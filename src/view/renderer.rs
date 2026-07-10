@@ -4,7 +4,10 @@
 //! 백버퍼 = FP16 scRGB(advanced color, 2026-07-10 직행 확정): `R16G16B16A16_FLOAT`에
 //! `SetColorSpace1`(RGB_FULL_G10_NONE_P709)을 선언 — SDR/ACM/HDR 패널 매핑은 DWM 위임.
 //! 소스 비트맵(sRGB 인코딩 PBGRA8)은 draw 시점에 `ColorManagement` 이펙트로 scRGB 변환하고,
-//! HDR 모드의 SDR 백레벨은 `WhiteLevelAdjustment` 이펙트로 보정한다 (SPEC §7).
+//! HDR 모드의 SDR 백레벨은 `WhiteLevelAdjustment` 이펙트(Input=SDRWhite, Output=80 —
+//! ×SdrWhite/80 부스트)로 보정한다 (SPEC §7). 이펙트 중간 버퍼는 FP16 강제 — 기본
+//! 정밀도(입력 기준 8bpc)면 백레벨 부스트(>1.0)가 클램프된다(실기 확인 2026-07-11,
+//! ColorMatrix 스케일과 A/B 동등 판정 후 전용 이펙트로 확정).
 //! 구 UNORM 비트 심도 감지(모니터별 R10G10B10A2 매칭)는 제거.
 
 use windows::Win32::Foundation::{HMODULE, HWND};
@@ -15,11 +18,12 @@ use windows::Win32::Graphics::Direct2D::Common::{
 use windows::Win32::Graphics::Direct2D::{
     CLSID_D2D1ColorManagement, CLSID_D2D1WhiteLevelAdjustment, D2D1_BITMAP_OPTIONS_CANNOT_DRAW,
     D2D1_BITMAP_OPTIONS_NONE, D2D1_BITMAP_OPTIONS_TARGET, D2D1_BITMAP_PROPERTIES1,
-    D2D1_COLOR_SPACE_CUSTOM, D2D1_COLOR_SPACE_SCRGB, D2D1_COLOR_SPACE_SRGB,
-    D2D1_COLORMANAGEMENT_PROP_DESTINATION_COLOR_CONTEXT, D2D1_COLORMANAGEMENT_PROP_QUALITY,
-    D2D1_COLORMANAGEMENT_PROP_SOURCE_COLOR_CONTEXT, D2D1_COLORMANAGEMENT_QUALITY_BEST,
-    D2D1_DEVICE_CONTEXT_OPTIONS_NONE, D2D1_FACTORY_TYPE_SINGLE_THREADED, D2D1_INTERPOLATION_MODE,
-    D2D1_PROPERTY_TYPE_COLOR_CONTEXT, D2D1_PROPERTY_TYPE_ENUM, D2D1_PROPERTY_TYPE_FLOAT,
+    D2D1_BUFFER_PRECISION_16BPC_FLOAT, D2D1_COLOR_SPACE_CUSTOM, D2D1_COLOR_SPACE_SCRGB,
+    D2D1_COLOR_SPACE_SRGB, D2D1_COLORMANAGEMENT_PROP_DESTINATION_COLOR_CONTEXT,
+    D2D1_COLORMANAGEMENT_PROP_QUALITY, D2D1_COLORMANAGEMENT_PROP_SOURCE_COLOR_CONTEXT,
+    D2D1_COLORMANAGEMENT_QUALITY_BEST, D2D1_DEVICE_CONTEXT_OPTIONS_NONE,
+    D2D1_FACTORY_TYPE_SINGLE_THREADED, D2D1_INTERPOLATION_MODE, D2D1_PROPERTY_TYPE_COLOR_CONTEXT,
+    D2D1_PROPERTY_TYPE_ENUM, D2D1_PROPERTY_TYPE_FLOAT,
     D2D1_WHITELEVELADJUSTMENT_PROP_INPUT_WHITE_LEVEL,
     D2D1_WHITELEVELADJUSTMENT_PROP_OUTPUT_WHITE_LEVEL, D2D1CreateFactory, ID2D1Bitmap1,
     ID2D1ColorContext, ID2D1DeviceContext, ID2D1Effect, ID2D1Factory1, ID2D1Image,
@@ -42,19 +46,16 @@ use windows::Win32::Graphics::Dxgi::{
 use windows::core::{Interface, Result};
 use windows_numerics::Matrix3x2;
 
-/// SDR 참조 화이트 = 80 nits (D2D1_SCENE_REFERRED_SDR_WHITE_LEVEL)
-const SDR_REFERENCE_WHITE_NITS: f32 = 80.0;
-
 pub struct Renderer {
     swap_chain: IDXGISwapChain1,
     d2d_context: ID2D1DeviceContext,
     target: Option<ID2D1Bitmap1>,
     image: Option<ID2D1Bitmap1>,
-    /// 이펙트 체인 최종 출력 — ColorManagement (→ WhiteLevelAdjustment)
+    /// 이펙트 체인 최종 출력 — ColorManagement → 백레벨 스케일
     effect_output: Option<ID2D1Image>,
     /// sRGB → scRGB 변환 이펙트 (SPEC §7) — wine 등 미지원 환경은 None(DrawBitmap 직행)
     color_management_effect: Option<ID2D1Effect>,
-    /// HDR 모드 SDR 백레벨 보정 (SPEC §7) — 미지원 환경은 None
+    /// HDR 모드 SDR 백레벨 보정(WhiteLevelAdjustment) (SPEC §7) — 미지원 환경은 None
     white_level_effect: Option<ID2D1Effect>,
     /// 현재 소스 프로파일 캐시 — 애니메이션 프레임 재업로드 시 재생성 회피
     source_icc_profile: Option<Vec<u8>>,
@@ -93,6 +94,21 @@ fn source_pixel_format() -> D2D1_PIXEL_FORMAT {
 /// IUnknown 계열 이펙트 프로퍼티 값 — raw 인터페이스 포인터 바이트
 fn interface_property_bytes<T: Interface>(interface: &T) -> [u8; size_of::<usize>()] {
     (interface.as_raw() as usize).to_ne_bytes()
+}
+
+/// SDR 참조 화이트 = 80 nits (D2D1_SCENE_REFERRED_SDR_WHITE_LEVEL)
+const SDR_REFERENCE_WHITE_NITS: f32 = 80.0;
+
+/// WhiteLevelAdjustment의 입력 백레벨(nits) 설정 — 문서 표(SDR 콘텐츠·FP16·HDR):
+/// Input = SDRWhite, Output = 80 고정. 이펙트는 Input/Output 비율로 곱한다.
+fn set_white_level_input(effect: &ID2D1Effect, input_white_nits: f32) -> Result<()> {
+    unsafe {
+        effect.SetValue(
+            D2D1_WHITELEVELADJUSTMENT_PROP_INPUT_WHITE_LEVEL.0 as u32,
+            D2D1_PROPERTY_TYPE_FLOAT,
+            &input_white_nits.to_ne_bytes(),
+        )
+    }
 }
 
 impl Renderer {
@@ -134,6 +150,14 @@ impl Renderer {
             let d2d_device = d2d_factory.CreateDevice(&dxgi_device)?;
             d2d_device.CreateDeviceContext(D2D1_DEVICE_CONTEXT_OPTIONS_NONE)?
         };
+        // 이펙트 중간 버퍼를 FP16으로 — 기본(입력 비트맵 기준 8bpc UNORM)이면 백레벨
+        // 부스트(>1.0)가 중간 버퍼에서 [0,1] 클램프된다 (실기 HDR 어두움 원인 후보,
+        // 2026-07-11 — 오버레이(이펙트 미경유)만 밝던 관찰과 부합)
+        unsafe {
+            let mut rendering_controls = d2d_context.GetRenderingControls();
+            rendering_controls.bufferPrecision = D2D1_BUFFER_PRECISION_16BPC_FLOAT;
+            d2d_context.SetRenderingControls(&rendering_controls);
+        }
 
         // 이펙트·색 컨텍스트 — 미지원 환경(wine)은 None으로 DrawBitmap 직행 (P16)
         let scrgb_color_context =
@@ -163,17 +187,11 @@ impl Renderer {
             .ok()?;
             Some(effect)
         });
+        // SDR 백레벨 보정 — Input=SDRWhite(부스트 반영), Output=80 고정 (SPEC §7)
         let white_level_effect = color_management_effect.as_ref().and_then(|_| {
             let effect =
                 unsafe { d2d_context.CreateEffect(&CLSID_D2D1WhiteLevelAdjustment) }.ok()?;
-            unsafe {
-                effect.SetValue(
-                    D2D1_WHITELEVELADJUSTMENT_PROP_INPUT_WHITE_LEVEL.0 as u32,
-                    D2D1_PROPERTY_TYPE_FLOAT,
-                    &SDR_REFERENCE_WHITE_NITS.to_ne_bytes(),
-                )
-            }
-            .ok()?;
+            set_white_level_input(&effect, SDR_REFERENCE_WHITE_NITS).ok()?;
             unsafe {
                 effect.SetValue(
                     D2D1_WHITELEVELADJUSTMENT_PROP_OUTPUT_WHITE_LEVEL.0 as u32,
@@ -240,17 +258,11 @@ impl Renderer {
         self.create_target()
     }
 
-    /// HDR 모드의 SDR 백레벨 반영 (SPEC §7) — boost = SDRWhiteLevel/1000 (1.0 = SDR/ACM)
+    /// HDR 모드의 SDR 백레벨 반영 (SPEC §7) — boost = SDRWhiteLevel/1000, 1.0 = SDR/ACM
+    /// (스케일 항등). 이펙트 프로퍼티는 라이브 — 다음 draw부터 반영된다.
     pub fn set_sdr_white_boost(&mut self, boost: f32) {
         if let Some(effect) = &self.white_level_effect {
-            let output_nits = SDR_REFERENCE_WHITE_NITS * boost.max(0.01);
-            let _ = unsafe {
-                effect.SetValue(
-                    D2D1_WHITELEVELADJUSTMENT_PROP_OUTPUT_WHITE_LEVEL.0 as u32,
-                    D2D1_PROPERTY_TYPE_FLOAT,
-                    &output_nits.to_ne_bytes(),
-                )
-            };
+            let _ = set_white_level_input(effect, SDR_REFERENCE_WHITE_NITS * boost.max(0.01));
         }
     }
 
@@ -286,7 +298,7 @@ impl Renderer {
         Ok(())
     }
 
-    /// 소스 프로파일 → ID2D1ColorContext → ColorManagement → (WhiteLevelAdjustment) (SPEC §7)
+    /// 소스 프로파일 → ID2D1ColorContext → ColorManagement → 백레벨 스케일 (SPEC §7)
     fn rewire_effect_chain(&mut self, bitmap: &ID2D1Bitmap1, icc_profile: Option<&[u8]>) {
         self.effect_output = None;
         let Some(color_management) = &self.color_management_effect else {

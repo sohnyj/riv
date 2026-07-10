@@ -139,8 +139,8 @@ fn query_sdr_white_boost(window: HWND) -> Option<f32> {
         if unsafe { DisplayConfigGetDeviceInfo(&mut advanced_color.header) } != 0 {
             return None;
         }
-        let advanced_color_enabled = unsafe { advanced_color.Anonymous.value } & 0x2 != 0;
-        if !advanced_color_enabled {
+        // 비트 0x2 = advancedColorEnabled
+        if unsafe { advanced_color.Anonymous.value } & 0x2 == 0 {
             return None;
         }
         let mut white_level = DISPLAYCONFIG_SDR_WHITE_LEVEL {
