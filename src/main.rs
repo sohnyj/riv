@@ -51,15 +51,16 @@ use windows::Win32::UI::Input::KeyboardAndMouse::{
 use windows::Win32::UI::WindowsAndMessaging::{
     CS_DBLCLKS, CS_HREDRAW, CS_VREDRAW, CW_USEDEFAULT, CreateWindowExW, DefWindowProcW,
     DispatchMessageW, GWL_STYLE, GWLP_USERDATA, GetClientRect, GetCursorPos, GetMessageW,
-    GetWindowLongPtrW, GetWindowPlacement, GetWindowRect, HCURSOR, HTCAPTION, HWND_TOP, IDC_ARROW,
-    IDC_SIZEALL, IsZoomed, KillTimer, LoadCursorW, LoadIconW, MSG, PostMessageW, PostQuitMessage,
-    RegisterClassExW, SW_SHOW, SWP_FRAMECHANGED, SWP_NOACTIVATE, SWP_NOMOVE, SWP_NOSIZE,
-    SWP_NOZORDER, SendMessageW, SetCursor, SetTimer, SetWindowLongPtrW, SetWindowPlacement,
-    SetWindowPos, ShowWindow, TranslateMessage, WINDOW_STYLE, WINDOWPLACEMENT, WM_ACTIVATEAPP,
-    WM_APP, WM_CLOSE, WM_CONTEXTMENU, WM_DESTROY, WM_DPICHANGED, WM_KEYDOWN, WM_LBUTTONDBLCLK,
-    WM_LBUTTONDOWN, WM_LBUTTONUP, WM_MBUTTONDOWN, WM_MOUSEMOVE, WM_MOUSEWHEEL, WM_MOVE,
-    WM_NCDESTROY, WM_NCLBUTTONDOWN, WM_PAINT, WM_SETCURSOR, WM_SIZE, WM_SYSKEYDOWN, WM_TIMER,
-    WM_XBUTTONDOWN, WNDCLASSEXW, WS_OVERLAPPEDWINDOW, WS_POPUP, WS_VISIBLE,
+    GetSystemMetrics, GetWindowLongPtrW, GetWindowPlacement, GetWindowRect, HCURSOR, HTCAPTION,
+    HWND_TOP, IDC_ARROW, IDC_SIZEALL, IsZoomed, KillTimer, LoadCursorW, LoadIconW, MSG,
+    PostMessageW, PostQuitMessage, RegisterClassExW, SM_CXSCREEN, SM_CYSCREEN, SW_SHOW,
+    SWP_FRAMECHANGED, SWP_NOACTIVATE, SWP_NOMOVE, SWP_NOSIZE, SWP_NOZORDER, SendMessageW,
+    SetCursor, SetTimer, SetWindowLongPtrW, SetWindowPlacement, SetWindowPos, ShowWindow,
+    TranslateMessage, WINDOW_STYLE, WINDOWPLACEMENT, WM_ACTIVATEAPP, WM_APP, WM_CLOSE,
+    WM_CONTEXTMENU, WM_DESTROY, WM_DPICHANGED, WM_KEYDOWN, WM_LBUTTONDBLCLK, WM_LBUTTONDOWN,
+    WM_LBUTTONUP, WM_MBUTTONDOWN, WM_MOUSEMOVE, WM_MOUSEWHEEL, WM_MOVE, WM_NCDESTROY,
+    WM_NCLBUTTONDOWN, WM_PAINT, WM_SETCURSOR, WM_SIZE, WM_SYSKEYDOWN, WM_TIMER, WM_XBUTTONDOWN,
+    WNDCLASSEXW, WS_OVERLAPPEDWINDOW, WS_POPUP, WS_VISIBLE,
 };
 use windows::core::{PCWSTR, Result, w};
 
@@ -275,7 +276,7 @@ impl Application {
         unsafe { SetTimer(Some(window), ZOOM_PILL_TIMER, 1000, None) };
     }
 
-    /// 슬라이드쇼 토글 (SPEC §6.3)
+    /// 슬라이드쇼 토글 (SPEC §6.3) — 상태 필 "Slideshow: Start/Stop" (SPEC §3.6)
     fn toggle_slideshow(&mut self, window: HWND) {
         if self.slideshow_active {
             self.cancel_slideshow(window);
@@ -284,14 +285,19 @@ impl Application {
                 (self.settings.options.slideshow_timer_seconds * 1000.0).max(100.0) as u32;
             unsafe { SetTimer(Some(window), SLIDESHOW_TIMER, interval, None) };
             self.slideshow_active = true;
+            self.show_zoom_pill(window, "Slideshow: Start".to_string());
+            self.render(window);
         }
     }
 
-    /// 수동 파일 로드·드롭·폴더 끝(루프 off) 시 자동 취소 (SPEC §6.3)
+    /// 수동 파일 로드·드롭·폴더 끝(루프 off) 시 자동 취소 (SPEC §6.3) —
+    /// 자동 취소도 상태 필로 알림
     fn cancel_slideshow(&mut self, window: HWND) {
         if self.slideshow_active {
             let _ = unsafe { KillTimer(Some(window), SLIDESHOW_TIMER) };
             self.slideshow_active = false;
+            self.show_zoom_pill(window, "Slideshow: Stop".to_string());
+            self.render(window);
         }
     }
 
@@ -912,6 +918,9 @@ fn main() -> Result<()> {
     let class_atom = unsafe { RegisterClassExW(&window_class) };
     assert!(class_atom != 0, "RegisterClassExW failed");
 
+    // 창 기본 크기 = 주 화면의 40% × 30% (SPEC §6.1, 2026-07-10 — 지오메트리 복원은 R7)
+    let default_width = unsafe { GetSystemMetrics(SM_CXSCREEN) } * 40 / 100;
+    let default_height = unsafe { GetSystemMetrics(SM_CYSCREEN) } * 30 / 100;
     let window = unsafe {
         CreateWindowExW(
             Default::default(),
@@ -920,8 +929,8 @@ fn main() -> Result<()> {
             WS_OVERLAPPEDWINDOW,
             CW_USEDEFAULT,
             CW_USEDEFAULT,
-            CW_USEDEFAULT,
-            CW_USEDEFAULT,
+            default_width.max(320),
+            default_height.max(240),
             None,
             None,
             Some(instance.into()),
