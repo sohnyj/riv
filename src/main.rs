@@ -23,6 +23,7 @@ use settings::{Options, SettingsFile};
 use view::renderer::Renderer;
 use view::transform::{FitMode, Size, ViewTransform};
 use window::context_menu::{self, MenuState};
+use window::overlay::{self, Overlay, OverlayContent};
 use windows::Win32::Foundation::{HWND, LPARAM, LRESULT, POINT, RECT, WPARAM};
 use windows::Win32::Graphics::Direct2D::Common::D2D1_COLOR_F;
 use windows::Win32::Graphics::Direct2D::D2D1_INTERPOLATION_MODE;
@@ -64,6 +65,12 @@ const WM_APP_SHOW_WINDOW: u32 = WM_APP + 2;
 
 /// R3 게이트 검증용 액션 스크립트 타이머 (임시 — wine 합성 키 입력 불가, R4 검증 후 제거)
 const ACTION_SCRIPT_TIMER: usize = 1;
+/// 줌 필 1초 자동 숨김 (SPEC §3.6)
+const ZOOM_PILL_TIMER: usize = 2;
+/// 슬라이드쇼 간격 (SPEC §6.3)
+const SLIDESHOW_TIMER: usize = 3;
+/// 최근 파일 500ms 디바운스 저장 (SPEC §6.4)
+const RECENTS_SAVE_TIMER: usize = 4;
 
 /// 키보드/메뉴 팬 스텝 (디바이스 픽셀)
 const PAN_STEP: f32 = 64.0;
@@ -89,6 +96,13 @@ struct Application {
     wheel_notch_accumulator: i32,
     /// 지연 첫 표시 (SPEC §6.1) — 첫 이미지(또는 실패) 후 show
     window_shown: bool,
+    overlay: Overlay,
+    /// Show File Info 토글 (SPEC §3.6 정보 오버레이)
+    show_file_info: bool,
+    /// 줌 필 텍스트 — 1초 자동 숨김 (SPEC §3.6)
+    zoom_pill_text: Option<String>,
+    /// 슬라이드쇼 상태 (SPEC §6.3)
+    slideshow_active: bool,
     /// R3 게이트 검증용 액션 스크립트 (임시)
     action_script: VecDeque<Action>,
 }
@@ -117,6 +131,10 @@ impl Application {
             pan_cursor: unsafe { LoadCursorW(None, IDC_SIZEALL)? },
             wheel_notch_accumulator: 0,
             window_shown: false,
+            overlay: Overlay::new()?,
+            show_file_info: false,
+            zoom_pill_text: None,
+            slideshow_active: false,
             action_script: parse_action_script(),
         };
         // 실행 인자 = 열 파일 경로 하나 (SPEC §6.5 — CLI 옵션 없음)
@@ -213,7 +231,51 @@ impl Application {
             // 업로드 실패(디바이스 로스트 등) — 재구축 경로가 display에서 재업로드
             let _ = self.rebuild_renderer(window);
         }
+        // 최근 파일 수집 — 500ms 디바운스 저장 (SPEC §6.4)
+        let recent_path = self
+            .image_core
+            .current
+            .as_ref()
+            .map(|current| current.path.clone());
+        if let Some(path) = recent_path
+            && self.settings.add_recent_file(&path)
+        {
+            unsafe { SetTimer(Some(window), RECENTS_SAVE_TIMER, 500, None) };
+        }
         self.render(window);
+    }
+
+    /// 디코드 실패 반영 — 이미지 제거 + 에러 텍스트 (SPEC §3.6·§4.2)
+    fn apply_load_error(&mut self, window: HWND) {
+        self.display = None;
+        self.renderer.clear_image();
+        self.render(window);
+    }
+
+    /// 줌 필 표시 + 1초 자동 숨김 타이머 (SPEC §3.6)
+    fn show_zoom_pill(&mut self, window: HWND, text: String) {
+        self.zoom_pill_text = Some(text);
+        unsafe { SetTimer(Some(window), ZOOM_PILL_TIMER, 1000, None) };
+    }
+
+    /// 슬라이드쇼 토글 (SPEC §6.3)
+    fn toggle_slideshow(&mut self, window: HWND) {
+        if self.slideshow_active {
+            self.cancel_slideshow(window);
+        } else {
+            let interval =
+                (self.settings.options.slideshow_timer_seconds * 1000.0).max(100.0) as u32;
+            unsafe { SetTimer(Some(window), SLIDESHOW_TIMER, interval, None) };
+            self.slideshow_active = true;
+        }
+    }
+
+    /// 수동 파일 로드·드롭·폴더 끝(루프 off) 시 자동 취소 (SPEC §6.3)
+    fn cancel_slideshow(&mut self, window: HWND) {
+        if self.slideshow_active {
+            let _ = unsafe { KillTimer(Some(window), SLIDESHOW_TIMER) };
+            self.slideshow_active = false;
+        }
     }
 
     /// 디바이스 로스트·모니터 이동 시 전체 재구축 — 백버퍼 포맷도 재감지 (SPEC §3.1·§3.4)
@@ -232,6 +294,36 @@ impl Application {
         Ok(())
     }
 
+    /// 오버레이 내용 스냅샷 조립 (SPEC §3.6)
+    fn overlay_content(&self, background: D2D1_COLOR_F) -> OverlayContent {
+        let error_text = self
+            .image_core
+            .load_error
+            .as_ref()
+            .map(|(path, error)| overlay::build_error_text(path, &error.message, error.code));
+        let info_text = if self.show_file_info {
+            self.image_core.current.as_ref().map(|current| {
+                let metadata = std::fs::metadata(&current.path).ok();
+                overlay::build_info_text(
+                    &current.path,
+                    &current.image,
+                    metadata.as_ref().map_or(0, std::fs::Metadata::len),
+                    metadata.and_then(|metadata| metadata.modified().ok()),
+                )
+            })
+        } else {
+            None
+        };
+        // perceived brightness > 0.5 → 검정 에러 텍스트 (SPEC §3.6)
+        let brightness = 0.299 * background.r + 0.587 * background.g + 0.114 * background.b;
+        OverlayContent {
+            error_text,
+            info_text,
+            zoom_pill_text: self.zoom_pill_text.clone(),
+            background_is_bright: brightness > 0.5,
+        }
+    }
+
     fn render(&mut self, window: HWND) {
         let (width, height) = client_size(window);
         if width == 0 || height == 0 {
@@ -243,14 +335,22 @@ impl Application {
         let matrix = self.view_transform.matrix(viewport, image);
         let interpolation = self.interpolation_mode();
         let background = self.background_color();
+        let content = self.overlay_content(background);
+        let overlay = &self.overlay;
+        let draw = |context: &_| overlay.draw(context, viewport.width, viewport.height, &content);
         if self
             .renderer
-            .render(matrix, interpolation, background)
+            .render(matrix, interpolation, background, draw)
             .is_err()
         {
             // 디바이스 로스트 — 재구축 후 1회 재시도
             if self.rebuild_renderer(window).is_ok() {
-                let _ = self.renderer.render(matrix, interpolation, background);
+                let overlay = &self.overlay;
+                let _ = self
+                    .renderer
+                    .render(matrix, interpolation, background, |context| {
+                        overlay.draw(context, viewport.width, viewport.height, &content)
+                    });
             }
         }
     }
@@ -290,7 +390,14 @@ impl Application {
         };
         let viewport = self.viewport(window);
         let image = self.image_size();
+        let previous_scale = self.view_transform.scale;
         self.view_transform.zoom(factor, anchor, viewport, image);
+        if (self.view_transform.scale - previous_scale).abs() > f32::EPSILON {
+            let percent = (self.view_transform.scale / self.view_transform.device_pixel_ratio
+                * 100.0)
+                .round();
+            self.show_zoom_pill(window, format!("Zoom: {percent}%"));
+        }
         self.render(window);
     }
 
@@ -393,10 +500,33 @@ fn parse_action_script() -> VecDeque<Action> {
     )
 }
 
-fn execute_navigation(application: &mut Application, window: HWND, command: NavigationCommand) {
-    // true = 캐시 히트로 동기 표시 변경 — 비동기 완료는 WM_APP_DECODE_COMPLETE에서 반영
-    if application.image_core.navigate(command) {
+/// 반환 = 이동 발생 여부 (슬라이드쇼 폴더 끝 취소 판단용)
+fn execute_navigation(
+    application: &mut Application,
+    window: HWND,
+    command: NavigationCommand,
+) -> bool {
+    match application.image_core.navigate(command) {
+        // 캐시 히트 — 동기 표시 변경. 비동기 완료는 WM_APP_DECODE_COMPLETE에서 반영
+        Some(true) => application.apply_current_image(window),
+        Some(false) => {
+            if application.image_core.load_error.is_some() {
+                // 동기 실패(파일 접근 불가 등) — 에러 텍스트 표시
+                application.apply_load_error(window);
+            }
+        }
+        None => return false,
+    }
+    true
+}
+
+/// 외부 경로 열기(최근 파일·드롭·붙여넣기 공용) — 수동 로드 = 슬라이드쇼 취소 (SPEC §6.3)
+fn open_external_path(application: &mut Application, window: HWND, path: &Path) {
+    application.cancel_slideshow(window);
+    if application.image_core.load_path(path) {
         application.apply_current_image(window);
+    } else if application.image_core.load_error.is_some() {
+        application.apply_load_error(window);
     }
 }
 
@@ -410,12 +540,18 @@ fn dispatch_action(application: &mut Application, window: HWND, action: Action) 
         Action::Quit | Action::CloseWindow => {
             let _ = unsafe { PostMessageW(Some(window), WM_CLOSE, WPARAM(0), LPARAM(0)) };
         }
-        Action::FirstFile => execute_navigation(application, window, NavigationCommand::First),
+        Action::FirstFile => {
+            execute_navigation(application, window, NavigationCommand::First);
+        }
         Action::PreviousFile => {
             execute_navigation(application, window, NavigationCommand::Previous);
         }
-        Action::NextFile => execute_navigation(application, window, NavigationCommand::Next),
-        Action::LastFile => execute_navigation(application, window, NavigationCommand::Last),
+        Action::NextFile => {
+            execute_navigation(application, window, NavigationCommand::Next);
+        }
+        Action::LastFile => {
+            execute_navigation(application, window, NavigationCommand::Last);
+        }
         Action::ReloadFile => {
             if application.image_core.reload_current() {
                 application.apply_current_image(window);
@@ -427,11 +563,43 @@ fn dispatch_action(application: &mut Application, window: HWND, action: Action) 
             let viewport = application.viewport(window);
             let image = application.image_size();
             application.view_transform.toggle_zoom(viewport, image);
+            let pill = if application.view_transform.fit_tracking {
+                "Fit"
+            } else {
+                "1:1"
+            };
+            application.show_zoom_pill(window, pill.to_string());
             application.render(window);
         }
         Action::PreserveZoom => {
             application.preserve_zoom = !application.preserve_zoom;
-            // 상태 필 오버레이 표시는 R4
+            let state = if application.preserve_zoom {
+                "On"
+            } else {
+                "Off"
+            };
+            application.show_zoom_pill(window, format!("Preserve Zoom: {state}"));
+            application.render(window);
+        }
+        Action::ShowFileInfo => {
+            application.show_file_info = !application.show_file_info;
+            application.render(window);
+        }
+        Action::Slideshow => application.toggle_slideshow(window),
+        Action::Recent(index) => {
+            let path = application
+                .settings
+                .recent_files()
+                .get(usize::from(index))
+                .map(|(_, path)| std::path::PathBuf::from(path));
+            if let Some(path) = path {
+                open_external_path(application, window, &path);
+            }
+        }
+        Action::ClearRecents => {
+            if application.settings.clear_recent_files() {
+                unsafe { SetTimer(Some(window), RECENTS_SAVE_TIMER, 500, None) };
+            }
         }
         Action::PanUp => application.pan_by(window, 0.0, PAN_STEP),
         Action::PanDown => application.pan_by(window, 0.0, -PAN_STEP),
@@ -456,20 +624,16 @@ fn dispatch_action(application: &mut Application, window: HWND, action: Action) 
             toggle_fullscreen(application, window);
             application.render(window);
         }
-        // R4: 셸 통합·오버레이·최근 파일·슬라이드쇼
+        // R4 잔여: 셸 통합 (클립보드·삭제·rename·explorer·Open With·열기 다이얼로그)
         Action::Open
         | Action::OpenWith
         | Action::OpenWithOther
         | Action::OpenContainingFolder
-        | Action::ShowFileInfo
         | Action::Rename
         | Action::Delete
         | Action::DeletePermanent
         | Action::Copy
-        | Action::Paste
-        | Action::Recent(_)
-        | Action::ClearRecents
-        | Action::Slideshow => {}
+        | Action::Paste => {}
         // R5: 애니메이션 스케줄러
         Action::Pause
         | Action::NextFrame
@@ -682,7 +846,11 @@ extern "system" fn window_procedure(
             if let Some(application) = unsafe { application_from_window(window) }
                 && application.image_core.on_decode_complete(*completion)
             {
-                application.apply_current_image(window);
+                if application.image_core.load_error.is_some() {
+                    application.apply_load_error(window);
+                } else {
+                    application.apply_current_image(window);
+                }
                 application.ensure_window_shown(window);
             }
             LRESULT(0)
@@ -703,6 +871,38 @@ extern "system" fn window_procedure(
                         let _ = unsafe { KillTimer(Some(window), ACTION_SCRIPT_TIMER) };
                     }
                 }
+            }
+            LRESULT(0)
+        }
+        // 줌 필 1초 자동 숨김 (SPEC §3.6)
+        WM_TIMER if wparam.0 == ZOOM_PILL_TIMER => {
+            let _ = unsafe { KillTimer(Some(window), ZOOM_PILL_TIMER) };
+            if let Some(application) = unsafe { application_from_window(window) }
+                && application.zoom_pill_text.take().is_some()
+            {
+                application.render(window);
+            }
+            LRESULT(0)
+        }
+        // 슬라이드쇼 틱 (SPEC §6.3) — 폴더 끝(루프 off) 도달 시 자동 취소
+        WM_TIMER if wparam.0 == SLIDESHOW_TIMER => {
+            if let Some(application) = unsafe { application_from_window(window) } {
+                let command = if application.settings.options.slideshow_reversed {
+                    NavigationCommand::Previous
+                } else {
+                    NavigationCommand::Next
+                };
+                if !execute_navigation(application, window, command) {
+                    application.cancel_slideshow(window);
+                }
+            }
+            LRESULT(0)
+        }
+        // 최근 파일 디바운스 저장 (SPEC §6.4)
+        WM_TIMER if wparam.0 == RECENTS_SAVE_TIMER => {
+            let _ = unsafe { KillTimer(Some(window), RECENTS_SAVE_TIMER) };
+            if let Some(application) = unsafe { application_from_window(window) } {
+                let _ = application.settings.save();
             }
             LRESULT(0)
         }
@@ -834,6 +1034,10 @@ extern "system" fn window_procedure(
                     x = (bounds.left + bounds.right) / 2;
                     y = (bounds.top + bounds.bottom) / 2;
                 }
+                // 메뉴 구성 전 최근 파일 부재 감사 (SPEC §6.4)
+                if application.settings.prune_recent_files() {
+                    unsafe { SetTimer(Some(window), RECENTS_SAVE_TIMER, 500, None) };
+                }
                 let state = MenuState {
                     has_image: application.image_core.current.is_some(),
                     has_folder: application.image_core.has_folder_entries(),
@@ -844,6 +1048,13 @@ extern "system" fn window_procedure(
                         .is_some_and(|current| current.image.frames.len() > 1),
                     preserve_zoom: application.preserve_zoom,
                     fullscreen: application.fullscreen_restore.is_some(),
+                    slideshow_active: application.slideshow_active,
+                    recent_names: application
+                        .settings
+                        .recent_files()
+                        .into_iter()
+                        .map(|(name, _)| name)
+                        .collect(),
                 };
                 if let Some(action) = context_menu::show(window, state, x, y) {
                     dispatch_action(application, window, action);

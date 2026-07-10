@@ -204,12 +204,18 @@ impl Renderer {
         Ok(())
     }
 
-    /// Clear → SetTransform → DrawBitmap → Present (SPEC §3.1)
+    /// 디코드 실패 등으로 표시 이미지 제거 (에러 텍스트만 남김 — SPEC §3.6)
+    pub fn clear_image(&mut self) {
+        self.image = None;
+    }
+
+    /// Clear → SetTransform → DrawBitmap → 오버레이(같은 패스, SPEC §3.6) → Present
     pub fn render(
         &mut self,
         matrix: [f32; 6],
         interpolation: D2D1_INTERPOLATION_MODE,
         clear_color: D2D1_COLOR_F,
+        draw_overlay: impl FnOnce(&ID2D1DeviceContext) -> Result<()>,
     ) -> Result<()> {
         unsafe {
             self.d2d_context.BeginDraw();
@@ -241,8 +247,11 @@ impl Renderer {
                 );
                 self.d2d_context.SetTransform(&Matrix3x2::identity());
             }
+            // 오버레이 실패는 프레임 제시를 막지 않는다 — EndDraw·Present 후 전파
+            let overlay_result = draw_overlay(&self.d2d_context);
             self.d2d_context.EndDraw(None, None)?;
-            self.swap_chain.Present(1, DXGI_PRESENT(0)).ok()
+            self.swap_chain.Present(1, DXGI_PRESENT(0)).ok()?;
+            overlay_result
         }
     }
 }

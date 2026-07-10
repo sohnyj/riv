@@ -236,15 +236,18 @@ impl ImageCore {
         false
     }
 
-    /// First/Previous/Next/Last (SPEC §4.4) — 부재 파일 건너뜀·동일 파일 무시
-    pub fn navigate(&mut self, command: NavigationCommand) -> bool {
+    /// First/Previous/Next/Last (SPEC §4.4) — 부재 파일 건너뜀·동일 파일 무시.
+    /// 반환: None = 이동 없음(대상 없음·폴더 끝·동일 파일), Some(표시 동기 변경 여부).
+    pub fn navigate(&mut self, command: NavigationCommand) -> Option<bool> {
         self.refresh_folder_if_stale();
         if self.entries.is_empty() {
-            return false;
+            return None;
         }
+        // 위치 기준: 진행 중 로드 → 에러 파일(에러에서도 이동 가능, SPEC §4.2) → 현재 표시
         let current_path = self
             .pending_display
             .clone()
+            .or_else(|| self.load_error.as_ref().map(|(path, _)| path.clone()))
             .or_else(|| self.current.as_ref().map(|current| current.path.clone()));
         let current_index = current_path
             .as_deref()
@@ -255,13 +258,11 @@ impl ImageCore {
             NavigationCommand::Next => self.step_existing_entry(current_index, 1),
             NavigationCommand::Previous => self.step_existing_entry(current_index, -1),
         };
-        let Some(target) = target else {
-            return false;
-        };
+        let target = target?;
         if current_path.is_some_and(|current| paths_equal(&current, &target)) {
-            return false; // 같은 파일 재이동 무시
+            return None; // 같은 파일 재이동 무시
         }
-        self.load_file(&target)
+        Some(self.load_file(&target))
     }
 
     /// 워커 완료 수신 (WM_APP_DECODE_COMPLETE) — 반환 = 표시 상태 변경 여부

@@ -164,7 +164,13 @@ impl SettingsFile {
     /// 앱 재활성화 시 재로드 — 외부 편집 반영 (SPEC §8.1).
     /// 반환 = 옵션 변경 여부(변경 시 호출자가 브로드캐스트).
     pub fn reload(&mut self) -> bool {
-        let document = read_document(&self.path);
+        let mut document = read_document(&self.path);
+        // recents는 앱 소유 상태(외부 편집 대상 아님) — 디바운스 저장 전 유실 방지
+        if let Some(recents) = self.document.get("recents").cloned()
+            && let Some(object) = document.as_object_mut()
+        {
+            object.insert("recents".to_string(), recents);
+        }
         let options = Options::from_document(&document);
         let options_changed = options != self.options;
         let bindings_changed = document.get("keyboardbindings")
@@ -175,9 +181,7 @@ impl SettingsFile {
         options_changed || bindings_changed
     }
 
-    /// 원자 저장 — 임시 파일 쓰기 후 교체(std::fs::rename = MoveFileExW REPLACE_EXISTING).
-    /// R3에서 쓰는 절 없음 — recents(R4)·지오메트리(R7)·옵션 다이얼로그(R6)가 소비.
-    #[expect(dead_code)]
+    /// 원자 저장 — 임시 파일 쓰기 후 교체(std::fs::rename = MoveFileExW REPLACE_EXISTING)
     pub fn save(&self) -> std::io::Result<()> {
         let serialized =
             serde_json::to_string_pretty(&self.document).map_err(std::io::Error::other)?;
@@ -195,6 +199,92 @@ impl SettingsFile {
     pub fn mouse_bindings(&self) -> Option<&Map<String, Value>> {
         self.document.get("mousebindings")?.as_object()
     }
+
+    // ── 최근 파일 (SPEC §6.4 — 최대 10, 중복 제거, 부재 감사) ────────────────
+
+    /// (표시명, 경로) 목록 — recents.recentFiles
+    pub fn recent_files(&self) -> Vec<(String, String)> {
+        self.document
+            .get("recents")
+            .and_then(|recents| recents.get("recentFiles"))
+            .and_then(Value::as_array)
+            .map(|list| {
+                list.iter()
+                    .filter_map(|entry| {
+                        Some((
+                            entry.get("name")?.as_str()?.to_string(),
+                            entry.get("path")?.as_str()?.to_string(),
+                        ))
+                    })
+                    .collect()
+            })
+            .unwrap_or_default()
+    }
+
+    fn set_recent_files(&mut self, files: &[(String, String)]) {
+        let list: Vec<Value> = files
+            .iter()
+            .map(|(name, path)| serde_json::json!({ "name": name, "path": path }))
+            .collect();
+        let document = self
+            .document
+            .as_object_mut()
+            .expect("settings document is object");
+        document
+            .entry("recents")
+            .or_insert_with(|| Value::Object(Map::new()))
+            .as_object_mut()
+            .expect("recents is object")
+            .insert("recentFiles".to_string(), Value::Array(list));
+    }
+
+    /// 표시 성공 시 호출 — 반환 = 변경 여부(디바운스 저장 트리거).
+    /// `saverecents` off면 수집하지 않고 목록을 비운다 (SPEC §6.4).
+    pub fn add_recent_file(&mut self, path: &std::path::Path) -> bool {
+        if !self.options.save_recents {
+            return self.clear_recent_files();
+        }
+        let path_text = path.to_string_lossy().into_owned();
+        let name = path.file_name().map_or_else(
+            || path_text.clone(),
+            |name| name.to_string_lossy().into_owned(),
+        );
+        let mut files = self.recent_files();
+        if files
+            .first()
+            .is_some_and(|(_, existing)| existing.eq_ignore_ascii_case(&path_text))
+        {
+            return false;
+        }
+        files.retain(|(_, existing)| !existing.eq_ignore_ascii_case(&path_text));
+        files.insert(0, (name, path_text));
+        files.truncate(10);
+        self.set_recent_files(&files);
+        true
+    }
+
+    /// 존재하지 않는 파일 자동 제거 — 메뉴 구성 시 감사 (SPEC §6.4)
+    pub fn prune_recent_files(&mut self) -> bool {
+        let files = self.recent_files();
+        let pruned: Vec<(String, String)> = files
+            .iter()
+            .filter(|(_, path)| std::path::Path::new(path).is_file())
+            .cloned()
+            .collect();
+        if pruned.len() == files.len() {
+            return false;
+        }
+        self.set_recent_files(&pruned);
+        true
+    }
+
+    pub fn clear_recent_files(&mut self) -> bool {
+        if self.recent_files().is_empty() {
+            return false;
+        }
+        self.set_recent_files(&[]);
+        true
+    }
 }
 
 /// exe와 같은 디렉토리의 riv.json (R4 — 별도 설정 디렉토리 없음).
@@ -211,5 +301,6 @@ fn read_document(path: &PathBuf) -> Value {
     std::fs::read_to_string(path)
         .ok()
         .and_then(|text| serde_json::from_str(&text).ok())
+        .filter(Value::is_object)
         .unwrap_or_else(|| Value::Object(Map::new()))
 }

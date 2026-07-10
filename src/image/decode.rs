@@ -39,8 +39,7 @@ pub struct DecodedImage {
     /// 픽셀 버퍼 크기 — 디바이스 한계 초과 시에만 논리 크기보다 작다 (DP3)
     pub pixel_width: u32,
     pub pixel_height: u32,
-    /// 디코더 레지스트리 포맷명 — 정보 오버레이(R4) 소스 (SPEC §3.6)
-    #[expect(dead_code)]
+    /// 디코더 레지스트리 포맷명 — 정보 오버레이 소스 (SPEC §3.6)
     pub format_name: &'static str,
     pub frames: Vec<Frame>,
 }

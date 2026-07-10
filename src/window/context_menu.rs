@@ -18,6 +18,9 @@ pub struct MenuState {
     pub has_animation: bool,
     pub preserve_zoom: bool,
     pub fullscreen: bool,
+    pub slideshow_active: bool,
+    /// 최근 파일 표시명 (부재 감사 완료 목록 — SPEC §6.4)
+    pub recent_names: Vec<String>,
 }
 
 struct MenuBuilder {
@@ -27,7 +30,7 @@ struct MenuBuilder {
 }
 
 impl MenuBuilder {
-    /// 아직 배선되지 않은 액션(R4 셸 통합·R5 애니·R6 다이얼로그) — 항상 비활성 표시
+    /// 아직 배선되지 않은 액션(R4 셸 통합 잔여·R5 애니·R6 다이얼로그) — 항상 비활성 표시
     fn is_wired(action: Action) -> bool {
         !matches!(
             action,
@@ -35,18 +38,14 @@ impl MenuBuilder {
                 | Action::OpenWith
                 | Action::OpenWithOther
                 | Action::OpenContainingFolder
-                | Action::ShowFileInfo
                 | Action::Rename
                 | Action::Delete
                 | Action::Copy
                 | Action::Paste
-                | Action::Recent(_)
-                | Action::ClearRecents
                 | Action::NewWindow
                 | Action::CloseAllWindows
                 | Action::Pause
                 | Action::NextFrame
-                | Action::Slideshow
                 | Action::Options
         )
     }
@@ -68,7 +67,9 @@ impl MenuBuilder {
         self.actions.push(action);
         let identifier = self.actions.len();
         let mut flags = MF_STRING;
-        if !Self::is_wired(action) || !self.gate_satisfied(action.gate()) {
+        let clear_without_recents =
+            action == Action::ClearRecents && self.state_snapshot.recent_names.is_empty();
+        if !Self::is_wired(action) || !self.gate_satisfied(action.gate()) || clear_without_recents {
             flags |= MF_GRAYED | MF_DISABLED;
         }
         if action == Action::PreserveZoom && self.state_snapshot.preserve_zoom {
@@ -90,8 +91,15 @@ impl MenuBuilder {
         let menu = unsafe { CreatePopupMenu()? };
         self.append_action(menu, Action::Open)?;
 
-        // Open Recent / Open With — 목록 채움은 R4 (빈 서브메뉴, 비활성 자리 표시)
+        // Open Recent — 최대 10개 + Clear Menu (SPEC §6.4, 아이콘 없음 — R10)
         let recent = unsafe { CreatePopupMenu()? };
+        for index in 0..self.state_snapshot.recent_names.len().min(10) {
+            let name = self.state_snapshot.recent_names[index].clone();
+            self.append_action_labeled(recent, Action::Recent(index as u8), &name)?;
+        }
+        if !self.state_snapshot.recent_names.is_empty() {
+            self.append_separator(recent)?;
+        }
         self.append_action_labeled(recent, Action::ClearRecents, "Clear Menu")?;
         self.append_submenu(menu, recent, "Open Recent")?;
         self.append_action(menu, Action::ReloadFile)?;
@@ -129,7 +137,12 @@ impl MenuBuilder {
         self.append_action(tools, Action::Pause)?;
         self.append_action(tools, Action::NextFrame)?;
         self.append_separator(tools)?;
-        self.append_action(tools, Action::Slideshow)?;
+        let slideshow_label = if self.state_snapshot.slideshow_active {
+            "Stop Slideshow"
+        } else {
+            "Start Slideshow"
+        };
+        self.append_action_labeled(tools, Action::Slideshow, slideshow_label)?;
         self.append_separator(tools)?;
         self.append_action(tools, Action::Options)?;
         self.append_submenu(menu, tools, "Tools")?;
