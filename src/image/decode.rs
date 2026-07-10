@@ -252,6 +252,14 @@ static REGISTRY: &[FormatDescriptor] = &[
     },
 ];
 
+/// (포맷명, 확장자 목록) — 파일 연결 트리의 동적 그룹핑 소스 (SPEC §8.3 —
+/// 수작업 테이블 금지). 정렬·헤더 생략 규칙은 UI 측 책임.
+pub fn format_groups() -> impl Iterator<Item = (&'static str, &'static [&'static str])> {
+    REGISTRY
+        .iter()
+        .map(|descriptor| (descriptor.name, descriptor.extensions))
+}
+
 /// 지원 확장자 전체 — 파일 필터·연결 UI 파생 소스 (SPEC §10 — 수작업 테이블 금지)
 pub fn supported_extensions() -> impl Iterator<Item = &'static str> {
     REGISTRY

@@ -271,8 +271,11 @@ impl Action {
             .map(|(action, _, _, _)| *action)
     }
 
-    /// R6 단축키 편집(테이블·충돌 경고)에서 사용 — 연동 후 expect가 알려준다
-    #[expect(dead_code)]
+    /// 단축키 편집 테이블의 행 목록 (SPEC §8.3) — Recent(동적 이름)는 제외
+    pub fn all_bindable() -> impl Iterator<Item = Self> {
+        ACTION_TABLE.iter().map(|(action, _, _, _)| *action)
+    }
+
     pub fn name(self) -> &'static str {
         if let Self::Recent(index) = self {
             return RECENT_NAMES[usize::from(index).min(9)];

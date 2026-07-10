@@ -206,6 +206,86 @@ impl Bindings {
     }
 }
 
+/// 기본 키 시퀀스 (SPEC §5.2) — 단축키 편집의 Reset to Default·저장 생략 기준
+pub fn default_keyboard_sequences(action_name: &str) -> &'static [&'static str] {
+    DEFAULT_KEYBOARD
+        .iter()
+        .find(|(name, _)| *name == action_name)
+        .map_or(&[], |(_, sequences)| sequences)
+}
+
+/// 기본 마우스 인코딩 (SPEC §5.3) — 동상
+pub fn default_mouse_encodings(action_name: &str) -> &'static [&'static str] {
+    DEFAULT_MOUSE
+        .iter()
+        .find(|(name, _)| *name == action_name)
+        .map_or(&[], |(_, encodings)| encodings)
+}
+
+/// 캡처 결과 → 인코딩 문자열. 이름 없는 가상 키(한/영 전환 등)는 None —
+/// `parse_key_sequence`와 왕복 정합이 보장되는 키만 바인딩 허용 (R6 캡처)
+pub fn format_key_sequence(modifiers: u8, virtual_key: u16) -> Option<String> {
+    let base = key_name_from_virtual_key(virtual_key)?;
+    Some(format!("{}{base}", modifier_prefix(modifiers)))
+}
+
+/// 캡처 결과 → 마우스 인코딩 문자열 (SPEC §5.3)
+pub fn format_mouse_encoding(modifiers: u8, double_click: bool, base: MouseBase) -> String {
+    let base_name = match base {
+        MouseBase::Left => "Left",
+        MouseBase::Middle => "Middle",
+        MouseBase::Back => "Back",
+        MouseBase::Forward => "Forward",
+        MouseBase::WheelUp => "WheelUp",
+        MouseBase::WheelDown => "WheelDown",
+    };
+    format!(
+        "{}{}{base_name}",
+        modifier_prefix(modifiers),
+        if double_click { "Double+" } else { "" }
+    )
+}
+
+/// 수정자 접두 — 파서·기본값과 같은 순서(Ctrl, Shift, Alt, Meta).
+/// 캡처 필드의 진행 중 표시(R6)에도 쓰인다.
+pub fn modifier_prefix(modifiers: u8) -> String {
+    let mut prefix = String::new();
+    if modifiers & MODIFIER_CONTROL != 0 {
+        prefix.push_str("Ctrl+");
+    }
+    if modifiers & MODIFIER_SHIFT != 0 {
+        prefix.push_str("Shift+");
+    }
+    if modifiers & MODIFIER_ALT != 0 {
+        prefix.push_str("Alt+");
+    }
+    if modifiers & MODIFIER_META != 0 {
+        prefix.push_str("Meta+");
+    }
+    prefix
+}
+
+/// 액션의 확정 키 시퀀스 목록 — 재정의가 있으면 그 목록, 없으면 기본값.
+/// 옵션 다이얼로그 Shortcuts 탭의 초기 상태 (SPEC §8.3)
+pub fn resolved_keyboard_sequences(
+    overrides: Option<&Map<String, Value>>,
+    action_name: &str,
+) -> Vec<String> {
+    override_or_default(
+        overrides,
+        action_name,
+        default_keyboard_sequences(action_name),
+    )
+}
+
+/// 액션의 확정 마우스 인코딩 목록 — 동상
+pub fn resolved_mouse_encodings(
+    overrides: Option<&Map<String, Value>>,
+    action_name: &str,
+) -> Vec<String> {
+    override_or_default(overrides, action_name, default_mouse_encodings(action_name))
+}
+
 /// 설정 재정의가 있으면 그 목록(빈 배열 = 제거), 없으면 기본값
 fn override_or_default(
     overrides: Option<&Map<String, Value>>,
@@ -327,4 +407,54 @@ fn virtual_key_from_name(name: &str) -> Option<u16> {
         _ => return None,
     };
     Some(key.0)
+}
+
+/// 가상 키 → 시퀀스 베이스 이름 — `virtual_key_from_name`의 역 (R6 캡처).
+/// 왕복 정합: 여기서 나온 이름은 반드시 같은 가상 키로 파싱된다.
+fn key_name_from_virtual_key(virtual_key: u16) -> Option<String> {
+    use windows::Win32::UI::Input::KeyboardAndMouse::{
+        VK_BACK, VK_DELETE, VK_DOWN, VK_END, VK_ESCAPE, VK_F1, VK_F24, VK_HOME, VK_INSERT, VK_LEFT,
+        VK_NEXT, VK_OEM_1, VK_OEM_2, VK_OEM_3, VK_OEM_4, VK_OEM_5, VK_OEM_6, VK_OEM_7,
+        VK_OEM_COMMA, VK_OEM_MINUS, VK_OEM_PERIOD, VK_OEM_PLUS, VK_PRIOR, VK_RETURN, VK_RIGHT,
+        VK_SPACE, VK_TAB, VK_UP,
+    };
+    // 영숫자: 가상 키 = ASCII 대문자
+    if (u16::from(b'0')..=u16::from(b'9')).contains(&virtual_key)
+        || (u16::from(b'A')..=u16::from(b'Z')).contains(&virtual_key)
+    {
+        return Some(char::from(virtual_key as u8).to_string());
+    }
+    if (VK_F1.0..=VK_F24.0).contains(&virtual_key) {
+        return Some(format!("F{}", virtual_key - VK_F1.0 + 1));
+    }
+    let name = match windows::Win32::UI::Input::KeyboardAndMouse::VIRTUAL_KEY(virtual_key) {
+        VK_LEFT => "Left",
+        VK_RIGHT => "Right",
+        VK_UP => "Up",
+        VK_DOWN => "Down",
+        VK_HOME => "Home",
+        VK_END => "End",
+        VK_PRIOR => "PgUp",
+        VK_NEXT => "PgDown",
+        VK_SPACE => "Space",
+        VK_BACK => "Backspace",
+        VK_DELETE => "Delete",
+        VK_INSERT => "Insert",
+        VK_ESCAPE => "Escape",
+        VK_RETURN => "Enter",
+        VK_TAB => "Tab",
+        VK_OEM_PLUS => "=",
+        VK_OEM_MINUS => "-",
+        VK_OEM_COMMA => ",",
+        VK_OEM_PERIOD => ".",
+        VK_OEM_1 => ";",
+        VK_OEM_2 => "/",
+        VK_OEM_3 => "`",
+        VK_OEM_4 => "[",
+        VK_OEM_5 => "\\",
+        VK_OEM_6 => "]",
+        VK_OEM_7 => "'",
+        _ => return None,
+    };
+    Some(name.to_string())
 }

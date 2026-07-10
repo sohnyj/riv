@@ -8,6 +8,7 @@ fn main() {
     }
 
     println!("cargo:rerun-if-changed=res/riv.rc");
+    println!("cargo:rerun-if-changed=res/resource.h");
     println!("cargo:rerun-if-changed=res/riv.manifest");
     println!("cargo:rerun-if-changed=res/riv.ico");
 

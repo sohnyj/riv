@@ -130,6 +130,11 @@ impl Options {
     }
 }
 
+/// (R, G, B) → "#RRGGBB"
+fn format_hex_color((red, green, blue): (u8, u8, u8)) -> String {
+    format!("#{red:02X}{green:02X}{blue:02X}")
+}
+
 /// "#RRGGBB" → (R, G, B)
 fn parse_hex_color(text: &str) -> Option<(u8, u8, u8)> {
     let digits = text.strip_prefix('#')?;
@@ -211,6 +216,195 @@ impl SettingsFile {
             .expect("options is object")
             .insert(key.to_string(), Value::Bool(value));
         self.options = Options::from_document(&self.document);
+    }
+
+    /// 옵션 전 항목 기록 (R6 Apply) — 기본값과 같은 키는 제거해 "기본값은 파일에
+    /// 쓰지 않음"(SPEC §8.1)을 유지하고, 스냅샷을 갱신한다.
+    pub fn set_options(&mut self, options: &Options) {
+        let default = Options::default();
+        let entries: [(&str, Value, Value); 22] = [
+            (
+                "bgcolorenabled",
+                Value::Bool(options.background_color_enabled),
+                Value::Bool(default.background_color_enabled),
+            ),
+            (
+                "bgcolor",
+                Value::String(format_hex_color(options.background_color)),
+                Value::String(format_hex_color(default.background_color)),
+            ),
+            (
+                "titlebarmode",
+                Value::from(options.title_bar_mode),
+                Value::from(default.title_bar_mode),
+            ),
+            (
+                "ctrldragwindow",
+                Value::Bool(options.control_drag_window),
+                Value::Bool(default.control_drag_window),
+            ),
+            (
+                "savewindowposition",
+                Value::Bool(options.save_window_position),
+                Value::Bool(default.save_window_position),
+            ),
+            (
+                "singleinstance",
+                Value::Bool(options.single_instance),
+                Value::Bool(default.single_instance),
+            ),
+            (
+                "filteringenabled",
+                Value::from(options.scaling_filter),
+                Value::from(default.scaling_filter),
+            ),
+            (
+                "fitmode",
+                Value::from(options.fit_mode),
+                Value::from(default.fit_mode),
+            ),
+            (
+                "scalefactor",
+                Value::from(options.scale_factor_percent),
+                Value::from(default.scale_factor_percent),
+            ),
+            (
+                "fractionalzoom",
+                Value::Bool(options.fractional_zoom),
+                Value::Bool(default.fractional_zoom),
+            ),
+            (
+                "cursorzoom",
+                Value::Bool(options.cursor_zoom),
+                Value::Bool(default.cursor_zoom),
+            ),
+            (
+                "sortmode",
+                Value::from(options.sort_mode),
+                Value::from(default.sort_mode),
+            ),
+            (
+                "sortdescending",
+                Value::Bool(options.sort_descending),
+                Value::Bool(default.sort_descending),
+            ),
+            (
+                "preloadingmode",
+                Value::from(options.preloading_mode),
+                Value::from(default.preloading_mode),
+            ),
+            (
+                "loopfoldersenabled",
+                Value::Bool(options.loop_folders_enabled),
+                Value::Bool(default.loop_folders_enabled),
+            ),
+            (
+                "slideshowreversed",
+                Value::Bool(options.slideshow_reversed),
+                Value::Bool(default.slideshow_reversed),
+            ),
+            (
+                "slideshowtimer",
+                Value::from(options.slideshow_timer_seconds),
+                Value::from(default.slideshow_timer_seconds),
+            ),
+            (
+                "afterdelete",
+                Value::from(options.after_delete),
+                Value::from(default.after_delete),
+            ),
+            (
+                "askdelete",
+                Value::Bool(options.ask_delete),
+                Value::Bool(default.ask_delete),
+            ),
+            (
+                "allowmimecontentdetection",
+                Value::Bool(options.allow_mime_content_detection),
+                Value::Bool(default.allow_mime_content_detection),
+            ),
+            (
+                "saverecents",
+                Value::Bool(options.save_recents),
+                Value::Bool(default.save_recents),
+            ),
+            (
+                "skiphidden",
+                Value::Bool(options.skip_hidden),
+                Value::Bool(default.skip_hidden),
+            ),
+        ];
+        let options_object = self
+            .document
+            .as_object_mut()
+            .expect("settings document is object")
+            .entry("options")
+            .or_insert_with(|| Value::Object(Map::new()))
+            .as_object_mut()
+            .expect("options is object");
+        for (key, value, default_value) in entries {
+            if value == default_value {
+                options_object.remove(key);
+            } else {
+                options_object.insert(key.to_string(), value);
+            }
+        }
+        self.options = Options::from_document(&self.document);
+    }
+
+    /// 바인딩 재정의 기록 (R6 Apply) — 각 액션의 확정 목록이 기본값과 같으면 키 제거,
+    /// 다르면 대체 목록 기록(빈 배열 = 바인딩 제거). 목록에 없는 키(recent0..9 등)는 보존.
+    pub fn set_binding_overrides(
+        &mut self,
+        keyboard: &[(String, Vec<String>)],
+        mouse: &[(String, Vec<String>)],
+    ) {
+        let document = self
+            .document
+            .as_object_mut()
+            .expect("settings document is object");
+        for (section, resolved, defaults_of) in [
+            (
+                "keyboardbindings",
+                keyboard,
+                crate::bindings::default_keyboard_sequences as fn(&str) -> &'static [&'static str],
+            ),
+            (
+                "mousebindings",
+                mouse,
+                crate::bindings::default_mouse_encodings as fn(&str) -> &'static [&'static str],
+            ),
+        ] {
+            let object = document
+                .entry(section)
+                .or_insert_with(|| Value::Object(Map::new()))
+                .as_object_mut()
+                .expect("bindings section is object");
+            for (action_name, sequences) in resolved {
+                let defaults = defaults_of(action_name);
+                if defaults.len() == sequences.len()
+                    && defaults
+                        .iter()
+                        .zip(sequences.iter())
+                        .all(|(default, sequence)| default == sequence)
+                {
+                    object.remove(action_name);
+                } else {
+                    object.insert(
+                        action_name.clone(),
+                        Value::Array(
+                            sequences
+                                .iter()
+                                .map(|sequence| Value::String(sequence.clone()))
+                                .collect(),
+                        ),
+                    );
+                }
+            }
+            if object.is_empty() {
+                document.remove(section);
+            }
+        }
     }
 
     /// 파일 열기 다이얼로그 마지막 디렉터리 (SPEC §6.4·§8.1 recents)

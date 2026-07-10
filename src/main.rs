@@ -17,6 +17,7 @@ use actions::{Action, ActivationGate};
 use bindings::{
     Bindings, MODIFIER_ALT, MODIFIER_CONTROL, MODIFIER_META, MODIFIER_SHIFT, MouseBase,
 };
+use dialogs::options::WM_APP_OPTIONS_APPLIED;
 use image::animation::Animation;
 use image::color;
 use image::core::{
@@ -825,8 +826,12 @@ fn dispatch_action(application: &mut Application, window: HWND, action: Action) 
                 animation.reset_speed();
             }
         }
-        // R6: 옵션 다이얼로그 / R7: 멀티윈도우
-        Action::Options | Action::NewWindow | Action::CloseAllWindows => {}
+        // 옵션 다이얼로그 (SPEC §8.3) — Apply·OK는 WM_APP_OPTIONS_APPLIED로 수신
+        Action::Options => {
+            dialogs::options::show(window, &application.settings);
+        }
+        // R7: 멀티윈도우
+        Action::NewWindow | Action::CloseAllWindows => {}
     }
 }
 
@@ -1123,6 +1128,20 @@ extern "system" fn window_procedure(
             let path = unsafe { Box::from_raw(lparam.0 as *mut std::path::PathBuf) };
             if let Some(application) = unsafe { application_from_window(window) } {
                 open_external_path(application, window, &path);
+            }
+            LRESULT(0)
+        }
+        // 옵션 다이얼로그 Apply·OK — 저장 + 전 컴포넌트 브로드캐스트 (SPEC §8.3)
+        WM_APP_OPTIONS_APPLIED => {
+            let payload = unsafe { &*(lparam.0 as *const dialogs::options::AppliedOptions) };
+            if let Some(application) = unsafe { application_from_window(window) } {
+                application.settings.set_options(&payload.options);
+                application
+                    .settings
+                    .set_binding_overrides(&payload.keyboard, &payload.mouse);
+                let _ = application.settings.save();
+                application.apply_options(window);
+                application.render(window);
             }
             LRESULT(0)
         }
