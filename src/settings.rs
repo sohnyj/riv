@@ -407,6 +407,56 @@ impl SettingsFile {
         }
     }
 
+    /// 창 지오메트리 (SPEC §6.1·§8.1 루트 windowgeometry) — (x, y, 너비, 높이, 최대화)
+    pub fn window_geometry(&self) -> Option<(i32, i32, i32, i32, bool)> {
+        let geometry = self.document.get("windowgeometry")?;
+        let read = |key: &str| geometry.get(key)?.as_i64().map(|value| value as i32);
+        Some((
+            read("x")?,
+            read("y")?,
+            read("width").filter(|width| *width > 0)?,
+            read("height").filter(|height| *height > 0)?,
+            geometry
+                .get("maximized")
+                .and_then(Value::as_bool)
+                .unwrap_or(false),
+        ))
+    }
+
+    pub fn set_window_geometry(
+        &mut self,
+        x: i32,
+        y: i32,
+        width: i32,
+        height: i32,
+        maximized: bool,
+    ) {
+        self.document
+            .as_object_mut()
+            .expect("settings document is object")
+            .insert(
+                "windowgeometry".to_string(),
+                serde_json::json!({ "x": x, "y": y, "width": width, "height": height, "maximized": maximized }),
+            );
+    }
+
+    /// 옵션 다이얼로그 위치 (SPEC §8.1 루트 optionsgeometry) — (x, y)
+    pub fn options_geometry(&self) -> Option<(i32, i32)> {
+        let geometry = self.document.get("optionsgeometry")?;
+        let read = |key: &str| geometry.get(key)?.as_i64().map(|value| value as i32);
+        Some((read("x")?, read("y")?))
+    }
+
+    pub fn set_options_geometry(&mut self, x: i32, y: i32) {
+        self.document
+            .as_object_mut()
+            .expect("settings document is object")
+            .insert(
+                "optionsgeometry".to_string(),
+                serde_json::json!({ "x": x, "y": y }),
+            );
+    }
+
     /// 파일 열기 다이얼로그 마지막 디렉터리 (SPEC §6.4·§8.1 recents)
     pub fn last_file_dialog_directory(&self) -> Option<String> {
         self.document

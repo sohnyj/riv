@@ -158,6 +158,13 @@ impl ImageCore {
         self.preload_neighbors();
     }
 
+    /// 현재 파일의 폴더 내 위치 (1-기반, 총 개수) — 타이틀바 모드 2 "i/n" (SPEC §6.1)
+    pub fn folder_position(&self) -> Option<(usize, usize)> {
+        let current = self.current.as_ref()?;
+        let index = self.position_of(&current.path)?;
+        Some((index + 1, self.entries.len()))
+    }
+
     pub fn has_folder_entries(&self) -> bool {
         !self.entries.is_empty()
     }

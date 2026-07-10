@@ -48,6 +48,8 @@ use crate::shell::file_association;
 
 /// Apply·OK 통지 — lparam = `*const AppliedOptions` (수신 측이 저장 + 브로드캐스트)
 pub const WM_APP_OPTIONS_APPLIED: u32 = WM_APP + 5;
+/// 다이얼로그 위치 통지 (SPEC §8.1 optionsgeometry) — lparam = x(하위 32비트)·y(상위)
+pub const WM_APP_OPTIONS_GEOMETRY: u32 = WM_APP + 6;
 
 /// Apply 페이로드 — 옵션 전 항목 + 액션별 확정 바인딩 목록
 pub struct AppliedOptions {
@@ -106,6 +108,8 @@ struct OptionsState {
     syncing: bool,
     state_images: HIMAGELIST,
     custom_colors: [COLORREF; 16],
+    /// 저장된 다이얼로그 위치 (optionsgeometry) — WM_INITDIALOG에서 적용
+    initial_position: Option<(i32, i32)>,
 }
 
 impl OptionsState {
@@ -176,6 +180,7 @@ pub fn show(parent: HWND, settings: &SettingsFile) {
         syncing: false,
         state_images: HIMAGELIST::default(),
         custom_colors: [COLORREF(0x00FF_FFFF); 16],
+        initial_position: settings.options_geometry(),
     };
     let instance = unsafe { GetModuleHandleW(None) }.unwrap_or_default();
     unsafe {
@@ -271,6 +276,19 @@ unsafe extern "system" fn frame_procedure(
         }
         WM_DESTROY => {
             if let Some(state) = state_mut(dialog) {
+                // 위치 저장 (optionsgeometry) — OK/Cancel 무관
+                let mut bounds = RECT::default();
+                if unsafe { GetWindowRect(dialog, &mut bounds) }.is_ok() {
+                    let packed = (bounds.left as u32 as isize) | ((bounds.top as isize) << 32);
+                    unsafe {
+                        SendMessageW(
+                            state.parent,
+                            WM_APP_OPTIONS_GEOMETRY,
+                            None,
+                            Some(LPARAM(packed)),
+                        )
+                    };
+                }
                 for page in state.pages {
                     if !page.is_invalid() {
                         let _ = unsafe { DestroyWindow(page) };
@@ -291,6 +309,21 @@ unsafe extern "system" fn frame_procedure(
 
 fn initialize_frame(state: &mut OptionsState) {
     let dialog = state.dialog;
+    if let Some((x, y)) = state.initial_position {
+        let _ = unsafe {
+            SetWindowPos(
+                dialog,
+                None,
+                x,
+                y,
+                0,
+                0,
+                windows::Win32::UI::WindowsAndMessaging::SWP_NOSIZE
+                    | windows::Win32::UI::WindowsAndMessaging::SWP_NOZORDER
+                    | windows::Win32::UI::WindowsAndMessaging::SWP_NOACTIVATE,
+            )
+        };
+    }
     let Ok(tab) = (unsafe { GetDlgItem(Some(dialog), IDC_OPTIONS_TAB) }) else {
         return;
     };

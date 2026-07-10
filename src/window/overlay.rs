@@ -67,34 +67,35 @@ pub struct Overlay {
     text_format: IDWriteTextFormat,
     error_format: IDWriteTextFormat,
     dwrite_factory: IDWriteFactory,
+    /// 창 DPI 배율 — D2D 타깃이 96 DPI 고정이라 치수·폰트를 물리 픽셀로 보정
+    /// (R7 — 150% DPI 과소 표시 수정, SPEC R12·§3.6)
+    scale: f32,
 }
 
 impl Overlay {
     pub fn new() -> Result<Self> {
         let dwrite_factory: IDWriteFactory =
             unsafe { DWriteCreateFactory(DWRITE_FACTORY_TYPE_SHARED)? };
-        let create_format = |size: f32| unsafe {
-            dwrite_factory.CreateTextFormat(
-                w!("Segoe UI"),
-                None,
-                DWRITE_FONT_WEIGHT_NORMAL,
-                DWRITE_FONT_STYLE_NORMAL,
-                DWRITE_FONT_STRETCH_NORMAL,
-                size,
-                w!("en-us"),
-            )
-        };
-        let text_format = create_format(14.0)?;
-        let error_format = create_format(16.0)?;
-        unsafe {
-            error_format.SetTextAlignment(DWRITE_TEXT_ALIGNMENT_CENTER)?;
-            error_format.SetParagraphAlignment(DWRITE_PARAGRAPH_ALIGNMENT_CENTER)?;
-        }
+        let (text_format, error_format) = create_text_formats(&dwrite_factory, 1.0)?;
         Ok(Self {
             text_format,
             error_format,
             dwrite_factory,
+            scale: 1.0,
         })
+    }
+
+    /// 창 DPI 변경 반영 — 텍스트 포맷 재생성 (WM_DPICHANGED·시작 시)
+    pub fn set_scale(&mut self, scale: f32) {
+        let scale = scale.max(0.5);
+        if (scale - self.scale).abs() < f32::EPSILON {
+            return;
+        }
+        if let Ok((text_format, error_format)) = create_text_formats(&self.dwrite_factory, scale) {
+            self.text_format = text_format;
+            self.error_format = error_format;
+            self.scale = scale;
+        }
     }
 
     /// 렌더러의 D2D 패스 내부에서 호출 (BeginDraw~EndDraw 사이, 변환 identity)
@@ -106,15 +107,10 @@ impl Overlay {
         content: &OverlayContent,
     ) -> Result<()> {
         let boost = content.scrgb_boost;
+        let margin = PANEL_MARGIN * self.scale;
+        let panel_gap = 8.0 * self.scale;
         let info_rect = if let Some(info_text) = &content.info_text {
-            Some(self.draw_panel(
-                context,
-                info_text,
-                PANEL_MARGIN,
-                PANEL_MARGIN,
-                viewport_width,
-                boost,
-            )?)
+            Some(self.draw_panel(context, info_text, margin, margin, viewport_width, boost)?)
         } else {
             None
         };
@@ -122,10 +118,10 @@ impl Overlay {
             // 줌 필 = 상단 중앙 (2026-07-10 — qView의 좌측 배치는 Qt 중앙 정렬 제약의
             // 우회였음. DWrite 메트릭 기반 정밀 중앙 배치). 정보 패널과 겹치면 그 아래로.
             let pill_width = self.measure_panel_width(pill_text, viewport_width)?;
-            let centered_left = ((viewport_width - pill_width) / 2.0).max(PANEL_MARGIN);
+            let centered_left = ((viewport_width - pill_width) / 2.0).max(margin);
             let top = match &info_rect {
-                Some(info) if centered_left < info.right + 8.0 => info.bottom + 8.0,
-                _ => PANEL_MARGIN,
+                Some(info) if centered_left < info.right + panel_gap => info.bottom + panel_gap,
+                _ => margin,
             };
             self.draw_panel(
                 context,
@@ -152,7 +148,7 @@ impl Overlay {
         self.create_layout(
             text,
             &self.text_format,
-            (viewport_width - PANEL_MARGIN * 2.0 - PANEL_PADDING_X * 2.0).max(0.0),
+            (viewport_width - (PANEL_MARGIN * 2.0 + PANEL_PADDING_X * 2.0) * self.scale).max(0.0),
         )
     }
 
@@ -161,7 +157,7 @@ impl Overlay {
         let layout = self.panel_layout(text, viewport_width)?;
         let mut metrics = DWRITE_TEXT_METRICS::default();
         unsafe { layout.GetMetrics(&mut metrics)? };
-        Ok(metrics.width + PANEL_PADDING_X * 2.0)
+        Ok(metrics.width + PANEL_PADDING_X * 2.0 * self.scale)
     }
 
     /// 반투명 라운드 패널 + 흰 글자. 반환 = 패널 사각형.
@@ -177,15 +173,17 @@ impl Overlay {
         let layout = self.panel_layout(text, viewport_width)?;
         let mut metrics = DWRITE_TEXT_METRICS::default();
         unsafe { layout.GetMetrics(&mut metrics)? };
+        let padding_x = PANEL_PADDING_X * self.scale;
+        let padding_y = PANEL_PADDING_Y * self.scale;
         let panel = D2D1_ROUNDED_RECT {
             rect: D2D_RECT_F {
                 left,
                 top,
-                right: left + metrics.width + PANEL_PADDING_X * 2.0,
-                bottom: top + metrics.height + PANEL_PADDING_Y * 2.0,
+                right: left + metrics.width + padding_x * 2.0,
+                bottom: top + metrics.height + padding_y * 2.0,
             },
-            radiusX: PANEL_CORNER_RADIUS,
-            radiusY: PANEL_CORNER_RADIUS,
+            radiusX: PANEL_CORNER_RADIUS * self.scale,
+            radiusY: PANEL_CORNER_RADIUS * self.scale,
         };
         unsafe {
             let background = context
@@ -195,8 +193,8 @@ impl Overlay {
                 context.CreateSolidColorBrush(&color::output_color(WHITE, scrgb_boost), None)?;
             context.DrawTextLayout(
                 Vector2 {
-                    X: left + PANEL_PADDING_X,
-                    Y: top + PANEL_PADDING_Y,
+                    X: left + padding_x,
+                    Y: top + padding_y,
                 },
                 &layout,
                 &foreground,
@@ -252,6 +250,31 @@ impl Overlay {
 }
 
 /// 정보 패널 본문 조립 — 필드 8종 (SPEC §3.6)
+/// Segoe UI 텍스트 포맷 2종(패널 14pt·에러 16pt) × DPI 배율 (R12)
+fn create_text_formats(
+    dwrite_factory: &IDWriteFactory,
+    scale: f32,
+) -> Result<(IDWriteTextFormat, IDWriteTextFormat)> {
+    let create_format = |size: f32| unsafe {
+        dwrite_factory.CreateTextFormat(
+            w!("Segoe UI"),
+            None,
+            DWRITE_FONT_WEIGHT_NORMAL,
+            DWRITE_FONT_STYLE_NORMAL,
+            DWRITE_FONT_STRETCH_NORMAL,
+            size * scale,
+            w!("en-us"),
+        )
+    };
+    let text_format = create_format(14.0)?;
+    let error_format = create_format(16.0)?;
+    unsafe {
+        error_format.SetTextAlignment(DWRITE_TEXT_ALIGNMENT_CENTER)?;
+        error_format.SetParagraphAlignment(DWRITE_PARAGRAPH_ALIGNMENT_CENTER)?;
+    }
+    Ok((text_format, error_format))
+}
+
 pub fn build_info_text(
     path: &Path,
     image: &DecodedImage,

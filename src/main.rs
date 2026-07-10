@@ -17,7 +17,7 @@ use actions::{Action, ActivationGate};
 use bindings::{
     Bindings, MODIFIER_ALT, MODIFIER_CONTROL, MODIFIER_META, MODIFIER_SHIFT, MouseBase,
 };
-use dialogs::options::WM_APP_OPTIONS_APPLIED;
+use dialogs::options::{WM_APP_OPTIONS_APPLIED, WM_APP_OPTIONS_GEOMETRY};
 use image::animation::Animation;
 use image::color;
 use image::core::{
@@ -32,6 +32,7 @@ use shell::{file_ops, open_dialog};
 use view::renderer::Renderer;
 use view::transform::{FitMode, Size, ViewTransform};
 use window::context_menu::{self, MenuSelection, MenuState};
+use window::dwm;
 use window::overlay::{self, Overlay, OverlayContent};
 use windows::Win32::Foundation::{HWND, LPARAM, LRESULT, POINT, RECT, WPARAM};
 use windows::Win32::Graphics::Direct2D::Common::D2D1_COLOR_F;
@@ -56,13 +57,14 @@ use windows::Win32::UI::WindowsAndMessaging::{
     DispatchMessageW, GWL_STYLE, GWLP_USERDATA, GetClientRect, GetCursorPos, GetMessageW,
     GetWindowLongPtrW, GetWindowPlacement, GetWindowRect, HCURSOR, HTCAPTION, HWND_TOP, IDC_ARROW,
     IDC_SIZEALL, IsZoomed, KillTimer, LoadCursorW, LoadIconW, MSG, PostMessageW, PostQuitMessage,
-    RegisterClassExW, SW_SHOW, SWP_FRAMECHANGED, SWP_NOACTIVATE, SWP_NOMOVE, SWP_NOSIZE,
-    SWP_NOZORDER, SendMessageW, SetCursor, SetTimer, SetWindowLongPtrW, SetWindowPlacement,
-    SetWindowPos, ShowWindow, TranslateMessage, WINDOW_STYLE, WINDOWPLACEMENT, WM_ACTIVATEAPP,
-    WM_APP, WM_CLOSE, WM_CONTEXTMENU, WM_DESTROY, WM_DISPLAYCHANGE, WM_DPICHANGED, WM_KEYDOWN,
-    WM_LBUTTONDBLCLK, WM_LBUTTONDOWN, WM_LBUTTONUP, WM_MBUTTONDOWN, WM_MOUSEMOVE, WM_MOUSEWHEEL,
-    WM_MOVE, WM_NCDESTROY, WM_NCLBUTTONDOWN, WM_PAINT, WM_SETCURSOR, WM_SIZE, WM_SYSKEYDOWN,
-    WM_TIMER, WM_XBUTTONDOWN, WNDCLASSEXW, WS_OVERLAPPEDWINDOW, WS_POPUP, WS_VISIBLE,
+    RegisterClassExW, SW_HIDE, SW_SHOW, SW_SHOWMAXIMIZED, SWP_FRAMECHANGED, SWP_NOACTIVATE,
+    SWP_NOMOVE, SWP_NOSIZE, SWP_NOZORDER, SendMessageW, SetCursor, SetTimer, SetWindowLongPtrW,
+    SetWindowPlacement, SetWindowPos, SetWindowTextW, ShowWindow, TranslateMessage, WINDOW_STYLE,
+    WINDOWPLACEMENT, WM_ACTIVATEAPP, WM_APP, WM_CLOSE, WM_CONTEXTMENU, WM_DESTROY,
+    WM_DISPLAYCHANGE, WM_DPICHANGED, WM_KEYDOWN, WM_LBUTTONDBLCLK, WM_LBUTTONDOWN, WM_LBUTTONUP,
+    WM_MBUTTONDOWN, WM_MOUSEMOVE, WM_MOUSEWHEEL, WM_MOVE, WM_NCDESTROY, WM_NCLBUTTONDOWN, WM_PAINT,
+    WM_SETCURSOR, WM_SETTINGCHANGE, WM_SIZE, WM_SYSKEYDOWN, WM_TIMER, WM_XBUTTONDOWN, WNDCLASSEXW,
+    WS_OVERLAPPEDWINDOW, WS_POPUP, WS_VISIBLE,
 };
 use windows::core::{PCWSTR, Result, w};
 
@@ -111,6 +113,8 @@ struct Application {
     wheel_notch_accumulator: i32,
     /// 지연 첫 표시 (SPEC §6.1) — 첫 이미지(또는 실패) 후 show
     window_shown: bool,
+    /// 지오메트리 복원이 최대화 상태였음 — 첫 표시 시 SW_SHOWMAXIMIZED (SPEC §6.1)
+    show_maximized: bool,
     overlay: Overlay,
     /// Show File Info 토글 (SPEC §3.6 정보 오버레이)
     show_file_info: bool,
@@ -158,6 +162,7 @@ impl Application {
             pan_cursor: unsafe { LoadCursorW(None, IDC_SIZEALL)? },
             wheel_notch_accumulator: 0,
             window_shown: false,
+            show_maximized: false,
             overlay: Overlay::new()?,
             show_file_info: false,
             zoom_pill_text: None,
@@ -170,6 +175,7 @@ impl Application {
         application
             .renderer
             .set_sdr_white_boost(application.sdr_white_boost);
+        application.overlay.set_scale(device_pixel_ratio);
         // 실행 인자 = 열 파일 경로 하나 (SPEC §6.5 — CLI 옵션 없음)
         if let Some(argument) = std::env::args_os().nth(1) {
             application.image_core.load_path(Path::new(&argument));
@@ -255,10 +261,87 @@ impl Application {
             return;
         }
         self.window_shown = true;
-        let _ = unsafe { ShowWindow(window, SW_SHOW) };
+        let _ = unsafe {
+            ShowWindow(
+                window,
+                if self.show_maximized {
+                    SW_SHOWMAXIMIZED
+                } else {
+                    SW_SHOW
+                },
+            )
+        };
         if !self.action_script.is_empty() {
             unsafe { SetTimer(Some(window), ACTION_SCRIPT_TIMER, 700, None) };
         }
+    }
+
+    /// 시작 시 창 지오메트리 복원 (SPEC §6.1) — 숨김 유지(지연 첫 표시가 표시 담당)
+    fn restore_window_geometry(&mut self, window: HWND) {
+        if !self.settings.options.save_window_position {
+            return;
+        }
+        let Some((x, y, width, height, maximized)) = self.settings.window_geometry() else {
+            return;
+        };
+        self.show_maximized = maximized;
+        let placement = WINDOWPLACEMENT {
+            length: size_of::<WINDOWPLACEMENT>() as u32,
+            showCmd: SW_HIDE.0 as u32,
+            rcNormalPosition: RECT {
+                left: x,
+                top: y,
+                right: x + width,
+                bottom: y + height,
+            },
+            ..Default::default()
+        };
+        let _ = unsafe { SetWindowPlacement(window, &placement) };
+    }
+
+    /// 종료 시 창 지오메트리 저장 (SPEC §6.1) — 전체화면 중이면 진입 전 상태를 저장
+    fn save_window_geometry(&mut self, window: HWND) {
+        if !self.settings.options.save_window_position {
+            return;
+        }
+        let mut placement = WINDOWPLACEMENT {
+            length: size_of::<WINDOWPLACEMENT>() as u32,
+            ..Default::default()
+        };
+        if let Some((saved, _)) = &self.fullscreen_restore {
+            placement = *saved;
+        } else if unsafe { GetWindowPlacement(window, &mut placement) }.is_err() {
+            return;
+        }
+        let bounds = placement.rcNormalPosition;
+        self.settings.set_window_geometry(
+            bounds.left,
+            bounds.top,
+            bounds.right - bounds.left,
+            bounds.bottom - bounds.top,
+            placement.showCmd == SW_SHOWMAXIMIZED.0 as u32,
+        );
+        let _ = self.settings.save();
+    }
+
+    /// 타이틀바 모드 (SPEC §6.1) — 0="riv" / 1=파일명 / 2="i/n - 파일명"
+    fn update_window_title(&self, window: HWND) {
+        let file_name = self.image_core.current.as_ref().and_then(|current| {
+            current
+                .path
+                .file_name()
+                .map(|name| name.to_string_lossy().into_owned())
+        });
+        let title = match (self.settings.options.title_bar_mode, file_name) {
+            (0, _) | (_, None) => "riv".to_string(),
+            (2, Some(name)) => match self.image_core.folder_position() {
+                Some((index, total)) => format!("{index}/{total} - {name}"),
+                None => name,
+            },
+            (_, Some(name)) => name,
+        };
+        let wide: Vec<u16> = title.encode_utf16().chain(std::iter::once(0)).collect();
+        let _ = unsafe { SetWindowTextW(window, PCWSTR(wide.as_ptr())) };
     }
 
     /// 새 현재 이미지 반영 — 회전·팬 리셋, Preserve Zoom이면 절대 배율 유지 (SPEC §3.2·§4.1).
@@ -325,6 +408,7 @@ impl Application {
             self.open_with_list = None;
             unsafe { SetTimer(Some(window), OPEN_WITH_TIMER, 250, None) };
         }
+        self.update_window_title(window);
         self.render(window);
     }
 
@@ -335,6 +419,7 @@ impl Application {
         self.display = None;
         self.displayed_path = None;
         self.renderer.clear_image();
+        self.update_window_title(window);
         self.render(window);
     }
 
@@ -501,6 +586,7 @@ impl Application {
         self.view_transform.fit_mode = FitMode::from_setting(self.settings.options.fit_mode);
         self.image_core
             .update_options(core_options(&self.settings.options));
+        self.update_window_title(window);
         self.render(window);
     }
 
@@ -947,6 +1033,8 @@ fn toggle_fullscreen(application: &mut Application, window: HWND) {
                 0,
                 SWP_FRAMECHANGED | SWP_NOMOVE | SWP_NOSIZE | SWP_NOZORDER | SWP_NOACTIVATE,
             );
+            // DWM 보정 원복 (SPEC §6.2)
+            dwm::set_fullscreen_polish(window, false);
         } else {
             let mut placement = WINDOWPLACEMENT {
                 length: size_of::<WINDOWPLACEMENT>() as u32,
@@ -955,6 +1043,8 @@ fn toggle_fullscreen(application: &mut Application, window: HWND) {
             let _ = GetWindowPlacement(window, &mut placement);
             let style = WINDOW_STYLE(GetWindowLongPtrW(window, GWL_STYLE) as u32);
             application.fullscreen_restore = Some((placement, style));
+            // 전환 애니메이션 비활성 + 라운드 코너 해제 (SPEC §6.2 — Win11 1px 갭)
+            dwm::set_fullscreen_polish(window, true);
 
             let monitor = MonitorFromWindow(window, MONITOR_DEFAULTTONEAREST);
             let mut monitor_info = MONITORINFO {
@@ -1084,6 +1174,9 @@ fn main() -> Result<()> {
         SetWindowLongPtrW(window, GWLP_USERDATA, Box::into_raw(application) as isize);
     }
     if let Some(application) = unsafe { application_from_window(window) } {
+        // 지오메트리 복원(숨김 유지 — 지연 첫 표시) + 다크 타이틀바 (SPEC §6.1, P14)
+        application.restore_window_geometry(window);
+        dwm::apply_title_bar_theme(window);
         application.drop_target = drag_drop::register(window).ok();
         application.render(window);
         if !load_pending {
@@ -1165,6 +1258,16 @@ extern "system" fn window_procedure(
                 let _ = application.settings.save();
                 application.apply_options(window);
                 application.render(window);
+            }
+            LRESULT(0)
+        }
+        // 옵션 다이얼로그 위치 저장 (SPEC §8.1 optionsgeometry) — lparam = (x, y) i32 2개
+        WM_APP_OPTIONS_GEOMETRY => {
+            if let Some(application) = unsafe { application_from_window(window) } {
+                let x = (lparam.0 & 0xFFFF_FFFF) as u32 as i32;
+                let y = (lparam.0 >> 32) as i32;
+                application.settings.set_options_geometry(x, y);
+                let _ = application.settings.save();
             }
             LRESULT(0)
         }
@@ -1462,7 +1565,10 @@ extern "system" fn window_procedure(
         // Per-Monitor V2: 제안 사각형 적용 + 배율 기준 갱신
         WM_DPICHANGED => {
             if let Some(application) = unsafe { application_from_window(window) } {
-                application.view_transform.device_pixel_ratio = (wparam.0 & 0xFFFF) as f32 / 96.0;
+                let ratio = (wparam.0 & 0xFFFF) as f32 / 96.0;
+                application.view_transform.device_pixel_ratio = ratio;
+                // 오버레이 치수·폰트 물리 픽셀 보정 (R7 — 재렌더는 후속 WM_SIZE)
+                application.overlay.set_scale(ratio);
             }
             let suggested_bounds = unsafe { &*(lparam.0 as *const RECT) };
             let _ = unsafe {
@@ -1477,6 +1583,18 @@ extern "system" fn window_procedure(
                 )
             };
             LRESULT(0)
+        }
+        // 종료 전 지오메트리 저장 (SPEC §6.1) — 이후 기본 경로(DestroyWindow)
+        WM_CLOSE => {
+            if let Some(application) = unsafe { application_from_window(window) } {
+                application.save_window_geometry(window);
+            }
+            unsafe { DefWindowProcW(window, message, wparam, lparam) }
+        }
+        // 시스템 테마 변경 — 다크 타이틀바 추종 (P14)
+        WM_SETTINGCHANGE => {
+            dwm::apply_title_bar_theme(window);
+            unsafe { DefWindowProcW(window, message, wparam, lparam) }
         }
         WM_NCDESTROY => {
             let _ = unsafe { RevokeDragDrop(window) };
