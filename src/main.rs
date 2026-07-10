@@ -51,16 +51,15 @@ use windows::Win32::UI::Input::KeyboardAndMouse::{
 use windows::Win32::UI::WindowsAndMessaging::{
     CS_DBLCLKS, CS_HREDRAW, CS_VREDRAW, CW_USEDEFAULT, CreateWindowExW, DefWindowProcW,
     DispatchMessageW, GWL_STYLE, GWLP_USERDATA, GetClientRect, GetCursorPos, GetMessageW,
-    GetSystemMetrics, GetWindowLongPtrW, GetWindowPlacement, GetWindowRect, HCURSOR, HTCAPTION,
-    HWND_TOP, IDC_ARROW, IDC_SIZEALL, IsZoomed, KillTimer, LoadCursorW, LoadIconW, MSG,
-    PostMessageW, PostQuitMessage, RegisterClassExW, SM_CXSCREEN, SM_CYSCREEN, SW_SHOW,
-    SWP_FRAMECHANGED, SWP_NOACTIVATE, SWP_NOMOVE, SWP_NOSIZE, SWP_NOZORDER, SendMessageW,
-    SetCursor, SetTimer, SetWindowLongPtrW, SetWindowPlacement, SetWindowPos, ShowWindow,
-    TranslateMessage, WINDOW_STYLE, WINDOWPLACEMENT, WM_ACTIVATEAPP, WM_APP, WM_CLOSE,
-    WM_CONTEXTMENU, WM_DESTROY, WM_DPICHANGED, WM_KEYDOWN, WM_LBUTTONDBLCLK, WM_LBUTTONDOWN,
-    WM_LBUTTONUP, WM_MBUTTONDOWN, WM_MOUSEMOVE, WM_MOUSEWHEEL, WM_MOVE, WM_NCDESTROY,
-    WM_NCLBUTTONDOWN, WM_PAINT, WM_SETCURSOR, WM_SIZE, WM_SYSKEYDOWN, WM_TIMER, WM_XBUTTONDOWN,
-    WNDCLASSEXW, WS_OVERLAPPEDWINDOW, WS_POPUP, WS_VISIBLE,
+    GetWindowLongPtrW, GetWindowPlacement, GetWindowRect, HCURSOR, HTCAPTION, HWND_TOP, IDC_ARROW,
+    IDC_SIZEALL, IsZoomed, KillTimer, LoadCursorW, LoadIconW, MSG, PostMessageW, PostQuitMessage,
+    RegisterClassExW, SW_SHOW, SWP_FRAMECHANGED, SWP_NOACTIVATE, SWP_NOMOVE, SWP_NOSIZE,
+    SWP_NOZORDER, SendMessageW, SetCursor, SetTimer, SetWindowLongPtrW, SetWindowPlacement,
+    SetWindowPos, ShowWindow, TranslateMessage, WINDOW_STYLE, WINDOWPLACEMENT, WM_ACTIVATEAPP,
+    WM_APP, WM_CLOSE, WM_CONTEXTMENU, WM_DESTROY, WM_DPICHANGED, WM_KEYDOWN, WM_LBUTTONDBLCLK,
+    WM_LBUTTONDOWN, WM_LBUTTONUP, WM_MBUTTONDOWN, WM_MOUSEMOVE, WM_MOUSEWHEEL, WM_MOVE,
+    WM_NCDESTROY, WM_NCLBUTTONDOWN, WM_PAINT, WM_SETCURSOR, WM_SIZE, WM_SYSKEYDOWN, WM_TIMER,
+    WM_XBUTTONDOWN, WNDCLASSEXW, WS_OVERLAPPEDWINDOW, WS_POPUP, WS_VISIBLE,
 };
 use windows::core::{PCWSTR, Result, w};
 
@@ -918,9 +917,8 @@ fn main() -> Result<()> {
     let class_atom = unsafe { RegisterClassExW(&window_class) };
     assert!(class_atom != 0, "RegisterClassExW failed");
 
-    // 창 기본 크기 = 주 화면의 40% × 30% (SPEC §6.1, 2026-07-10 — 지오메트리 복원은 R7)
-    let default_width = unsafe { GetSystemMetrics(SM_CXSCREEN) } * 40 / 100;
-    let default_height = unsafe { GetSystemMetrics(SM_CYSCREEN) } * 30 / 100;
+    // 창 기본 크기 = 640×480 (SPEC §6.1, 2026-07-10 — 화면 비율 기반(40%×30%)은
+    // 초광폭에서 부적합해 폐기. 지오메트리 복원은 R7)
     let window = unsafe {
         CreateWindowExW(
             Default::default(),
@@ -929,8 +927,8 @@ fn main() -> Result<()> {
             WS_OVERLAPPEDWINDOW,
             CW_USEDEFAULT,
             CW_USEDEFAULT,
-            default_width.max(320),
-            default_height.max(240),
+            640,
+            480,
             None,
             None,
             Some(instance.into()),
