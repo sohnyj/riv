@@ -1,0 +1,16 @@
+[package]
+name = "riv"
+version = "0.1.0"
+edition = "2024"
+license = "GPL-3.0-only"
+description = "rust image viewer for Windows"
+
+[dependencies]
+windows = { version = "0.62.2", features = ["Win32_Foundation", "Win32_UI_WindowsAndMessaging", "Win32_UI_HiDpi", "Win32_System_LibraryLoader", "Win32_Graphics_Gdi"] }
+
+[profile.release]
+opt-level = 3
+lto = "thin"
+codegen-units = 1
+panic = "abort"
+strip = true

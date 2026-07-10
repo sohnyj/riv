@@ -1,0 +1,4 @@
+// 1 = 앱 아이콘 리소스 ID (창 클래스 hIcon과 탐색기 표시가 공유)
+1 ICON "riv.ico"
+// 24 = RT_MANIFEST, 1 = CREATEPROCESS_MANIFEST_RESOURCE_ID
+1 24 "riv.manifest"
