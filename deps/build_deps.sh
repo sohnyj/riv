@@ -1,7 +1,7 @@
 #!/bin/sh
 # C/C++ fallback 코덱 정적 빌드 (PORTING_PLAN §6.2-4) — clang-cl + xwin, /arch:AVX2.
 # 레시피 원전: github.com/sohnyj/qView buildtools/packages (사용자 작성, 2026-07-10 승인).
-# 산출물: buildtools/prefix/{lib,include} — riv의 build.rs가 링크한다.
+# 산출물: deps/prefix/{lib,include} — riv의 build.rs가 링크한다.
 set -e
 cd "$(dirname "$0")"
 ROOT=$PWD

@@ -1,9 +1,9 @@
 //! C 정적 fallback 코덱 어댑터 (PORTING_PLAN §5) — 애니 WebP(libwebp+libwebpdemux)·
 //! EXR(OpenEXR C++ 심)·HEIF(libheif+libde265). 정적 라이브러리는
-//! `buildtools/build_deps.sh` 산출물이며 build.rs가 링크한다.
+//! `deps/build_deps.sh` 산출물이며 build.rs가 링크한다.
 //!
 //! FFI 선언은 각 라이브러리의 공개 C 헤더와 1:1 — 구조체 레이아웃·enum 값·ABI 버전은
-//! 빌드 시점 소스(buildtools/sources)에서 확인해 고정했다. 출력은 전부 premultiplied
+//! 빌드 시점 소스(deps/sources)에서 확인해 고정했다. 출력은 전부 premultiplied
 //! BGRA8 (SPEC §3.1).
 
 use std::ffi::{CStr, c_char, c_int, c_void};
@@ -201,7 +201,7 @@ fn premultiply_bgra_in_place(pixels: &mut [u8]) {
     }
 }
 
-// ── EXR — OpenEXR C++ 심 (buildtools/shim, SPEC §10 성능 우선 선택) ────────────
+// ── EXR — OpenEXR C++ 심 (deps/shim, SPEC §10 성능 우선 선택) ────────────
 
 unsafe extern "C" {
     fn riv_exr_decode(

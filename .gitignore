@@ -1,7 +1,7 @@
 /.claude
 /docs
 /target
-/buildtools/sources
-/buildtools/build
-/buildtools/prefix
+/deps/sources
+/deps/build
+/deps/prefix
 /test

@@ -25,12 +25,12 @@ fn main() {
     println!("cargo:rustc-link-arg-bins={}", compiled_resource.display());
 
     // C/C++ fallback 코덱 정적 링크 (PORTING_PLAN §5·§6.2) —
-    // buildtools/build_deps.sh 산출물(버전 접미사 포함)을 전부 링크한다
+    // deps/build_deps.sh 산출물(버전 접미사 포함)을 전부 링크한다
     let manifest_directory = PathBuf::from(env::var("CARGO_MANIFEST_DIR").unwrap());
-    let codec_library_directory = manifest_directory.join("buildtools/prefix/lib");
+    let codec_library_directory = manifest_directory.join("deps/prefix/lib");
     assert!(
         codec_library_directory.join("riv_exr_shim.lib").exists(),
-        "fallback codec libraries missing - run buildtools/build_deps.sh first"
+        "fallback codec libraries missing - run deps/build_deps.sh first"
     );
     println!(
         "cargo:rerun-if-changed={}",
