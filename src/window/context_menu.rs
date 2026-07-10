@@ -45,12 +45,9 @@ struct MenuBuilder {
 }
 
 impl MenuBuilder {
-    /// 아직 배선되지 않은 액션(R6 다이얼로그·R7 멀티윈도우) — 항상 비활성 표시
+    /// 아직 배선되지 않은 액션(R7 멀티윈도우) — 항상 비활성 표시
     fn is_wired(action: Action) -> bool {
-        !matches!(
-            action,
-            Action::NewWindow | Action::CloseAllWindows | Action::Options
-        )
+        !matches!(action, Action::NewWindow | Action::CloseAllWindows)
     }
 
     fn gate_satisfied(&self, gate: ActivationGate) -> bool {
