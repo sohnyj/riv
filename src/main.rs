@@ -62,10 +62,11 @@ use windows::Win32::UI::WindowsAndMessaging::{
     SWP_NOMOVE, SWP_NOSIZE, SWP_NOZORDER, SendMessageW, SetCursor, SetTimer, SetWindowLongPtrW,
     SetWindowPlacement, SetWindowPos, SetWindowTextW, ShowWindow, TranslateMessage, WINDOW_STYLE,
     WINDOWPLACEMENT, WM_ACTIVATE, WM_ACTIVATEAPP, WM_APP, WM_CLOSE, WM_CONTEXTMENU, WM_COPYDATA,
-    WM_DESTROY, WM_DISPLAYCHANGE, WM_DPICHANGED, WM_KEYDOWN, WM_LBUTTONDBLCLK, WM_LBUTTONDOWN,
-    WM_LBUTTONUP, WM_MBUTTONDOWN, WM_MOUSEMOVE, WM_MOUSEWHEEL, WM_MOVE, WM_NCDESTROY,
-    WM_NCLBUTTONDOWN, WM_PAINT, WM_SETCURSOR, WM_SETTINGCHANGE, WM_SIZE, WM_SYSKEYDOWN, WM_TIMER,
-    WM_XBUTTONDOWN, WNDCLASSEXW, WS_OVERLAPPEDWINDOW, WS_POPUP, WS_VISIBLE,
+    WM_DESTROY, WM_DISPLAYCHANGE, WM_DPICHANGED, WM_GESTURE, WM_KEYDOWN, WM_LBUTTONDBLCLK,
+    WM_LBUTTONDOWN, WM_LBUTTONUP, WM_MBUTTONDOWN, WM_MOUSEHWHEEL, WM_MOUSEMOVE, WM_MOUSEWHEEL,
+    WM_MOVE, WM_NCDESTROY, WM_NCLBUTTONDOWN, WM_PAINT, WM_SETCURSOR, WM_SETTINGCHANGE, WM_SIZE,
+    WM_SYSKEYDOWN, WM_TIMER, WM_XBUTTONDOWN, WNDCLASSEXW, WS_OVERLAPPEDWINDOW, WS_POPUP,
+    WS_VISIBLE,
 };
 use windows::core::{PCWSTR, Result, w};
 
@@ -116,6 +117,10 @@ struct Application {
     window_shown: bool,
     /// 지오메트리 복원이 최대화 상태였음 — 첫 표시 시 SW_SHOWMAXIMIZED (SPEC §6.1)
     show_maximized: bool,
+    /// 진행 중 핀치 제스처의 직전 손가락 거리 (GID_ZOOM — SPEC §5.3)
+    gesture_zoom_distance: Option<f32>,
+    /// 진행 중 팬 제스처의 직전 위치 (GID_PAN — 터치스크린 자연 팬)
+    gesture_pan_point: Option<(i32, i32)>,
     overlay: Overlay,
     /// Show File Info 토글 (SPEC §3.6 정보 오버레이)
     show_file_info: bool,
@@ -164,6 +169,8 @@ impl Application {
             wheel_notch_accumulator: 0,
             window_shown: false,
             show_maximized: false,
+            gesture_zoom_distance: None,
+            gesture_pan_point: None,
             overlay: Overlay::new()?,
             show_file_info: false,
             zoom_pill_text: None,
@@ -611,6 +618,11 @@ impl Application {
         } else {
             None
         };
+        self.zoom_at(window, factor, anchor);
+    }
+
+    /// 명시 앵커 줌 — 핀치 핫포인트(SPEC §5.3)·커서 앵커 공용. 앵커 = 중심 기준 오프셋
+    fn zoom_at(&mut self, window: HWND, factor: f32, anchor: Option<(f32, f32)>) {
         let viewport = self.viewport(window);
         let image = self.image_size();
         let previous_scale = self.view_transform.scale;
@@ -1109,6 +1121,18 @@ fn handle_key(application: &mut Application, window: HWND, virtual_key: u16) -> 
 
 /// 휠 → 바인딩 (SPEC §5.3) — zoom/pan 계열은 델타 직접 소비, 그 외 노치당 1회
 fn handle_wheel(application: &mut Application, window: HWND, wheel_delta: i16) {
+    // 터치패드 휴리스틱 (Q5 1차, PORTING_PLAN §8): 노치(120) 미세분 델타 + 무수정자
+    // (Shift는 축 스왑 — SPEC §5.3 자연 팬)는 바인딩 대신 자연 팬으로 처리
+    let modifiers = current_modifiers();
+    if wheel_delta % 120 != 0 && modifiers & !MODIFIER_SHIFT == 0 {
+        let amount = f32::from(wheel_delta) / 2.0;
+        if modifiers & MODIFIER_SHIFT != 0 {
+            application.pan_by(window, amount, 0.0);
+        } else {
+            application.pan_by(window, 0.0, amount);
+        }
+        return;
+    }
     let base = if wheel_delta > 0 {
         MouseBase::WheelUp
     } else {
@@ -1137,6 +1161,70 @@ fn handle_wheel(application: &mut Application, window: HWND, wheel_delta: i16) {
             }
         }
     }
+}
+
+/// WM_GESTURE (SPEC §5.3, Q5) — 핀치 = 핫포인트 앵커 줌, 팬 = 자연 팬(터치스크린).
+/// 반환 = 처리 여부(미처리 제스처는 DefWindowProc로).
+fn handle_gesture(application: &mut Application, window: HWND, lparam: LPARAM) -> bool {
+    use windows::Win32::UI::Input::Touch::{
+        CloseGestureInfoHandle, GESTUREINFO, GID_PAN, GID_ZOOM, GetGestureInfo, HGESTUREINFO,
+    };
+    const GF_BEGIN: u32 = 0x1;
+
+    let handle = HGESTUREINFO(lparam.0 as *mut _);
+    let mut information = GESTUREINFO {
+        cbSize: size_of::<GESTUREINFO>() as u32,
+        ..Default::default()
+    };
+    if unsafe { GetGestureInfo(handle, &mut information) }.is_err() {
+        return false;
+    }
+    let began = information.dwFlags & GF_BEGIN != 0;
+    let handled = match information.dwID {
+        identifier if identifier == GID_ZOOM.0 => {
+            // ullArguments 하위 = 손가락 간 거리, ptsLocation = 핫포인트 (문서)
+            let distance = (information.ullArguments & 0xFFFF_FFFF) as f32;
+            if began {
+                application.gesture_zoom_distance = Some(distance);
+            } else if let Some(previous) = application.gesture_zoom_distance.replace(distance)
+                && previous > 0.0
+            {
+                let mut hotpoint = POINT {
+                    x: i32::from(information.ptsLocation.x),
+                    y: i32::from(information.ptsLocation.y),
+                };
+                let _ = unsafe { ScreenToClient(window, &mut hotpoint) };
+                let (width, height) = client_size(window);
+                let anchor = (
+                    hotpoint.x as f32 - width as f32 / 2.0,
+                    hotpoint.y as f32 - height as f32 / 2.0,
+                );
+                application.zoom_at(window, distance / previous, Some(anchor));
+            }
+            true
+        }
+        identifier if identifier == GID_PAN.0 => {
+            let position = (
+                i32::from(information.ptsLocation.x),
+                i32::from(information.ptsLocation.y),
+            );
+            if began {
+                application.gesture_pan_point = Some(position);
+            } else if let Some(previous) = application.gesture_pan_point.replace(position) {
+                application.pan_by(
+                    window,
+                    (position.0 - previous.0) as f32,
+                    (position.1 - previous.1) as f32,
+                );
+            }
+            true
+        }
+        _ => false,
+    };
+    if handled {
+        let _ = unsafe { CloseGestureInfoHandle(handle) };
+    }
+    handled
 }
 
 fn main() -> Result<()> {
@@ -1231,6 +1319,33 @@ fn create_main_window(initial_path: Option<&Path>) -> Result<HWND> {
         SetWindowLongPtrW(window, GWLP_USERDATA, Box::into_raw(application) as isize);
     }
     instances::register_window(window);
+    // 핀치 줌·팬 제스처 수신 (SPEC §5.3, Q5) — 미지원 환경(wine)은 실패 무시
+    {
+        use windows::Win32::System::SystemServices::{GC_PAN, GC_ZOOM};
+        use windows::Win32::UI::Input::Touch::{
+            GESTURECONFIG, GID_PAN, GID_ZOOM, SetGestureConfig,
+        };
+        let configurations = [
+            GESTURECONFIG {
+                dwID: GID_ZOOM,
+                dwWant: GC_ZOOM.0,
+                dwBlock: 0,
+            },
+            GESTURECONFIG {
+                dwID: GID_PAN,
+                dwWant: GC_PAN.0,
+                dwBlock: 0,
+            },
+        ];
+        let _ = unsafe {
+            SetGestureConfig(
+                window,
+                0,
+                &configurations,
+                size_of::<GESTURECONFIG>() as u32,
+            )
+        };
+    }
     if let Some(application) = unsafe { application_from_window(window) } {
         // 지오메트리 복원(숨김 유지 — 지연 첫 표시) + 다크 타이틀바 (SPEC §6.1, P14)
         application.restore_window_geometry(window);
@@ -1489,6 +1604,22 @@ extern "system" fn window_procedure(
             } else {
                 LRESULT(0)
             }
+        }
+        WM_GESTURE => {
+            if let Some(application) = unsafe { application_from_window(window) }
+                && handle_gesture(application, window, lparam)
+            {
+                return LRESULT(0);
+            }
+            unsafe { DefWindowProcW(window, message, wparam, lparam) }
+        }
+        // 수평 휠·터치패드 수평 스크롤 = 수평 자연 팬 (SPEC §5.3 — 바인딩 비대상)
+        WM_MOUSEHWHEEL => {
+            if let Some(application) = unsafe { application_from_window(window) } {
+                let delta = ((wparam.0 >> 16) & 0xFFFF) as u16 as i16;
+                application.pan_by(window, f32::from(delta) / -2.0, 0.0);
+            }
+            LRESULT(0)
         }
         WM_MOUSEWHEEL => {
             if let Some(application) = unsafe { application_from_window(window) } {
