@@ -89,6 +89,8 @@ struct Application {
     image_core: ImageCore,
     /// 현재 표시 이미지 — 디바이스 로스트 재구축 시 재업로드용
     display: Option<Arc<DecodedImage>>,
+    /// 마지막 적용 경로 — 같은 파일 재적용(RAW 프리뷰 → 풀 교체 등) 판별 (SPEC §4.1)
+    displayed_path: Option<std::path::PathBuf>,
     settings: SettingsFile,
     bindings: Bindings,
     /// 창 단위 휘발성 토글 — 파일 이동·전체화면 전환에도 절대 배율 유지 (SPEC §3.2)
@@ -134,6 +136,7 @@ impl Application {
             view_transform,
             image_core: ImageCore::new(window, core_options(&settings.options)),
             display: None,
+            displayed_path: None,
             settings,
             bindings,
             preserve_zoom: false,
@@ -219,12 +222,21 @@ impl Application {
         }
     }
 
-    /// 새 현재 이미지 반영 — 회전·팬 리셋, Preserve Zoom이면 절대 배율 유지 (SPEC §3.2·§4.1)
+    /// 새 현재 이미지 반영 — 회전·팬 리셋, Preserve Zoom이면 절대 배율 유지 (SPEC §3.2·§4.1).
+    /// 같은 파일 재적용(RAW 프리뷰 → 풀 교체·reload)이고 논리 크기가 같으면 변환 유지.
     fn apply_current_image(&mut self, window: HWND) {
         let Some(current) = &self.image_core.current else {
             return;
         };
         let image = current.image.clone();
+        let path = current.path.clone();
+        let same_view = self.displayed_path.as_deref().is_some_and(|displayed| {
+            displayed
+                .to_string_lossy()
+                .eq_ignore_ascii_case(&path.to_string_lossy())
+        }) && self.display.as_ref().is_some_and(|previous| {
+            previous.width == image.width && previous.height == image.height
+        });
         let frame = &image.frames[0];
         let upload = self.renderer.set_image(
             &frame.pixels,
@@ -233,32 +245,30 @@ impl Application {
             (image.width, image.height),
         );
         self.display = Some(image);
-        let transform = &mut self.view_transform;
-        transform.rotation_quadrant = 0;
-        transform.mirrored = false;
-        transform.flipped = false;
-        transform.pan_offset_x = 0.0;
-        transform.pan_offset_y = 0.0;
-        // Preserve Zoom: 배율 유지·fit 재적용 안 함(팬만 리셋+클램프), 아니면 fit
-        transform.fit_tracking = !self.preserve_zoom;
+        self.displayed_path = Some(path.clone());
+        if !same_view {
+            let transform = &mut self.view_transform;
+            transform.rotation_quadrant = 0;
+            transform.mirrored = false;
+            transform.flipped = false;
+            transform.pan_offset_x = 0.0;
+            transform.pan_offset_y = 0.0;
+            // Preserve Zoom: 배율 유지·fit 재적용 안 함(팬만 리셋+클램프), 아니면 fit
+            transform.fit_tracking = !self.preserve_zoom;
+        }
         if upload.is_err() {
             // 업로드 실패(디바이스 로스트 등) — 재구축 경로가 display에서 재업로드
             let _ = self.rebuild_renderer(window);
         }
-        // 최근 파일 수집 — 500ms 디바운스 저장 (SPEC §6.4)
-        let recent_path = self
-            .image_core
-            .current
-            .as_ref()
-            .map(|current| current.path.clone());
-        if let Some(path) = recent_path
-            && self.settings.add_recent_file(&path)
-        {
-            unsafe { SetTimer(Some(window), RECENTS_SAVE_TIMER, 500, None) };
+        if !same_view {
+            // 최근 파일 수집 — 500ms 디바운스 저장 (SPEC §6.4)
+            if self.settings.add_recent_file(&path) {
+                unsafe { SetTimer(Some(window), RECENTS_SAVE_TIMER, 500, None) };
+            }
+            // Open With 목록 갱신 — 파일 변경 250ms 디바운스 (SPEC §6.4)
+            self.open_with_list = None;
+            unsafe { SetTimer(Some(window), OPEN_WITH_TIMER, 250, None) };
         }
-        // Open With 목록 갱신 — 파일 변경 250ms 디바운스 (SPEC §6.4)
-        self.open_with_list = None;
-        unsafe { SetTimer(Some(window), OPEN_WITH_TIMER, 250, None) };
         self.render(window);
     }
 
@@ -318,11 +328,9 @@ impl Application {
 
     /// 오버레이 내용 스냅샷 조립 (SPEC §3.6)
     fn overlay_content(&self, background: D2D1_COLOR_F) -> OverlayContent {
-        let error_text = self
-            .image_core
-            .load_error
-            .as_ref()
-            .map(|(path, error)| overlay::build_error_text(path, &error.message, error.code));
+        let error_text = self.image_core.load_error.as_ref().map(|(path, error)| {
+            overlay::build_error_text(path, &error.message, error.code, error.store_extension)
+        });
         let info_text = if self.show_file_info {
             self.image_core.current.as_ref().map(|current| {
                 let metadata = std::fs::metadata(&current.path).ok();

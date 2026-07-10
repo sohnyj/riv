@@ -82,10 +82,18 @@ pub struct FolderEntry {
     created: SystemTime,
 }
 
+/// 디코드 결과 단계 — RAW 2단계 로드의 프리뷰는 표시만 하고 로드를 종결하지 않는다 (SPEC §4.1)
+pub enum DecodeStage {
+    /// RAW 임베디드 프리뷰 — 캐시·in_flight·pending 불변, 풀 디코드가 이어짐
+    Preview,
+    Final,
+}
+
 /// 워커 → UI 완료 통지 페이로드 (WM_APP_DECODE_COMPLETE의 lparam)
 pub struct DecodeCompletion {
     pub path: PathBuf,
     pub file_size: u64,
+    pub stage: DecodeStage,
     pub result: Result<Arc<DecodedImage>, DecodeError>,
 }
 
@@ -207,6 +215,7 @@ impl ImageCore {
                     DecodeError {
                         code: error.raw_os_error().unwrap_or(0),
                         message: error.to_string(),
+                        store_extension: None,
                     },
                 ));
                 return false;
@@ -287,6 +296,24 @@ impl ImageCore {
 
     /// 워커 완료 수신 (WM_APP_DECODE_COMPLETE) — 반환 = 표시 상태 변경 여부
     pub fn on_decode_complete(&mut self, completion: DecodeCompletion) -> bool {
+        if matches!(completion.stage, DecodeStage::Preview) {
+            // RAW 프리뷰 — 표시 대상이면 먼저 보여주고 풀 디코드 완료를 계속 기다린다
+            // (SPEC §4.1). 캐시 미삽입, in_flight·pending 불변 — 폐기는 경로 불일치뿐.
+            let is_pending = self
+                .pending_display
+                .as_deref()
+                .is_some_and(|pending| paths_equal(pending, &completion.path));
+            if is_pending && let Ok(image) = completion.result {
+                trace(|| format!("preview {} displayed", completion.path.display()));
+                self.current = Some(CurrentImage {
+                    path: completion.path,
+                    image,
+                });
+                self.load_error = None;
+                return true;
+            }
+            return false;
+        }
         self.in_flight.remove(&completion.path);
         let is_pending = self
             .pending_display
@@ -738,12 +765,27 @@ fn worker_loop(shared: &PoolShared, window: isize) {
                 queue = shared.available.wait(queue).expect("decode queue poisoned");
             }
         };
+        // RAW 2단계: 동일 워커에서 프리뷰 → 풀 디코드 순차 — 레이스 자체가 없다 (SPEC §4.1)
+        if decode::is_raw_two_stage(&job.path)
+            && let Some(preview) = decode::decode_raw_preview(&job.path)
+        {
+            post_completion(
+                window,
+                Box::new(DecodeCompletion {
+                    path: job.path.clone(),
+                    file_size: job.file_size,
+                    stage: DecodeStage::Preview,
+                    result: Ok(Arc::new(preview)),
+                }),
+            );
+        }
         let result = decode::decode_file(&job.path).map(Arc::new);
         post_completion(
             window,
             Box::new(DecodeCompletion {
                 path: job.path,
                 file_size: job.file_size,
+                stage: DecodeStage::Final,
                 result,
             }),
         );

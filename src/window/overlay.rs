@@ -269,7 +269,12 @@ pub fn build_info_text(
 }
 
 /// 에러 텍스트 조립 (SPEC §3.6)
-pub fn build_error_text(path: &Path, message: &str, code: i32) -> String {
+pub fn build_error_text(
+    path: &Path,
+    message: &str,
+    code: i32,
+    store_extension: Option<&str>,
+) -> String {
     let file_name = path
         .file_name()
         .map_or_else(String::new, |name| name.to_string_lossy().into_owned());
@@ -278,7 +283,14 @@ pub fn build_error_text(path: &Path, message: &str, code: i32) -> String {
     } else {
         message.trim().to_string()
     };
-    format!("Error occurred opening\n{file_name}\n{reason} (Error 0x{code:08X})")
+    let mut text = format!("Error occurred opening\n{file_name}\n{reason} (Error 0x{code:08X})");
+    // WIC 확장 부재 — 설치 안내 문구만, 링크 없음 (SPEC §10)
+    if let Some(extension_name) = store_extension {
+        text.push_str(&format!(
+            "\nInstall \"{extension_name}\" from the Microsoft Store to view this file."
+        ));
+    }
+    text
 }
 
 /// "1.2 MiB (1,234,567 bytes)" (SPEC §3.6)

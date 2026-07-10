@@ -9,7 +9,7 @@ use std::fs::File;
 use std::io::Read;
 use std::path::Path;
 
-use windows::Win32::Foundation::GENERIC_READ;
+use windows::Win32::Foundation::{GENERIC_READ, WINCODEC_ERR_COMPONENTNOTFOUND};
 use windows::Win32::Graphics::Imaging::{
     CLSID_WICImagingFactory, GUID_WICPixelFormat32bppPBGRA, IWICBitmapDecoder,
     IWICBitmapFrameDecode, IWICBitmapSource, IWICImagingFactory, IWICMetadataQueryReader,
@@ -56,6 +56,8 @@ impl DecodedImage {
 pub struct DecodeError {
     pub code: i32,
     pub message: String,
+    /// WIC 확장 부재 시 설치 안내에 쓸 Store 확장 이름 (SPEC §10 — 문구만, 링크 없음)
+    pub store_extension: Option<&'static str>,
 }
 
 impl From<windows::core::Error> for DecodeError {
@@ -63,6 +65,7 @@ impl From<windows::core::Error> for DecodeError {
         Self {
             code: error.code().0,
             message: error.message(),
+            store_extension: None,
         }
     }
 }
@@ -80,15 +83,26 @@ enum FrameSemantics {
 /// D3D11 FL11·D2D 비트맵 한계 — 초과 시 업로드 전 다운스케일 (SPEC §3.4 DP3)
 const MAXIMUM_TEXTURE_DIMENSION: u32 = 16384;
 
-/// 매직 시그니처 — (오프셋, 바이트) 전부 일치 시 매치. 빈 배열 = 매직 프로빙 비대상.
+/// 매직 시그니처 1개 — (오프셋, 바이트) 전부 일치 시 매치
 type MagicSignature = &'static [(usize, &'static [u8])];
+
+/// 디코드 어댑터 선택 (PORTING_PLAN §5) — WIC 또는 내장 fallback
+enum Adapter {
+    Wic,
+    /// WIC + RAW 2단계 로드: 임베디드 프리뷰 먼저 표시 (SPEC §4.1)
+    WicRawTwoStage,
+}
 
 pub struct FormatDescriptor {
     /// 포맷명 — 타입 정렬·정보 오버레이·연결 UI 그룹의 단일 소스 (SPEC §10)
     pub name: &'static str,
     pub extensions: &'static [&'static str],
-    magic: MagicSignature,
+    /// 대안 시그니처 목록(OR) — 빈 배열 = 매직 프로빙 비대상
+    magic: &'static [MagicSignature],
     semantics: FrameSemantics,
+    adapter: Adapter,
+    /// WIC 코덱 부재(COMPONENTNOTFOUND) 시 설치 안내할 Store 확장 이름 (SPEC §10)
+    store_extension: Option<&'static str>,
 }
 
 /// 디코더 레지스트리 — 지원 확장자 목록·파일 필터·연결 그룹은 전부 여기서 파생
@@ -99,46 +113,114 @@ static REGISTRY: &[FormatDescriptor] = &[
     FormatDescriptor {
         name: "PNG",
         extensions: &["png"],
-        magic: &[(0, b"\x89PNG\r\n\x1a\n")],
+        magic: &[&[(0, b"\x89PNG\r\n\x1a\n")]],
         semantics: FrameSemantics::Single,
+        adapter: Adapter::Wic,
+        store_extension: None,
     },
     FormatDescriptor {
         name: "APNG",
         extensions: &["apng"],
         magic: &[],
         semantics: FrameSemantics::Animation,
+        adapter: Adapter::Wic,
+        store_extension: None,
     },
     FormatDescriptor {
         name: "JPEG",
         extensions: &["jpg", "jpeg", "jpe", "jfif"],
-        magic: &[(0, b"\xFF\xD8\xFF")],
+        magic: &[&[(0, b"\xFF\xD8\xFF")]],
         semantics: FrameSemantics::Single,
+        adapter: Adapter::Wic,
+        store_extension: None,
     },
     FormatDescriptor {
         name: "GIF",
         extensions: &["gif"],
-        magic: &[(0, b"GIF8")],
+        magic: &[&[(0, b"GIF8")]],
         semantics: FrameSemantics::Animation,
+        adapter: Adapter::Wic,
+        store_extension: None,
     },
     // WIC WebP는 애니메이션 미지원(2026-07-10 확인) — 정지 전용, 애니메이션은 R5에서
     // VP8X ANIM 플래그 프로빙 분기 + libwebp 정적 fallback (PORTING_PLAN §5)
     FormatDescriptor {
         name: "WebP",
         extensions: &["webp"],
-        magic: &[(0, b"RIFF"), (8, b"WEBP")],
+        magic: &[&[(0, b"RIFF"), (8, b"WEBP")]],
         semantics: FrameSemantics::Single,
+        adapter: Adapter::Wic,
+        store_extension: Some("WebP Image Extensions"),
     },
     FormatDescriptor {
         name: "BMP",
         extensions: &["bmp", "dib"],
-        magic: &[(0, b"BM")],
+        magic: &[&[(0, b"BM")]],
         semantics: FrameSemantics::Single,
+        adapter: Adapter::Wic,
+        store_extension: None,
     },
     FormatDescriptor {
         name: "ICO",
         extensions: &["ico"],
-        magic: &[(0, &[0x00, 0x00, 0x01, 0x00])],
+        magic: &[&[(0, &[0x00, 0x00, 0x01, 0x00])]],
         semantics: FrameSemantics::SizeVariants,
+        adapter: Adapter::Wic,
+        store_extension: None,
+    },
+    FormatDescriptor {
+        name: "TIFF",
+        extensions: &["tif", "tiff"],
+        magic: &[&[(0, b"II*\x00")], &[(0, b"MM\x00*")]],
+        semantics: FrameSemantics::Single,
+        adapter: Adapter::Wic,
+        store_extension: None,
+    },
+    // HEIF는 WIC 부재 시 내장 fallback(libheif) 전환 예정 — 안내 없음 (PORTING_PLAN §5)
+    FormatDescriptor {
+        name: "HEIF",
+        extensions: &["heic", "heif", "hif"],
+        magic: &[
+            &[(4, b"ftypheic")],
+            &[(4, b"ftypheix")],
+            &[(4, b"ftypmif1")],
+            &[(4, b"ftypmsf1")],
+            &[(4, b"ftyphevc")],
+        ],
+        semantics: FrameSemantics::Single,
+        adapter: Adapter::Wic,
+        store_extension: None,
+    },
+    FormatDescriptor {
+        name: "AVIF",
+        extensions: &["avif"],
+        magic: &[&[(4, b"ftypavif")], &[(4, b"ftypavis")]],
+        semantics: FrameSemantics::Single,
+        adapter: Adapter::Wic,
+        store_extension: Some("AV1 Video Extension"),
+    },
+    FormatDescriptor {
+        name: "JPEG XL",
+        extensions: &["jxl"],
+        magic: &[
+            &[(0, b"\x00\x00\x00\x0CJXL \r\n\x87\n")],
+            &[(0, b"\xFF\x0A")],
+        ],
+        semantics: FrameSemantics::Single,
+        adapter: Adapter::Wic,
+        store_extension: Some("JPEG XL Image Extension (Windows 11 24H2+)"),
+    },
+    // RAW는 확장자 전용(컨테이너 매직이 TIFF와 겹침 — DNG·CR2 등), 2단계 로드 (SPEC §4.1)
+    FormatDescriptor {
+        name: "RAW",
+        extensions: &[
+            "arw", "cr2", "cr3", "crw", "dng", "erf", "kdc", "mrw", "nef", "nrw", "orf", "pef",
+            "raf", "raw", "rw2", "rwl", "sr2", "srw", "x3f",
+        ],
+        magic: &[],
+        semantics: FrameSemantics::Single,
+        adapter: Adapter::WicRawTwoStage,
+        store_extension: Some("Raw Image Extension"),
     },
 ];
 
@@ -175,12 +257,13 @@ pub fn probe_file(path: &Path) -> Option<&'static FormatDescriptor> {
 
 fn probe_magic(header: &[u8]) -> Option<&'static FormatDescriptor> {
     REGISTRY.iter().find(|descriptor| {
-        !descriptor.magic.is_empty()
-            && descriptor.magic.iter().all(|(offset, bytes)| {
+        descriptor.magic.iter().any(|signature| {
+            signature.iter().all(|(offset, bytes)| {
                 header
                     .get(*offset..offset + bytes.len())
                     .is_some_and(|slice| slice == *bytes)
             })
+        })
     })
 }
 
@@ -241,10 +324,69 @@ fn read_header(path: &Path) -> Option<Vec<u8>> {
 /// 디코드 진입점 (워커 스레드 전용 — COM MTA 전제)
 pub fn decode_file(path: &Path) -> Result<DecodedImage, DecodeError> {
     let descriptor = descriptor_for_path(path);
-    // R2 어댑터는 WIC 단일 — 레지스트리 미등록 포맷도 WIC 내용 판별에 맡긴다
+    // 레지스트리 미등록 포맷도 WIC 내용 판별에 맡긴다
     let format_name = descriptor.map_or("Unknown", |descriptor| descriptor.name);
     let semantics = descriptor.map_or(&FrameSemantics::Single, |descriptor| &descriptor.semantics);
-    decode_with_wic(path, format_name, semantics)
+    decode_with_wic(path, format_name, semantics).map_err(|mut error| {
+        // WIC 확장 부재 → 에러 오버레이에 설치 안내 문구 (SPEC §10 — 링크 없음)
+        if error.code == WINCODEC_ERR_COMPONENTNOTFOUND.0
+            && let Some(descriptor) = descriptor
+        {
+            error.store_extension = descriptor.store_extension;
+        }
+        error
+    })
+}
+
+/// RAW 2단계 로드 대상 여부 — 워커가 프리뷰 → 풀 디코드 순차 수행 (SPEC §4.1)
+pub fn is_raw_two_stage(path: &Path) -> bool {
+    descriptor_for_path(path)
+        .is_some_and(|descriptor| matches!(descriptor.adapter, Adapter::WicRawTwoStage))
+}
+
+/// RAW 임베디드 프리뷰 디코드 (SPEC §4.1) — 실패는 조용히 무시(풀 디코드가 이어짐)
+pub fn decode_raw_preview(path: &Path) -> Option<DecodedImage> {
+    let decoded = with_wic_factory(|factory| {
+        let decoder = unsafe {
+            factory.CreateDecoderFromFilename(
+                &HSTRING::from(path.as_os_str()),
+                None,
+                GENERIC_READ,
+                WICDecodeMetadataCacheOnDemand,
+            )?
+        };
+        let preview =
+            unsafe { decoder.GetPreview() }.or_else(|_| unsafe { decoder.GetThumbnail() })?;
+        // 오리엔테이션은 프레임 메타데이터 기준 — 풀 디코드와 동일 방향으로 표시
+        let orientation = unsafe { decoder.GetFrame(0) }
+            .map(|frame| exif_orientation(&frame))
+            .unwrap_or(1);
+        let source = convert_to_pbgra(factory, &preview)?;
+        let source = apply_orientation(factory, source, orientation)?;
+        let (width, height) = source_size(&source)?;
+        let (source, pixel_width, pixel_height) =
+            downscale_to_device_limit(factory, source, width, height)?;
+        let pixels = copy_pixels(&source, pixel_width, pixel_height)?;
+        Ok(DecodedFrames {
+            width,
+            height,
+            pixel_width,
+            pixel_height,
+            frames: vec![Frame {
+                pixels,
+                delay_milliseconds: 0,
+            }],
+        })
+    })
+    .ok()?;
+    Some(DecodedImage {
+        width: decoded.width,
+        height: decoded.height,
+        pixel_width: decoded.pixel_width,
+        pixel_height: decoded.pixel_height,
+        format_name: "RAW",
+        frames: decoded.frames,
+    })
 }
 
 thread_local! {
@@ -346,7 +488,7 @@ fn decode_single_frame(
 ) -> windows::core::Result<DecodedFrames> {
     let frame = unsafe { decoder.GetFrame(index)? };
     let orientation = exif_orientation(&frame);
-    let source = convert_to_pbgra(factory, &frame)?;
+    let source = convert_to_pbgra(factory, &frame.cast()?)?;
     let source = apply_orientation(factory, source, orientation)?;
     let (width, height) = source_size(&source)?;
     let (source, pixel_width, pixel_height) =
@@ -433,7 +575,7 @@ fn decode_animation(
     for index in 0..frame_count {
         let frame = unsafe { decoder.GetFrame(index)? };
         let metadata = frame_metadata(&frame);
-        let source = convert_to_pbgra(factory, &frame)?;
+        let source = convert_to_pbgra(factory, &frame.cast()?)?;
         let (frame_width, frame_height) = source_size(&source)?;
         if canvas_width == 0 || canvas_height == 0 {
             canvas_width = frame_width;
@@ -540,12 +682,12 @@ fn clear_rectangle(
 
 fn convert_to_pbgra(
     factory: &IWICImagingFactory,
-    frame: &IWICBitmapFrameDecode,
+    source: &IWICBitmapSource,
 ) -> windows::core::Result<IWICBitmapSource> {
     let converter = unsafe { factory.CreateFormatConverter()? };
     unsafe {
         converter.Initialize(
-            frame,
+            source,
             &GUID_WICPixelFormat32bppPBGRA,
             WICBitmapDitherTypeNone,
             None,
