@@ -101,14 +101,27 @@ impl Overlay {
         viewport_height: f32,
         content: &OverlayContent,
     ) -> Result<()> {
-        let mut next_panel_top = PANEL_MARGIN;
-        if let Some(info_text) = &content.info_text {
-            next_panel_top =
-                self.draw_panel(context, info_text, PANEL_MARGIN, viewport_width)? + 8.0;
-        }
+        let info_rect = if let Some(info_text) = &content.info_text {
+            Some(self.draw_panel(
+                context,
+                info_text,
+                PANEL_MARGIN,
+                PANEL_MARGIN,
+                viewport_width,
+            )?)
+        } else {
+            None
+        };
         if let Some(pill_text) = &content.zoom_pill_text {
-            // 정보 패널과 겹치면 그 아래로 (SPEC §3.6)
-            self.draw_panel(context, pill_text, next_panel_top, viewport_width)?;
+            // 줌 필 = 상단 중앙 (2026-07-10 — qView의 좌측 배치는 Qt 중앙 정렬 제약의
+            // 우회였음. DWrite 메트릭 기반 정밀 중앙 배치). 정보 패널과 겹치면 그 아래로.
+            let pill_width = self.measure_panel_width(pill_text, viewport_width)?;
+            let centered_left = ((viewport_width - pill_width) / 2.0).max(PANEL_MARGIN);
+            let top = match &info_rect {
+                Some(info) if centered_left < info.right + 8.0 => info.bottom + 8.0,
+                _ => PANEL_MARGIN,
+            };
+            self.draw_panel(context, pill_text, centered_left, top, viewport_width)?;
         }
         if let Some(error_text) = &content.error_text {
             self.draw_error_text(
@@ -122,26 +135,39 @@ impl Overlay {
         Ok(())
     }
 
-    /// 반투명 라운드 패널 + 흰 글자, 좌상단 앵커. 반환 = 패널 하단 y.
+    fn panel_layout(&self, text: &str, viewport_width: f32) -> Result<IDWriteTextLayout> {
+        self.create_layout(
+            text,
+            &self.text_format,
+            (viewport_width - PANEL_MARGIN * 2.0 - PANEL_PADDING_X * 2.0).max(0.0),
+        )
+    }
+
+    /// 패널 전체 폭(패딩 포함) 측정 — 중앙 배치 계산용
+    fn measure_panel_width(&self, text: &str, viewport_width: f32) -> Result<f32> {
+        let layout = self.panel_layout(text, viewport_width)?;
+        let mut metrics = DWRITE_TEXT_METRICS::default();
+        unsafe { layout.GetMetrics(&mut metrics)? };
+        Ok(metrics.width + PANEL_PADDING_X * 2.0)
+    }
+
+    /// 반투명 라운드 패널 + 흰 글자. 반환 = 패널 사각형.
     fn draw_panel(
         &self,
         context: &ID2D1DeviceContext,
         text: &str,
+        left: f32,
         top: f32,
         viewport_width: f32,
-    ) -> Result<f32> {
-        let layout = self.create_layout(
-            text,
-            &self.text_format,
-            (viewport_width - PANEL_MARGIN * 2.0 - PANEL_PADDING_X * 2.0).max(0.0),
-        )?;
+    ) -> Result<D2D_RECT_F> {
+        let layout = self.panel_layout(text, viewport_width)?;
         let mut metrics = DWRITE_TEXT_METRICS::default();
         unsafe { layout.GetMetrics(&mut metrics)? };
         let panel = D2D1_ROUNDED_RECT {
             rect: D2D_RECT_F {
-                left: PANEL_MARGIN,
+                left,
                 top,
-                right: PANEL_MARGIN + metrics.width + PANEL_PADDING_X * 2.0,
+                right: left + metrics.width + PANEL_PADDING_X * 2.0,
                 bottom: top + metrics.height + PANEL_PADDING_Y * 2.0,
             },
             radiusX: PANEL_CORNER_RADIUS,
@@ -153,7 +179,7 @@ impl Overlay {
             let foreground = context.CreateSolidColorBrush(&WHITE, None)?;
             context.DrawTextLayout(
                 Vector2 {
-                    X: PANEL_MARGIN + PANEL_PADDING_X,
+                    X: left + PANEL_PADDING_X,
                     Y: top + PANEL_PADDING_Y,
                 },
                 &layout,
@@ -161,7 +187,7 @@ impl Overlay {
                 D2D1_DRAW_TEXT_OPTIONS_NONE,
             );
         }
-        Ok(panel.rect.bottom)
+        Ok(panel.rect)
     }
 
     /// 뷰포트 중앙 에러 텍스트 — 배경 밝기에 따라 검정/흰색 (SPEC §3.6)
