@@ -131,7 +131,12 @@ struct Application {
 impl Application {
     fn new(window: HWND) -> Result<Self> {
         let (width, height) = client_size(window);
-        let renderer = Renderer::new(window, width.max(1), height.max(1))?;
+        let renderer = Renderer::new(
+            window,
+            width.max(1),
+            height.max(1),
+            color::monitor_is_hdr(window),
+        )?;
         let device_pixel_ratio = unsafe { GetDpiForWindow(window) } as f32 / 96.0;
         let settings = SettingsFile::load();
         let bindings =
@@ -172,14 +177,27 @@ impl Application {
         Ok(application)
     }
 
-    /// 모니터 이동·디스플레이 설정 변경 시 SDR 백레벨 재조회 → 변경 시 재렌더 (SPEC §7)
-    fn refresh_sdr_white_boost(&mut self, window: HWND) {
+    /// 모니터 이동·디스플레이 설정 변경 시 색 상태 재조회 (SPEC §7 A안) —
+    /// HDR 모드가 바뀌면 스왑체인 모드 매칭을 위해 렌더러 재구축, 아니면 백레벨만 갱신
+    fn refresh_display_color_state(&mut self, window: HWND) {
+        if color::monitor_is_hdr(window) != self.renderer.hdr_mode() {
+            self.sdr_white_boost = color::sdr_white_boost(window);
+            if self.rebuild_renderer(window).is_ok() {
+                self.render(window);
+            }
+            return;
+        }
         let boost = color::sdr_white_boost(window);
         if (boost - self.sdr_white_boost).abs() > f32::EPSILON {
             self.sdr_white_boost = boost;
             self.renderer.set_sdr_white_boost(boost);
             self.render(window);
         }
+    }
+
+    /// 클리어·오버레이 색 보정 인자 (A안) — HDR 타깃에서만 Some(선형화×백레벨)
+    fn scrgb_boost(&self) -> Option<f32> {
+        self.renderer.hdr_mode().then_some(self.sdr_white_boost)
     }
 
     fn image_size(&self) -> Size {
@@ -388,7 +406,12 @@ impl Application {
     /// 디바이스 로스트 시 전체 재구축 (SPEC §3.4)
     fn rebuild_renderer(&mut self, window: HWND) -> Result<()> {
         let (width, height) = client_size(window);
-        self.renderer = Renderer::new(window, width.max(1), height.max(1))?;
+        self.renderer = Renderer::new(
+            window,
+            width.max(1),
+            height.max(1),
+            color::monitor_is_hdr(window),
+        )?;
         self.renderer.set_sdr_white_boost(self.sdr_white_boost);
         if let Some(image) = &self.display {
             // 애니메이션 중이면 현재 프레임 유지
@@ -432,7 +455,7 @@ impl Application {
             info_text,
             zoom_pill_text: self.zoom_pill_text.clone(),
             background_is_bright: brightness > 0.5,
-            sdr_white_boost: self.sdr_white_boost,
+            scrgb_boost: self.scrgb_boost(),
         }
     }
 
@@ -448,8 +471,8 @@ impl Application {
         let interpolation = self.interpolation_mode();
         let background = self.background_color();
         let content = self.overlay_content(background);
-        // FP16 scRGB 타깃 — 클리어 색은 linear scRGB (SPEC §7)
-        let clear_color = color::srgb_color_to_scrgb(background, self.sdr_white_boost);
+        // 클리어 색 = 타깃 모드 색 (SPEC §7 A안 — HDR=linear scRGB×백레벨, SDR=원값)
+        let clear_color = color::output_color(background, self.scrgb_boost());
         let overlay = &self.overlay;
         let draw = |context: &_| overlay.draw(context, viewport.width, viewport.height, &content);
         if self
@@ -1432,7 +1455,7 @@ extern "system" fn window_procedure(
         // 모니터 이동·디스플레이 설정 변경 → SDR 백레벨 재조회 (SPEC §7)
         WM_MOVE | WM_DISPLAYCHANGE => {
             if let Some(application) = unsafe { application_from_window(window) } {
-                application.refresh_sdr_white_boost(window);
+                application.refresh_display_color_state(window);
             }
             LRESULT(0)
         }

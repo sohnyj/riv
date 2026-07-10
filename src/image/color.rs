@@ -16,9 +16,19 @@ use windows::Win32::Graphics::Gdi::{
     GetMonitorInfoW, MONITOR_DEFAULTTONEAREST, MONITORINFOEXW, MonitorFromWindow,
 };
 
+/// 타깃 모드별 클리어·브러시 색 (SPEC §7 A안 — 스왑체인 모드 매칭):
+/// `scrgb_boost = Some(boost)` = HDR의 FP16 scRGB 타깃(선형화 × SDR 백레벨),
+/// `None` = SDR/ACM의 B8G8R8A8 타깃(sRGB 인코딩 원값 그대로).
+pub fn output_color(color: D2D1_COLOR_F, scrgb_boost: Option<f32>) -> D2D1_COLOR_F {
+    match scrgb_boost {
+        Some(boost) => srgb_color_to_scrgb(color, boost),
+        None => color,
+    }
+}
+
 /// sRGB 인코딩 색 → linear scRGB(× SDR 백레벨 배율) — FP16 타깃의 클리어·브러시 색 공용.
 /// DWM은 scRGB 1.0을 SDR 화이트(80 nits)로 매핑하므로 HDR 모드에서만 boost > 1 (SPEC §7).
-pub fn srgb_color_to_scrgb(color: D2D1_COLOR_F, sdr_white_boost: f32) -> D2D1_COLOR_F {
+fn srgb_color_to_scrgb(color: D2D1_COLOR_F, sdr_white_boost: f32) -> D2D1_COLOR_F {
     let linearize = |encoded: f32| {
         if encoded <= 0.04045 {
             encoded / 12.92
@@ -45,8 +55,9 @@ pub fn sdr_white_boost(window: HWND) -> f32 {
 }
 
 /// HDR 활성 판별 — `IDXGIOutput6::GetDesc1().ColorSpace == G2084` (문서 권장 Win32 경로.
-/// SDR advanced color 디스플레이는 G22_P709로 보고되어 자연히 제외된다)
-fn monitor_is_hdr(window: HWND) -> bool {
+/// SDR advanced color 디스플레이는 G22_P709로 보고되어 자연히 제외된다).
+/// 스왑체인 모드 매칭(A안)의 분기 기준 — 렌더러 구축·재구축 시 조회 (SPEC §7).
+pub fn monitor_is_hdr(window: HWND) -> bool {
     use windows::Win32::Graphics::Dxgi::Common::DXGI_COLOR_SPACE_RGB_FULL_G2084_NONE_P2020;
     use windows::Win32::Graphics::Dxgi::{CreateDXGIFactory1, IDXGIFactory1, IDXGIOutput6};
     use windows::core::Interface;

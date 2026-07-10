@@ -1,13 +1,19 @@
 //! D3D11 디바이스 + DXGI 플립 스왑체인 + D2D 드로우 경로
 //! (SPEC §3.1·§3.3·§7, PORTING_PLAN §3 렌더러 세부 — 커스텀 셰이더 0)
 //!
-//! 백버퍼 = FP16 scRGB(advanced color, 2026-07-10 직행 확정): `R16G16B16A16_FLOAT`에
-//! `SetColorSpace1`(RGB_FULL_G10_NONE_P709)을 선언 — SDR/ACM/HDR 패널 매핑은 DWM 위임.
-//! 소스 비트맵(sRGB 인코딩 PBGRA8)은 draw 시점에 `ColorManagement` 이펙트로 scRGB 변환하고,
-//! HDR 모드의 SDR 백레벨은 `WhiteLevelAdjustment` 이펙트(Input=SDRWhite, Output=80 —
-//! ×SdrWhite/80 부스트)로 보정한다 (SPEC §7). 이펙트 중간 버퍼는 FP16 강제 — 기본
-//! 정밀도(입력 기준 8bpc)면 백레벨 부스트(>1.0)가 클램프된다(실기 확인 2026-07-11,
-//! ColorMatrix 스케일과 A/B 동등 판정 후 전용 이펙트로 확정).
+//! 백버퍼 = **스왑체인 모드 매칭(A안, 2026-07-11 확정)** — 상시 FP16 선언(구 B안)이
+//! SDR/ACM에서 DWM 컴포지션 전환(전역 Mica 변화·플래시)을 유발해 모드별로 나눈다:
+//! - **HDR(G2084)**: `R16G16B16A16_FLOAT` + `SetColorSpace1`(RGB_FULL_G10 scRGB).
+//!   SDR 백레벨은 `WhiteLevelAdjustment` 이펙트(Input=SDRWhite, Output=80 —
+//!   ×SdrWhite/80 부스트), 클리어·브러시 색은 CPU 선형화×부스트.
+//! - **SDR/ACM**: `B8G8R8A8_UNORM` + 색공간 무선언(DWM이 sRGB로 간주 — ACM 매핑 포함).
+//!   백레벨 이펙트 없음, 클리어·브러시 색은 sRGB 원값.
+//!
+//! 소스 비트맵(sRGB 인코딩 PBGRA8)은 draw 시점에 `ColorManagement` 이펙트로 대상
+//! 색공간(HDR=scRGB, SDR=sRGB)으로 변환한다 (SPEC §7). 이펙트 중간 버퍼는 FP16 강제 —
+//! 기본 정밀도(입력 기준 8bpc)면 백레벨 부스트(>1.0)가 클램프된다(실기 확인 2026-07-11,
+//! 사설 텍스처라 컴포지션 플래시와 무관 — 상시 유지). 모니터 이동·HDR 토글로 모드가
+//! 바뀌면 호출자(main)가 렌더러를 재구축한다.
 //! 구 UNORM 비트 심도 감지(모니터별 R10G10B10A2 매칭)는 제거.
 
 use windows::Win32::Foundation::{HMODULE, HWND};
@@ -47,6 +53,8 @@ use windows::core::{Interface, Result};
 use windows_numerics::Matrix3x2;
 
 pub struct Renderer {
+    /// 구축 시점의 스왑체인 모드 (A안) — 현재 모니터와 불일치하면 재구축 대상
+    hdr_mode: bool,
     swap_chain: IDXGISwapChain1,
     d2d_context: ID2D1DeviceContext,
     target: Option<ID2D1Bitmap1>,
@@ -112,7 +120,9 @@ fn set_white_level_input(effect: &ID2D1Effect, input_white_nits: f32) -> Result<
 }
 
 impl Renderer {
-    pub fn new(window: HWND, width: u32, height: u32) -> Result<Self> {
+    /// `hdr_mode` = 창이 있는 모니터의 HDR(G2084) 여부 (A안 — 호출자가
+    /// `color::monitor_is_hdr`로 조회, 모드 변경 시 재구축)
+    pub fn new(window: HWND, width: u32, height: u32, hdr_mode: bool) -> Result<Self> {
         // WARP 폴백은 런타임 위임(P7) — 하드웨어 실패 시 1회 재시도만
         let d3d_device = create_d3d_device(D3D_DRIVER_TYPE_HARDWARE)
             .or_else(|_| create_d3d_device(D3D_DRIVER_TYPE_WARP))?;
@@ -124,7 +134,11 @@ impl Renderer {
             let description = DXGI_SWAP_CHAIN_DESC1 {
                 Width: width,
                 Height: height,
-                Format: DXGI_FORMAT_R16G16B16A16_FLOAT,
+                Format: if hdr_mode {
+                    DXGI_FORMAT_R16G16B16A16_FLOAT
+                } else {
+                    DXGI_FORMAT_B8G8R8A8_UNORM
+                },
                 SampleDesc: DXGI_SAMPLE_DESC {
                     Count: 1,
                     Quality: 0,
@@ -138,9 +152,10 @@ impl Renderer {
             };
             factory.CreateSwapChainForHwnd(&d3d_device, window, &description, None, None)?
         };
-        // scRGB 색공간 선언 — DWM이 SDR/ACM/HDR 패널 매핑 수행 (SPEC §7).
+        // HDR만 scRGB 색공간 선언 — SDR/ACM은 무선언(DWM이 sRGB로 간주·ACM 매핑 포함,
+        // FP16+scRGB 상시 선언은 컴포지션 전환 플래시 유발 — A안 2026-07-11).
         // wine 등 IDXGISwapChain3 미지원 환경은 무시(P16 — 형상 확인만)
-        if let Ok(swap_chain3) = swap_chain.cast::<IDXGISwapChain3>() {
+        if hdr_mode && let Ok(swap_chain3) = swap_chain.cast::<IDXGISwapChain3>() {
             let _ = unsafe { swap_chain3.SetColorSpace1(DXGI_COLOR_SPACE_RGB_FULL_G10_NONE_P709) };
         }
 
@@ -159,10 +174,20 @@ impl Renderer {
             d2d_context.SetRenderingControls(&rendering_controls);
         }
 
-        // 이펙트·색 컨텍스트 — 미지원 환경(wine)은 None으로 DrawBitmap 직행 (P16)
-        let scrgb_color_context =
-            unsafe { d2d_context.CreateColorContext(D2D1_COLOR_SPACE_SCRGB, None) }.ok();
-        let color_management_effect = scrgb_color_context.as_ref().and_then(|destination| {
+        // 이펙트·색 컨텍스트 — 미지원 환경(wine)은 None으로 DrawBitmap 직행 (P16).
+        // 변환 대상 = 타깃 색공간 (A안: HDR=scRGB, SDR/ACM=sRGB)
+        let destination_color_context = unsafe {
+            d2d_context.CreateColorContext(
+                if hdr_mode {
+                    D2D1_COLOR_SPACE_SCRGB
+                } else {
+                    D2D1_COLOR_SPACE_SRGB
+                },
+                None,
+            )
+        }
+        .ok();
+        let color_management_effect = destination_color_context.as_ref().and_then(|destination| {
             let effect = unsafe { d2d_context.CreateEffect(&CLSID_D2D1ColorManagement) }.ok()?;
             // 품질 BEST 필수 — 부동소수점 정밀도·scRGB 색공간 지원 조건. 기본(NORMAL)이면
             // scRGB 변환이 적용되지 않아 이중 감마 인코딩(실기 washed-out, 2026-07-11 확인)
@@ -187,23 +212,28 @@ impl Renderer {
             .ok()?;
             Some(effect)
         });
-        // SDR 백레벨 보정 — Input=SDRWhite(부스트 반영), Output=80 고정 (SPEC §7)
-        let white_level_effect = color_management_effect.as_ref().and_then(|_| {
-            let effect =
-                unsafe { d2d_context.CreateEffect(&CLSID_D2D1WhiteLevelAdjustment) }.ok()?;
-            set_white_level_input(&effect, SDR_REFERENCE_WHITE_NITS).ok()?;
-            unsafe {
-                effect.SetValue(
-                    D2D1_WHITELEVELADJUSTMENT_PROP_OUTPUT_WHITE_LEVEL.0 as u32,
-                    D2D1_PROPERTY_TYPE_FLOAT,
-                    &SDR_REFERENCE_WHITE_NITS.to_ne_bytes(),
-                )
-            }
-            .ok()?;
-            Some(effect)
-        });
+        // SDR 백레벨 보정 — HDR 모드 전용(Input=SDRWhite(부스트 반영), Output=80 고정,
+        // SPEC §7). SDR/ACM은 display-referred라 비대상 (A안 — 이펙트 자체를 생성 안 함)
+        let white_level_effect = hdr_mode
+            .then_some(())
+            .and(color_management_effect.as_ref())
+            .and_then(|_| {
+                let effect =
+                    unsafe { d2d_context.CreateEffect(&CLSID_D2D1WhiteLevelAdjustment) }.ok()?;
+                set_white_level_input(&effect, SDR_REFERENCE_WHITE_NITS).ok()?;
+                unsafe {
+                    effect.SetValue(
+                        D2D1_WHITELEVELADJUSTMENT_PROP_OUTPUT_WHITE_LEVEL.0 as u32,
+                        D2D1_PROPERTY_TYPE_FLOAT,
+                        &SDR_REFERENCE_WHITE_NITS.to_ne_bytes(),
+                    )
+                }
+                .ok()?;
+                Some(effect)
+            });
 
         let mut renderer = Self {
+            hdr_mode,
             swap_chain,
             d2d_context,
             target: None,
@@ -220,10 +250,19 @@ impl Renderer {
         Ok(renderer)
     }
 
+    /// 구축 모드 — 현재 모니터의 HDR 여부와 다르면 호출자가 재구축 (A안)
+    pub fn hdr_mode(&self) -> bool {
+        self.hdr_mode
+    }
+
     fn create_target(&mut self) -> Result<()> {
         let properties = D2D1_BITMAP_PROPERTIES1 {
             pixelFormat: D2D1_PIXEL_FORMAT {
-                format: DXGI_FORMAT_R16G16B16A16_FLOAT,
+                format: if self.hdr_mode {
+                    DXGI_FORMAT_R16G16B16A16_FLOAT
+                } else {
+                    DXGI_FORMAT_B8G8R8A8_UNORM
+                },
                 alphaMode: D2D1_ALPHA_MODE_PREMULTIPLIED,
             },
             dpiX: 96.0,
@@ -357,7 +396,8 @@ impl Renderer {
     }
 
     /// Clear → SetTransform → DrawImage(이펙트 체인) → 오버레이(같은 패스) → Present.
-    /// `clear_color`는 linear scRGB 값 (변환은 호출자 — image/color.rs)
+    /// `clear_color`는 타깃 모드 색 — HDR=linear scRGB, SDR=sRGB 원값
+    /// (변환은 호출자 — image/color.rs `output_color`)
     pub fn render(
         &mut self,
         matrix: [f32; 6],
