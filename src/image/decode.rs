@@ -2,7 +2,7 @@
 //!
 //! 어댑터는 디코드 워커 스레드(COM MTA)에서 호출된다 — WIC 팩토리·디코더는
 //! 스레드별 생성(thread_local). R2는 WIC 어댑터 1개만 등록하며, R5에서 내장
-//! fallback(APNG·EXR·SVG·HEIF)이 추가될 때 어댑터 선택 필드가 생긴다.
+//! fallback(APNG·애니 WebP·EXR·SVG·HEIF)이 추가될 때 어댑터 선택 필드가 생긴다.
 
 use std::cell::RefCell;
 use std::fs::File;
@@ -72,7 +72,7 @@ impl From<windows::core::Error> for DecodeError {
 enum FrameSemantics {
     /// 첫 프레임만 사용 (PNG·JPEG·BMP)
     Single,
-    /// 프레임 = 애니메이션 시퀀스 (GIF·WebP·APNG)
+    /// 프레임 = 애니메이션 시퀀스 (GIF — APNG·애니 WebP는 R5 fallback에서 합류)
     Animation,
     /// 프레임 = 해상도 변형 — 최대 해상도 선택 (ICO)
     SizeVariants,
@@ -121,11 +121,13 @@ static REGISTRY: &[FormatDescriptor] = &[
         magic: &[(0, b"GIF8")],
         semantics: FrameSemantics::Animation,
     },
+    // WIC WebP는 애니메이션 미지원(2026-07-10 확인) — 정지 전용, 애니메이션은 R5에서
+    // VP8X ANIM 플래그 프로빙 분기 + `image-webp` fallback (PORTING_PLAN §5)
     FormatDescriptor {
         name: "WebP",
         extensions: &["webp"],
         magic: &[(0, b"RIFF"), (8, b"WEBP")],
-        semantics: FrameSemantics::Animation,
+        semantics: FrameSemantics::Single,
     },
     FormatDescriptor {
         name: "BMP",
@@ -376,8 +378,8 @@ fn decode_largest_frame(
     decode_single_frame(factory, decoder, largest_index)
 }
 
-/// 프레임별 배치·타이밍 메타데이터 — GIF 쿼리 우선, WebP(ANMF) 차선, 실패 시 기본값.
-/// WIC 애니 WebP의 쿼리 지원 범위는 실기 검증 대상 (R2 게이트, PORTING_PLAN §8)
+/// 프레임별 배치·타이밍 메타데이터 (GIF) — 쿼리 실패 시 기본값.
+/// 딜레이 값은 실기 검증 대상 (R2 게이트, PORTING_PLAN §8)
 struct FrameMetadata {
     left: u32,
     top: u32,
@@ -392,23 +394,18 @@ fn frame_metadata(frame: &IWICBitmapFrameDecode) -> FrameMetadata {
 
     let delay_milliseconds = query(w!("/grctlext/Delay"))
         .map(|centiseconds| centiseconds * 10)
-        .or_else(|| query(w!("/ANMF/FrameDuration")))
         // 관례: 미지정·20ms 미만은 100ms (브라우저·qView 동일)
         .filter(|milliseconds| *milliseconds >= 20)
         .unwrap_or(100);
     FrameMetadata {
-        left: query(w!("/imgdesc/Left"))
-            .or_else(|| query(w!("/ANMF/FrameX")))
-            .unwrap_or(0),
-        top: query(w!("/imgdesc/Top"))
-            .or_else(|| query(w!("/ANMF/FrameY")))
-            .unwrap_or(0),
+        left: query(w!("/imgdesc/Left")).unwrap_or(0),
+        top: query(w!("/imgdesc/Top")).unwrap_or(0),
         delay_milliseconds,
         disposal: query(w!("/grctlext/Disposal")).unwrap_or(0),
     }
 }
 
-/// GIF·WebP 애니메이션 프레임 합성 (SPEC §4.6, PORTING_PLAN §5 — 자체 합성).
+/// GIF 애니메이션 프레임 합성 (SPEC §4.6, PORTING_PLAN §5 — 자체 합성).
 /// 캔버스 = GIF 논리 스크린(없으면 첫 프레임 크기), 프레임은 over 블렌드.
 /// DP3 다운스케일 비대상(디바이스 한계 초과 애니메이션은 비현실적 — 타일링 후속 과제와 동일 취급).
 fn decode_animation(
