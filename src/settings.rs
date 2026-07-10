@@ -200,6 +200,42 @@ impl SettingsFile {
         self.document.get("mousebindings")?.as_object()
     }
 
+    /// 옵션 값 기록 + 스냅샷 갱신 — 삭제 확인 "다시 묻지 않기" 등 (SPEC §6.4·§8.2)
+    pub fn set_option_boolean(&mut self, key: &str, value: bool) {
+        self.document
+            .as_object_mut()
+            .expect("settings document is object")
+            .entry("options")
+            .or_insert_with(|| Value::Object(Map::new()))
+            .as_object_mut()
+            .expect("options is object")
+            .insert(key.to_string(), Value::Bool(value));
+        self.options = Options::from_document(&self.document);
+    }
+
+    /// 파일 열기 다이얼로그 마지막 디렉터리 (SPEC §6.4·§8.1 recents)
+    pub fn last_file_dialog_directory(&self) -> Option<String> {
+        self.document
+            .get("recents")?
+            .get("lastFileDialogDir")?
+            .as_str()
+            .map(str::to_string)
+    }
+
+    pub fn set_last_file_dialog_directory(&mut self, directory: &str) {
+        self.document
+            .as_object_mut()
+            .expect("settings document is object")
+            .entry("recents")
+            .or_insert_with(|| Value::Object(Map::new()))
+            .as_object_mut()
+            .expect("recents is object")
+            .insert(
+                "lastFileDialogDir".to_string(),
+                Value::String(directory.to_string()),
+            );
+    }
+
     // ── 최근 파일 (SPEC §6.4 — 최대 10, 중복 제거, 부재 감사) ────────────────
 
     /// (표시명, 경로) 목록 — recents.recentFiles

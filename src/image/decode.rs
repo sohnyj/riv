@@ -142,6 +142,13 @@ static REGISTRY: &[FormatDescriptor] = &[
     },
 ];
 
+/// 지원 확장자 전체 — 파일 필터·연결 UI 파생 소스 (SPEC §10 — 수작업 테이블 금지)
+pub fn supported_extensions() -> impl Iterator<Item = &'static str> {
+    REGISTRY
+        .iter()
+        .flat_map(|descriptor| descriptor.extensions.iter().copied())
+}
+
 /// 폴더 목록 확장자 매칭 (SPEC §4.3) — 소문자 확장자 기준
 pub fn is_supported_extension(extension: &str) -> bool {
     REGISTRY

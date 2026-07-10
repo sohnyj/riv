@@ -2,8 +2,10 @@
 
 mod actions;
 mod bindings;
+mod dialogs;
 mod image;
 mod settings;
+mod shell;
 mod view;
 mod window;
 
@@ -20,6 +22,9 @@ use image::core::{
 };
 use image::decode::DecodedImage;
 use settings::{Options, SettingsFile};
+use shell::clipboard::{self, BakedOrientation};
+use shell::drag_drop::{self, WM_APP_DROP_PATH};
+use shell::{file_ops, open_dialog};
 use view::renderer::Renderer;
 use view::transform::{FitMode, Size, ViewTransform};
 use window::context_menu::{self, MenuState};
@@ -35,8 +40,8 @@ use windows::Win32::Graphics::Gdi::{
     COLOR_WINDOW, GetMonitorInfoW, GetSysColor, GetSysColorBrush, HMONITOR,
     MONITOR_DEFAULTTONEAREST, MONITORINFO, MonitorFromWindow, ScreenToClient, ValidateRect,
 };
-use windows::Win32::System::Com::{COINIT_APARTMENTTHREADED, CoInitializeEx};
 use windows::Win32::System::LibraryLoader::GetModuleHandleW;
+use windows::Win32::System::Ole::{IDropTarget, OleInitialize, RevokeDragDrop};
 use windows::Win32::UI::HiDpi::GetDpiForWindow;
 use windows::Win32::UI::Input::KeyboardAndMouse::{
     GetKeyState, ReleaseCapture, SetCapture, VIRTUAL_KEY, VK_CONTROL, VK_ESCAPE, VK_LWIN, VK_MENU,
@@ -103,6 +108,8 @@ struct Application {
     zoom_pill_text: Option<String>,
     /// 슬라이드쇼 상태 (SPEC §6.3)
     slideshow_active: bool,
+    /// 드롭 타깃 — 창 수명 동안 유지 (SPEC §5.4)
+    drop_target: Option<IDropTarget>,
     /// R3 게이트 검증용 액션 스크립트 (임시)
     action_script: VecDeque<Action>,
 }
@@ -135,6 +142,7 @@ impl Application {
             show_file_info: false,
             zoom_pill_text: None,
             slideshow_active: false,
+            drop_target: None,
             action_script: parse_action_script(),
         };
         // 실행 인자 = 열 파일 경로 하나 (SPEC §6.5 — CLI 옵션 없음)
@@ -624,16 +632,60 @@ fn dispatch_action(application: &mut Application, window: HWND, action: Action) 
             toggle_fullscreen(application, window);
             application.render(window);
         }
-        // R4 잔여: 셸 통합 (클립보드·삭제·rename·explorer·Open With·열기 다이얼로그)
-        Action::Open
-        | Action::OpenWith
-        | Action::OpenWithOther
-        | Action::OpenContainingFolder
-        | Action::Rename
-        | Action::Delete
-        | Action::DeletePermanent
-        | Action::Copy
-        | Action::Paste => {}
+        Action::Open => {
+            let last_directory = application.settings.last_file_dialog_directory();
+            let paths = open_dialog::show(window, last_directory.as_deref());
+            // 다중 선택의 나머지 파일 = 새 창 (R7 멀티윈도우) — 현재는 첫 파일만
+            if let Some(first) = paths.first() {
+                if let Some(parent) = first.parent() {
+                    application
+                        .settings
+                        .set_last_file_dialog_directory(&parent.to_string_lossy());
+                    unsafe { SetTimer(Some(window), RECENTS_SAVE_TIMER, 500, None) };
+                }
+                let first = first.clone();
+                open_external_path(application, window, &first);
+            }
+        }
+        Action::OpenContainingFolder => {
+            if let Some(current) = &application.image_core.current {
+                file_ops::show_in_explorer(&current.path);
+            }
+        }
+        Action::Delete | Action::DeletePermanent => {
+            delete_current_file(application, window, action == Action::DeletePermanent);
+        }
+        Action::Rename => {
+            rename_current_file(application, window);
+        }
+        Action::Copy => {
+            if let Some(current) = &application.image_core.current {
+                let image = current.image.clone();
+                let path = current.path.clone();
+                let orientation = BakedOrientation {
+                    rotation_quadrant: application.view_transform.rotation_quadrant,
+                    mirrored: application.view_transform.mirrored,
+                    flipped: application.view_transform.flipped,
+                };
+                let _ = clipboard::copy_image(
+                    window,
+                    &path,
+                    &image.frames[0].pixels,
+                    image.pixel_width,
+                    image.pixel_height,
+                    &orientation,
+                );
+            }
+        }
+        Action::Paste => {
+            // CF_HDROP 경로만 — 첫 항목 현재 창, 나머지 새 창은 R7 (SPEC §6.4)
+            if let Some(first) = clipboard::paste_paths(window).first() {
+                let first = first.clone();
+                open_external_path(application, window, &first);
+            }
+        }
+        // R4 잔여: Open With (SHAssocEnumHandlers·앱 아이콘)
+        Action::OpenWith | Action::OpenWithOther => {}
         // R5: 애니메이션 스케줄러
         Action::Pause
         | Action::NextFrame
@@ -642,6 +694,81 @@ fn dispatch_action(application: &mut Application, window: HWND, action: Action) 
         | Action::IncreaseSpeed => {}
         // R6: 옵션 다이얼로그 / R7: 멀티윈도우
         Action::Options | Action::NewWindow | Action::CloseAllWindows => {}
+    }
+}
+
+/// 삭제 흐름 (SPEC §6.4) — 확인 다이얼로그·afterdelete 이동·실패 시 재오픈
+fn delete_current_file(application: &mut Application, window: HWND, permanent: bool) {
+    let Some(path) = application
+        .image_core
+        .current
+        .as_ref()
+        .map(|current| current.path.clone())
+    else {
+        return;
+    };
+    // 영구 삭제는 항상 확인, 휴지통은 askdelete일 때만 (SPEC §6.4)
+    if permanent || application.settings.options.ask_delete {
+        let confirmation = file_ops::confirm_delete(window, &path, permanent);
+        if !confirmation.confirmed {
+            return;
+        }
+        if !permanent && confirmation.do_not_ask_again {
+            application.settings.set_option_boolean("askdelete", false);
+            unsafe { SetTimer(Some(window), RECENTS_SAVE_TIMER, 500, None) };
+        }
+    }
+    // afterdelete 대상은 삭제 전에 계산: 0=이전 / 1=유지 / 2=다음 (SPEC §6.4)
+    let target = match application.settings.options.after_delete {
+        0 => application
+            .image_core
+            .peek_navigation_target(NavigationCommand::Previous),
+        2 => application
+            .image_core
+            .peek_navigation_target(NavigationCommand::Next),
+        _ => None,
+    }
+    .filter(|candidate| {
+        !candidate
+            .to_string_lossy()
+            .eq_ignore_ascii_case(&path.to_string_lossy())
+    });
+    match file_ops::delete_file(&path, permanent) {
+        Ok(()) => {
+            application.image_core.refresh_folder();
+            if let Some(target) = target {
+                open_external_path(application, window, &target);
+            }
+        }
+        Err(_) => {
+            // 실패 시 파일 다시 열고 에러 표시 (SPEC §6.4)
+            if application.image_core.reload_current() {
+                application.apply_current_image(window);
+            }
+        }
+    }
+}
+
+/// 이름 변경 흐름 (SPEC §6.4) — 다이얼로그·성공 시 새 경로 재오픈.
+/// 디코더는 디코드 후 파일 핸들을 잡지 않으므로 별도 핸들 닫기 불필요.
+fn rename_current_file(application: &mut Application, window: HWND) {
+    let Some(path) = application
+        .image_core
+        .current
+        .as_ref()
+        .map(|current| current.path.clone())
+    else {
+        return;
+    };
+    let current_name = path
+        .file_name()
+        .map_or_else(String::new, |name| name.to_string_lossy().into_owned());
+    let Some(new_name) = dialogs::rename::show(window, &current_name) else {
+        return;
+    };
+    if let Ok(new_path) = file_ops::rename_file(&path, &new_name) {
+        application.image_core.refresh_folder();
+        open_external_path(application, window, &new_path);
     }
 }
 
@@ -748,8 +875,8 @@ fn handle_wheel(application: &mut Application, window: HWND, wheel_delta: i16) {
 }
 
 fn main() -> Result<()> {
-    // UI 스레드 = STA, 디코드 워커 = MTA (PORTING_PLAN §3 매핑)
-    unsafe { CoInitializeEx(None, COINIT_APARTMENTTHREADED) }.ok()?;
+    // UI 스레드 = STA(OLE 포함 — 드래그&드롭), 디코드 워커 = MTA (PORTING_PLAN §3 매핑)
+    unsafe { OleInitialize(None) }?;
     let instance = unsafe { GetModuleHandleW(None)? };
     let class_name = w!("riv");
 
@@ -794,6 +921,7 @@ fn main() -> Result<()> {
         SetWindowLongPtrW(window, GWLP_USERDATA, Box::into_raw(application) as isize);
     }
     if let Some(application) = unsafe { application_from_window(window) } {
+        application.drop_target = drag_drop::register(window).ok();
         application.render(window);
         if !load_pending {
             let _ = unsafe { PostMessageW(Some(window), WM_APP_SHOW_WINDOW, WPARAM(0), LPARAM(0)) };
@@ -852,6 +980,14 @@ extern "system" fn window_procedure(
                     application.apply_current_image(window);
                 }
                 application.ensure_window_shown(window);
+            }
+            LRESULT(0)
+        }
+        // 드롭 경로 수신 — 첫 파일 현재 창 (SPEC §5.4)
+        WM_APP_DROP_PATH => {
+            let path = unsafe { Box::from_raw(lparam.0 as *mut std::path::PathBuf) };
+            if let Some(application) = unsafe { application_from_window(window) } {
+                open_external_path(application, window, &path);
             }
             LRESULT(0)
         }
@@ -1104,6 +1240,7 @@ extern "system" fn window_procedure(
             LRESULT(0)
         }
         WM_NCDESTROY => {
+            let _ = unsafe { RevokeDragDrop(window) };
             let pointer =
                 unsafe { SetWindowLongPtrW(window, GWLP_USERDATA, 0) } as *mut Application;
             if !pointer.is_null() {

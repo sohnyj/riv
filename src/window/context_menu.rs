@@ -30,18 +30,13 @@ struct MenuBuilder {
 }
 
 impl MenuBuilder {
-    /// 아직 배선되지 않은 액션(R4 셸 통합 잔여·R5 애니·R6 다이얼로그) — 항상 비활성 표시
+    /// 아직 배선되지 않은 액션(R4 잔여 Open With·R5 애니·R6 다이얼로그·R7 멀티윈도우)
+    /// — 항상 비활성 표시
     fn is_wired(action: Action) -> bool {
         !matches!(
             action,
-            Action::Open
-                | Action::OpenWith
+            Action::OpenWith
                 | Action::OpenWithOther
-                | Action::OpenContainingFolder
-                | Action::Rename
-                | Action::Delete
-                | Action::Copy
-                | Action::Paste
                 | Action::NewWindow
                 | Action::CloseAllWindows
                 | Action::Pause

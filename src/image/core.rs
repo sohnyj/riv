@@ -240,29 +240,49 @@ impl ImageCore {
     /// 반환: None = 이동 없음(대상 없음·폴더 끝·동일 파일), Some(표시 동기 변경 여부).
     pub fn navigate(&mut self, command: NavigationCommand) -> Option<bool> {
         self.refresh_folder_if_stale();
-        if self.entries.is_empty() {
-            return None;
-        }
-        // 위치 기준: 진행 중 로드 → 에러 파일(에러에서도 이동 가능, SPEC §4.2) → 현재 표시
-        let current_path = self
-            .pending_display
-            .clone()
-            .or_else(|| self.load_error.as_ref().map(|(path, _)| path.clone()))
-            .or_else(|| self.current.as_ref().map(|current| current.path.clone()));
-        let current_index = current_path
-            .as_deref()
-            .and_then(|path| self.position_of(path));
-        let target = match command {
-            NavigationCommand::First => self.first_existing_entry(),
-            NavigationCommand::Last => self.last_existing_entry(),
-            NavigationCommand::Next => self.step_existing_entry(current_index, 1),
-            NavigationCommand::Previous => self.step_existing_entry(current_index, -1),
-        };
-        let target = target?;
+        let current_path = self.navigation_anchor();
+        let target = self.navigation_target(command)?;
         if current_path.is_some_and(|current| paths_equal(&current, &target)) {
             return None; // 같은 파일 재이동 무시
         }
         Some(self.load_file(&target))
+    }
+
+    /// 이동 대상 사전 계산 — 삭제 후 이동(afterdelete)용 (SPEC §6.4)
+    pub fn peek_navigation_target(&mut self, command: NavigationCommand) -> Option<PathBuf> {
+        self.refresh_folder_if_stale();
+        self.navigation_target(command)
+    }
+
+    /// 폴더 목록 강제 재수집 — 삭제·rename 직후 (SPEC §4.3)
+    pub fn refresh_folder(&mut self) {
+        if let Some(directory) = self.folder_directory.clone() {
+            self.rescan_folder(&directory);
+        }
+    }
+
+    /// 위치 기준: 진행 중 로드 → 에러 파일(에러에서도 이동 가능, SPEC §4.2) → 현재 표시
+    fn navigation_anchor(&self) -> Option<PathBuf> {
+        self.pending_display
+            .clone()
+            .or_else(|| self.load_error.as_ref().map(|(path, _)| path.clone()))
+            .or_else(|| self.current.as_ref().map(|current| current.path.clone()))
+    }
+
+    fn navigation_target(&self, command: NavigationCommand) -> Option<PathBuf> {
+        if self.entries.is_empty() {
+            return None;
+        }
+        let current_index = self
+            .navigation_anchor()
+            .as_deref()
+            .and_then(|path| self.position_of(path));
+        match command {
+            NavigationCommand::First => self.first_existing_entry(),
+            NavigationCommand::Last => self.last_existing_entry(),
+            NavigationCommand::Next => self.step_existing_entry(current_index, 1),
+            NavigationCommand::Previous => self.step_existing_entry(current_index, -1),
+        }
     }
 
     /// 워커 완료 수신 (WM_APP_DECODE_COMPLETE) — 반환 = 표시 상태 변경 여부
