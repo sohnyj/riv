@@ -13,7 +13,8 @@ use windows::Win32::UI::Shell::{DragQueryFileW, HDROP};
 use windows::Win32::UI::WindowsAndMessaging::{PostMessageW, WM_APP};
 use windows::core::{Result, implement};
 
-/// 드롭 경로 통지 — lparam = Box<PathBuf> (첫 파일만 — 나머지 새 창은 R7 멀티윈도우)
+/// 드롭 경로 통지 — lparam = Box<Vec<PathBuf>> (첫 파일 현재 창, 나머지는
+/// 빈 창 재사용 → 새 창 — SPEC §5.4·§6.1)
 pub const WM_APP_DROP_PATH: u32 = WM_APP + 3;
 
 #[implement(IDropTarget)]
@@ -42,16 +43,27 @@ fn has_paths(data_object: Option<&IDataObject>) -> bool {
     data_object.is_some_and(|data| unsafe { data.QueryGetData(&drop_format()) }.is_ok())
 }
 
-fn first_path(data_object: Option<&IDataObject>) -> Option<PathBuf> {
-    let data = data_object?;
-    let mut medium = unsafe { data.GetData(&drop_format()) }.ok()?;
+fn dropped_paths(data_object: Option<&IDataObject>) -> Vec<PathBuf> {
+    let Some(data) = data_object else {
+        return Vec::new();
+    };
+    let Ok(mut medium) = (unsafe { data.GetData(&drop_format()) }) else {
+        return Vec::new();
+    };
     let drop_handle = HDROP(unsafe { medium.u.hGlobal }.0);
-    let mut buffer = [0u16; 32768];
-    let length = unsafe { DragQueryFileW(drop_handle, 0, Some(&mut buffer)) };
-    let path =
-        (length > 0).then(|| PathBuf::from(String::from_utf16_lossy(&buffer[..length as usize])));
+    let count = unsafe { DragQueryFileW(drop_handle, 0xFFFF_FFFF, None) };
+    let mut paths = Vec::new();
+    for index in 0..count {
+        let mut buffer = [0u16; 32768];
+        let length = unsafe { DragQueryFileW(drop_handle, index, Some(&mut buffer)) };
+        if length > 0 {
+            paths.push(PathBuf::from(String::from_utf16_lossy(
+                &buffer[..length as usize],
+            )));
+        }
+    }
     unsafe { ReleaseStgMedium(&mut medium) };
-    path
+    paths
 }
 
 impl IDropTarget_Impl for DropTarget_Impl {
@@ -98,8 +110,9 @@ impl IDropTarget_Impl for DropTarget_Impl {
         _point: &POINTL,
         effect: *mut DROPEFFECT,
     ) -> Result<()> {
-        if let Some(path) = first_path(data_object.as_ref()) {
-            let pointer = Box::into_raw(Box::new(path));
+        let paths = dropped_paths(data_object.as_ref());
+        if !paths.is_empty() {
+            let pointer = Box::into_raw(Box::new(paths));
             let posted = unsafe {
                 PostMessageW(
                     Some(self.window),

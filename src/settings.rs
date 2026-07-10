@@ -147,6 +147,19 @@ fn parse_hex_color(text: &str) -> Option<(u8, u8, u8)> {
     Some((red, green, blue))
 }
 
+/// 설정 파일 쓰기 가능성 검증 (SPEC §8.1 fail-fast) — 프로브 파일 생성·삭제.
+/// 관리자 권한이 필요한 폴더(Program Files 등)면 false.
+pub fn probe_writable() -> bool {
+    let probe = settings_path().with_extension("json.probe");
+    match std::fs::write(&probe, b"") {
+        Ok(()) => {
+            let _ = std::fs::remove_file(&probe);
+            true
+        }
+        Err(_) => false,
+    }
+}
+
 pub struct SettingsFile {
     path: PathBuf,
     /// 파일 문서 전체 — options 외 절(recents·지오메트리·바인딩) 보존용

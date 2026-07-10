@@ -33,6 +33,7 @@ use view::renderer::Renderer;
 use view::transform::{FitMode, Size, ViewTransform};
 use window::context_menu::{self, MenuSelection, MenuState};
 use window::dwm;
+use window::instances;
 use window::overlay::{self, Overlay, OverlayContent};
 use windows::Win32::Foundation::{HWND, LPARAM, LRESULT, POINT, RECT, WPARAM};
 use windows::Win32::Graphics::Direct2D::Common::D2D1_COLOR_F;
@@ -60,11 +61,11 @@ use windows::Win32::UI::WindowsAndMessaging::{
     RegisterClassExW, SW_HIDE, SW_SHOW, SW_SHOWMAXIMIZED, SWP_FRAMECHANGED, SWP_NOACTIVATE,
     SWP_NOMOVE, SWP_NOSIZE, SWP_NOZORDER, SendMessageW, SetCursor, SetTimer, SetWindowLongPtrW,
     SetWindowPlacement, SetWindowPos, SetWindowTextW, ShowWindow, TranslateMessage, WINDOW_STYLE,
-    WINDOWPLACEMENT, WM_ACTIVATEAPP, WM_APP, WM_CLOSE, WM_CONTEXTMENU, WM_DESTROY,
-    WM_DISPLAYCHANGE, WM_DPICHANGED, WM_KEYDOWN, WM_LBUTTONDBLCLK, WM_LBUTTONDOWN, WM_LBUTTONUP,
-    WM_MBUTTONDOWN, WM_MOUSEMOVE, WM_MOUSEWHEEL, WM_MOVE, WM_NCDESTROY, WM_NCLBUTTONDOWN, WM_PAINT,
-    WM_SETCURSOR, WM_SETTINGCHANGE, WM_SIZE, WM_SYSKEYDOWN, WM_TIMER, WM_XBUTTONDOWN, WNDCLASSEXW,
-    WS_OVERLAPPEDWINDOW, WS_POPUP, WS_VISIBLE,
+    WINDOWPLACEMENT, WM_ACTIVATE, WM_ACTIVATEAPP, WM_APP, WM_CLOSE, WM_CONTEXTMENU, WM_COPYDATA,
+    WM_DESTROY, WM_DISPLAYCHANGE, WM_DPICHANGED, WM_KEYDOWN, WM_LBUTTONDBLCLK, WM_LBUTTONDOWN,
+    WM_LBUTTONUP, WM_MBUTTONDOWN, WM_MOUSEMOVE, WM_MOUSEWHEEL, WM_MOVE, WM_NCDESTROY,
+    WM_NCLBUTTONDOWN, WM_PAINT, WM_SETCURSOR, WM_SETTINGCHANGE, WM_SIZE, WM_SYSKEYDOWN, WM_TIMER,
+    WM_XBUTTONDOWN, WNDCLASSEXW, WS_OVERLAPPEDWINDOW, WS_POPUP, WS_VISIBLE,
 };
 use windows::core::{PCWSTR, Result, w};
 
@@ -133,7 +134,7 @@ struct Application {
 }
 
 impl Application {
-    fn new(window: HWND) -> Result<Self> {
+    fn new(window: HWND, initial_path: Option<&Path>) -> Result<Self> {
         let (width, height) = client_size(window);
         let renderer = Renderer::new(
             window,
@@ -176,9 +177,8 @@ impl Application {
             .renderer
             .set_sdr_white_boost(application.sdr_white_boost);
         application.overlay.set_scale(device_pixel_ratio);
-        // 실행 인자 = 열 파일 경로 하나 (SPEC §6.5 — CLI 옵션 없음)
-        if let Some(argument) = std::env::args_os().nth(1) {
-            application.image_core.load_path(Path::new(&argument));
+        if let Some(path) = initial_path {
+            application.image_core.load_path(path);
         }
         Ok(application)
     }
@@ -764,8 +764,17 @@ fn dispatch_action(application: &mut Application, window: HWND, action: Action) 
     }
     let zoom_step = 1.0 + application.settings.options.scale_factor_percent as f32 / 100.0;
     match action {
-        Action::Quit | Action::CloseWindow => {
+        Action::CloseWindow => {
             let _ = unsafe { PostMessageW(Some(window), WM_CLOSE, WPARAM(0), LPARAM(0)) };
+        }
+        // Exit·Close All = 프로세스 내 전 창 닫기 (SPEC §6.1 — 마지막 창이 루프 종료)
+        Action::Quit | Action::CloseAllWindows => {
+            for target in instances::all_windows() {
+                let _ = unsafe { PostMessageW(Some(target), WM_CLOSE, WPARAM(0), LPARAM(0)) };
+            }
+        }
+        Action::NewWindow => {
+            let _ = create_main_window(None);
         }
         Action::FirstFile => {
             execute_navigation(application, window, NavigationCommand::First);
@@ -854,7 +863,10 @@ fn dispatch_action(application: &mut Application, window: HWND, action: Action) 
         Action::Open => {
             let last_directory = application.settings.last_file_dialog_directory();
             let paths = open_dialog::show(window, last_directory.as_deref());
-            // 다중 선택의 나머지 파일 = 새 창 (R7 멀티윈도우) — 현재는 첫 파일만
+            // 다중 선택: 첫 파일 현재 창, 나머지 = 빈 창 재사용 → 새 창 (SPEC §6.4)
+            for rest in paths.iter().skip(1) {
+                let _ = open_in_empty_or_new_window(rest);
+            }
             if let Some(first) = paths.first() {
                 if let Some(parent) = first.parent() {
                     application
@@ -897,8 +909,12 @@ fn dispatch_action(application: &mut Application, window: HWND, action: Action) 
             }
         }
         Action::Paste => {
-            // CF_HDROP 경로만 — 첫 항목 현재 창, 나머지 새 창은 R7 (SPEC §6.4)
-            if let Some(first) = clipboard::paste_paths(window).first() {
+            // CF_HDROP 경로만 — 첫 항목 현재 창, 나머지 = 빈 창 재사용 → 새 창 (SPEC §6.4)
+            let paths = clipboard::paste_paths(window);
+            for rest in paths.iter().skip(1) {
+                let _ = open_in_empty_or_new_window(rest);
+            }
+            if let Some(first) = paths.first() {
                 let first = first.clone();
                 open_external_path(application, window, &first);
             }
@@ -939,8 +955,6 @@ fn dispatch_action(application: &mut Application, window: HWND, action: Action) 
         Action::Options => {
             dialogs::options::show(window, &application.settings);
         }
-        // R7: 멀티윈도우
-        Action::NewWindow | Action::CloseAllWindows => {}
     }
 }
 
@@ -1128,6 +1142,34 @@ fn handle_wheel(application: &mut Application, window: HWND, wheel_delta: i16) {
 fn main() -> Result<()> {
     // UI 스레드 = STA(OLE 포함 — 드래그&드롭), 디코드 워커 = MTA (PORTING_PLAN §3 매핑)
     unsafe { OleInitialize(None) }?;
+
+    // 시작 fail-fast (SPEC R3·R4·§8.1) — 승격 실행 거부, 설정 쓰기 불가 폴더면 종료
+    if process_is_elevated() {
+        fail_fast_dialog(
+            "riv does not run elevated",
+            "Running as administrator is not supported. Start riv from a normal user session.",
+        );
+        return Ok(());
+    }
+    if !settings::probe_writable() {
+        fail_fast_dialog(
+            "Settings cannot be saved here",
+            "riv stores riv.json next to the executable, but this folder is not writable \
+             (for example Program Files). Move riv to a writable folder and run it again.",
+        );
+        return Ok(());
+    }
+
+    // 실행 인자 = 열 파일 경로 하나 (SPEC §6.5 — CLI 옵션 없음)
+    let argument_path = std::env::args_os().nth(1).map(std::path::PathBuf::from);
+
+    // 단일 인스턴스 (SPEC §6.5) — 기존 인스턴스에 위임했으면 즉시 종료
+    if SettingsFile::load().options.single_instance
+        && !instances::claim_single_instance(argument_path.as_deref())
+    {
+        return Ok(());
+    }
+
     let instance = unsafe { GetModuleHandleW(None)? };
     let class_name = w!("riv");
 
@@ -1147,12 +1189,27 @@ fn main() -> Result<()> {
     let class_atom = unsafe { RegisterClassExW(&window_class) };
     assert!(class_atom != 0, "RegisterClassExW failed");
 
+    create_main_window(argument_path.as_deref())?;
+
+    let mut message = MSG::default();
+    while unsafe { GetMessageW(&mut message, None, 0, 0) }.as_bool() {
+        let _ = unsafe { TranslateMessage(&message) };
+        unsafe { DispatchMessageW(&message) };
+    }
+    Ok(())
+}
+
+/// GWLP_USERDATA에 실린 Application 포인터 복원
+/// 메인 창 생성 + Application 설치 (SPEC §6.1) — 최초 실행·New Window·
+/// "없으면 새 창" 정책 공용. 창 클래스는 main()에서 1회 등록.
+fn create_main_window(initial_path: Option<&Path>) -> Result<HWND> {
+    let instance = unsafe { GetModuleHandleW(None)? };
     // 창 기본 크기 = 640×480 (SPEC §6.1, 2026-07-10 — 화면 비율 기반(40%×30%)은
-    // 초광폭에서 부적합해 폐기. 지오메트리 복원은 R7)
+    // 초광폭에서 부적합해 폐기)
     let window = unsafe {
         CreateWindowExW(
             Default::default(),
-            class_name,
+            w!("riv"),
             w!("riv"),
             WS_OVERLAPPEDWINDOW,
             CW_USEDEFAULT,
@@ -1166,13 +1223,14 @@ fn main() -> Result<()> {
         )?
     };
 
-    let application = Box::new(Application::new(window)?);
+    let application = Box::new(Application::new(window, initial_path)?);
     // 지연 첫 표시 (SPEC §6.1): 로드 진행 중이면 완료(또는 실패) 시점에,
     // 아니면 다음 이벤트 루프 턴에 표시
     let load_pending = application.image_core.is_load_pending();
     unsafe {
         SetWindowLongPtrW(window, GWLP_USERDATA, Box::into_raw(application) as isize);
     }
+    instances::register_window(window);
     if let Some(application) = unsafe { application_from_window(window) } {
         // 지오메트리 복원(숨김 유지 — 지연 첫 표시) + 다크 타이틀바 (SPEC §6.1, P14)
         application.restore_window_geometry(window);
@@ -1183,16 +1241,74 @@ fn main() -> Result<()> {
             let _ = unsafe { PostMessageW(Some(window), WM_APP_SHOW_WINDOW, WPARAM(0), LPARAM(0)) };
         }
     }
-
-    let mut message = MSG::default();
-    while unsafe { GetMessageW(&mut message, None, 0, 0) }.as_bool() {
-        let _ = unsafe { TranslateMessage(&message) };
-        unsafe { DispatchMessageW(&message) };
-    }
-    Ok(())
+    Ok(window)
 }
 
-/// GWLP_USERDATA에 실린 Application 포인터 복원
+/// 빈 창 재사용 → 없으면 새 창 (SPEC §6.1) — 다중 선택·붙여넣기·드롭의 "나머지",
+/// 단일 인스턴스 수신 공용. 반환 = 연 창.
+fn open_in_empty_or_new_window(path: &Path) -> Option<HWND> {
+    for candidate in instances::windows_by_recency() {
+        if let Some(application) = unsafe { application_from_window(candidate) }
+            && application.image_core.current.is_none()
+            && !application.image_core.is_load_pending()
+        {
+            open_external_path(application, candidate, path);
+            return Some(candidate);
+        }
+    }
+    create_main_window(Some(path)).ok()
+}
+
+/// 승격 실행 감지 (SPEC R3) — `TokenElevationType == Full`(UAC "관리자 권한으로 실행")만
+/// 거부. `TokenElevation`은 UAC 비활성 관리자 계정·wine 기본 토큰까지 승격으로 보고해 부적합.
+fn process_is_elevated() -> bool {
+    use windows::Win32::Security::{
+        GetTokenInformation, TOKEN_ELEVATION_TYPE, TOKEN_QUERY, TokenElevationType,
+        TokenElevationTypeFull,
+    };
+    use windows::Win32::System::Threading::{GetCurrentProcess, OpenProcessToken};
+
+    let mut token = windows::Win32::Foundation::HANDLE::default();
+    if unsafe { OpenProcessToken(GetCurrentProcess(), TOKEN_QUERY, &mut token) }.is_err() {
+        return false;
+    }
+    let mut elevation_type = TOKEN_ELEVATION_TYPE::default();
+    let mut returned = 0u32;
+    let elevated = unsafe {
+        GetTokenInformation(
+            token,
+            TokenElevationType,
+            Some((&raw mut elevation_type).cast()),
+            size_of::<TOKEN_ELEVATION_TYPE>() as u32,
+            &mut returned,
+        )
+    }
+    .is_ok()
+        && elevation_type == TokenElevationTypeFull;
+    let _ = unsafe { windows::Win32::Foundation::CloseHandle(token) };
+    elevated
+}
+
+/// 시작 fail-fast 안내 (SPEC R4 — panic/abort 경로가 아닌 명시적 종료)
+fn fail_fast_dialog(instruction: &str, content: &str) {
+    use windows::Win32::UI::Controls::{TASKDIALOGCONFIG, TDCBF_CLOSE_BUTTON, TaskDialogIndirect};
+
+    let instruction_wide: Vec<u16> = instruction
+        .encode_utf16()
+        .chain(std::iter::once(0))
+        .collect();
+    let content_wide: Vec<u16> = content.encode_utf16().chain(std::iter::once(0)).collect();
+    let configuration = TASKDIALOGCONFIG {
+        cbSize: size_of::<TASKDIALOGCONFIG>() as u32,
+        pszWindowTitle: w!("riv"),
+        pszMainInstruction: PCWSTR(instruction_wide.as_ptr()),
+        pszContent: PCWSTR(content_wide.as_ptr()),
+        dwCommonButtons: TDCBF_CLOSE_BUTTON,
+        ..Default::default()
+    };
+    let _ = unsafe { TaskDialogIndirect(&configuration, None, None, None) };
+}
+
 unsafe fn application_from_window(window: HWND) -> Option<&'static mut Application> {
     let pointer = unsafe { GetWindowLongPtrW(window, GWLP_USERDATA) } as *mut Application;
     unsafe { pointer.as_mut() }
@@ -1239,11 +1355,16 @@ extern "system" fn window_procedure(
             }
             LRESULT(0)
         }
-        // 드롭 경로 수신 — 첫 파일 현재 창 (SPEC §5.4)
+        // 드롭 경로 수신 — 첫 파일 현재 창, 나머지 = 빈 창 재사용 → 새 창 (SPEC §5.4·§6.1)
         WM_APP_DROP_PATH => {
-            let path = unsafe { Box::from_raw(lparam.0 as *mut std::path::PathBuf) };
-            if let Some(application) = unsafe { application_from_window(window) } {
-                open_external_path(application, window, &path);
+            let paths = unsafe { Box::from_raw(lparam.0 as *mut Vec<std::path::PathBuf>) };
+            for rest in paths.iter().skip(1) {
+                let _ = open_in_empty_or_new_window(rest);
+            }
+            if let Some(application) = unsafe { application_from_window(window) }
+                && let Some(first) = paths.first()
+            {
+                open_external_path(application, window, first);
             }
             LRESULT(0)
         }
@@ -1555,6 +1676,23 @@ extern "system" fn window_procedure(
             }
             LRESULT(0)
         }
+        // 최근 활성 창 추적 (SPEC §6.1 — 빈 창 재사용 탐색 순서)
+        WM_ACTIVATE => {
+            if wparam.0 & 0xFFFF != 0 {
+                instances::note_window_activated(window);
+            }
+            LRESULT(0)
+        }
+        // 단일 인스턴스 경로 수신 (SPEC §6.5) — 빈 창 재사용 정책 + 전면 활성화
+        WM_COPYDATA => {
+            if let Some(path) = instances::parse_open_path(lparam) {
+                if let Some(target) = open_in_empty_or_new_window(&path) {
+                    instances::bring_to_foreground(target);
+                }
+                return LRESULT(1);
+            }
+            LRESULT(0)
+        }
         // 모니터 이동·디스플레이 설정 변경 → SDR 백레벨 재조회 (SPEC §7)
         WM_MOVE | WM_DISPLAYCHANGE => {
             if let Some(application) = unsafe { application_from_window(window) } {
@@ -1606,7 +1744,10 @@ extern "system" fn window_procedure(
             unsafe { DefWindowProcW(window, message, wparam, lparam) }
         }
         WM_DESTROY => {
-            unsafe { PostQuitMessage(0) };
+            // 마지막 창이 닫힐 때만 메시지 루프 종료 (SPEC §6.1 멀티윈도우)
+            if instances::unregister_window(window) == 0 {
+                unsafe { PostQuitMessage(0) };
+            }
             LRESULT(0)
         }
         _ => unsafe { DefWindowProcW(window, message, wparam, lparam) },
