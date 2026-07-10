@@ -1,0 +1,25 @@
+From 17d8e3d669a221c55c2763105a1f8cae5855bacb Mon Sep 17 00:00:00 2001
+From: sohnyj <sohnyj@users.noreply.github.com>
+Date: Tue, 7 Jul 2026 14:01:29 +0900
+Subject: [PATCH] IlmThread: use native Win32 semaphores on MinGW
+
+---
+ cmake/CMakeLists.txt | 2 +-
+ 1 file changed, 1 insertion(+), 1 deletion(-)
+
+diff --git a/cmake/CMakeLists.txt b/cmake/CMakeLists.txt
+index 72441ea..790795b 100644
+--- a/cmake/CMakeLists.txt
++++ b/cmake/CMakeLists.txt
+@@ -111,7 +111,7 @@ if(OPENEXR_ENABLE_THREADING AND Threads_FOUND)
+ 
+   # we have threads, but do we have posix semaphores for sem_init?
+   # should be in pthreads
+-  if(NOT (APPLE OR (WIN32 AND (NOT MINGW))))
++  if(NOT (APPLE OR WIN32))
+     if(MINGW)
+       check_include_files("pthread_unistd.h;semaphore.h" ILMTHREAD_HAVE_SEMAPHORE_H)
+     else()
+-- 
+2.53.0
+

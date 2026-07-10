@@ -95,6 +95,12 @@ enum Adapter {
     Apng,
     /// SVG/SVGZ — WIC 완전 미지원, 최대 모니터 긴 변으로 래스터화 (`resvg`, SPEC §4.2)
     Svg,
+    /// 애니메이션 WebP — WIC 미지원, VP8X ANIM 플래그 프로빙으로 분기 (libwebp 정적)
+    WebPAnimation,
+    /// EXR — OpenEXR C++ 심 (성능 우선 선택 2026-07-10)
+    Exr,
+    /// HEIF — WIC 우선, 코덱 부재(COMPONENTNOTFOUND) 시 안내 없이 libheif로 전환
+    HeifWithWicPreferred,
 }
 
 pub struct FormatDescriptor {
@@ -188,7 +194,7 @@ static REGISTRY: &[FormatDescriptor] = &[
         adapter: Adapter::Wic,
         store_extension: None,
     },
-    // HEIF는 WIC 부재 시 내장 fallback(libheif) 전환 예정 — 안내 없음 (PORTING_PLAN §5)
+    // HEIF는 WIC 부재 시 내장 fallback(libheif)으로 안내 없이 전환 (PORTING_PLAN §5)
     FormatDescriptor {
         name: "HEIF",
         extensions: &["heic", "heif", "hif"],
@@ -200,7 +206,15 @@ static REGISTRY: &[FormatDescriptor] = &[
             &[(4, b"ftyphevc")],
         ],
         semantics: FrameSemantics::Single,
-        adapter: Adapter::Wic,
+        adapter: Adapter::HeifWithWicPreferred,
+        store_extension: None,
+    },
+    FormatDescriptor {
+        name: "EXR",
+        extensions: &["exr"],
+        magic: &[&[(0, b"\x76\x2F\x31\x01")]],
+        semantics: FrameSemantics::Single,
+        adapter: Adapter::Exr,
         store_extension: None,
     },
     FormatDescriptor {
@@ -279,7 +293,18 @@ fn probe_magic(header: &[u8]) -> Option<&'static FormatDescriptor> {
     })
 }
 
-/// 내용 기반 세분화 — PNG + acTL 청크 = APNG (R5: SVG + gzip = SVGZ 추가)
+/// 애니메이션 WebP 전용 디스크립터 — 확장자·매직 조회 비대상, VP8X ANIM 프로빙
+/// 세분화(`refine_by_content`)로만 도달한다. 포맷명·확장자 파생은 정지 WebP 항목 소유.
+static ANIMATED_WEBP: FormatDescriptor = FormatDescriptor {
+    name: "WebP",
+    extensions: &[],
+    magic: &[],
+    semantics: FrameSemantics::Animation,
+    adapter: Adapter::WebPAnimation,
+    store_extension: None,
+};
+
+/// 내용 기반 세분화 — PNG + acTL = APNG, WebP + VP8X ANIM 플래그 = 애니 WebP
 fn refine_by_content(
     descriptor: &'static FormatDescriptor,
     header: &[u8],
@@ -287,7 +312,15 @@ fn refine_by_content(
     if descriptor.name == "PNG" && png_has_animation_control(header) {
         return descriptor_for_extension("apng").unwrap_or(descriptor);
     }
+    if descriptor.name == "WebP" && webp_has_animation_flag(header) {
+        return &ANIMATED_WEBP;
+    }
     descriptor
+}
+
+/// VP8X 확장 청크의 ANIM 플래그(비트 0x02) — 애니메이션 WebP 판별 (PORTING_PLAN §5)
+fn webp_has_animation_flag(header: &[u8]) -> bool {
+    header.get(12..16) == Some(b"VP8X") && header.get(20).is_some_and(|flags| flags & 0x02 != 0)
 }
 
 /// PNG 청크 순회로 IDAT 이전의 acTL 존재 확인 (헤더 버퍼 범위 내)
@@ -353,6 +386,18 @@ pub fn decode_file(path: &Path) -> Result<DecodedImage, DecodeError> {
             }),
         Adapter::Apng => decode_apng(path, format_name),
         Adapter::Svg => decode_svg(path, format_name),
+        Adapter::WebPAnimation => super::fallback::decode_webp_animation(path, format_name),
+        Adapter::Exr => super::fallback::decode_exr(path, format_name),
+        // WIC 우선, 코덱 부재 시 안내 없이 내장 전환 (PORTING_PLAN §5)
+        Adapter::HeifWithWicPreferred => {
+            decode_with_wic(path, format_name, semantics).or_else(|error| {
+                if error.code == WINCODEC_ERR_COMPONENTNOTFOUND.0 {
+                    super::fallback::decode_heif(path, format_name)
+                } else {
+                    Err(error)
+                }
+            })
+        }
     }
 }
 
@@ -644,7 +689,7 @@ fn decode_animation(
 
 /// premultiplied over 블렌드: out = src + dst × (1 − srcA). 캔버스 밖은 클립.
 #[expect(clippy::too_many_arguments)]
-fn blend_over(
+pub(crate) fn blend_over(
     canvas: &mut [u8],
     canvas_width: u32,
     canvas_height: u32,
@@ -681,7 +726,7 @@ fn blend_over(
 }
 
 /// 디스포절 2(배경 복원) — 프레임 사각형을 투명으로 클리어
-fn clear_rectangle(
+pub(crate) fn clear_rectangle(
     canvas: &mut [u8],
     canvas_width: u32,
     left: u32,
@@ -767,7 +812,7 @@ fn source_size(source: &IWICBitmapSource) -> windows::core::Result<(u32, u32)> {
 // ── 내장 fallback 디코더 (PORTING_PLAN §5 — WIC 완전 미지원 포맷 전담) ────────
 
 /// fallback 디코더 오류 — Win32 HRESULT가 없는 경로 (코드 0)
-fn fallback_error(message: impl std::fmt::Display) -> DecodeError {
+pub(crate) fn fallback_error(message: impl std::fmt::Display) -> DecodeError {
     DecodeError {
         code: 0,
         message: message.to_string(),
@@ -921,7 +966,7 @@ fn pixels_to_premultiplied_bgra(
 
 /// blend_op Source — 사각형을 알파 포함 그대로 교체 (APNG 사양)
 #[expect(clippy::too_many_arguments)]
-fn copy_rectangle(
+pub(crate) fn copy_rectangle(
     canvas: &mut [u8],
     canvas_width: u32,
     canvas_height: u32,
