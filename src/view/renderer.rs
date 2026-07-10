@@ -17,13 +17,15 @@ use windows::Win32::Graphics::Direct3D11::{
     D3D11_CREATE_DEVICE_BGRA_SUPPORT, D3D11_SDK_VERSION, D3D11CreateDevice, ID3D11Device,
 };
 use windows::Win32::Graphics::Dxgi::Common::{
-    DXGI_ALPHA_MODE_IGNORE, DXGI_FORMAT_B8G8R8A8_UNORM, DXGI_FORMAT_UNKNOWN, DXGI_SAMPLE_DESC,
+    DXGI_ALPHA_MODE_IGNORE, DXGI_FORMAT, DXGI_FORMAT_B8G8R8A8_UNORM, DXGI_FORMAT_R10G10B10A2_UNORM,
+    DXGI_FORMAT_UNKNOWN, DXGI_SAMPLE_DESC,
 };
 use windows::Win32::Graphics::Dxgi::{
     DXGI_PRESENT, DXGI_SCALING_NONE, DXGI_SWAP_CHAIN_DESC1, DXGI_SWAP_CHAIN_FLAG,
     DXGI_SWAP_EFFECT_FLIP_DISCARD, DXGI_USAGE_RENDER_TARGET_OUTPUT, IDXGIAdapter, IDXGIDevice,
-    IDXGIFactory2, IDXGISurface, IDXGISwapChain1,
+    IDXGIFactory2, IDXGIOutput6, IDXGISurface, IDXGISwapChain1,
 };
+use windows::Win32::Graphics::Gdi::{MONITOR_DEFAULTTONEAREST, MonitorFromWindow};
 use windows::core::{Interface, Result};
 use windows_numerics::Matrix3x2;
 
@@ -32,6 +34,32 @@ pub struct Renderer {
     d2d_context: ID2D1DeviceContext,
     target: Option<ID2D1Bitmap1>,
     image: Option<ID2D1Bitmap1>,
+    backbuffer_format: DXGI_FORMAT,
+}
+
+/// 창이 있는 모니터의 비트 심도를 감지해 백버퍼 포맷을 결정 —
+/// 10-bit 디스플레이면 R10G10B10A2, 그 외·감지 실패는 8-bit(B8G8R8A8).
+/// 10-bit 경로는 실기 검증 대상(wine은 IDXGIOutput6 미지원 가능).
+fn detect_backbuffer_format(adapter: &IDXGIAdapter, window: HWND) -> DXGI_FORMAT {
+    let monitor = unsafe { MonitorFromWindow(window, MONITOR_DEFAULTTONEAREST) };
+    let mut output_index = 0;
+    while let Ok(output) = unsafe { adapter.EnumOutputs(output_index) } {
+        output_index += 1;
+        let Ok(description) = (unsafe { output.GetDesc() }) else {
+            continue;
+        };
+        if description.Monitor != monitor {
+            continue;
+        }
+        if let Ok(output6) = output.cast::<IDXGIOutput6>()
+            && let Ok(description1) = unsafe { output6.GetDesc1() }
+            && description1.BitsPerColor >= 10
+        {
+            return DXGI_FORMAT_R10G10B10A2_UNORM;
+        }
+        break;
+    }
+    DXGI_FORMAT_B8G8R8A8_UNORM
 }
 
 fn create_d3d_device(driver_type: D3D_DRIVER_TYPE) -> Result<ID3D11Device> {
@@ -66,13 +94,14 @@ impl Renderer {
             .or_else(|_| create_d3d_device(D3D_DRIVER_TYPE_WARP))?;
         let dxgi_device: IDXGIDevice = d3d_device.cast()?;
 
+        let adapter: IDXGIAdapter = unsafe { dxgi_device.GetAdapter()? };
+        let backbuffer_format = detect_backbuffer_format(&adapter, window);
         let swap_chain = unsafe {
-            let adapter: IDXGIAdapter = dxgi_device.GetAdapter()?;
             let factory: IDXGIFactory2 = adapter.GetParent()?;
             let description = DXGI_SWAP_CHAIN_DESC1 {
                 Width: width,
                 Height: height,
-                Format: DXGI_FORMAT_B8G8R8A8_UNORM,
+                Format: backbuffer_format,
                 SampleDesc: DXGI_SAMPLE_DESC {
                     Count: 1,
                     Quality: 0,
@@ -99,6 +128,7 @@ impl Renderer {
             d2d_context,
             target: None,
             image: None,
+            backbuffer_format,
         };
         renderer.create_target()?;
         Ok(renderer)
@@ -106,7 +136,10 @@ impl Renderer {
 
     fn create_target(&mut self) -> Result<()> {
         let properties = D2D1_BITMAP_PROPERTIES1 {
-            pixelFormat: pixel_format(),
+            pixelFormat: D2D1_PIXEL_FORMAT {
+                format: self.backbuffer_format,
+                alphaMode: D2D1_ALPHA_MODE_PREMULTIPLIED,
+            },
             dpiX: 96.0,
             dpiY: 96.0,
             bitmapOptions: D2D1_BITMAP_OPTIONS_TARGET | D2D1_BITMAP_OPTIONS_CANNOT_DRAW,

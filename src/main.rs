@@ -12,8 +12,8 @@ use windows::Win32::Graphics::Direct2D::{
     D2D1_INTERPOLATION_MODE_LINEAR, D2D1_INTERPOLATION_MODE_NEAREST_NEIGHBOR,
 };
 use windows::Win32::Graphics::Gdi::{
-    COLOR_WINDOW, GetMonitorInfoW, GetSysColorBrush, MONITOR_DEFAULTTONEAREST, MONITORINFO,
-    MonitorFromWindow, ScreenToClient, ValidateRect,
+    COLOR_WINDOW, GetMonitorInfoW, GetSysColorBrush, HMONITOR, MONITOR_DEFAULTTONEAREST,
+    MONITORINFO, MonitorFromWindow, ScreenToClient, ValidateRect,
 };
 use windows::Win32::System::LibraryLoader::GetModuleHandleW;
 use windows::Win32::UI::HiDpi::GetDpiForWindow;
@@ -27,7 +27,7 @@ use windows::Win32::UI::WindowsAndMessaging::{
     HWND_TOP, IDC_ARROW, LoadCursorW, LoadIconW, MSG, PostQuitMessage, RegisterClassExW, SW_SHOW,
     SWP_FRAMECHANGED, SWP_NOACTIVATE, SWP_NOMOVE, SWP_NOSIZE, SWP_NOZORDER, SetWindowLongPtrW,
     SetWindowPlacement, SetWindowPos, ShowWindow, TranslateMessage, WINDOW_STYLE, WINDOWPLACEMENT,
-    WM_DESTROY, WM_DPICHANGED, WM_KEYDOWN, WM_MOUSEWHEEL, WM_NCDESTROY, WM_PAINT, WM_SIZE,
+    WM_DESTROY, WM_DPICHANGED, WM_KEYDOWN, WM_MOUSEWHEEL, WM_MOVE, WM_NCDESTROY, WM_PAINT, WM_SIZE,
     WNDCLASSEXW, WS_OVERLAPPEDWINDOW, WS_POPUP, WS_VISIBLE,
 };
 use windows::core::{PCWSTR, Result, w};
@@ -53,6 +53,8 @@ struct Application {
     scaling_tier: u32,
     /// 전체화면 진입 전 창 상태 (R1 임시 — DWM 보정은 R7)
     fullscreen_restore: Option<(WINDOWPLACEMENT, WINDOW_STYLE)>,
+    /// 백버퍼 포맷 재평가용 — 모니터 이동 감지 (SPEC §3.1 비트 심도 매칭)
+    current_monitor: HMONITOR,
 }
 
 impl Application {
@@ -70,6 +72,7 @@ impl Application {
             image_height,
             scaling_tier: 1,
             fullscreen_restore: None,
+            current_monitor: unsafe { MonitorFromWindow(window, MONITOR_DEFAULTTONEAREST) },
         })
     }
 
@@ -89,9 +92,10 @@ impl Application {
         }
     }
 
-    /// 디바이스 로스트 시 전체 재구축 (SPEC §3.4)
+    /// 디바이스 로스트·모니터 이동 시 전체 재구축 — 백버퍼 포맷도 재감지 (SPEC §3.1·§3.4)
     fn rebuild_renderer(&mut self, window: HWND) -> Result<()> {
         let (width, height) = client_size(window);
+        self.current_monitor = unsafe { MonitorFromWindow(window, MONITOR_DEFAULTTONEAREST) };
         self.renderer = Renderer::new(window, width.max(1), height.max(1))?;
         self.renderer
             .set_image(&self.image_pixels, self.image_width, self.image_height)
@@ -413,6 +417,18 @@ extern "system" fn window_procedure(
                     .view_transform
                     .zoom(factor, Some(cursor_from_center), viewport, image);
                 application.render(window);
+            }
+            LRESULT(0)
+        }
+        // 모니터 이동 감지 → 백버퍼 비트 심도 재평가 (SPEC §3.1)
+        WM_MOVE => {
+            if let Some(application) = unsafe { application_from_window(window) } {
+                let monitor = unsafe { MonitorFromWindow(window, MONITOR_DEFAULTTONEAREST) };
+                if monitor != application.current_monitor
+                    && application.rebuild_renderer(window).is_ok()
+                {
+                    application.render(window);
+                }
             }
             LRESULT(0)
         }
