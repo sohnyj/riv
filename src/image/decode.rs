@@ -122,7 +122,7 @@ static REGISTRY: &[FormatDescriptor] = &[
         semantics: FrameSemantics::Animation,
     },
     // WIC WebP는 애니메이션 미지원(2026-07-10 확인) — 정지 전용, 애니메이션은 R5에서
-    // VP8X ANIM 플래그 프로빙 분기 + `image-webp` fallback (PORTING_PLAN §5)
+    // VP8X ANIM 플래그 프로빙 분기 + libwebp 정적 fallback (PORTING_PLAN §5)
     FormatDescriptor {
         name: "WebP",
         extensions: &["webp"],
