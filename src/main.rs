@@ -1,7 +1,14 @@
 #![windows_subsystem = "windows"]
 
+mod image;
 mod view;
 
+use std::collections::VecDeque;
+use std::path::Path;
+use std::sync::Arc;
+
+use image::core::{DecodeCompletion, ImageCore, NavigationCommand, WM_APP_DECODE_COMPLETE};
+use image::decode::DecodedImage;
 use view::renderer::Renderer;
 use view::transform::{Size, ViewTransform};
 use windows::Win32::Foundation::{HWND, LPARAM, LRESULT, RECT, WPARAM};
@@ -15,20 +22,22 @@ use windows::Win32::Graphics::Gdi::{
     COLOR_WINDOW, GetMonitorInfoW, GetSysColorBrush, HMONITOR, MONITOR_DEFAULTTONEAREST,
     MONITORINFO, MonitorFromWindow, ScreenToClient, ValidateRect,
 };
+use windows::Win32::System::Com::{COINIT_APARTMENTTHREADED, CoInitializeEx};
 use windows::Win32::System::LibraryLoader::GetModuleHandleW;
 use windows::Win32::UI::HiDpi::GetDpiForWindow;
 use windows::Win32::UI::Input::KeyboardAndMouse::{
-    VK_ADD, VK_BACK, VK_DOWN, VK_F11, VK_LEFT, VK_OEM_MINUS, VK_OEM_PLUS, VK_RIGHT, VK_SUBTRACT,
-    VK_UP,
+    GetKeyState, VK_ADD, VK_BACK, VK_CONTROL, VK_DOWN, VK_END, VK_F11, VK_HOME, VK_LEFT,
+    VK_OEM_MINUS, VK_OEM_PLUS, VK_RIGHT, VK_SUBTRACT, VK_UP,
 };
 use windows::Win32::UI::WindowsAndMessaging::{
     CS_HREDRAW, CS_VREDRAW, CW_USEDEFAULT, CreateWindowExW, DefWindowProcW, DispatchMessageW,
     GWL_STYLE, GWLP_USERDATA, GetClientRect, GetMessageW, GetWindowLongPtrW, GetWindowPlacement,
-    HWND_TOP, IDC_ARROW, LoadCursorW, LoadIconW, MSG, PostQuitMessage, RegisterClassExW, SW_SHOW,
-    SWP_FRAMECHANGED, SWP_NOACTIVATE, SWP_NOMOVE, SWP_NOSIZE, SWP_NOZORDER, SetWindowLongPtrW,
-    SetWindowPlacement, SetWindowPos, ShowWindow, TranslateMessage, WINDOW_STYLE, WINDOWPLACEMENT,
-    WM_DESTROY, WM_DPICHANGED, WM_KEYDOWN, WM_MOUSEWHEEL, WM_MOVE, WM_NCDESTROY, WM_PAINT, WM_SIZE,
-    WNDCLASSEXW, WS_OVERLAPPEDWINDOW, WS_POPUP, WS_VISIBLE,
+    HWND_TOP, IDC_ARROW, KillTimer, LoadCursorW, LoadIconW, MSG, PostQuitMessage, RegisterClassExW,
+    SW_SHOW, SWP_FRAMECHANGED, SWP_NOACTIVATE, SWP_NOMOVE, SWP_NOSIZE, SWP_NOZORDER, SetTimer,
+    SetWindowLongPtrW, SetWindowPlacement, SetWindowPos, ShowWindow, TranslateMessage,
+    WINDOW_STYLE, WINDOWPLACEMENT, WM_DESTROY, WM_DPICHANGED, WM_KEYDOWN, WM_MOUSEWHEEL, WM_MOVE,
+    WM_NCDESTROY, WM_PAINT, WM_SIZE, WM_TIMER, WNDCLASSEXW, WS_OVERLAPPEDWINDOW, WS_POPUP,
+    WS_VISIBLE,
 };
 use windows::core::{PCWSTR, Result, w};
 
@@ -43,43 +52,100 @@ const BACKGROUND_COLOR: D2D1_COLOR_F = D2D1_COLOR_F {
     a: 1.0,
 };
 
+/// R2 검증 스크립트 타이머 (임시 — wine 합성 키 입력 불가, R3에서 제거)
+const R2_SCRIPT_TIMER: usize = 1;
+
+/// 현재 표시 소스 — 디바이스 로스트 재구축 시 재업로드용 CPU 픽셀 보유
+enum DisplaySource {
+    /// 인자 없이 실행 시 R1 테스트 텍스처 유지 (렌더 검증용)
+    TestPattern {
+        pixels: Vec<u8>,
+        width: u32,
+        height: u32,
+    },
+    Decoded(Arc<DecodedImage>),
+}
+
+impl DisplaySource {
+    fn pixels(&self) -> &[u8] {
+        match self {
+            Self::TestPattern { pixels, .. } => pixels,
+            Self::Decoded(image) => &image.frames[0].pixels,
+        }
+    }
+
+    /// 픽셀 버퍼 크기 — 업로드용 (DP3 다운스케일 시 논리 크기보다 작다)
+    fn pixel_size(&self) -> (u32, u32) {
+        match self {
+            Self::TestPattern { width, height, .. } => (*width, *height),
+            Self::Decoded(image) => (image.pixel_width, image.pixel_height),
+        }
+    }
+
+    /// 논리(원본) 크기 — 변환·표시 기준 (SPEC §3.4)
+    fn size(&self) -> (u32, u32) {
+        match self {
+            Self::TestPattern { width, height, .. } => (*width, *height),
+            Self::Decoded(image) => (image.width, image.height),
+        }
+    }
+}
+
 struct Application {
     renderer: Renderer,
     view_transform: ViewTransform,
-    image_pixels: Vec<u8>,
-    image_width: u32,
-    image_height: u32,
+    image_core: ImageCore,
+    display: Option<DisplaySource>,
     /// 스케일링 티어 0..=3 (SPEC §3.3 — 설정 연동은 R3)
     scaling_tier: u32,
     /// 전체화면 진입 전 창 상태 (R1 임시 — DWM 보정은 R7)
     fullscreen_restore: Option<(WINDOWPLACEMENT, WINDOW_STYLE)>,
     /// 백버퍼 포맷 재평가용 — 모니터 이동 감지 (SPEC §3.1 비트 심도 매칭)
     current_monitor: HMONITOR,
+    /// R2 게이트 검증용 내비게이션 스크립트 (임시 — R3에서 제거)
+    navigation_script: VecDeque<NavigationCommand>,
 }
 
 impl Application {
     fn new(window: HWND) -> Result<Self> {
         let (width, height) = client_size(window);
-        let mut renderer = Renderer::new(window, width.max(1), height.max(1))?;
-        let (image_pixels, image_width, image_height) = generate_test_texture();
-        renderer.set_image(&image_pixels, image_width, image_height)?;
+        let renderer = Renderer::new(window, width.max(1), height.max(1))?;
         let device_pixel_ratio = unsafe { GetDpiForWindow(window) } as f32 / 96.0;
-        Ok(Self {
+        let mut application = Self {
             renderer,
             view_transform: ViewTransform::new(device_pixel_ratio),
-            image_pixels,
-            image_width,
-            image_height,
+            image_core: ImageCore::new(window),
+            display: None,
             scaling_tier: 1,
             fullscreen_restore: None,
             current_monitor: unsafe { MonitorFromWindow(window, MONITOR_DEFAULTTONEAREST) },
-        })
+            navigation_script: parse_navigation_script(),
+        };
+        // 실행 인자 = 열 파일 경로 하나 (SPEC §6.5 — CLI 옵션 없음)
+        if let Some(argument) = std::env::args_os().nth(1) {
+            application.image_core.load_path(Path::new(&argument));
+        } else {
+            let (pixels, width, height) = generate_test_texture();
+            application
+                .renderer
+                .set_image(&pixels, width, height, (width, height))?;
+            application.display = Some(DisplaySource::TestPattern {
+                pixels,
+                width,
+                height,
+            });
+        }
+        Ok(application)
     }
 
     fn image_size(&self) -> Size {
+        let (width, height) = self
+            .display
+            .as_ref()
+            .map_or((1, 1), |display| display.size());
         Size {
-            width: self.image_width as f32,
-            height: self.image_height as f32,
+            width: width as f32,
+            height: height as f32,
         }
     }
 
@@ -92,13 +158,45 @@ impl Application {
         }
     }
 
+    /// 새 현재 이미지 반영: 업로드 + fit 리셋(SPEC §4.1 — Preserve Zoom은 R3) + 재렌더
+    fn apply_current_image(&mut self, window: HWND) {
+        let Some(current) = &self.image_core.current else {
+            return;
+        };
+        let image = current.image.clone();
+        let frame = &image.frames[0];
+        let upload = self.renderer.set_image(
+            &frame.pixels,
+            image.pixel_width,
+            image.pixel_height,
+            (image.width, image.height),
+        );
+        self.display = Some(DisplaySource::Decoded(image));
+        let transform = &mut self.view_transform;
+        transform.fit_tracking = true;
+        transform.rotation_quadrant = 0;
+        transform.mirrored = false;
+        transform.flipped = false;
+        transform.pan_offset_x = 0.0;
+        transform.pan_offset_y = 0.0;
+        if upload.is_err() {
+            // 업로드 실패(디바이스 로스트 등) — 재구축 경로가 display에서 재업로드
+            let _ = self.rebuild_renderer(window);
+        }
+        self.render(window);
+    }
+
     /// 디바이스 로스트·모니터 이동 시 전체 재구축 — 백버퍼 포맷도 재감지 (SPEC §3.1·§3.4)
     fn rebuild_renderer(&mut self, window: HWND) -> Result<()> {
         let (width, height) = client_size(window);
         self.current_monitor = unsafe { MonitorFromWindow(window, MONITOR_DEFAULTTONEAREST) };
         self.renderer = Renderer::new(window, width.max(1), height.max(1))?;
-        self.renderer
-            .set_image(&self.image_pixels, self.image_width, self.image_height)
+        if let Some(display) = &self.display {
+            let (pixel_width, pixel_height) = display.pixel_size();
+            self.renderer
+                .set_image(display.pixels(), pixel_width, pixel_height, display.size())?;
+        }
+        Ok(())
     }
 
     fn render(&mut self, window: HWND) {
@@ -214,6 +312,33 @@ fn apply_debug_initial_state(application: &mut Application) {
     }
 }
 
+/// R2 게이트 검증용 내비게이션 스크립트 파싱 (임시 — R3에서 제거)
+/// 예: RIV_R2_SCRIPT="next;next;prev;last;first"
+fn parse_navigation_script() -> VecDeque<NavigationCommand> {
+    std::env::var("RIV_R2_SCRIPT").map_or_else(
+        |_| VecDeque::new(),
+        |script| {
+            script
+                .split(';')
+                .filter_map(|token| match token.trim() {
+                    "first" => Some(NavigationCommand::First),
+                    "prev" | "previous" => Some(NavigationCommand::Previous),
+                    "next" => Some(NavigationCommand::Next),
+                    "last" => Some(NavigationCommand::Last),
+                    _ => None,
+                })
+                .collect()
+        },
+    )
+}
+
+fn execute_navigation(application: &mut Application, window: HWND, command: NavigationCommand) {
+    // true = 캐시 히트로 동기 표시 변경 — 비동기 완료는 WM_APP_DECODE_COMPLETE에서 반영
+    if application.image_core.navigate(command) {
+        application.apply_current_image(window);
+    }
+}
+
 fn toggle_fullscreen(application: &mut Application, window: HWND) {
     unsafe {
         if let Some((placement, style)) = application.fullscreen_restore.take() {
@@ -259,8 +384,21 @@ fn toggle_fullscreen(application: &mut Application, window: HWND) {
     }
 }
 
-/// 임시 디버그 입력 (R1 게이트 검증용 — R3에서 bindings 디스패치로 대체)
+/// 임시 디버그 입력 (R1·R2 게이트 검증용 — R3에서 bindings 디스패치로 대체).
+/// 키 배치는 SPEC §5.2 기본 바인딩과 정합: ←/→/Home/End = 파일 이동, Ctrl+화살표 = 팬
 fn handle_debug_key(application: &mut Application, window: HWND, key: u16) {
+    let control_pressed = unsafe { GetKeyState(VK_CONTROL.0.into()) } < 0;
+    let navigation = match key {
+        key if key == VK_LEFT.0 && !control_pressed => Some(NavigationCommand::Previous),
+        key if key == VK_RIGHT.0 && !control_pressed => Some(NavigationCommand::Next),
+        key if key == VK_HOME.0 => Some(NavigationCommand::First),
+        key if key == VK_END.0 => Some(NavigationCommand::Last),
+        _ => None,
+    };
+    if let Some(command) = navigation {
+        execute_navigation(application, window, command);
+        return;
+    }
     let (width, height) = client_size(window);
     let viewport = Size {
         width: width as f32,
@@ -277,8 +415,10 @@ fn handle_debug_key(application: &mut Application, window: HWND, key: u16) {
         }
         key if key == VK_LEFT.0 => transform.pan_by(64.0, 0.0, viewport, image),
         key if key == VK_RIGHT.0 => transform.pan_by(-64.0, 0.0, viewport, image),
-        key if key == VK_UP.0 => transform.pan_by(0.0, 64.0, viewport, image),
-        key if key == VK_DOWN.0 => transform.pan_by(0.0, -64.0, viewport, image),
+        key if key == VK_UP.0 && control_pressed => transform.pan_by(0.0, 64.0, viewport, image),
+        key if key == VK_DOWN.0 && control_pressed => {
+            transform.pan_by(0.0, -64.0, viewport, image);
+        }
         key if key == VK_BACK.0 => transform.toggle_zoom(viewport, image),
         key if key == u16::from(b'R') => transform.rotate(1, viewport, image),
         key if key == u16::from(b'E') => transform.rotate(-1, viewport, image),
@@ -296,6 +436,8 @@ fn handle_debug_key(application: &mut Application, window: HWND, key: u16) {
 }
 
 fn main() -> Result<()> {
+    // UI 스레드 = STA, 디코드 워커 = MTA (PORTING_PLAN §3 매핑)
+    unsafe { CoInitializeEx(None, COINIT_APARTMENTTHREADED) }.ok()?;
     let instance = unsafe { GetModuleHandleW(None)? };
     let class_name = w!("riv");
 
@@ -336,6 +478,7 @@ fn main() -> Result<()> {
     apply_debug_initial_state(&mut application);
     let debug_fullscreen = std::env::var("RIV_R1_STATE")
         .is_ok_and(|state| state.split(';').any(|token| token == "fullscreen"));
+    let run_script = !application.navigation_script.is_empty();
     unsafe {
         SetWindowLongPtrW(window, GWLP_USERDATA, Box::into_raw(application) as isize);
     }
@@ -346,6 +489,9 @@ fn main() -> Result<()> {
         application.render(window);
     }
     let _ = unsafe { ShowWindow(window, SW_SHOW) };
+    if run_script {
+        unsafe { SetTimer(Some(window), R2_SCRIPT_TIMER, 700, None) };
+    }
 
     let mut message = MSG::default();
     while unsafe { GetMessageW(&mut message, None, 0, 0) }.as_bool() {
@@ -385,6 +531,28 @@ extern "system" fn window_procedure(
         // 렌더는 온디맨드 — WM_PAINT는 ValidateRect만 (PORTING_PLAN §3 렌더러 세부)
         WM_PAINT => {
             let _ = unsafe { ValidateRect(Some(window), None) };
+            LRESULT(0)
+        }
+        // 디코드 워커 완료 통지 — lparam = Box<DecodeCompletion> (PORTING_PLAN §2)
+        WM_APP_DECODE_COMPLETE => {
+            let completion = unsafe { Box::from_raw(lparam.0 as *mut DecodeCompletion) };
+            if let Some(application) = unsafe { application_from_window(window) }
+                && application.image_core.on_decode_complete(*completion)
+            {
+                application.apply_current_image(window);
+            }
+            LRESULT(0)
+        }
+        // R2 검증 스크립트 스텝 (임시 — R3에서 제거)
+        WM_TIMER if wparam.0 == R2_SCRIPT_TIMER => {
+            if let Some(application) = unsafe { application_from_window(window) } {
+                match application.navigation_script.pop_front() {
+                    Some(command) => execute_navigation(application, window, command),
+                    None => {
+                        let _ = unsafe { KillTimer(Some(window), R2_SCRIPT_TIMER) };
+                    }
+                }
+            }
             LRESULT(0)
         }
         WM_KEYDOWN => {

@@ -3,7 +3,7 @@
 
 use windows::Win32::Foundation::{HMODULE, HWND};
 use windows::Win32::Graphics::Direct2D::Common::{
-    D2D_SIZE_U, D2D1_ALPHA_MODE_PREMULTIPLIED, D2D1_COLOR_F, D2D1_PIXEL_FORMAT,
+    D2D_RECT_F, D2D_SIZE_U, D2D1_ALPHA_MODE_PREMULTIPLIED, D2D1_COLOR_F, D2D1_PIXEL_FORMAT,
 };
 use windows::Win32::Graphics::Direct2D::{
     D2D1_BITMAP_OPTIONS_CANNOT_DRAW, D2D1_BITMAP_OPTIONS_NONE, D2D1_BITMAP_OPTIONS_TARGET,
@@ -34,6 +34,8 @@ pub struct Renderer {
     d2d_context: ID2D1DeviceContext,
     target: Option<ID2D1Bitmap1>,
     image: Option<ID2D1Bitmap1>,
+    /// 드로우 논리 크기(원본 픽셀) — DP3 다운스케일 시 비트맵보다 크다 (SPEC §3.4)
+    image_display_size: (f32, f32),
     backbuffer_format: DXGI_FORMAT,
 }
 
@@ -128,6 +130,7 @@ impl Renderer {
             d2d_context,
             target: None,
             image: None,
+            image_display_size: (0.0, 0.0),
             backbuffer_format,
         };
         renderer.create_target()?;
@@ -172,8 +175,15 @@ impl Renderer {
         self.create_target()
     }
 
-    /// premultiplied BGRA8 픽셀 업로드 (SPEC §3.1)
-    pub fn set_image(&mut self, pixels: &[u8], width: u32, height: u32) -> Result<()> {
+    /// premultiplied BGRA8 픽셀 업로드 (SPEC §3.1).
+    /// `display_size` = 논리(원본) 크기 — DP3 다운스케일 시 비트맵을 이 크기로 드로우
+    pub fn set_image(
+        &mut self,
+        pixels: &[u8],
+        width: u32,
+        height: u32,
+        display_size: (u32, u32),
+    ) -> Result<()> {
         let properties = D2D1_BITMAP_PROPERTIES1 {
             pixelFormat: pixel_format(),
             dpiX: 96.0,
@@ -190,6 +200,7 @@ impl Renderer {
             )?
         };
         self.image = Some(bitmap);
+        self.image_display_size = (display_size.0 as f32, display_size.1 as f32);
         Ok(())
     }
 
@@ -213,8 +224,21 @@ impl Renderer {
                     M32: matrix[5],
                 };
                 self.d2d_context.SetTransform(&transform);
-                self.d2d_context
-                    .DrawBitmap(image, None, 1.0, interpolation, None, None);
+                // 대상 사각형 = 논리 크기 — 다운스케일된 비트맵도 원본 크기로 표시 (DP3)
+                let destination = D2D_RECT_F {
+                    left: 0.0,
+                    top: 0.0,
+                    right: self.image_display_size.0,
+                    bottom: self.image_display_size.1,
+                };
+                self.d2d_context.DrawBitmap(
+                    image,
+                    Some(&destination),
+                    1.0,
+                    interpolation,
+                    None,
+                    None,
+                );
                 self.d2d_context.SetTransform(&Matrix3x2::identity());
             }
             self.d2d_context.EndDraw(None, None)?;
