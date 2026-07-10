@@ -24,10 +24,11 @@ use image::decode::DecodedImage;
 use settings::{Options, SettingsFile};
 use shell::clipboard::{self, BakedOrientation};
 use shell::drag_drop::{self, WM_APP_DROP_PATH};
+use shell::open_with::{self, OpenWithList, WM_APP_OPEN_WITH_LIST};
 use shell::{file_ops, open_dialog};
 use view::renderer::Renderer;
 use view::transform::{FitMode, Size, ViewTransform};
-use window::context_menu::{self, MenuState};
+use window::context_menu::{self, MenuSelection, MenuState};
 use window::overlay::{self, Overlay, OverlayContent};
 use windows::Win32::Foundation::{HWND, LPARAM, LRESULT, POINT, RECT, WPARAM};
 use windows::Win32::Graphics::Direct2D::Common::D2D1_COLOR_F;
@@ -76,6 +77,8 @@ const ZOOM_PILL_TIMER: usize = 2;
 const SLIDESHOW_TIMER: usize = 3;
 /// 최근 파일 500ms 디바운스 저장 (SPEC §6.4)
 const RECENTS_SAVE_TIMER: usize = 4;
+/// Open With 목록 채우기 — 파일 변경 250ms 디바운스 (SPEC §6.4)
+const OPEN_WITH_TIMER: usize = 5;
 
 /// 키보드/메뉴 팬 스텝 (디바이스 픽셀)
 const PAN_STEP: f32 = 64.0;
@@ -110,6 +113,8 @@ struct Application {
     slideshow_active: bool,
     /// 드롭 타깃 — 창 수명 동안 유지 (SPEC §5.4)
     drop_target: Option<IDropTarget>,
+    /// Open With 핸들러 목록 — 백그라운드 열거 결과, 파일 전환 시 폐기 (SPEC §6.4)
+    open_with_list: Option<Box<OpenWithList>>,
     /// R3 게이트 검증용 액션 스크립트 (임시)
     action_script: VecDeque<Action>,
 }
@@ -143,6 +148,7 @@ impl Application {
             zoom_pill_text: None,
             slideshow_active: false,
             drop_target: None,
+            open_with_list: None,
             action_script: parse_action_script(),
         };
         // 실행 인자 = 열 파일 경로 하나 (SPEC §6.5 — CLI 옵션 없음)
@@ -250,6 +256,9 @@ impl Application {
         {
             unsafe { SetTimer(Some(window), RECENTS_SAVE_TIMER, 500, None) };
         }
+        // Open With 목록 갱신 — 파일 변경 250ms 디바운스 (SPEC §6.4)
+        self.open_with_list = None;
+        unsafe { SetTimer(Some(window), OPEN_WITH_TIMER, 250, None) };
         self.render(window);
     }
 
@@ -684,8 +693,15 @@ fn dispatch_action(application: &mut Application, window: HWND, action: Action) 
                 open_external_path(application, window, &first);
             }
         }
-        // R4 잔여: Open With (SHAssocEnumHandlers·앱 아이콘)
-        Action::OpenWith | Action::OpenWithOther => {}
+        Action::OpenWithOther => {
+            // "다른 앱 선택" — OS Open With 다이얼로그 (SPEC §6.4)
+            if let Some(current) = &application.image_core.current {
+                let path = current.path.clone();
+                open_with::show_open_with_dialog(window, &path);
+            }
+        }
+        // OpenWith는 서브메뉴 컨테이너 — 항목 선택은 MenuSelection::OpenWithEntry 경로
+        Action::OpenWith => {}
         // R5: 애니메이션 스케줄러
         Action::Pause
         | Action::NextFrame
@@ -1042,6 +1058,36 @@ extern "system" fn window_procedure(
             }
             LRESULT(0)
         }
+        // Open With 백그라운드 열거 시작 (250ms 디바운스 후 — SPEC §6.4)
+        WM_TIMER if wparam.0 == OPEN_WITH_TIMER => {
+            let _ = unsafe { KillTimer(Some(window), OPEN_WITH_TIMER) };
+            if let Some(application) = unsafe { application_from_window(window) }
+                && let Some(current) = &application.image_core.current
+            {
+                open_with::enumerate_in_background(window, current.path.clone());
+            }
+            LRESULT(0)
+        }
+        // Open With 열거 결과 수신 — 파일이 바뀌었으면 폐기 (SPEC §6.4)
+        WM_APP_OPEN_WITH_LIST => {
+            let list = unsafe { Box::from_raw(lparam.0 as *mut OpenWithList) };
+            if let Some(application) = unsafe { application_from_window(window) } {
+                let is_current = application
+                    .image_core
+                    .current
+                    .as_ref()
+                    .is_some_and(|current| {
+                        current
+                            .path
+                            .to_string_lossy()
+                            .eq_ignore_ascii_case(&list.path.to_string_lossy())
+                    });
+                if is_current {
+                    application.open_with_list = Some(list);
+                }
+            }
+            LRESULT(0)
+        }
         WM_KEYDOWN | WM_SYSKEYDOWN => {
             let handled = unsafe { application_from_window(window) }
                 .is_some_and(|application| handle_key(application, window, wparam.0 as u16));
@@ -1191,9 +1237,35 @@ extern "system" fn window_procedure(
                         .into_iter()
                         .map(|(name, _)| name)
                         .collect(),
+                    open_with_items: application.open_with_list.as_ref().map_or_else(
+                        Vec::new,
+                        |list| {
+                            list.items
+                                .iter()
+                                .map(|item| (item.display_name.clone(), item.icon))
+                                .collect()
+                        },
+                    ),
+                    open_with_has_default: application
+                        .open_with_list
+                        .as_ref()
+                        .is_some_and(|list| list.has_default),
                 };
-                if let Some(action) = context_menu::show(window, state, x, y) {
-                    dispatch_action(application, window, action);
+                match context_menu::show(window, state, x, y) {
+                    Some(MenuSelection::Action(action)) => {
+                        dispatch_action(application, window, action);
+                    }
+                    Some(MenuSelection::OpenWithEntry(index)) => {
+                        // 셸 핸들러 Invoke — UI 스레드에서 재매칭 (SPEC §6.4)
+                        if let (Some(current), Some(list)) = (
+                            application.image_core.current.as_ref(),
+                            application.open_with_list.as_ref(),
+                        ) && let Some(item) = list.items.get(index)
+                        {
+                            let _ = open_with::invoke(&current.path, &item.executable_path);
+                        }
+                    }
+                    None => {}
                 }
             }
             LRESULT(0)

@@ -3,13 +3,22 @@
 //! 액션을 반환하고 디스패치는 호출자(단일 디스패처)가 수행한다.
 
 use windows::Win32::Foundation::HWND;
+use windows::Win32::Graphics::Gdi::HBITMAP;
 use windows::Win32::UI::WindowsAndMessaging::{
-    AppendMenuW, CreatePopupMenu, DestroyMenu, HMENU, MF_CHECKED, MF_DISABLED, MF_GRAYED, MF_POPUP,
-    MF_SEPARATOR, MF_STRING, TPM_RETURNCMD, TPM_RIGHTBUTTON, TrackPopupMenuEx,
+    AppendMenuW, CreatePopupMenu, DestroyMenu, HMENU, MENUITEMINFOW, MF_CHECKED, MF_DISABLED,
+    MF_GRAYED, MF_POPUP, MF_SEPARATOR, MF_STRING, MIIM_BITMAP, SetMenuItemInfoW, TPM_RETURNCMD,
+    TPM_RIGHTBUTTON, TrackPopupMenuEx,
 };
 use windows::core::{HSTRING, Result};
 
 use crate::actions::{Action, ActivationGate};
+
+/// 메뉴 선택 결과 — 액션 또는 Open With 핸들러 인덱스
+#[derive(Clone, Copy)]
+pub enum MenuSelection {
+    Action(Action),
+    OpenWithEntry(usize),
+}
 
 /// 메뉴 enable·라벨 토글에 필요한 상태 스냅샷
 pub struct MenuState {
@@ -21,23 +30,24 @@ pub struct MenuState {
     pub slideshow_active: bool,
     /// 최근 파일 표시명 (부재 감사 완료 목록 — SPEC §6.4)
     pub recent_names: Vec<String>,
+    /// Open With 항목: (표시명, ARGB HBITMAP — P14 유일 예외) (SPEC §6.4)
+    pub open_with_items: Vec<(String, Option<isize>)>,
+    /// Open With 첫 항목 = 기본 앱 (구분선 분리)
+    pub open_with_has_default: bool,
 }
 
 struct MenuBuilder {
-    /// 명령 ID = actions 인덱스 + 1 (0 = 선택 없음/취소)
-    actions: Vec<Action>,
+    /// 명령 ID = entries 인덱스 + 1 (0 = 선택 없음/취소)
+    entries: Vec<MenuSelection>,
     state_snapshot: MenuState,
 }
 
 impl MenuBuilder {
-    /// 아직 배선되지 않은 액션(R4 잔여 Open With·R5 애니·R6 다이얼로그·R7 멀티윈도우)
-    /// — 항상 비활성 표시
+    /// 아직 배선되지 않은 액션(R5 애니·R6 다이얼로그·R7 멀티윈도우) — 항상 비활성 표시
     fn is_wired(action: Action) -> bool {
         !matches!(
             action,
-            Action::OpenWith
-                | Action::OpenWithOther
-                | Action::NewWindow
+            Action::NewWindow
                 | Action::CloseAllWindows
                 | Action::Pause
                 | Action::NextFrame
@@ -59,8 +69,8 @@ impl MenuBuilder {
     }
 
     fn append_action_labeled(&mut self, menu: HMENU, action: Action, label: &str) -> Result<()> {
-        self.actions.push(action);
-        let identifier = self.actions.len();
+        self.entries.push(MenuSelection::Action(action));
+        let identifier = self.entries.len();
         let mut flags = MF_STRING;
         let clear_without_recents =
             action == Action::ClearRecents && self.state_snapshot.recent_names.is_empty();
@@ -71,6 +81,29 @@ impl MenuBuilder {
             flags |= MF_CHECKED;
         }
         unsafe { AppendMenuW(menu, flags, identifier, &HSTRING::from(label)) }
+    }
+
+    /// Open With 핸들러 항목 — 앱 아이콘 표시 (P14 유일 예외, SPEC §6.4)
+    fn append_open_with_entry(
+        &mut self,
+        menu: HMENU,
+        index: usize,
+        label: &str,
+        icon: Option<isize>,
+    ) -> Result<()> {
+        self.entries.push(MenuSelection::OpenWithEntry(index));
+        let identifier = self.entries.len();
+        unsafe { AppendMenuW(menu, MF_STRING, identifier, &HSTRING::from(label))? };
+        if let Some(icon) = icon {
+            let information = MENUITEMINFOW {
+                cbSize: size_of::<MENUITEMINFOW>() as u32,
+                fMask: MIIM_BITMAP,
+                hbmpItem: HBITMAP(icon as *mut core::ffi::c_void),
+                ..Default::default()
+            };
+            let _ = unsafe { SetMenuItemInfoW(menu, identifier as u32, false, &information) };
+        }
+        Ok(())
     }
 
     fn append_separator(&self, menu: HMENU) -> Result<()> {
@@ -98,7 +131,18 @@ impl MenuBuilder {
         self.append_action_labeled(recent, Action::ClearRecents, "Clear Menu")?;
         self.append_submenu(menu, recent, "Open Recent")?;
         self.append_action(menu, Action::ReloadFile)?;
+        // Open With — 기본 앱 최상단 + 구분선, 핸들러 목록, 다른 앱 선택 (SPEC §6.4)
         let open_with = unsafe { CreatePopupMenu()? };
+        let open_with_items = self.state_snapshot.open_with_items.clone();
+        for (index, (label, icon)) in open_with_items.iter().enumerate() {
+            self.append_open_with_entry(open_with, index, label, *icon)?;
+            if index == 0 && self.state_snapshot.open_with_has_default {
+                self.append_separator(open_with)?;
+            }
+        }
+        if !open_with_items.is_empty() {
+            self.append_separator(open_with)?;
+        }
         self.append_action_labeled(open_with, Action::OpenWithOther, "Other Application...")?;
         self.append_submenu(menu, open_with, "Open With")?;
         self.append_action(menu, Action::OpenContainingFolder)?;
@@ -154,10 +198,10 @@ impl MenuBuilder {
     }
 }
 
-/// 메뉴 표시 → 선택 액션 반환 (취소 시 None). (x, y) = 화면 좌표.
-pub fn show(window: HWND, state: MenuState, x: i32, y: i32) -> Option<Action> {
+/// 메뉴 표시 → 선택 반환 (취소 시 None). (x, y) = 화면 좌표.
+pub fn show(window: HWND, state: MenuState, x: i32, y: i32) -> Option<MenuSelection> {
     let mut builder = MenuBuilder {
-        actions: Vec::new(),
+        entries: Vec::new(),
         state_snapshot: state,
     };
     let menu = builder.build().ok()?;
@@ -174,6 +218,6 @@ pub fn show(window: HWND, state: MenuState, x: i32, y: i32) -> Option<Action> {
     let _ = unsafe { DestroyMenu(menu) };
     let identifier = selected.0 as usize;
     (identifier > 0)
-        .then(|| builder.actions.get(identifier - 1).copied())
+        .then(|| builder.entries.get(identifier - 1).copied())
         .flatten()
 }
