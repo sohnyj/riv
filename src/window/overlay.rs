@@ -21,6 +21,7 @@ use windows::Win32::System::Time::{FileTimeToSystemTime, SystemTimeToTzSpecificL
 use windows::core::{Result, w};
 use windows_numerics::Vector2;
 
+use crate::image::color;
 use crate::image::decode::DecodedImage;
 
 const PANEL_MARGIN: f32 = 12.0;
@@ -57,6 +58,8 @@ pub struct OverlayContent {
     pub zoom_pill_text: Option<String>,
     /// 배경 perceived brightness > 0.5 → 에러 글자 검정 (SPEC §3.6)
     pub background_is_bright: bool,
+    /// FP16 scRGB 타깃의 브러시 색 보정 — sRGB → linear × SDR 백레벨 (SPEC §7)
+    pub sdr_white_boost: f32,
 }
 
 pub struct Overlay {
@@ -101,6 +104,7 @@ impl Overlay {
         viewport_height: f32,
         content: &OverlayContent,
     ) -> Result<()> {
+        let boost = content.sdr_white_boost;
         let info_rect = if let Some(info_text) = &content.info_text {
             Some(self.draw_panel(
                 context,
@@ -108,6 +112,7 @@ impl Overlay {
                 PANEL_MARGIN,
                 PANEL_MARGIN,
                 viewport_width,
+                boost,
             )?)
         } else {
             None
@@ -121,7 +126,14 @@ impl Overlay {
                 Some(info) if centered_left < info.right + 8.0 => info.bottom + 8.0,
                 _ => PANEL_MARGIN,
             };
-            self.draw_panel(context, pill_text, centered_left, top, viewport_width)?;
+            self.draw_panel(
+                context,
+                pill_text,
+                centered_left,
+                top,
+                viewport_width,
+                boost,
+            )?;
         }
         if let Some(error_text) = &content.error_text {
             self.draw_error_text(
@@ -159,6 +171,7 @@ impl Overlay {
         left: f32,
         top: f32,
         viewport_width: f32,
+        sdr_white_boost: f32,
     ) -> Result<D2D_RECT_F> {
         let layout = self.panel_layout(text, viewport_width)?;
         let mut metrics = DWRITE_TEXT_METRICS::default();
@@ -174,9 +187,13 @@ impl Overlay {
             radiusY: PANEL_CORNER_RADIUS,
         };
         unsafe {
-            let background = context.CreateSolidColorBrush(&PANEL_BACKGROUND, None)?;
+            let background = context.CreateSolidColorBrush(
+                &color::srgb_color_to_scrgb(PANEL_BACKGROUND, sdr_white_boost),
+                None,
+            )?;
             context.FillRoundedRectangle(&panel, &background);
-            let foreground = context.CreateSolidColorBrush(&WHITE, None)?;
+            let foreground = context
+                .CreateSolidColorBrush(&color::srgb_color_to_scrgb(WHITE, sdr_white_boost), None)?;
             context.DrawTextLayout(
                 Vector2 {
                     X: left + PANEL_PADDING_X,
@@ -202,12 +219,15 @@ impl Overlay {
         let layout = self.create_layout(text, &self.error_format, viewport_width)?;
         unsafe {
             layout.SetMaxHeight(viewport_height)?;
-            let color = if content.background_is_bright {
+            let text_color = if content.background_is_bright {
                 BLACK
             } else {
                 WHITE
             };
-            let brush = context.CreateSolidColorBrush(&color, None)?;
+            let brush = context.CreateSolidColorBrush(
+                &color::srgb_color_to_scrgb(text_color, content.sdr_white_boost),
+                None,
+            )?;
             context.DrawTextLayout(
                 Vector2 { X: 0.0, Y: 0.0 },
                 &layout,

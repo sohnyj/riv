@@ -18,6 +18,7 @@ use bindings::{
     Bindings, MODIFIER_ALT, MODIFIER_CONTROL, MODIFIER_META, MODIFIER_SHIFT, MouseBase,
 };
 use image::animation::Animation;
+use image::color;
 use image::core::{
     CoreOptions, DecodeCompletion, ImageCore, NavigationCommand, SortMode, WM_APP_DECODE_COMPLETE,
 };
@@ -39,8 +40,8 @@ use windows::Win32::Graphics::Direct2D::{
     D2D1_INTERPOLATION_MODE_LINEAR, D2D1_INTERPOLATION_MODE_NEAREST_NEIGHBOR,
 };
 use windows::Win32::Graphics::Gdi::{
-    COLOR_WINDOW, GetMonitorInfoW, GetSysColor, GetSysColorBrush, HMONITOR,
-    MONITOR_DEFAULTTONEAREST, MONITORINFO, MonitorFromWindow, ScreenToClient, ValidateRect,
+    COLOR_WINDOW, GetMonitorInfoW, GetSysColor, GetSysColorBrush, MONITOR_DEFAULTTONEAREST,
+    MONITORINFO, MonitorFromWindow, ScreenToClient, ValidateRect,
 };
 use windows::Win32::System::LibraryLoader::GetModuleHandleW;
 use windows::Win32::System::Ole::{IDropTarget, OleInitialize, RevokeDragDrop};
@@ -57,10 +58,10 @@ use windows::Win32::UI::WindowsAndMessaging::{
     RegisterClassExW, SW_SHOW, SWP_FRAMECHANGED, SWP_NOACTIVATE, SWP_NOMOVE, SWP_NOSIZE,
     SWP_NOZORDER, SendMessageW, SetCursor, SetTimer, SetWindowLongPtrW, SetWindowPlacement,
     SetWindowPos, ShowWindow, TranslateMessage, WINDOW_STYLE, WINDOWPLACEMENT, WM_ACTIVATEAPP,
-    WM_APP, WM_CLOSE, WM_CONTEXTMENU, WM_DESTROY, WM_DPICHANGED, WM_KEYDOWN, WM_LBUTTONDBLCLK,
-    WM_LBUTTONDOWN, WM_LBUTTONUP, WM_MBUTTONDOWN, WM_MOUSEMOVE, WM_MOUSEWHEEL, WM_MOVE,
-    WM_NCDESTROY, WM_NCLBUTTONDOWN, WM_PAINT, WM_SETCURSOR, WM_SIZE, WM_SYSKEYDOWN, WM_TIMER,
-    WM_XBUTTONDOWN, WNDCLASSEXW, WS_OVERLAPPEDWINDOW, WS_POPUP, WS_VISIBLE,
+    WM_APP, WM_CLOSE, WM_CONTEXTMENU, WM_DESTROY, WM_DISPLAYCHANGE, WM_DPICHANGED, WM_KEYDOWN,
+    WM_LBUTTONDBLCLK, WM_LBUTTONDOWN, WM_LBUTTONUP, WM_MBUTTONDOWN, WM_MOUSEMOVE, WM_MOUSEWHEEL,
+    WM_MOVE, WM_NCDESTROY, WM_NCLBUTTONDOWN, WM_PAINT, WM_SETCURSOR, WM_SIZE, WM_SYSKEYDOWN,
+    WM_TIMER, WM_XBUTTONDOWN, WNDCLASSEXW, WS_OVERLAPPEDWINDOW, WS_POPUP, WS_VISIBLE,
 };
 use windows::core::{PCWSTR, Result, w};
 
@@ -100,8 +101,8 @@ struct Application {
     preserve_zoom: bool,
     /// 전체화면 진입 전 창 상태 (DWM 보정은 R7)
     fullscreen_restore: Option<(WINDOWPLACEMENT, WINDOW_STYLE)>,
-    /// 백버퍼 포맷 재평가용 — 모니터 이동 감지 (SPEC §3.1 비트 심도 매칭)
-    current_monitor: HMONITOR,
+    /// HDR 모드 SDR 백레벨 배율 — 모니터 이동·디스플레이 변경 시 재조회 (SPEC §7)
+    sdr_white_boost: f32,
     /// 팬 드래그 중 마지막 커서 위치 (클라이언트 좌표) (SPEC §5.4)
     pan_drag_position: Option<(i32, i32)>,
     pan_cursor: HCURSOR,
@@ -146,7 +147,7 @@ impl Application {
             bindings,
             preserve_zoom: false,
             fullscreen_restore: None,
-            current_monitor: unsafe { MonitorFromWindow(window, MONITOR_DEFAULTTONEAREST) },
+            sdr_white_boost: color::sdr_white_boost(window),
             pan_drag_position: None,
             pan_cursor: unsafe { LoadCursorW(None, IDC_SIZEALL)? },
             wheel_notch_accumulator: 0,
@@ -160,11 +161,24 @@ impl Application {
             open_with_list: None,
             action_script: parse_action_script(),
         };
+        application
+            .renderer
+            .set_sdr_white_boost(application.sdr_white_boost);
         // 실행 인자 = 열 파일 경로 하나 (SPEC §6.5 — CLI 옵션 없음)
         if let Some(argument) = std::env::args_os().nth(1) {
             application.image_core.load_path(Path::new(&argument));
         }
         Ok(application)
+    }
+
+    /// 모니터 이동·디스플레이 설정 변경 시 SDR 백레벨 재조회 → 변경 시 재렌더 (SPEC §7)
+    fn refresh_sdr_white_boost(&mut self, window: HWND) {
+        let boost = color::sdr_white_boost(window);
+        if (boost - self.sdr_white_boost).abs() > f32::EPSILON {
+            self.sdr_white_boost = boost;
+            self.renderer.set_sdr_white_boost(boost);
+            self.render(window);
+        }
     }
 
     fn image_size(&self) -> Size {
@@ -249,6 +263,7 @@ impl Application {
             image.pixel_width,
             image.pixel_height,
             (image.width, image.height),
+            image.icc_profile.as_deref(),
         );
         self.display = Some(image);
         self.displayed_path = Some(path.clone());
@@ -330,6 +345,7 @@ impl Application {
             image.pixel_width,
             image.pixel_height,
             (image.width, image.height),
+            image.icc_profile.as_deref(),
         );
         if !paused {
             unsafe { SetTimer(Some(window), ANIMATION_TIMER, delay, None) };
@@ -368,11 +384,11 @@ impl Application {
         }
     }
 
-    /// 디바이스 로스트·모니터 이동 시 전체 재구축 — 백버퍼 포맷도 재감지 (SPEC §3.1·§3.4)
+    /// 디바이스 로스트 시 전체 재구축 (SPEC §3.4)
     fn rebuild_renderer(&mut self, window: HWND) -> Result<()> {
         let (width, height) = client_size(window);
-        self.current_monitor = unsafe { MonitorFromWindow(window, MONITOR_DEFAULTTONEAREST) };
         self.renderer = Renderer::new(window, width.max(1), height.max(1))?;
+        self.renderer.set_sdr_white_boost(self.sdr_white_boost);
         if let Some(image) = &self.display {
             // 애니메이션 중이면 현재 프레임 유지
             let frame_index = self
@@ -384,6 +400,7 @@ impl Application {
                 image.pixel_width,
                 image.pixel_height,
                 (image.width, image.height),
+                image.icc_profile.as_deref(),
             )?;
         }
         Ok(())
@@ -414,6 +431,7 @@ impl Application {
             info_text,
             zoom_pill_text: self.zoom_pill_text.clone(),
             background_is_bright: brightness > 0.5,
+            sdr_white_boost: self.sdr_white_boost,
         }
     }
 
@@ -429,11 +447,13 @@ impl Application {
         let interpolation = self.interpolation_mode();
         let background = self.background_color();
         let content = self.overlay_content(background);
+        // FP16 scRGB 타깃 — 클리어 색은 linear scRGB (SPEC §7)
+        let clear_color = color::srgb_color_to_scrgb(background, self.sdr_white_boost);
         let overlay = &self.overlay;
         let draw = |context: &_| overlay.draw(context, viewport.width, viewport.height, &content);
         if self
             .renderer
-            .render(matrix, interpolation, background, draw)
+            .render(matrix, interpolation, clear_color, draw)
             .is_err()
         {
             // 디바이스 로스트 — 재구축 후 1회 재시도
@@ -441,7 +461,7 @@ impl Application {
                 let overlay = &self.overlay;
                 let _ = self
                     .renderer
-                    .render(matrix, interpolation, background, |context| {
+                    .render(matrix, interpolation, clear_color, |context| {
                         overlay.draw(context, viewport.width, viewport.height, &content)
                     });
             }
@@ -1390,15 +1410,10 @@ extern "system" fn window_procedure(
             }
             LRESULT(0)
         }
-        // 모니터 이동 감지 → 백버퍼 비트 심도 재평가 (SPEC §3.1)
-        WM_MOVE => {
+        // 모니터 이동·디스플레이 설정 변경 → SDR 백레벨 재조회 (SPEC §7)
+        WM_MOVE | WM_DISPLAYCHANGE => {
             if let Some(application) = unsafe { application_from_window(window) } {
-                let monitor = unsafe { MonitorFromWindow(window, MONITOR_DEFAULTTONEAREST) };
-                if monitor != application.current_monitor
-                    && application.rebuild_renderer(window).is_ok()
-                {
-                    application.render(window);
-                }
+                application.refresh_sdr_white_boost(window);
             }
             LRESULT(0)
         }

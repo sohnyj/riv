@@ -182,6 +182,7 @@ fn compose_webp_frames(
         pixel_width: canvas_width,
         pixel_height: canvas_height,
         format_name,
+        icc_profile: None,
         frames,
     })
 }
@@ -259,12 +260,14 @@ pub fn decode_exr(path: &Path, format_name: &'static str) -> Result<DecodedImage
         pixels.push((alpha * 255.0 + 0.5) as u8);
     }
     unsafe { riv_exr_free(half_pixels) };
+    // 톤 다운 결과는 sRGB 인코딩 — 프로파일 없음(sRGB 가정 경로)
     Ok(DecodedImage {
         width: width as u32,
         height: height as u32,
         pixel_width: width as u32,
         pixel_height: height as u32,
         format_name,
+        icc_profile: None,
         frames: vec![Frame {
             pixels,
             delay_milliseconds: 0,
@@ -370,6 +373,11 @@ unsafe extern "C" {
         channel: c_int,
         stride: *mut c_int,
     ) -> *const u8;
+    fn heif_image_handle_get_raw_color_profile_size(handle: *const HeifImageHandle) -> usize;
+    fn heif_image_handle_get_raw_color_profile(
+        handle: *const HeifImageHandle,
+        out_data: *mut c_void,
+    ) -> HeifError;
 }
 
 /// HEIF 디코드 — irot/imir 등 변환은 libheif 기본 적용(옵션 NULL) (PORTING_PLAN §5)
@@ -412,6 +420,19 @@ fn decode_heif_primary_image(
         )
     }
     .into_result();
+    // ICC 바이트 — ColorManagement 이펙트 소스 (SPEC §7 "fallback 디코더는 ICC 바이트")
+    let icc_profile = {
+        let size = unsafe { heif_image_handle_get_raw_color_profile_size(handle) };
+        if size > 0 {
+            let mut buffer = vec![0u8; size];
+            unsafe { heif_image_handle_get_raw_color_profile(handle, buffer.as_mut_ptr().cast()) }
+                .into_result()
+                .ok()
+                .map(|()| buffer)
+        } else {
+            None
+        }
+    };
     unsafe { heif_image_handle_release(handle) };
     decode_result?;
 
@@ -444,6 +465,7 @@ fn decode_heif_primary_image(
         pixel_width: width as u32,
         pixel_height: height as u32,
         format_name,
+        icc_profile,
         frames: vec![Frame {
             pixels,
             delay_milliseconds: 0,

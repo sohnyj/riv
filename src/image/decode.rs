@@ -13,11 +13,11 @@ use std::sync::OnceLock;
 use windows::Win32::Foundation::{GENERIC_READ, WINCODEC_ERR_COMPONENTNOTFOUND};
 use windows::Win32::Graphics::Imaging::{
     CLSID_WICImagingFactory, GUID_WICPixelFormat32bppPBGRA, IWICBitmapDecoder,
-    IWICBitmapFrameDecode, IWICBitmapSource, IWICImagingFactory, IWICMetadataQueryReader,
-    WICBitmapDitherTypeNone, WICBitmapInterpolationModeFant, WICBitmapPaletteTypeCustom,
-    WICBitmapTransformFlipHorizontal, WICBitmapTransformFlipVertical, WICBitmapTransformOptions,
-    WICBitmapTransformRotate90, WICBitmapTransformRotate180, WICBitmapTransformRotate270,
-    WICDecodeMetadataCacheOnDemand,
+    IWICBitmapFrameDecode, IWICBitmapSource, IWICColorContext, IWICImagingFactory,
+    IWICMetadataQueryReader, WICBitmapDitherTypeNone, WICBitmapInterpolationModeFant,
+    WICBitmapPaletteTypeCustom, WICBitmapTransformFlipHorizontal, WICBitmapTransformFlipVertical,
+    WICBitmapTransformOptions, WICBitmapTransformRotate90, WICBitmapTransformRotate180,
+    WICBitmapTransformRotate270, WICColorContextProfile, WICDecodeMetadataCacheOnDemand,
 };
 use windows::Win32::System::Com::StructuredStorage::{
     PROPVARIANT, PropVariantClear, PropVariantToUInt32,
@@ -41,6 +41,8 @@ pub struct DecodedImage {
     pub pixel_height: u32,
     /// 디코더 레지스트리 포맷명 — 정보 오버레이 소스 (SPEC §3.6)
     pub format_name: &'static str,
+    /// 임베디드 색 프로파일(ICC 바이트) — ColorManagement 이펙트 소스, 없으면 sRGB 가정 (SPEC §7)
+    pub icc_profile: Option<Vec<u8>>,
     pub frames: Vec<Frame>,
 }
 
@@ -420,10 +422,12 @@ pub fn decode_raw_preview(path: &Path) -> Option<DecodedImage> {
         };
         let preview =
             unsafe { decoder.GetPreview() }.or_else(|_| unsafe { decoder.GetThumbnail() })?;
-        // 오리엔테이션은 프레임 메타데이터 기준 — 풀 디코드와 동일 방향으로 표시
-        let orientation = unsafe { decoder.GetFrame(0) }
-            .map(|frame| exif_orientation(&frame))
-            .unwrap_or(1);
+        // 오리엔테이션·색 프로파일은 프레임 메타데이터 기준 — 풀 디코드와 동일하게 표시
+        let frame = unsafe { decoder.GetFrame(0) }.ok();
+        let orientation = frame.as_ref().map_or(1, exif_orientation);
+        let icc_profile = frame
+            .as_ref()
+            .and_then(|frame| icc_profile_bytes(factory, frame));
         let source = convert_to_pbgra(factory, &preview)?;
         let source = apply_orientation(factory, source, orientation)?;
         let (width, height) = source_size(&source)?;
@@ -435,6 +439,7 @@ pub fn decode_raw_preview(path: &Path) -> Option<DecodedImage> {
             height,
             pixel_width,
             pixel_height,
+            icc_profile,
             frames: vec![Frame {
                 pixels,
                 delay_milliseconds: 0,
@@ -448,6 +453,7 @@ pub fn decode_raw_preview(path: &Path) -> Option<DecodedImage> {
         pixel_width: decoded.pixel_width,
         pixel_height: decoded.pixel_height,
         format_name: "RAW",
+        icc_profile: decoded.icc_profile,
         frames: decoded.frames,
     })
 }
@@ -477,6 +483,7 @@ struct DecodedFrames {
     height: u32,
     pixel_width: u32,
     pixel_height: u32,
+    icc_profile: Option<Vec<u8>>,
     frames: Vec<Frame>,
 }
 
@@ -513,6 +520,7 @@ fn decode_with_wic(
         pixel_width: decoded.pixel_width,
         pixel_height: decoded.pixel_height,
         format_name,
+        icc_profile: decoded.icc_profile,
         frames: decoded.frames,
     })
 }
@@ -551,6 +559,7 @@ fn decode_single_frame(
 ) -> windows::core::Result<DecodedFrames> {
     let frame = unsafe { decoder.GetFrame(index)? };
     let orientation = exif_orientation(&frame);
+    let icc_profile = icc_profile_bytes(factory, &frame);
     let source = convert_to_pbgra(factory, &frame.cast()?)?;
     let source = apply_orientation(factory, source, orientation)?;
     let (width, height) = source_size(&source)?;
@@ -562,11 +571,49 @@ fn decode_single_frame(
         height,
         pixel_width,
         pixel_height,
+        icc_profile,
         frames: vec![Frame {
             pixels,
             delay_milliseconds: 0,
         }],
     })
+}
+
+/// 임베디드 색 프로파일(ICC 바이트) 추출 (SPEC §7) — 프로파일 타입 컨텍스트만 대상,
+/// Exif 색공간 지정·부재는 None(sRGB 가정)
+fn icc_profile_bytes(
+    factory: &IWICImagingFactory,
+    frame: &IWICBitmapFrameDecode,
+) -> Option<Vec<u8>> {
+    let mut count = 0u32;
+    unsafe { frame.GetColorContexts(&mut [], &mut count) }.ok()?;
+    if count == 0 {
+        return None;
+    }
+    let mut contexts: Vec<Option<IWICColorContext>> = (0..count)
+        .map(|_| unsafe { factory.CreateColorContext() }.ok())
+        .collect();
+    if contexts.iter().any(Option::is_none) {
+        return None;
+    }
+    let mut actual_count = 0u32;
+    unsafe { frame.GetColorContexts(&mut contexts, &mut actual_count) }.ok()?;
+    for context in contexts.into_iter().flatten() {
+        if unsafe { context.GetType() } != Ok(WICColorContextProfile) {
+            continue;
+        }
+        let mut size = 0u32;
+        let _ = unsafe { context.GetProfileBytes(&mut [], &mut size) };
+        if size == 0 {
+            continue;
+        }
+        let mut buffer = vec![0u8; size as usize];
+        let mut written = 0u32;
+        unsafe { context.GetProfileBytes(&mut buffer, &mut written) }.ok()?;
+        buffer.truncate(written as usize);
+        return Some(buffer);
+    }
+    None
 }
 
 /// ICO 등 해상도 변형 컨테이너 — 픽셀 수 최대 프레임 선택
@@ -635,8 +682,12 @@ fn decode_animation(
 
     let mut canvas: Vec<u8> = Vec::new();
     let mut frames = Vec::with_capacity(frame_count as usize);
+    let mut icc_profile = None;
     for index in 0..frame_count {
         let frame = unsafe { decoder.GetFrame(index)? };
+        if index == 0 {
+            icc_profile = icc_profile_bytes(factory, &frame);
+        }
         let metadata = frame_metadata(&frame);
         let source = convert_to_pbgra(factory, &frame.cast()?)?;
         let (frame_width, frame_height) = source_size(&source)?;
@@ -683,6 +734,7 @@ fn decode_animation(
         height: canvas_height,
         pixel_width: canvas_width,
         pixel_height: canvas_height,
+        icc_profile,
         frames,
     })
 }
@@ -833,6 +885,11 @@ fn decode_apng(path: &Path, format_name: &'static str) -> Result<DecodedImage, D
         let information = reader.info();
         (information.width, information.height)
     };
+    let icc_profile = reader
+        .info()
+        .icc_profile
+        .as_ref()
+        .map(|profile| profile.to_vec());
     let animation_frame_count = reader
         .info()
         .animation_control
@@ -927,6 +984,7 @@ fn decode_apng(path: &Path, format_name: &'static str) -> Result<DecodedImage, D
         pixel_width: canvas_width,
         pixel_height: canvas_height,
         format_name,
+        icc_profile,
         frames,
     })
 }
@@ -1021,6 +1079,7 @@ fn decode_svg(path: &Path, format_name: &'static str) -> Result<DecodedImage, De
         pixel_width,
         pixel_height,
         format_name,
+        icc_profile: None,
         frames: vec![Frame {
             pixels,
             delay_milliseconds: 0,

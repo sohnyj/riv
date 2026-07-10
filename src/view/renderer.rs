@@ -1,14 +1,27 @@
 //! D3D11 디바이스 + DXGI 플립 스왑체인 + D2D 드로우 경로
-//! (SPEC §3.1·§3.3, PORTING_PLAN §3 렌더러 세부 — 커스텀 셰이더 0)
+//! (SPEC §3.1·§3.3·§7, PORTING_PLAN §3 렌더러 세부 — 커스텀 셰이더 0)
+//!
+//! 백버퍼 = FP16 scRGB(advanced color, 2026-07-10 직행 확정): `R16G16B16A16_FLOAT`에
+//! `SetColorSpace1`(RGB_FULL_G10_NONE_P709)을 선언 — SDR/ACM/HDR 패널 매핑은 DWM 위임.
+//! 소스 비트맵(sRGB 인코딩 PBGRA8)은 draw 시점에 `ColorManagement` 이펙트로 scRGB 변환하고,
+//! HDR 모드의 SDR 백레벨은 `WhiteLevelAdjustment` 이펙트로 보정한다 (SPEC §7).
+//! 구 UNORM 비트 심도 감지(모니터별 R10G10B10A2 매칭)는 제거.
 
 use windows::Win32::Foundation::{HMODULE, HWND};
 use windows::Win32::Graphics::Direct2D::Common::{
-    D2D_RECT_F, D2D_SIZE_U, D2D1_ALPHA_MODE_PREMULTIPLIED, D2D1_COLOR_F, D2D1_PIXEL_FORMAT,
+    D2D_RECT_F, D2D_SIZE_U, D2D1_ALPHA_MODE_PREMULTIPLIED, D2D1_COLOR_F,
+    D2D1_COMPOSITE_MODE_SOURCE_OVER, D2D1_PIXEL_FORMAT,
 };
 use windows::Win32::Graphics::Direct2D::{
-    D2D1_BITMAP_OPTIONS_CANNOT_DRAW, D2D1_BITMAP_OPTIONS_NONE, D2D1_BITMAP_OPTIONS_TARGET,
-    D2D1_BITMAP_PROPERTIES1, D2D1_DEVICE_CONTEXT_OPTIONS_NONE, D2D1_FACTORY_TYPE_SINGLE_THREADED,
-    D2D1_INTERPOLATION_MODE, D2D1CreateFactory, ID2D1Bitmap1, ID2D1DeviceContext, ID2D1Factory1,
+    CLSID_D2D1ColorManagement, CLSID_D2D1WhiteLevelAdjustment, D2D1_BITMAP_OPTIONS_CANNOT_DRAW,
+    D2D1_BITMAP_OPTIONS_NONE, D2D1_BITMAP_OPTIONS_TARGET, D2D1_BITMAP_PROPERTIES1,
+    D2D1_COLOR_SPACE_CUSTOM, D2D1_COLOR_SPACE_SCRGB, D2D1_COLOR_SPACE_SRGB,
+    D2D1_COLORMANAGEMENT_PROP_DESTINATION_COLOR_CONTEXT,
+    D2D1_COLORMANAGEMENT_PROP_SOURCE_COLOR_CONTEXT, D2D1_DEVICE_CONTEXT_OPTIONS_NONE,
+    D2D1_FACTORY_TYPE_SINGLE_THREADED, D2D1_INTERPOLATION_MODE, D2D1_PROPERTY_TYPE_FLOAT,
+    D2D1_PROPERTY_TYPE_IUNKNOWN, D2D1_WHITELEVELADJUSTMENT_PROP_INPUT_WHITE_LEVEL,
+    D2D1_WHITELEVELADJUSTMENT_PROP_OUTPUT_WHITE_LEVEL, D2D1CreateFactory, ID2D1Bitmap1,
+    ID2D1ColorContext, ID2D1DeviceContext, ID2D1Effect, ID2D1Factory1, ID2D1Image,
 };
 use windows::Win32::Graphics::Direct3D::{
     D3D_DRIVER_TYPE, D3D_DRIVER_TYPE_HARDWARE, D3D_DRIVER_TYPE_WARP, D3D_FEATURE_LEVEL_11_0,
@@ -17,51 +30,37 @@ use windows::Win32::Graphics::Direct3D11::{
     D3D11_CREATE_DEVICE_BGRA_SUPPORT, D3D11_SDK_VERSION, D3D11CreateDevice, ID3D11Device,
 };
 use windows::Win32::Graphics::Dxgi::Common::{
-    DXGI_ALPHA_MODE_IGNORE, DXGI_FORMAT, DXGI_FORMAT_B8G8R8A8_UNORM, DXGI_FORMAT_R10G10B10A2_UNORM,
-    DXGI_FORMAT_UNKNOWN, DXGI_SAMPLE_DESC,
+    DXGI_ALPHA_MODE_IGNORE, DXGI_COLOR_SPACE_RGB_FULL_G10_NONE_P709, DXGI_FORMAT_B8G8R8A8_UNORM,
+    DXGI_FORMAT_R16G16B16A16_FLOAT, DXGI_FORMAT_UNKNOWN, DXGI_SAMPLE_DESC,
 };
 use windows::Win32::Graphics::Dxgi::{
     DXGI_PRESENT, DXGI_SCALING_NONE, DXGI_SWAP_CHAIN_DESC1, DXGI_SWAP_CHAIN_FLAG,
-    DXGI_SWAP_EFFECT_FLIP_DISCARD, DXGI_USAGE_RENDER_TARGET_OUTPUT, IDXGIAdapter, IDXGIDevice,
-    IDXGIFactory2, IDXGIOutput6, IDXGISurface, IDXGISwapChain1,
+    DXGI_SWAP_EFFECT_FLIP_DISCARD, DXGI_USAGE_RENDER_TARGET_OUTPUT, IDXGIDevice, IDXGIFactory2,
+    IDXGISurface, IDXGISwapChain1, IDXGISwapChain3,
 };
-use windows::Win32::Graphics::Gdi::{MONITOR_DEFAULTTONEAREST, MonitorFromWindow};
 use windows::core::{Interface, Result};
 use windows_numerics::Matrix3x2;
+
+/// SDR 참조 화이트 = 80 nits (D2D1_SCENE_REFERRED_SDR_WHITE_LEVEL)
+const SDR_REFERENCE_WHITE_NITS: f32 = 80.0;
 
 pub struct Renderer {
     swap_chain: IDXGISwapChain1,
     d2d_context: ID2D1DeviceContext,
     target: Option<ID2D1Bitmap1>,
     image: Option<ID2D1Bitmap1>,
+    /// 이펙트 체인 최종 출력 — ColorManagement (→ WhiteLevelAdjustment)
+    effect_output: Option<ID2D1Image>,
+    /// sRGB → scRGB 변환 이펙트 (SPEC §7) — wine 등 미지원 환경은 None(DrawBitmap 직행)
+    color_management_effect: Option<ID2D1Effect>,
+    /// HDR 모드 SDR 백레벨 보정 (SPEC §7) — 미지원 환경은 None
+    white_level_effect: Option<ID2D1Effect>,
+    /// 현재 소스 프로파일 캐시 — 애니메이션 프레임 재업로드 시 재생성 회피
+    source_icc_profile: Option<Vec<u8>>,
+    source_color_context: Option<ID2D1ColorContext>,
     /// 드로우 논리 크기(원본 픽셀) — DP3 다운스케일 시 비트맵보다 크다 (SPEC §3.4)
     image_display_size: (f32, f32),
-    backbuffer_format: DXGI_FORMAT,
-}
-
-/// 창이 있는 모니터의 비트 심도를 감지해 백버퍼 포맷을 결정 —
-/// 10-bit 디스플레이면 R10G10B10A2, 그 외·감지 실패는 8-bit(B8G8R8A8).
-/// 10-bit 경로는 실기 검증 대상(wine은 IDXGIOutput6 미지원 가능).
-fn detect_backbuffer_format(adapter: &IDXGIAdapter, window: HWND) -> DXGI_FORMAT {
-    let monitor = unsafe { MonitorFromWindow(window, MONITOR_DEFAULTTONEAREST) };
-    let mut output_index = 0;
-    while let Ok(output) = unsafe { adapter.EnumOutputs(output_index) } {
-        output_index += 1;
-        let Ok(description) = (unsafe { output.GetDesc() }) else {
-            continue;
-        };
-        if description.Monitor != monitor {
-            continue;
-        }
-        if let Ok(output6) = output.cast::<IDXGIOutput6>()
-            && let Ok(description1) = unsafe { output6.GetDesc1() }
-            && description1.BitsPerColor >= 10
-        {
-            return DXGI_FORMAT_R10G10B10A2_UNORM;
-        }
-        break;
-    }
-    DXGI_FORMAT_B8G8R8A8_UNORM
+    image_pixel_size: (f32, f32),
 }
 
 fn create_d3d_device(driver_type: D3D_DRIVER_TYPE) -> Result<ID3D11Device> {
@@ -82,11 +81,17 @@ fn create_d3d_device(driver_type: D3D_DRIVER_TYPE) -> Result<ID3D11Device> {
     Ok(device.expect("D3D11CreateDevice succeeded without device"))
 }
 
-fn pixel_format() -> D2D1_PIXEL_FORMAT {
+/// 소스 비트맵 픽셀 포맷 — sRGB 인코딩 premultiplied BGRA8 (SPEC §3.1)
+fn source_pixel_format() -> D2D1_PIXEL_FORMAT {
     D2D1_PIXEL_FORMAT {
         format: DXGI_FORMAT_B8G8R8A8_UNORM,
         alphaMode: D2D1_ALPHA_MODE_PREMULTIPLIED,
     }
+}
+
+/// IUnknown 계열 이펙트 프로퍼티 값 — raw 인터페이스 포인터 바이트
+fn interface_property_bytes<T: Interface>(interface: &T) -> [u8; size_of::<usize>()] {
+    (interface.as_raw() as usize).to_ne_bytes()
 }
 
 impl Renderer {
@@ -96,14 +101,13 @@ impl Renderer {
             .or_else(|_| create_d3d_device(D3D_DRIVER_TYPE_WARP))?;
         let dxgi_device: IDXGIDevice = d3d_device.cast()?;
 
-        let adapter: IDXGIAdapter = unsafe { dxgi_device.GetAdapter()? };
-        let backbuffer_format = detect_backbuffer_format(&adapter, window);
         let swap_chain = unsafe {
+            let adapter = dxgi_device.GetAdapter()?;
             let factory: IDXGIFactory2 = adapter.GetParent()?;
             let description = DXGI_SWAP_CHAIN_DESC1 {
                 Width: width,
                 Height: height,
-                Format: backbuffer_format,
+                Format: DXGI_FORMAT_R16G16B16A16_FLOAT,
                 SampleDesc: DXGI_SAMPLE_DESC {
                     Count: 1,
                     Quality: 0,
@@ -117,6 +121,11 @@ impl Renderer {
             };
             factory.CreateSwapChainForHwnd(&d3d_device, window, &description, None, None)?
         };
+        // scRGB 색공간 선언 — DWM이 SDR/ACM/HDR 패널 매핑 수행 (SPEC §7).
+        // wine 등 IDXGISwapChain3 미지원 환경은 무시(P16 — 형상 확인만)
+        if let Ok(swap_chain3) = swap_chain.cast::<IDXGISwapChain3>() {
+            let _ = unsafe { swap_chain3.SetColorSpace1(DXGI_COLOR_SPACE_RGB_FULL_G10_NONE_P709) };
+        }
 
         let d2d_context = unsafe {
             let d2d_factory: ID2D1Factory1 =
@@ -125,13 +134,55 @@ impl Renderer {
             d2d_device.CreateDeviceContext(D2D1_DEVICE_CONTEXT_OPTIONS_NONE)?
         };
 
+        // 이펙트·색 컨텍스트 — 미지원 환경(wine)은 None으로 DrawBitmap 직행 (P16)
+        let scrgb_color_context =
+            unsafe { d2d_context.CreateColorContext(D2D1_COLOR_SPACE_SCRGB, None) }.ok();
+        let color_management_effect = scrgb_color_context.as_ref().and_then(|destination| {
+            let effect = unsafe { d2d_context.CreateEffect(&CLSID_D2D1ColorManagement) }.ok()?;
+            unsafe {
+                effect.SetValue(
+                    D2D1_COLORMANAGEMENT_PROP_DESTINATION_COLOR_CONTEXT.0 as u32,
+                    D2D1_PROPERTY_TYPE_IUNKNOWN,
+                    &interface_property_bytes(destination),
+                )
+            }
+            .ok()?;
+            Some(effect)
+        });
+        let white_level_effect = color_management_effect.as_ref().and_then(|_| {
+            let effect =
+                unsafe { d2d_context.CreateEffect(&CLSID_D2D1WhiteLevelAdjustment) }.ok()?;
+            unsafe {
+                effect.SetValue(
+                    D2D1_WHITELEVELADJUSTMENT_PROP_INPUT_WHITE_LEVEL.0 as u32,
+                    D2D1_PROPERTY_TYPE_FLOAT,
+                    &SDR_REFERENCE_WHITE_NITS.to_ne_bytes(),
+                )
+            }
+            .ok()?;
+            unsafe {
+                effect.SetValue(
+                    D2D1_WHITELEVELADJUSTMENT_PROP_OUTPUT_WHITE_LEVEL.0 as u32,
+                    D2D1_PROPERTY_TYPE_FLOAT,
+                    &SDR_REFERENCE_WHITE_NITS.to_ne_bytes(),
+                )
+            }
+            .ok()?;
+            Some(effect)
+        });
+
         let mut renderer = Self {
             swap_chain,
             d2d_context,
             target: None,
             image: None,
+            effect_output: None,
+            color_management_effect,
+            white_level_effect,
+            source_icc_profile: None,
+            source_color_context: None,
             image_display_size: (0.0, 0.0),
-            backbuffer_format,
+            image_pixel_size: (0.0, 0.0),
         };
         renderer.create_target()?;
         Ok(renderer)
@@ -140,7 +191,7 @@ impl Renderer {
     fn create_target(&mut self) -> Result<()> {
         let properties = D2D1_BITMAP_PROPERTIES1 {
             pixelFormat: D2D1_PIXEL_FORMAT {
-                format: self.backbuffer_format,
+                format: DXGI_FORMAT_R16G16B16A16_FLOAT,
                 alphaMode: D2D1_ALPHA_MODE_PREMULTIPLIED,
             },
             dpiX: 96.0,
@@ -175,17 +226,32 @@ impl Renderer {
         self.create_target()
     }
 
-    /// premultiplied BGRA8 픽셀 업로드 (SPEC §3.1).
-    /// `display_size` = 논리(원본) 크기 — DP3 다운스케일 시 비트맵을 이 크기로 드로우
+    /// HDR 모드의 SDR 백레벨 반영 (SPEC §7) — boost = SDRWhiteLevel/1000 (1.0 = SDR/ACM)
+    pub fn set_sdr_white_boost(&mut self, boost: f32) {
+        if let Some(effect) = &self.white_level_effect {
+            let output_nits = SDR_REFERENCE_WHITE_NITS * boost.max(0.01);
+            let _ = unsafe {
+                effect.SetValue(
+                    D2D1_WHITELEVELADJUSTMENT_PROP_OUTPUT_WHITE_LEVEL.0 as u32,
+                    D2D1_PROPERTY_TYPE_FLOAT,
+                    &output_nits.to_ne_bytes(),
+                )
+            };
+        }
+    }
+
+    /// premultiplied BGRA8(sRGB 인코딩) 픽셀 업로드 (SPEC §3.1) + 이펙트 체인 재배선.
+    /// `display_size` = 논리(원본) 크기, `icc_profile` = 소스 프로파일(없으면 sRGB 가정)
     pub fn set_image(
         &mut self,
         pixels: &[u8],
         width: u32,
         height: u32,
         display_size: (u32, u32),
+        icc_profile: Option<&[u8]>,
     ) -> Result<()> {
         let properties = D2D1_BITMAP_PROPERTIES1 {
-            pixelFormat: pixel_format(),
+            pixelFormat: source_pixel_format(),
             dpiX: 96.0,
             dpiY: 96.0,
             bitmapOptions: D2D1_BITMAP_OPTIONS_NONE,
@@ -199,17 +265,73 @@ impl Renderer {
                 &properties,
             )?
         };
-        self.image = Some(bitmap);
         self.image_display_size = (display_size.0 as f32, display_size.1 as f32);
+        self.image_pixel_size = (width as f32, height as f32);
+        self.rewire_effect_chain(&bitmap, icc_profile);
+        self.image = Some(bitmap);
         Ok(())
+    }
+
+    /// 소스 프로파일 → ID2D1ColorContext → ColorManagement → (WhiteLevelAdjustment) (SPEC §7)
+    fn rewire_effect_chain(&mut self, bitmap: &ID2D1Bitmap1, icc_profile: Option<&[u8]>) {
+        self.effect_output = None;
+        let Some(color_management) = &self.color_management_effect else {
+            return;
+        };
+        // 프로파일이 바뀔 때만 소스 색 컨텍스트 재생성 (애니메이션 프레임 재업로드 대비)
+        if self.source_color_context.is_none() || self.source_icc_profile.as_deref() != icc_profile
+        {
+            self.source_color_context = match icc_profile {
+                Some(profile) => unsafe {
+                    self.d2d_context
+                        .CreateColorContext(D2D1_COLOR_SPACE_CUSTOM, Some(profile))
+                }
+                .ok(),
+                None => None,
+            }
+            .or_else(|| {
+                unsafe {
+                    self.d2d_context
+                        .CreateColorContext(D2D1_COLOR_SPACE_SRGB, None)
+                }
+                .ok()
+            });
+            self.source_icc_profile = icc_profile.map(<[u8]>::to_vec);
+        }
+        let Some(source_context) = &self.source_color_context else {
+            return;
+        };
+        let wired = unsafe {
+            color_management.SetValue(
+                D2D1_COLORMANAGEMENT_PROP_SOURCE_COLOR_CONTEXT.0 as u32,
+                D2D1_PROPERTY_TYPE_IUNKNOWN,
+                &interface_property_bytes(source_context),
+            )
+        }
+        .is_ok();
+        if !wired {
+            return;
+        }
+        unsafe { color_management.SetInput(0, bitmap, true) };
+        self.effect_output = match &self.white_level_effect {
+            Some(white_level) => unsafe {
+                color_management.GetOutput().ok().and_then(|converted| {
+                    white_level.SetInput(0, &converted, true);
+                    white_level.GetOutput().ok()
+                })
+            },
+            None => unsafe { color_management.GetOutput().ok() },
+        };
     }
 
     /// 디코드 실패 등으로 표시 이미지 제거 (에러 텍스트만 남김 — SPEC §3.6)
     pub fn clear_image(&mut self) {
         self.image = None;
+        self.effect_output = None;
     }
 
-    /// Clear → SetTransform → DrawBitmap → 오버레이(같은 패스, SPEC §3.6) → Present
+    /// Clear → SetTransform → DrawImage(이펙트 체인) → 오버레이(같은 패스) → Present.
+    /// `clear_color`는 linear scRGB 값 (변환은 호출자 — image/color.rs)
     pub fn render(
         &mut self,
         matrix: [f32; 6],
@@ -220,31 +342,49 @@ impl Renderer {
         unsafe {
             self.d2d_context.BeginDraw();
             self.d2d_context.Clear(Some(&clear_color));
-            if let Some(image) = &self.image {
+            if self.image.is_some() {
+                // 비트맵 픽셀 → 논리 크기 스케일을 변환에 합성 (DP3 — DrawImage는
+                // 대상 사각형이 없어 행렬로 처리)
+                let scale_x = self.image_display_size.0 / self.image_pixel_size.0.max(1.0);
+                let scale_y = self.image_display_size.1 / self.image_pixel_size.1.max(1.0);
                 let transform = Matrix3x2 {
-                    M11: matrix[0],
-                    M12: matrix[1],
-                    M21: matrix[2],
-                    M22: matrix[3],
+                    M11: matrix[0] * scale_x,
+                    M12: matrix[1] * scale_x,
+                    M21: matrix[2] * scale_y,
+                    M22: matrix[3] * scale_y,
                     M31: matrix[4],
                     M32: matrix[5],
                 };
                 self.d2d_context.SetTransform(&transform);
-                // 대상 사각형 = 논리 크기 — 다운스케일된 비트맵도 원본 크기로 표시 (DP3)
-                let destination = D2D_RECT_F {
-                    left: 0.0,
-                    top: 0.0,
-                    right: self.image_display_size.0,
-                    bottom: self.image_display_size.1,
-                };
-                self.d2d_context.DrawBitmap(
-                    image,
-                    Some(&destination),
-                    1.0,
-                    interpolation,
-                    None,
-                    None,
-                );
+                match (&self.effect_output, &self.image) {
+                    (Some(output), _) => {
+                        self.d2d_context.DrawImage(
+                            output,
+                            None,
+                            None,
+                            interpolation,
+                            D2D1_COMPOSITE_MODE_SOURCE_OVER,
+                        );
+                    }
+                    (None, Some(image)) => {
+                        // 이펙트 미지원 환경(wine) — 변환 없이 직접 드로우 (P16)
+                        let destination = D2D_RECT_F {
+                            left: 0.0,
+                            top: 0.0,
+                            right: self.image_pixel_size.0,
+                            bottom: self.image_pixel_size.1,
+                        };
+                        self.d2d_context.DrawBitmap(
+                            image,
+                            Some(&destination),
+                            1.0,
+                            interpolation,
+                            None,
+                            None,
+                        );
+                    }
+                    _ => {}
+                }
                 self.d2d_context.SetTransform(&Matrix3x2::identity());
             }
             // 오버레이 실패는 프레임 제시를 막지 않는다 — EndDraw·Present 후 전파
