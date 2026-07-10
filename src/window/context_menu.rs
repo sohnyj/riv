@@ -25,6 +25,8 @@ pub struct MenuState {
     pub has_image: bool,
     pub has_folder: bool,
     pub has_animation: bool,
+    /// Pause ↔ Resume 라벨 토글 (SPEC §5.1)
+    pub animation_paused: bool,
     pub preserve_zoom: bool,
     pub fullscreen: bool,
     pub slideshow_active: bool,
@@ -43,15 +45,11 @@ struct MenuBuilder {
 }
 
 impl MenuBuilder {
-    /// 아직 배선되지 않은 액션(R5 애니·R6 다이얼로그·R7 멀티윈도우) — 항상 비활성 표시
+    /// 아직 배선되지 않은 액션(R6 다이얼로그·R7 멀티윈도우) — 항상 비활성 표시
     fn is_wired(action: Action) -> bool {
         !matches!(
             action,
-            Action::NewWindow
-                | Action::CloseAllWindows
-                | Action::Pause
-                | Action::NextFrame
-                | Action::Options
+            Action::NewWindow | Action::CloseAllWindows | Action::Options
         )
     }
 
@@ -173,7 +171,12 @@ impl MenuBuilder {
         self.append_submenu(menu, view, "View")?;
 
         let tools = unsafe { CreatePopupMenu()? };
-        self.append_action(tools, Action::Pause)?;
+        let pause_label = if self.state_snapshot.animation_paused {
+            "Resume"
+        } else {
+            "Pause"
+        };
+        self.append_action_labeled(tools, Action::Pause, pause_label)?;
         self.append_action(tools, Action::NextFrame)?;
         self.append_separator(tools)?;
         let slideshow_label = if self.state_snapshot.slideshow_active {

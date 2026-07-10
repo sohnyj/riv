@@ -17,6 +17,7 @@ use actions::{Action, ActivationGate};
 use bindings::{
     Bindings, MODIFIER_ALT, MODIFIER_CONTROL, MODIFIER_META, MODIFIER_SHIFT, MouseBase,
 };
+use image::animation::Animation;
 use image::core::{
     CoreOptions, DecodeCompletion, ImageCore, NavigationCommand, SortMode, WM_APP_DECODE_COMPLETE,
 };
@@ -79,6 +80,8 @@ const SLIDESHOW_TIMER: usize = 3;
 const RECENTS_SAVE_TIMER: usize = 4;
 /// Open With 목록 채우기 — 파일 변경 250ms 디바운스 (SPEC §6.4)
 const OPEN_WITH_TIMER: usize = 5;
+/// 애니메이션 프레임 예약 — 프레임 지연 × (100/speed)로 재예약 (SPEC §4.6)
+const ANIMATION_TIMER: usize = 6;
 
 /// 키보드/메뉴 팬 스텝 (디바이스 픽셀)
 const PAN_STEP: f32 = 64.0;
@@ -113,6 +116,8 @@ struct Application {
     zoom_pill_text: Option<String>,
     /// 슬라이드쇼 상태 (SPEC §6.3)
     slideshow_active: bool,
+    /// 애니메이션 스케줄러 상태 — 프레임 수 > 1일 때만 (SPEC §4.6)
+    animation: Option<Animation>,
     /// 드롭 타깃 — 창 수명 동안 유지 (SPEC §5.4)
     drop_target: Option<IDropTarget>,
     /// Open With 핸들러 목록 — 백그라운드 열거 결과, 파일 전환 시 폐기 (SPEC §6.4)
@@ -150,6 +155,7 @@ impl Application {
             show_file_info: false,
             zoom_pill_text: None,
             slideshow_active: false,
+            animation: None,
             drop_target: None,
             open_with_list: None,
             action_script: parse_action_script(),
@@ -260,6 +266,22 @@ impl Application {
             // 업로드 실패(디바이스 로스트 등) — 재구축 경로가 display에서 재업로드
             let _ = self.rebuild_renderer(window);
         }
+        // 애니메이션 검사·시작 (SPEC §4.1·§4.6) — 이전 파일 스케줄은 항상 폐기
+        let _ = unsafe { KillTimer(Some(window), ANIMATION_TIMER) };
+        self.animation = self
+            .display
+            .as_ref()
+            .and_then(|image| Animation::new(image));
+        if let Some(animation) = &self.animation {
+            unsafe {
+                SetTimer(
+                    Some(window),
+                    ANIMATION_TIMER,
+                    animation.current_delay_milliseconds(),
+                    None,
+                )
+            };
+        }
         if !same_view {
             // 최근 파일 수집 — 500ms 디바운스 저장 (SPEC §6.4)
             if self.settings.add_recent_file(&path) {
@@ -274,8 +296,44 @@ impl Application {
 
     /// 디코드 실패 반영 — 이미지 제거 + 에러 텍스트 (SPEC §3.6·§4.2)
     fn apply_load_error(&mut self, window: HWND) {
+        let _ = unsafe { KillTimer(Some(window), ANIMATION_TIMER) };
+        self.animation = None;
         self.display = None;
+        self.displayed_path = None;
         self.renderer.clear_image();
+        self.render(window);
+    }
+
+    /// 파일 이동·외부 로드 시작 — 재생 중 애니메이션 일시정지(프레임 동결, SPEC §4.6).
+    /// 비애니메이션 파일 핸들은 디코드 후 잡지 않으므로 별도 닫기 불필요.
+    fn freeze_animation_for_load(&mut self, window: HWND) {
+        if self.animation.is_some() {
+            let _ = unsafe { KillTimer(Some(window), ANIMATION_TIMER) };
+        }
+    }
+
+    /// 프레임 진행(타이머 틱·Next Frame 공용) — 업로드 후 재생 중이면 재예약 (SPEC §4.6)
+    fn advance_animation_frame(&mut self, window: HWND) {
+        let Some(animation) = self.animation.as_mut() else {
+            let _ = unsafe { KillTimer(Some(window), ANIMATION_TIMER) };
+            return;
+        };
+        let frame_index = animation.advance();
+        let delay = animation.current_delay_milliseconds();
+        let paused = animation.paused;
+        let Some(image) = self.display.clone() else {
+            return;
+        };
+        let frame = &image.frames[frame_index];
+        let _ = self.renderer.set_image(
+            &frame.pixels,
+            image.pixel_width,
+            image.pixel_height,
+            (image.width, image.height),
+        );
+        if !paused {
+            unsafe { SetTimer(Some(window), ANIMATION_TIMER, delay, None) };
+        }
         self.render(window);
     }
 
@@ -316,8 +374,13 @@ impl Application {
         self.current_monitor = unsafe { MonitorFromWindow(window, MONITOR_DEFAULTTONEAREST) };
         self.renderer = Renderer::new(window, width.max(1), height.max(1))?;
         if let Some(image) = &self.display {
+            // 애니메이션 중이면 현재 프레임 유지
+            let frame_index = self
+                .animation
+                .as_ref()
+                .map_or(0, |animation| animation.frame_index);
             self.renderer.set_image(
-                &image.frames[0].pixels,
+                &image.frames[frame_index].pixels,
                 image.pixel_width,
                 image.pixel_height,
                 (image.width, image.height),
@@ -543,6 +606,9 @@ fn execute_navigation(
             if application.image_core.load_error.is_some() {
                 // 동기 실패(파일 접근 불가 등) — 에러 텍스트 표시
                 application.apply_load_error(window);
+            } else {
+                // 비동기 로드 시작 — 재생 중 애니메이션 동결 (SPEC §4.6)
+                application.freeze_animation_for_load(window);
             }
         }
         None => return false,
@@ -553,6 +619,7 @@ fn execute_navigation(
 /// 외부 경로 열기(최근 파일·드롭·붙여넣기 공용) — 수동 로드 = 슬라이드쇼 취소 (SPEC §6.3)
 fn open_external_path(application: &mut Application, window: HWND, path: &Path) {
     application.cancel_slideshow(window);
+    application.freeze_animation_for_load(window);
     if application.image_core.load_path(path) {
         application.apply_current_image(window);
     } else if application.image_core.load_error.is_some() {
@@ -715,12 +782,29 @@ fn dispatch_action(application: &mut Application, window: HWND, action: Action) 
         }
         // OpenWith는 서브메뉴 컨테이너 — 항목 선택은 MenuSelection::OpenWithEntry 경로
         Action::OpenWith => {}
-        // R5: 애니메이션 스케줄러
-        Action::Pause
-        | Action::NextFrame
-        | Action::DecreaseSpeed
-        | Action::ResetSpeed
-        | Action::IncreaseSpeed => {}
+        // 애니메이션 스케줄러 (SPEC §4.6) — 정지 이미지는 게이트가 차단
+        Action::Pause => {
+            if let Some(animation) = application.animation.as_mut() {
+                animation.paused = !animation.paused;
+                if animation.paused {
+                    let _ = unsafe { KillTimer(Some(window), ANIMATION_TIMER) };
+                } else {
+                    let delay = animation.current_delay_milliseconds();
+                    unsafe { SetTimer(Some(window), ANIMATION_TIMER, delay, None) };
+                }
+            }
+        }
+        Action::NextFrame => application.advance_animation_frame(window),
+        Action::DecreaseSpeed | Action::IncreaseSpeed => {
+            if let Some(animation) = application.animation.as_mut() {
+                animation.adjust_speed(action == Action::IncreaseSpeed);
+            }
+        }
+        Action::ResetSpeed => {
+            if let Some(animation) = application.animation.as_mut() {
+                animation.reset_speed();
+            }
+        }
         // R6: 옵션 다이얼로그 / R7: 멀티윈도우
         Action::Options | Action::NewWindow | Action::CloseAllWindows => {}
     }
@@ -1041,6 +1125,13 @@ extern "system" fn window_procedure(
             }
             LRESULT(0)
         }
+        // 애니메이션 프레임 진행 — 다음 프레임 지연으로 재예약 (SPEC §4.6)
+        WM_TIMER if wparam.0 == ANIMATION_TIMER => {
+            if let Some(application) = unsafe { application_from_window(window) } {
+                application.advance_animation_frame(window);
+            }
+            LRESULT(0)
+        }
         // 줌 필 1초 자동 숨김 (SPEC §3.6)
         WM_TIMER if wparam.0 == ZOOM_PILL_TIMER => {
             let _ = unsafe { KillTimer(Some(window), ZOOM_PILL_TIMER) };
@@ -1243,6 +1334,10 @@ extern "system" fn window_procedure(
                         .current
                         .as_ref()
                         .is_some_and(|current| current.image.frames.len() > 1),
+                    animation_paused: application
+                        .animation
+                        .as_ref()
+                        .is_some_and(|animation| animation.paused),
                     preserve_zoom: application.preserve_zoom,
                     fullscreen: application.fullscreen_restore.is_some(),
                     slideshow_active: application.slideshow_active,

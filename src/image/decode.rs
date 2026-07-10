@@ -27,8 +27,7 @@ use windows::core::{HSTRING, Interface, PCWSTR, w};
 /// 디코드 결과 프레임 — premultiplied BGRA8, 캔버스 전체로 합성 완료 (SPEC §3.1·§4.6)
 pub struct Frame {
     pub pixels: Vec<u8>,
-    /// 정지 이미지는 0. 애니메이션 스케줄러(R5)가 소비 — 연동 후 expect가 알려준다
-    #[expect(dead_code)]
+    /// 정지 이미지는 0 — 애니메이션 스케줄러가 소비 (SPEC §4.6)
     pub delay_milliseconds: u32,
 }
 
