@@ -34,10 +34,47 @@ pub fn srgb_color_to_scrgb(color: D2D1_COLOR_F, sdr_white_boost: f32) -> D2D1_CO
     }
 }
 
-/// 창이 있는 모니터의 SDR 백레벨 배율 (SPEC §7) — advanced color(HDR) 활성일 때만
-/// `DISPLAYCONFIG_SDR_WHITE_LEVEL`(1000 = 80 nits) 기반, 그 외·조회 실패는 1.0.
+/// 창이 있는 모니터의 SDR 백레벨 배율 (SPEC §7) — **HDR 모드(scene-referred)에서만**
+/// `DISPLAYCONFIG_SDR_WHITE_LEVEL`(1000 = 80 nits) 기반. SDR advanced color(ACM)는
+/// display-referred(1.0 = 디스플레이 참조 백)라 부스트 비대상, 조회 실패도 1.0.
 pub fn sdr_white_boost(window: HWND) -> f32 {
+    if !monitor_is_hdr(window) {
+        return 1.0;
+    }
     query_sdr_white_boost(window).unwrap_or(1.0)
+}
+
+/// HDR 활성 판별 — `IDXGIOutput6::GetDesc1().ColorSpace == G2084` (문서 권장 Win32 경로.
+/// SDR advanced color 디스플레이는 G22_P709로 보고되어 자연히 제외된다)
+fn monitor_is_hdr(window: HWND) -> bool {
+    use windows::Win32::Graphics::Dxgi::Common::DXGI_COLOR_SPACE_RGB_FULL_G2084_NONE_P2020;
+    use windows::Win32::Graphics::Dxgi::{CreateDXGIFactory1, IDXGIFactory1, IDXGIOutput6};
+    use windows::core::Interface;
+
+    let monitor = unsafe { MonitorFromWindow(window, MONITOR_DEFAULTTONEAREST) };
+    let Ok(factory) = (unsafe { CreateDXGIFactory1::<IDXGIFactory1>() }) else {
+        return false;
+    };
+    let mut adapter_index = 0;
+    while let Ok(adapter) = unsafe { factory.EnumAdapters1(adapter_index) } {
+        adapter_index += 1;
+        let mut output_index = 0;
+        while let Ok(output) = unsafe { adapter.EnumOutputs(output_index) } {
+            output_index += 1;
+            let Ok(description) = (unsafe { output.GetDesc() }) else {
+                continue;
+            };
+            if description.Monitor != monitor {
+                continue;
+            }
+            return output.cast::<IDXGIOutput6>().is_ok_and(|output6| {
+                unsafe { output6.GetDesc1() }.is_ok_and(|description1| {
+                    description1.ColorSpace == DXGI_COLOR_SPACE_RGB_FULL_G2084_NONE_P2020
+                })
+            });
+        }
+    }
+    false
 }
 
 fn query_sdr_white_boost(window: HWND) -> Option<f32> {

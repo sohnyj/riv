@@ -16,10 +16,11 @@ use windows::Win32::Graphics::Direct2D::{
     CLSID_D2D1ColorManagement, CLSID_D2D1WhiteLevelAdjustment, D2D1_BITMAP_OPTIONS_CANNOT_DRAW,
     D2D1_BITMAP_OPTIONS_NONE, D2D1_BITMAP_OPTIONS_TARGET, D2D1_BITMAP_PROPERTIES1,
     D2D1_COLOR_SPACE_CUSTOM, D2D1_COLOR_SPACE_SCRGB, D2D1_COLOR_SPACE_SRGB,
-    D2D1_COLORMANAGEMENT_PROP_DESTINATION_COLOR_CONTEXT,
-    D2D1_COLORMANAGEMENT_PROP_SOURCE_COLOR_CONTEXT, D2D1_DEVICE_CONTEXT_OPTIONS_NONE,
-    D2D1_FACTORY_TYPE_SINGLE_THREADED, D2D1_INTERPOLATION_MODE, D2D1_PROPERTY_TYPE_FLOAT,
-    D2D1_PROPERTY_TYPE_IUNKNOWN, D2D1_WHITELEVELADJUSTMENT_PROP_INPUT_WHITE_LEVEL,
+    D2D1_COLORMANAGEMENT_PROP_DESTINATION_COLOR_CONTEXT, D2D1_COLORMANAGEMENT_PROP_QUALITY,
+    D2D1_COLORMANAGEMENT_PROP_SOURCE_COLOR_CONTEXT, D2D1_COLORMANAGEMENT_QUALITY_BEST,
+    D2D1_DEVICE_CONTEXT_OPTIONS_NONE, D2D1_FACTORY_TYPE_SINGLE_THREADED, D2D1_INTERPOLATION_MODE,
+    D2D1_PROPERTY_TYPE_COLOR_CONTEXT, D2D1_PROPERTY_TYPE_ENUM, D2D1_PROPERTY_TYPE_FLOAT,
+    D2D1_WHITELEVELADJUSTMENT_PROP_INPUT_WHITE_LEVEL,
     D2D1_WHITELEVELADJUSTMENT_PROP_OUTPUT_WHITE_LEVEL, D2D1CreateFactory, ID2D1Bitmap1,
     ID2D1ColorContext, ID2D1DeviceContext, ID2D1Effect, ID2D1Factory1, ID2D1Image,
 };
@@ -139,10 +140,23 @@ impl Renderer {
             unsafe { d2d_context.CreateColorContext(D2D1_COLOR_SPACE_SCRGB, None) }.ok();
         let color_management_effect = scrgb_color_context.as_ref().and_then(|destination| {
             let effect = unsafe { d2d_context.CreateEffect(&CLSID_D2D1ColorManagement) }.ok()?;
+            // 품질 BEST 필수 — 부동소수점 정밀도·scRGB 색공간 지원 조건. 기본(NORMAL)이면
+            // scRGB 변환이 적용되지 않아 이중 감마 인코딩(실기 washed-out, 2026-07-11 확인)
+            unsafe {
+                effect.SetValue(
+                    D2D1_COLORMANAGEMENT_PROP_QUALITY.0 as u32,
+                    D2D1_PROPERTY_TYPE_ENUM,
+                    &D2D1_COLORMANAGEMENT_QUALITY_BEST.0.to_ne_bytes(),
+                )
+            }
+            .ok()?;
+            // 색 컨텍스트 프로퍼티 타입은 COLOR_CONTEXT — IUNKNOWN으로 지정하면 타입
+            // 불일치로 SetValue가 실패해 체인 전체가 폴백된다 (실기 washed-out의 원인,
+            // 2026-07-11 확인)
             unsafe {
                 effect.SetValue(
                     D2D1_COLORMANAGEMENT_PROP_DESTINATION_COLOR_CONTEXT.0 as u32,
-                    D2D1_PROPERTY_TYPE_IUNKNOWN,
+                    D2D1_PROPERTY_TYPE_COLOR_CONTEXT,
                     &interface_property_bytes(destination),
                 )
             }
@@ -304,7 +318,7 @@ impl Renderer {
         let wired = unsafe {
             color_management.SetValue(
                 D2D1_COLORMANAGEMENT_PROP_SOURCE_COLOR_CONTEXT.0 as u32,
-                D2D1_PROPERTY_TYPE_IUNKNOWN,
+                D2D1_PROPERTY_TYPE_COLOR_CONTEXT,
                 &interface_property_bytes(source_context),
             )
         }
