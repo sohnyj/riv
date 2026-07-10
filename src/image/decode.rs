@@ -6,8 +6,9 @@
 
 use std::cell::RefCell;
 use std::fs::File;
-use std::io::Read;
+use std::io::{BufReader, Read};
 use std::path::Path;
+use std::sync::OnceLock;
 
 use windows::Win32::Foundation::{GENERIC_READ, WINCODEC_ERR_COMPONENTNOTFOUND};
 use windows::Win32::Graphics::Imaging::{
@@ -90,6 +91,10 @@ enum Adapter {
     Wic,
     /// WIC + RAW 2단계 로드: 임베디드 프리뷰 먼저 표시 (SPEC §4.1)
     WicRawTwoStage,
+    /// APNG — WIC PNG는 단일 프레임만, acTL 프로빙으로 분기 (`png` crate)
+    Apng,
+    /// SVG/SVGZ — WIC 완전 미지원, 최대 모니터 긴 변으로 래스터화 (`resvg`, SPEC §4.2)
+    Svg,
 }
 
 pub struct FormatDescriptor {
@@ -122,7 +127,15 @@ static REGISTRY: &[FormatDescriptor] = &[
         extensions: &["apng"],
         magic: &[],
         semantics: FrameSemantics::Animation,
-        adapter: Adapter::Wic,
+        adapter: Adapter::Apng,
+        store_extension: None,
+    },
+    FormatDescriptor {
+        name: "SVG",
+        extensions: &["svg", "svgz"],
+        magic: &[&[(0, b"<svg")], &[(0, b"<?xml")]],
+        semantics: FrameSemantics::Single,
+        adapter: Adapter::Svg,
         store_extension: None,
     },
     FormatDescriptor {
@@ -326,15 +339,21 @@ pub fn decode_file(path: &Path) -> Result<DecodedImage, DecodeError> {
     // 레지스트리 미등록 포맷도 WIC 내용 판별에 맡긴다
     let format_name = descriptor.map_or("Unknown", |descriptor| descriptor.name);
     let semantics = descriptor.map_or(&FrameSemantics::Single, |descriptor| &descriptor.semantics);
-    decode_with_wic(path, format_name, semantics).map_err(|mut error| {
-        // WIC 확장 부재 → 에러 오버레이에 설치 안내 문구 (SPEC §10 — 링크 없음)
-        if error.code == WINCODEC_ERR_COMPONENTNOTFOUND.0
-            && let Some(descriptor) = descriptor
-        {
-            error.store_extension = descriptor.store_extension;
-        }
-        error
-    })
+    let adapter = descriptor.map_or(&Adapter::Wic, |descriptor| &descriptor.adapter);
+    match adapter {
+        Adapter::Wic | Adapter::WicRawTwoStage => decode_with_wic(path, format_name, semantics)
+            .map_err(|mut error| {
+                // WIC 확장 부재 → 에러 오버레이에 설치 안내 문구 (SPEC §10 — 링크 없음)
+                if error.code == WINCODEC_ERR_COMPONENTNOTFOUND.0
+                    && let Some(descriptor) = descriptor
+                {
+                    error.store_extension = descriptor.store_extension;
+                }
+                error
+            }),
+        Adapter::Apng => decode_apng(path, format_name),
+        Adapter::Svg => decode_svg(path, format_name),
+    }
 }
 
 /// RAW 2단계 로드 대상 여부 — 워커가 프리뷰 → 풀 디코드 순차 수행 (SPEC §4.1)
@@ -743,6 +762,267 @@ fn source_size(source: &IWICBitmapSource) -> windows::core::Result<(u32, u32)> {
     let (mut width, mut height) = (0u32, 0u32);
     unsafe { source.GetSize(&mut width, &mut height)? };
     Ok((width, height))
+}
+
+// ── 내장 fallback 디코더 (PORTING_PLAN §5 — WIC 완전 미지원 포맷 전담) ────────
+
+/// fallback 디코더 오류 — Win32 HRESULT가 없는 경로 (코드 0)
+fn fallback_error(message: impl std::fmt::Display) -> DecodeError {
+    DecodeError {
+        code: 0,
+        message: message.to_string(),
+        store_extension: None,
+    }
+}
+
+/// APNG (`png` crate — fdeflate, PORTING_PLAN §5). 프레임을 fcTL의 blend/dispose
+/// 규칙으로 캔버스에 합성해 완성 프레임 목록을 만든다 (GIF 합성과 동일 모델).
+fn decode_apng(path: &Path, format_name: &'static str) -> Result<DecodedImage, DecodeError> {
+    let file = File::open(path).map_err(fallback_error)?;
+    let mut decoder = png::Decoder::new(BufReader::new(file));
+    // 8비트 RGB(A)로 정규화 — 팔레트·고심도·그레이 확장
+    decoder.set_transformations(png::Transformations::normalize_to_color8());
+    let mut reader = decoder.read_info().map_err(fallback_error)?;
+
+    let (canvas_width, canvas_height) = {
+        let information = reader.info();
+        (information.width, information.height)
+    };
+    let animation_frame_count = reader
+        .info()
+        .animation_control
+        .map_or(1, |control| control.num_frames);
+    // acTL은 있지만 IDAT 앞에 fcTL이 없으면 IDAT는 애니메이션 밖의 기본 이미지
+    let default_image_is_first_frame = reader.info().frame_control.is_some();
+    let has_animation = reader.info().animation_control.is_some();
+
+    let buffer_size = reader
+        .output_buffer_size()
+        .ok_or_else(|| fallback_error("APNG output buffer size overflow"))?;
+    let mut buffer = vec![0u8; buffer_size];
+
+    // 기본 이미지가 애니메이션 밖이면 디코드 후 폐기 (APNG 사양)
+    if has_animation && !default_image_is_first_frame {
+        reader.next_frame(&mut buffer).map_err(fallback_error)?;
+    }
+
+    let mut canvas = vec![0u8; canvas_width as usize * canvas_height as usize * 4];
+    let mut frames = Vec::with_capacity(animation_frame_count as usize);
+    for index in 0..animation_frame_count {
+        // 첫 프레임이 IDAT면 fcTL이 이미 읽혀 있다 — 이후 프레임은 next_frame_info로 전진
+        if !(index == 0 && (default_image_is_first_frame || !has_animation)) {
+            reader.next_frame_info().map_err(fallback_error)?;
+        }
+        // 비-APNG 단일 프레임(fcTL 부재)은 전체 캔버스 Source 교체로 처리
+        let frame_control = reader.info().frame_control.unwrap_or(png::FrameControl {
+            width: canvas_width,
+            height: canvas_height,
+            blend_op: png::BlendOp::Source,
+            ..Default::default()
+        });
+        let output = reader.next_frame(&mut buffer).map_err(fallback_error)?;
+        let region_pixels = pixels_to_premultiplied_bgra(
+            &buffer[..output.buffer_size()],
+            output.color_type,
+            frame_control.width,
+            frame_control.height,
+        )?;
+
+        let restore_previous =
+            (frame_control.dispose_op == png::DisposeOp::Previous).then(|| canvas.clone());
+        if frame_control.blend_op == png::BlendOp::Source {
+            copy_rectangle(
+                &mut canvas,
+                canvas_width,
+                canvas_height,
+                &region_pixels,
+                frame_control.width,
+                frame_control.height,
+                frame_control.x_offset,
+                frame_control.y_offset,
+            );
+        } else {
+            blend_over(
+                &mut canvas,
+                canvas_width,
+                canvas_height,
+                &region_pixels,
+                frame_control.width,
+                frame_control.height,
+                frame_control.x_offset,
+                frame_control.y_offset,
+            );
+        }
+        let delay_denominator = if frame_control.delay_den == 0 {
+            100
+        } else {
+            u32::from(frame_control.delay_den)
+        };
+        frames.push(Frame {
+            pixels: canvas.clone(),
+            delay_milliseconds: (u32::from(frame_control.delay_num) * 1000 / delay_denominator)
+                .max(10),
+        });
+        match (frame_control.dispose_op, restore_previous) {
+            (png::DisposeOp::Background, _) => clear_rectangle(
+                &mut canvas,
+                canvas_width,
+                frame_control.x_offset,
+                frame_control.y_offset,
+                frame_control.width,
+                frame_control.height,
+            ),
+            (png::DisposeOp::Previous, Some(previous)) => canvas = previous,
+            _ => {}
+        }
+    }
+    Ok(DecodedImage {
+        width: canvas_width,
+        height: canvas_height,
+        pixel_width: canvas_width,
+        pixel_height: canvas_height,
+        format_name,
+        frames,
+    })
+}
+
+/// 정규화된 PNG 출력(RGB8/RGBA8) → premultiplied BGRA8
+fn pixels_to_premultiplied_bgra(
+    pixels: &[u8],
+    color_type: png::ColorType,
+    width: u32,
+    height: u32,
+) -> Result<Vec<u8>, DecodeError> {
+    let pixel_count = width as usize * height as usize;
+    let mut output = Vec::with_capacity(pixel_count * 4);
+    match color_type {
+        png::ColorType::Rgba => {
+            for pixel in pixels[..pixel_count * 4].chunks_exact(4) {
+                let alpha = u16::from(pixel[3]);
+                output.push((u16::from(pixel[2]) * alpha / 255) as u8);
+                output.push((u16::from(pixel[1]) * alpha / 255) as u8);
+                output.push((u16::from(pixel[0]) * alpha / 255) as u8);
+                output.push(pixel[3]);
+            }
+        }
+        png::ColorType::Rgb => {
+            for pixel in pixels[..pixel_count * 3].chunks_exact(3) {
+                output.extend_from_slice(&[pixel[2], pixel[1], pixel[0], 255]);
+            }
+        }
+        other => {
+            return Err(fallback_error(format!(
+                "unsupported PNG color type after normalization: {other:?}"
+            )));
+        }
+    }
+    Ok(output)
+}
+
+/// blend_op Source — 사각형을 알파 포함 그대로 교체 (APNG 사양)
+#[expect(clippy::too_many_arguments)]
+fn copy_rectangle(
+    canvas: &mut [u8],
+    canvas_width: u32,
+    canvas_height: u32,
+    source: &[u8],
+    source_width: u32,
+    source_height: u32,
+    left: u32,
+    top: u32,
+) {
+    let visible_width = source_width.min(canvas_width.saturating_sub(left)) as usize;
+    let visible_height = source_height.min(canvas_height.saturating_sub(top)) as usize;
+    for row in 0..visible_height {
+        let source_start = row * source_width as usize * 4;
+        let canvas_start = ((top as usize + row) * canvas_width as usize + left as usize) * 4;
+        canvas[canvas_start..canvas_start + visible_width * 4]
+            .copy_from_slice(&source[source_start..source_start + visible_width * 4]);
+    }
+}
+
+/// SVG/SVGZ (`resvg` — PORTING_PLAN §5). 가장 큰 모니터의 긴 변 해상도로
+/// 래스터화해 확대 여유를 확보한다 (SPEC §4.2). SVGZ(gzip)는 usvg가 판별.
+fn decode_svg(path: &Path, format_name: &'static str) -> Result<DecodedImage, DecodeError> {
+    let data = std::fs::read(path).map_err(fallback_error)?;
+    let options = resvg::usvg::Options {
+        fontdb: font_database().clone(),
+        ..Default::default()
+    };
+    let tree = resvg::usvg::Tree::from_data(&data, &options).map_err(fallback_error)?;
+    let size = tree.size();
+    if !(size.width() > 0.0 && size.height() > 0.0) {
+        return Err(fallback_error("SVG has no intrinsic size"));
+    }
+    let target = largest_monitor_long_side().min(MAXIMUM_TEXTURE_DIMENSION) as f32;
+    let scale = target / size.width().max(size.height());
+    let pixel_width = (size.width() * scale).round().max(1.0) as u32;
+    let pixel_height = (size.height() * scale).round().max(1.0) as u32;
+    let mut pixmap = resvg::tiny_skia::Pixmap::new(pixel_width, pixel_height)
+        .ok_or_else(|| fallback_error("SVG raster target allocation failed"))?;
+    resvg::render(
+        &tree,
+        resvg::tiny_skia::Transform::from_scale(scale, scale),
+        &mut pixmap.as_mut(),
+    );
+    // tiny-skia 픽스맵 = premultiplied RGBA → BGRA 스왑
+    let mut pixels = pixmap.take();
+    for pixel in pixels.chunks_exact_mut(4) {
+        pixel.swap(0, 2);
+    }
+    Ok(DecodedImage {
+        width: pixel_width,
+        height: pixel_height,
+        pixel_width,
+        pixel_height,
+        format_name,
+        frames: vec![Frame {
+            pixels,
+            delay_milliseconds: 0,
+        }],
+    })
+}
+
+/// SVG 텍스트용 폰트 데이터베이스 — 시스템 폰트 로드는 1회 (프로세스 수명)
+fn font_database() -> &'static std::sync::Arc<resvg::usvg::fontdb::Database> {
+    static DATABASE: OnceLock<std::sync::Arc<resvg::usvg::fontdb::Database>> = OnceLock::new();
+    DATABASE.get_or_init(|| {
+        let mut database = resvg::usvg::fontdb::Database::new();
+        database.load_system_fonts();
+        std::sync::Arc::new(database)
+    })
+}
+
+/// 가장 큰 모니터의 긴 변(물리 픽셀) — SVG 래스터화 목표 해상도 (SPEC §4.2)
+fn largest_monitor_long_side() -> u32 {
+    use windows::Win32::Foundation::{LPARAM, RECT};
+    use windows::Win32::Graphics::Gdi::{EnumDisplayMonitors, HDC, HMONITOR};
+    use windows::core::BOOL;
+
+    extern "system" fn monitor_callback(
+        _monitor: HMONITOR,
+        _device_context: HDC,
+        bounds: *mut RECT,
+        state: LPARAM,
+    ) -> BOOL {
+        let longest = unsafe { &mut *(state.0 as *mut i32) };
+        let bounds = unsafe { &*bounds };
+        *longest = (*longest)
+            .max(bounds.right - bounds.left)
+            .max(bounds.bottom - bounds.top);
+        true.into()
+    }
+
+    let mut longest = 0i32;
+    let _ = unsafe {
+        EnumDisplayMonitors(
+            None,
+            None,
+            Some(monitor_callback),
+            LPARAM(&raw mut longest as isize),
+        )
+    };
+    if longest > 0 { longest as u32 } else { 1920 }
 }
 
 fn copy_pixels(
