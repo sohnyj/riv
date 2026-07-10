@@ -5,9 +5,18 @@
 #[derive(Clone, Copy, PartialEq, Eq)]
 pub enum FitMode {
     Width,
-    // R3 설정 연동 시 사용 — 연동 후 expect가 불필요 경고로 알려준다
-    #[expect(dead_code)]
     Height,
+}
+
+impl FitMode {
+    /// 설정값 `fitmode` → 축, 범위 밖은 기본(Width)
+    pub fn from_setting(value: u32) -> Self {
+        if value == 1 {
+            Self::Height
+        } else {
+            Self::Width
+        }
+    }
 }
 
 /// 논리 줌 한계 — 10% ~ 500%, 초과 요청은 무시 (SPEC §3.2)

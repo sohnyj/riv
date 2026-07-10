@@ -21,30 +21,48 @@ use super::decode::{self, DecodeError, DecodedImage};
 /// 디코드 완료 통지 — lparam = Box<DecodeCompletion> 포인터 (PORTING_PLAN §2)
 pub const WM_APP_DECODE_COMPLETE: u32 = WM_APP + 1;
 
-// ── 설정 기본값 (설정 모듈 연동은 R3 — SPEC §8.2) ──────────────────────────
-const SORT_MODE: SortMode = SortMode::Name;
-const SORT_DESCENDING: bool = false;
 /// 프리로드 모드 0/1/2 → (거리, 예산 바이트) (SPEC §4.5)
-const PRELOADING_MODE: usize = 1;
 const PRELOAD_SPECIFICATIONS: [(usize, u64); 3] =
     [(0, 0), (1, 250 * 1024 * 1024), (4, 2 * 1024 * 1024 * 1024)];
-const LOOP_FOLDERS_ENABLED: bool = true;
-const SKIP_HIDDEN: bool = true;
-const ALLOW_MIME_CONTENT_DETECTION: bool = false;
 
 /// 목록 신선도 — 마지막 수집 3초 경과 시 이동 전 재수집 (SPEC §4.3)
 const FOLDER_LIST_FRESHNESS: Duration = Duration::from_secs(3);
 
-/// 정렬 모드 (SPEC §4.3) — 미사용 변형은 R3 설정 연동 시 선택 가능해진다
+/// ImageCore가 소비하는 옵션 부분집합 — 설정 브로드캐스트로 갱신 (SPEC §8.2)
+#[derive(Clone, PartialEq)]
+pub struct CoreOptions {
+    pub sort_mode: SortMode,
+    pub sort_descending: bool,
+    /// 0=off / 1=인접 / 2=확장 (SPEC §4.5)
+    pub preloading_mode: usize,
+    pub loop_folders_enabled: bool,
+    pub skip_hidden: bool,
+    pub allow_mime_content_detection: bool,
+}
+
+/// 정렬 모드 (SPEC §4.3)
 #[derive(Clone, Copy, PartialEq, Eq)]
-#[expect(dead_code)]
-enum SortMode {
+pub enum SortMode {
     Name,
     Modified,
     Created,
     Size,
     Type,
     Random,
+}
+
+impl SortMode {
+    /// 설정값 `sortmode`(0~5) → 모드, 범위 밖은 기본(이름)
+    pub fn from_setting(value: u32) -> Self {
+        match value {
+            1 => Self::Modified,
+            2 => Self::Created,
+            3 => Self::Size,
+            4 => Self::Type,
+            5 => Self::Random,
+            _ => Self::Name,
+        }
+    }
 }
 
 #[derive(Clone, Copy, PartialEq, Eq)]
@@ -83,6 +101,7 @@ struct CacheEntry {
 
 pub struct ImageCore {
     pool: DecodePool,
+    options: CoreOptions,
     folder_directory: Option<PathBuf>,
     entries: Vec<FolderEntry>,
     folder_scanned_at: Option<Instant>,
@@ -99,9 +118,10 @@ pub struct ImageCore {
 }
 
 impl ImageCore {
-    pub fn new(window: HWND) -> Self {
+    pub fn new(window: HWND, options: CoreOptions) -> Self {
         Self {
             pool: DecodePool::new(window.0 as isize),
+            options,
             folder_directory: None,
             entries: Vec::new(),
             folder_scanned_at: None,
@@ -111,6 +131,48 @@ impl ImageCore {
             current: None,
             load_error: None,
         }
+    }
+
+    /// 설정 브로드캐스트 수신 (SPEC §8.2) — 정렬 변경이면 재수집, 프리로드 변경이면
+    /// 예산 재적용. 현재 표시 이미지는 흐트러뜨리지 않는다 (§2 핵심 계약).
+    pub fn update_options(&mut self, options: CoreOptions) {
+        if options == self.options {
+            return;
+        }
+        let list_affected = options.sort_mode != self.options.sort_mode
+            || options.sort_descending != self.options.sort_descending
+            || options.skip_hidden != self.options.skip_hidden
+            || options.allow_mime_content_detection != self.options.allow_mime_content_detection;
+        self.options = options;
+        if list_affected && let Some(directory) = self.folder_directory.clone() {
+            self.rescan_folder(&directory);
+        }
+        self.preload_neighbors();
+    }
+
+    pub fn has_folder_entries(&self) -> bool {
+        !self.entries.is_empty()
+    }
+
+    /// 표시 대기 중 로드 존재 여부 — 지연 첫 표시 판단용 (SPEC §6.1)
+    pub fn is_load_pending(&self) -> bool {
+        self.pending_display.is_some()
+    }
+
+    /// Reload File — 캐시 무효화 후 현재 파일 재로드 (SPEC §5.1 reloadfile)
+    pub fn reload_current(&mut self) -> bool {
+        let Some(path) = self
+            .pending_display
+            .clone()
+            .or_else(|| self.current.as_ref().map(|current| current.path.clone()))
+        else {
+            return false;
+        };
+        self.cache.remove(&path);
+        if let Some(directory) = self.folder_directory.clone() {
+            self.rescan_folder(&directory);
+        }
+        self.load_file(&path)
     }
 
     /// 경로 인자·탐색 공용 진입 — 디렉터리면 목록 구성 후 첫 파일 (SPEC §4.1).
@@ -255,8 +317,29 @@ impl ImageCore {
     // ── 폴더 목록 (SPEC §4.3) ───────────────────────────────────────────────
 
     fn rescan_folder(&mut self, directory: &Path) {
-        let mut entries = scan_folder(directory);
-        sort_entries(&mut entries);
+        // 랜덤 정렬은 폴더가 바뀔 때만 재셔플 (SPEC §4.3) — 같은 폴더 재수집이면
+        // 기존 순서 보존(신규 파일은 뒤)
+        let preserved_order: HashMap<PathBuf, usize> = if self.options.sort_mode == SortMode::Random
+            && self.folder_directory.as_deref() == Some(directory)
+        {
+            self.entries
+                .iter()
+                .enumerate()
+                .map(|(index, entry)| (entry.path.clone(), index))
+                .collect()
+        } else {
+            HashMap::new()
+        };
+        let mut entries = scan_folder(directory, &self.options);
+        sort_entries(&mut entries, &self.options);
+        if !preserved_order.is_empty() {
+            entries.sort_by_key(|entry| {
+                preserved_order
+                    .get(&entry.path)
+                    .copied()
+                    .unwrap_or(usize::MAX)
+            });
+        }
         self.entries = entries;
         self.folder_directory = Some(directory.to_path_buf());
         self.folder_scanned_at = Some(Instant::now());
@@ -314,7 +397,7 @@ impl ImageCore {
         let mut index = start;
         for _ in 0..length {
             index += direction;
-            if LOOP_FOLDERS_ENABLED {
+            if self.options.loop_folders_enabled {
                 index = index.rem_euclid(length);
             } else if !(0..length).contains(&index) {
                 return None; // 끝에서 정지 (SPEC §4.4)
@@ -330,7 +413,7 @@ impl ImageCore {
     // ── 프리로드 캐시 (SPEC §4.5 — 예산·해제는 mpv demux 정책 참고) ─────────
 
     fn preload_neighbors(&mut self) {
-        let (distance, budget) = PRELOAD_SPECIFICATIONS[PRELOADING_MODE];
+        let (distance, budget) = PRELOAD_SPECIFICATIONS[self.options.preloading_mode.min(2)];
         if distance == 0 {
             self.cache.clear(); // 모드 0 = off: 캐시 비움
             return;
@@ -345,7 +428,12 @@ impl ImageCore {
             for step in 1..=distance {
                 for direction in [1isize, -1] {
                     let offset = step as isize * direction;
-                    let Some(index) = neighbor_index(current_index, offset, length) else {
+                    let Some(index) = neighbor_index(
+                        current_index,
+                        offset,
+                        length,
+                        self.options.loop_folders_enabled,
+                    ) else {
                         continue;
                     };
                     let entry = &self.entries[index];
@@ -374,7 +462,7 @@ impl ImageCore {
 
     /// 예산 초과 시 현재 위치에서 링 거리가 먼 항목부터 해제
     fn evict_cache(&mut self) {
-        let (_, budget) = PRELOAD_SPECIFICATIONS[PRELOADING_MODE];
+        let (_, budget) = PRELOAD_SPECIFICATIONS[self.options.preloading_mode.min(2)];
         let mut total: u64 = self
             .cache
             .values()
@@ -388,6 +476,7 @@ impl ImageCore {
             .as_ref()
             .and_then(|current| self.position_of(&current.path));
         let length = self.entries.len();
+        let loop_enabled = self.options.loop_folders_enabled;
         let mut ranked: Vec<(PathBuf, u64, usize)> = self
             .cache
             .iter()
@@ -396,7 +485,7 @@ impl ImageCore {
                     .position_of(path)
                     .zip(current_index)
                     .map_or(usize::MAX, |(index, current)| {
-                        ring_distance(index, current, length)
+                        ring_distance(index, current, length, loop_enabled)
                     });
                 (path.clone(), entry.image.pixel_bytes() as u64, distance)
             })
@@ -414,12 +503,17 @@ impl ImageCore {
 }
 
 /// 순환 설정 반영 이웃 인덱스 (SPEC §4.5 — 루프 켜짐이면 랩어라운드)
-fn neighbor_index(current: usize, offset: isize, length: usize) -> Option<usize> {
+fn neighbor_index(
+    current: usize,
+    offset: isize,
+    length: usize,
+    loop_enabled: bool,
+) -> Option<usize> {
     if length == 0 {
         return None;
     }
     let index = current as isize + offset;
-    if LOOP_FOLDERS_ENABLED {
+    if loop_enabled {
         let wrapped = index.rem_euclid(length as isize) as usize;
         (wrapped != current).then_some(wrapped)
     } else {
@@ -429,9 +523,9 @@ fn neighbor_index(current: usize, offset: isize, length: usize) -> Option<usize>
     }
 }
 
-fn ring_distance(a: usize, b: usize, length: usize) -> usize {
+fn ring_distance(a: usize, b: usize, length: usize, loop_enabled: bool) -> usize {
     let direct = a.abs_diff(b);
-    if LOOP_FOLDERS_ENABLED && length > 0 {
+    if loop_enabled && length > 0 {
         direct.min(length - direct)
     } else {
         direct
@@ -448,7 +542,7 @@ fn paths_equal(a: &Path, b: &Path) -> bool {
 
 // ── 폴더 스캔·정렬 (SPEC §4.3) ──────────────────────────────────────────────
 
-fn scan_folder(directory: &Path) -> Vec<FolderEntry> {
+fn scan_folder(directory: &Path, options: &CoreOptions) -> Vec<FolderEntry> {
     let Ok(reader) = std::fs::read_dir(directory) else {
         return Vec::new();
     };
@@ -460,7 +554,7 @@ fn scan_folder(directory: &Path) -> Vec<FolderEntry> {
         if !metadata.is_file() {
             continue;
         }
-        if SKIP_HIDDEN && metadata.file_attributes() & FILE_ATTRIBUTE_HIDDEN.0 != 0 {
+        if options.skip_hidden && metadata.file_attributes() & FILE_ATTRIBUTE_HIDDEN.0 != 0 {
             continue;
         }
         let file_name = entry.file_name();
@@ -473,7 +567,8 @@ fn scan_folder(directory: &Path) -> Vec<FolderEntry> {
             .map(|extension| extension.to_string_lossy().to_lowercase())
             .is_some_and(|extension| decode::is_supported_extension(&extension));
         let included = extension_matched
-            || (ALLOW_MIME_CONTENT_DETECTION && decode::probe_file(&entry.path()).is_some());
+            || (options.allow_mime_content_detection
+                && decode::probe_file(&entry.path()).is_some());
         if !included {
             continue;
         }
@@ -489,8 +584,8 @@ fn scan_folder(directory: &Path) -> Vec<FolderEntry> {
     entries
 }
 
-fn sort_entries(entries: &mut [FolderEntry]) {
-    match SORT_MODE {
+fn sort_entries(entries: &mut [FolderEntry], options: &CoreOptions) {
+    match options.sort_mode {
         SortMode::Name => entries.sort_by(compare_natural_names),
         SortMode::Modified => {
             entries.sort_by(|a, b| {
@@ -514,10 +609,10 @@ fn sort_entries(entries: &mut [FolderEntry]) {
                 .cmp(format_name_of(&b.path))
                 .then(compare_natural_names(a, b))
         }),
-        // 랜덤은 폴더가 바뀔 때만 재셔플 — 스캔 시점 1회 (SPEC §4.3)
+        // 랜덤 재셔플 규칙(폴더 변경 시에만, SPEC §4.3)은 rescan_folder가 순서 보존으로 처리
         SortMode::Random => shuffle(entries),
     }
-    if SORT_DESCENDING && SORT_MODE != SortMode::Random {
+    if options.sort_descending && options.sort_mode != SortMode::Random {
         entries.reverse();
     }
 }
