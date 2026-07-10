@@ -90,11 +90,9 @@ configure_and_install libdeflate \
     -DLIBDEFLATE_BUILD_TESTS=OFF
 
 # ── OpenEXR — EXR 전담 (SPEC §10, 성능 우선 2026-07-10) ────────────────────────
+# qView(mingw)의 win32-semaphore 패치는 불채택(2026-07-11): clang-cl(MSVC 타깃)은
+# 원 조건식(WIN32 AND NOT MINGW)이 이미 Win32 세마포어 분기를 탄다 — 무패치 빌드로 확인
 clone openexr https://github.com/AcademySoftwareFoundation/openexr.git release
-if ! git -C sources/openexr apply --reverse --check \
-    "$ROOT/patches/openexr-0001-mingw-win32-semaphore.patch" 2>/dev/null; then
-    git -C sources/openexr apply "$ROOT/patches/openexr-0001-mingw-win32-semaphore.patch"
-fi
 configure_and_install openexr \
     -DBUILD_TESTING=OFF \
     -DOPENEXR_BUILD_EXAMPLES=OFF \
