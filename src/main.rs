@@ -799,7 +799,14 @@ fn dispatch_action(application: &mut Application, window: HWND, action: Action) 
         Action::ResetZoom => {
             let viewport = application.viewport(window);
             let image = application.image_size();
-            application.view_transform.toggle_zoom(viewport, image);
+            let anchor = if application.settings.options.cursor_zoom {
+                cursor_from_center(window)
+            } else {
+                None
+            };
+            application
+                .view_transform
+                .toggle_zoom(anchor, viewport, image);
             let pill = if application.view_transform.fit_tracking {
                 "Fit"
             } else {

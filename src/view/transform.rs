@@ -132,13 +132,28 @@ impl ViewTransform {
         self.clamp_pan(viewport, image);
     }
 
-    /// Toggle Zoom — fit ↔ 1:1(=device_pixel_ratio) (SPEC §3.2)
-    pub fn toggle_zoom(&mut self, viewport: Size, image: Size) {
+    /// Toggle Zoom — fit ↔ 1:1(=device_pixel_ratio) (SPEC §3.2).
+    /// fit → 1:1이 확대 방향이면 `cursor_from_center` 앵커, 아니면 중앙 정렬.
+    /// 곱셈 줌이 아닌 직접 대입 — 1:1 정확도(DP7 픽셀 스냅)·논리 줌 한계 미적용.
+    pub fn toggle_zoom(
+        &mut self,
+        cursor_from_center: Option<(f32, f32)>,
+        viewport: Size,
+        image: Size,
+    ) {
         if self.fit_tracking {
+            let factor = self.device_pixel_ratio / self.fit_scale(viewport, image);
             self.scale = self.device_pixel_ratio;
             self.fit_tracking = false;
-            self.pan_offset_x = 0.0;
-            self.pan_offset_y = 0.0;
+            // 커서 아래 텍셀 고정 — fit의 팬은 (0,0)이므로 −cursor × (factor − 1)
+            let (pan_x, pan_y) = match cursor_from_center.filter(|_| factor > 1.0) {
+                Some((cursor_x, cursor_y)) => {
+                    (-cursor_x * (factor - 1.0), -cursor_y * (factor - 1.0))
+                }
+                None => (0.0, 0.0),
+            };
+            self.pan_offset_x = pan_x;
+            self.pan_offset_y = pan_y;
             self.clamp_pan(viewport, image);
         } else {
             self.refit(viewport, image);
