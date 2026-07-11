@@ -1,16 +1,16 @@
 <?xml version="1.0" encoding="UTF-8" standalone="yes"?>
 <assembly xmlns="urn:schemas-microsoft-com:asm.v1" manifestVersion="1.0">
-  <!-- version은 build.rs가 CARGO_PKG_VERSION으로 치환 (버전 단일 소스 = Cargo.toml) -->
+  <!-- build.rs substitutes the package version. -->
   <assemblyIdentity type="win32" name="riv" version="@VERSION@" processorArchitecture="amd64"/>
 
-  <!-- Windows 10/11 (Win11 전용 GUID는 없음 — Win10 GUID가 둘 다 커버) -->
+  <!-- Windows 10/11 (the Windows 10 GUID covers both). -->
   <compatibility xmlns="urn:schemas-microsoft-com:compatibility.v1">
     <application>
       <supportedOS Id="{8e0f7a12-bfb3-4fe8-b9a5-48fd50a15a9a}"/>
     </application>
   </compatibility>
 
-  <!-- user mode 전용: 권한 상승 요청 금지 (SPEC R3) -->
+  <!-- User mode only; never request elevation. -->
   <trustInfo xmlns="urn:schemas-microsoft-com:asm.v3">
     <security>
       <requestedPrivileges>
@@ -26,7 +26,7 @@
     </windowsSettings>
   </application>
 
-  <!-- comctl32 v6 (다이얼로그·TaskDialog 비주얼 스타일) -->
+  <!-- comctl32 v6 for dialog and TaskDialog visual styles. -->
   <dependency>
     <dependentAssembly>
       <assemblyIdentity type="win32" name="Microsoft.Windows.Common-Controls" version="6.0.0.0"

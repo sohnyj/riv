@@ -1,5 +1,4 @@
-//! 다이얼로그 리소스 ID — res/resource.h와 1:1 미러 (R6).
-//! 변경 시 반드시 양쪽을 함께 고칠 것.
+//! Dialog resource IDs; keep in sync with res/resource.h.
 
 pub const IDD_OPTIONS: u16 = 100;
 pub const IDD_PAGE_WINDOW: u16 = 110;

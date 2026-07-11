@@ -1,30 +1,18 @@
-//! JSON 설정 모듈 — exe와 같은 디렉토리의 `riv.json` (SPEC §8.1~8.2)
-//!
-//! 미설정 키는 기본값을 쓰고 **기본값은 파일에 쓰지 않는다**. recents·지오메트리·
-//! 바인딩 등 다른 절은 문서(Value)를 그대로 보존한다. 저장은 임시 파일 쓰기 후
-//! 원자 교체. 앱 재활성화 시 재로드해 외부 편집을 반영한다.
+//! JSON settings in riv.json next to the exe; defaults are never written.
 
 use std::path::PathBuf;
 
 use serde_json::{Map, Value};
 
-/// 옵션 스냅샷 — SPEC §8.2 전 항목. 로드 시 기본값으로 채워진다.
-/// 일부 필드는 R4~R7에서 소비 예정(항목별 주석 참조).
 #[derive(Clone, PartialEq)]
 pub struct Options {
     pub background_color_enabled: bool,
-    /// (R, G, B) — JSON에는 "#RRGGBB"
     pub background_color: (u8, u8, u8),
-    /// 0="riv" 고정 / 1=파일명 / 2="i/n - 파일명" (SPEC §6.1 — 타이틀 반영은 R7)
     pub title_bar_mode: u32,
     pub control_drag_window: bool,
-    /// 창 지오메트리 저장/복원 (R7)
     pub save_window_position: bool,
-    /// Scaling: 0=Nearest/1=Bilinear/2=Cubic/3=High Quality (SPEC §3.3)
     pub scaling_filter: u32,
-    /// fit 축: 0=Width/1=Height (SPEC §3.2)
     pub fit_mode: u32,
-    /// 줌 스텝(%) (SPEC §3.2)
     pub scale_factor_percent: u32,
     pub fractional_zoom: bool,
     pub cursor_zoom: bool,
@@ -32,15 +20,11 @@ pub struct Options {
     pub sort_descending: bool,
     pub preloading_mode: u32,
     pub loop_folders_enabled: bool,
-    /// 슬라이드쇼 (R4)
     pub slideshow_reversed: bool,
-    /// 정수 초 1~3600 (2026-07-11 — 소수 허용 폐기)
     pub slideshow_timer_seconds: u32,
-    /// 삭제 후 이동 (R4)
     pub after_delete: u32,
     pub ask_delete: bool,
     pub allow_mime_content_detection: bool,
-    /// 최근 파일 (R4)
     pub save_recents: bool,
     pub skip_hidden: bool,
 }
@@ -91,7 +75,7 @@ impl Options {
                 .and_then(Value::as_u64)
                 .map_or(fallback, |value| value as u32)
         };
-        // 인덱스형 설정 공용 검증 — 범위 밖 저장값은 기본값으로
+        // Out-of-range stored values fall back to the default.
         let bounded = |key: &str, maximum: u32, fallback: u32| {
             let value = unsigned(key, fallback);
             if value <= maximum { value } else { fallback }
@@ -130,12 +114,10 @@ impl Options {
     }
 }
 
-/// (R, G, B) → "#RRGGBB"
 fn format_hex_color((red, green, blue): (u8, u8, u8)) -> String {
     format!("#{red:02X}{green:02X}{blue:02X}")
 }
 
-/// "#RRGGBB" → (R, G, B)
 fn parse_hex_color(text: &str) -> Option<(u8, u8, u8)> {
     let digits = text.strip_prefix('#')?;
     if digits.len() != 6 {
@@ -147,8 +129,6 @@ fn parse_hex_color(text: &str) -> Option<(u8, u8, u8)> {
     Some((red, green, blue))
 }
 
-/// 설정 파일 쓰기 가능성 검증 (SPEC §8.1 fail-fast) — 프로브 파일 생성·삭제.
-/// 관리자 권한이 필요한 폴더(Program Files 등)면 false.
 pub fn probe_writable() -> bool {
     let probe = settings_path().with_extension("json.probe");
     match std::fs::write(&probe, b"") {
@@ -162,7 +142,6 @@ pub fn probe_writable() -> bool {
 
 pub struct SettingsFile {
     path: PathBuf,
-    /// 파일 문서 전체 — options 외 절(recents·지오메트리·바인딩) 보존용
     document: Value,
     pub options: Options,
 }
@@ -179,11 +158,8 @@ impl SettingsFile {
         }
     }
 
-    /// 앱 재활성화 시 재로드 — 외부 편집 반영 (SPEC §8.1).
-    /// 반환 = 옵션 변경 여부(변경 시 호출자가 브로드캐스트).
     pub fn reload(&mut self) -> bool {
         let mut document = read_document(&self.path);
-        // recents는 앱 소유 상태(외부 편집 대상 아님) — 디바운스 저장 전 유실 방지
         if let Some(recents) = self.document.get("recents").cloned()
             && let Some(object) = document.as_object_mut()
         {
@@ -199,7 +175,7 @@ impl SettingsFile {
         options_changed || bindings_changed
     }
 
-    /// 원자 저장 — 임시 파일 쓰기 후 교체(std::fs::rename = MoveFileExW REPLACE_EXISTING)
+    /// Atomic save: write a temp file, then rename over.
     pub fn save(&self) -> std::io::Result<()> {
         let serialized =
             serde_json::to_string_pretty(&self.document).map_err(std::io::Error::other)?;
@@ -208,17 +184,14 @@ impl SettingsFile {
         std::fs::rename(&temporary, &self.path)
     }
 
-    /// 사용자 재정의 키보드 바인딩: 액션명 → 키 시퀀스 문자열 목록 (SPEC §8.1)
     pub fn keyboard_bindings(&self) -> Option<&Map<String, Value>> {
         self.document.get("keyboardbindings")?.as_object()
     }
 
-    /// 사용자 재정의 마우스 바인딩: 액션명 → 마우스 인코딩 문자열 목록 (SPEC §8.1)
     pub fn mouse_bindings(&self) -> Option<&Map<String, Value>> {
         self.document.get("mousebindings")?.as_object()
     }
 
-    /// 옵션 값 기록 + 스냅샷 갱신 — 삭제 확인 "다시 묻지 않기" 등 (SPEC §6.4·§8.2)
     pub fn set_option_boolean(&mut self, key: &str, value: bool) {
         self.document
             .as_object_mut()
@@ -231,8 +204,6 @@ impl SettingsFile {
         self.options = Options::from_document(&self.document);
     }
 
-    /// 옵션 전 항목 기록 (R6 Apply) — 기본값과 같은 키는 제거해 "기본값은 파일에
-    /// 쓰지 않음"(SPEC §8.1)을 유지하고, 스냅샷을 갱신한다.
     pub fn set_options(&mut self, options: &Options) {
         let default = Options::default();
         let entries: [(&str, Value, Value); 21] = [
@@ -357,7 +328,6 @@ impl SettingsFile {
                 options_object.insert(key.to_string(), value);
             }
         }
-        // saverecents 해제 = recents 절 전체 제거 (2026-07-11 — lastFileDialogDir 포함)
         if !options.save_recents
             && let Some(document) = self.document.as_object_mut()
         {
@@ -366,8 +336,7 @@ impl SettingsFile {
         self.options = Options::from_document(&self.document);
     }
 
-    /// 바인딩 재정의 기록 (R6 Apply) — 각 액션의 확정 목록이 기본값과 같으면 키 제거,
-    /// 다르면 대체 목록 기록(빈 배열 = 바인딩 제거). 목록에 없는 키(recent0..9 등)는 보존.
+    /// Lists equal to the defaults are removed; unknown keys are preserved.
     pub fn set_binding_overrides(
         &mut self,
         keyboard: &[(String, Vec<String>)],
@@ -421,7 +390,6 @@ impl SettingsFile {
         }
     }
 
-    /// 창 지오메트리 (SPEC §6.1·§8.1 루트 windowgeometry) — (x, y, 너비, 높이, 최대화)
     pub fn window_geometry(&self) -> Option<(i32, i32, i32, i32, bool)> {
         let geometry = self.document.get("windowgeometry")?;
         let read = |key: &str| geometry.get(key)?.as_i64().map(|value| value as i32);
@@ -454,7 +422,6 @@ impl SettingsFile {
             );
     }
 
-    /// 옵션 다이얼로그 위치 (SPEC §8.1 루트 optionsgeometry) — (x, y)
     pub fn options_geometry(&self) -> Option<(i32, i32)> {
         let geometry = self.document.get("optionsgeometry")?;
         let read = |key: &str| geometry.get(key)?.as_i64().map(|value| value as i32);
@@ -471,7 +438,6 @@ impl SettingsFile {
             );
     }
 
-    /// 파일 열기 다이얼로그 마지막 디렉터리 (SPEC §6.4·§8.1 recents)
     pub fn last_file_dialog_directory(&self) -> Option<String> {
         self.document
             .get("recents")?
@@ -494,9 +460,6 @@ impl SettingsFile {
             );
     }
 
-    // ── 최근 파일 (SPEC §6.4 — 최대 10, 중복 제거, 부재 감사) ────────────────
-
-    /// (표시명, 경로) 목록 — recents.recentFiles
     pub fn recent_files(&self) -> Vec<(String, String)> {
         self.document
             .get("recents")
@@ -532,8 +495,6 @@ impl SettingsFile {
             .insert("recentFiles".to_string(), Value::Array(list));
     }
 
-    /// 표시 성공 시 호출 — 반환 = 변경 여부(디바운스 저장 트리거).
-    /// `saverecents` off면 수집하지 않고 목록을 비운다 (SPEC §6.4).
     pub fn add_recent_file(&mut self, path: &std::path::Path) -> bool {
         if !self.options.save_recents {
             return self.clear_recent_files();
@@ -557,7 +518,6 @@ impl SettingsFile {
         true
     }
 
-    /// 존재하지 않는 파일 자동 제거 — 메뉴 구성 시 감사 (SPEC §6.4)
     pub fn prune_recent_files(&mut self) -> bool {
         let files = self.recent_files();
         let pruned: Vec<(String, String)> = files
@@ -581,8 +541,6 @@ impl SettingsFile {
     }
 }
 
-/// exe와 같은 디렉토리의 riv.json (R4 — 별도 설정 디렉토리 없음).
-/// exe 경로 취득 실패는 현실적으로 불가 — 그 경우 작업 디렉토리 상대 경로.
 fn settings_path() -> PathBuf {
     std::env::current_exe()
         .ok()

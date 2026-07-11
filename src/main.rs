@@ -67,67 +67,43 @@ use windows::Win32::UI::WindowsAndMessaging::{
 };
 use windows::core::{PCWSTR, Result, w};
 
-// res/riv.rc의 아이콘 리소스 ID (MAKEINTRESOURCE — 정수 1을 포인터 슬롯에 싣는다)
+/// Icon resource id 1 in riv.rc (MAKEINTRESOURCE).
 const APPLICATION_ICON_ID: PCWSTR = PCWSTR(std::ptr::without_provenance(1));
 
-/// 무인자 실행 시 다음 이벤트 루프 턴에 빈 창 표시 (SPEC §6.1 지연 첫 표시)
 const WM_APP_SHOW_WINDOW: u32 = WM_APP + 2;
 
-/// 줌 필 1초 자동 숨김 (SPEC §3.6)
 const ZOOM_PILL_TIMER: usize = 2;
-/// 슬라이드쇼 간격 (SPEC §6.3)
 const SLIDESHOW_TIMER: usize = 3;
-/// 최근 파일 500ms 디바운스 저장 (SPEC §6.4)
 const RECENTS_SAVE_TIMER: usize = 4;
-/// Open With 목록 채우기 — 파일 변경 250ms 디바운스 (SPEC §6.4)
 const OPEN_WITH_TIMER: usize = 5;
-/// 애니메이션 프레임 예약 — 프레임 지연 × (100/speed)로 재예약 (SPEC §4.6)
 const ANIMATION_TIMER: usize = 6;
 
-/// 키보드/메뉴 팬 스텝 (디바이스 픽셀)
 const PAN_STEP: f32 = 64.0;
 
 struct Application {
     renderer: Renderer,
     view_transform: ViewTransform,
     image_core: ImageCore,
-    /// 현재 표시 이미지 — 디바이스 로스트 재구축 시 재업로드용
     display: Option<Arc<DecodedImage>>,
-    /// 마지막 적용 경로 — 같은 파일 재적용(RAW 프리뷰 → 풀 교체 등) 판별 (SPEC §4.1)
     displayed_path: Option<std::path::PathBuf>,
     settings: SettingsFile,
     bindings: Bindings,
-    /// 창 단위 휘발성 토글 — 파일 이동·전체화면 전환에도 절대 배율 유지 (SPEC §3.2)
     preserve_zoom: bool,
-    /// 전체화면 진입 전 창 상태 (DWM 보정은 R7)
     fullscreen_restore: Option<(WINDOWPLACEMENT, WINDOW_STYLE)>,
-    /// HDR 모드 SDR 백레벨 배율 — 모니터 이동·디스플레이 변경 시 재조회 (SPEC §7)
     sdr_white_boost: f32,
-    /// 팬 드래그 중 마지막 커서 위치 (클라이언트 좌표) (SPEC §5.4)
     pan_drag_position: Option<(i32, i32)>,
     pan_cursor: HCURSOR,
-    /// 휠 노치 누적 — 프랙셔널 줌 외 액션은 노치당 1회 (SPEC §5.3)
     wheel_notch_accumulator: i32,
-    /// 지연 첫 표시 (SPEC §6.1) — 첫 이미지(또는 실패) 후 show
     window_shown: bool,
-    /// 지오메트리 복원이 최대화 상태였음 — 첫 표시 시 SW_SHOWMAXIMIZED (SPEC §6.1)
     show_maximized: bool,
-    /// 진행 중 핀치 제스처의 직전 손가락 거리 (GID_ZOOM — SPEC §5.3)
     gesture_zoom_distance: Option<f32>,
-    /// 진행 중 팬 제스처의 직전 위치 (GID_PAN — 터치스크린 자연 팬)
     gesture_pan_point: Option<(i32, i32)>,
     overlay: Overlay,
-    /// Show File Info 토글 (SPEC §3.6 정보 오버레이)
     show_file_info: bool,
-    /// 줌 필 텍스트 — 1초 자동 숨김 (SPEC §3.6)
     zoom_pill_text: Option<String>,
-    /// 슬라이드쇼 상태 (SPEC §6.3)
     slideshow_active: bool,
-    /// 애니메이션 스케줄러 상태 — 프레임 수 > 1일 때만 (SPEC §4.6)
     animation: Option<Animation>,
-    /// 드롭 타깃 — 창 수명 동안 유지 (SPEC §5.4)
     drop_target: Option<IDropTarget>,
-    /// Open With 핸들러 목록 — 백그라운드 열거 결과, 파일 전환 시 폐기 (SPEC §6.4)
     open_with_list: Option<Box<OpenWithList>>,
 }
 
@@ -184,8 +160,7 @@ impl Application {
         Ok(application)
     }
 
-    /// 모니터 이동·디스플레이 설정 변경 시 색 상태 재조회 (SPEC §7 A안) —
-    /// HDR 모드가 바뀌면 스왑체인 모드 매칭을 위해 렌더러 재구축, 아니면 백레벨만 갱신
+    /// Rebuild the renderer when the monitor's HDR mode changes; else refresh the boost.
     fn refresh_display_color_state(&mut self, window: HWND) {
         if color::monitor_is_hdr(window) != self.renderer.hdr_mode() {
             self.sdr_white_boost = color::sdr_white_boost(window);
@@ -202,7 +177,6 @@ impl Application {
         }
     }
 
-    /// 클리어·오버레이 색 보정 인자 (A안) — HDR 타깃에서만 Some(선형화×백레벨)
     fn scrgb_boost(&self) -> Option<f32> {
         self.renderer.hdr_mode().then_some(self.sdr_white_boost)
     }
@@ -226,7 +200,6 @@ impl Application {
         }
     }
 
-    /// Scaling 설정 → D2D 보간 모드 (SPEC §3.3)
     fn interpolation_mode(&self) -> D2D1_INTERPOLATION_MODE {
         match self.settings.options.scaling_filter {
             0 => D2D1_INTERPOLATION_MODE_NEAREST_NEIGHBOR,
@@ -236,7 +209,6 @@ impl Application {
         }
     }
 
-    /// 배경색 — 설정 색 또는 시스템 창 배경색 (SPEC §3.1·§8.2)
     fn background_color(&self) -> D2D1_COLOR_F {
         let (red, green, blue) = if self.settings.options.background_color_enabled {
             self.settings.options.background_color
@@ -256,7 +228,6 @@ impl Application {
         }
     }
 
-    /// 지연 첫 표시 (SPEC §6.1) — 로드 실패해도 반드시 표시
     fn ensure_window_shown(&mut self, window: HWND) {
         if self.window_shown {
             return;
@@ -274,7 +245,6 @@ impl Application {
         };
     }
 
-    /// 시작 시 창 지오메트리 복원 (SPEC §6.1) — 숨김 유지(지연 첫 표시가 표시 담당)
     fn restore_window_geometry(&mut self, window: HWND) {
         if !self.settings.options.save_window_position {
             return;
@@ -297,7 +267,6 @@ impl Application {
         let _ = unsafe { SetWindowPlacement(window, &placement) };
     }
 
-    /// 종료 시 창 지오메트리 저장 (SPEC §6.1) — 전체화면 중이면 진입 전 상태를 저장
     fn save_window_geometry(&mut self, window: HWND) {
         if !self.settings.options.save_window_position {
             return;
@@ -322,7 +291,6 @@ impl Application {
         let _ = self.settings.save();
     }
 
-    /// 타이틀바 모드 (SPEC §6.1) — 0="riv" / 1=파일명 / 2="i/n - 파일명"
     fn update_window_title(&self, window: HWND) {
         let file_name = self.image_core.current.as_ref().and_then(|current| {
             current
@@ -342,8 +310,6 @@ impl Application {
         let _ = unsafe { SetWindowTextW(window, PCWSTR(wide.as_ptr())) };
     }
 
-    /// 새 현재 이미지 반영 — 회전·팬 리셋, Preserve Zoom이면 절대 배율 유지 (SPEC §3.2·§4.1).
-    /// 같은 파일 재적용(RAW 프리뷰 → 풀 교체·reload)이고 논리 크기가 같으면 변환 유지.
     fn apply_current_image(&mut self, window: HWND) {
         let Some(current) = &self.image_core.current else {
             return;
@@ -354,6 +320,7 @@ impl Application {
             displayed
                 .to_string_lossy()
                 .eq_ignore_ascii_case(&path.to_string_lossy())
+            // Same file at the same logical size (RAW preview swap, reload): keep the view.
         }) && self.display.as_ref().is_some_and(|previous| {
             previous.width == image.width && previous.height == image.height
         });
@@ -376,14 +343,11 @@ impl Application {
             transform.flipped = false;
             transform.pan_offset_x = 0.0;
             transform.pan_offset_y = 0.0;
-            // Preserve Zoom: 배율 유지·fit 재적용 안 함(팬만 리셋+클램프), 아니면 fit
             transform.fit_tracking = !self.preserve_zoom;
         }
         if upload.is_err() {
-            // 업로드 실패(디바이스 로스트 등) — 재구축 경로가 display에서 재업로드
             let _ = self.rebuild_renderer(window);
         }
-        // 애니메이션 검사·시작 (SPEC §4.1·§4.6) — 이전 파일 스케줄은 항상 폐기
         let _ = unsafe { KillTimer(Some(window), ANIMATION_TIMER) };
         self.animation = self
             .display
@@ -400,11 +364,9 @@ impl Application {
             };
         }
         if !same_view {
-            // 최근 파일 수집 — 500ms 디바운스 저장 (SPEC §6.4)
             if self.settings.add_recent_file(&path) {
                 unsafe { SetTimer(Some(window), RECENTS_SAVE_TIMER, 500, None) };
             }
-            // Open With 목록 갱신 — 파일 변경 250ms 디바운스 (SPEC §6.4)
             self.open_with_list = None;
             unsafe { SetTimer(Some(window), OPEN_WITH_TIMER, 250, None) };
         }
@@ -412,7 +374,6 @@ impl Application {
         self.render(window);
     }
 
-    /// 디코드 실패 반영 — 이미지 제거 + 에러 텍스트 (SPEC §3.6·§4.2)
     fn apply_load_error(&mut self, window: HWND) {
         let _ = unsafe { KillTimer(Some(window), ANIMATION_TIMER) };
         self.animation = None;
@@ -423,15 +384,13 @@ impl Application {
         self.render(window);
     }
 
-    /// 파일 이동·외부 로드 시작 — 재생 중 애니메이션 일시정지(프레임 동결, SPEC §4.6).
-    /// 비애니메이션 파일 핸들은 디코드 후 잡지 않으므로 별도 닫기 불필요.
+    /// Freeze a playing animation while a new load is in flight.
     fn freeze_animation_for_load(&mut self, window: HWND) {
         if self.animation.is_some() {
             let _ = unsafe { KillTimer(Some(window), ANIMATION_TIMER) };
         }
     }
 
-    /// 프레임 진행(타이머 틱·Next Frame 공용) — 업로드 후 재생 중이면 재예약 (SPEC §4.6)
     fn advance_animation_frame(&mut self, window: HWND) {
         let Some(animation) = self.animation.as_mut() else {
             let _ = unsafe { KillTimer(Some(window), ANIMATION_TIMER) };
@@ -459,13 +418,11 @@ impl Application {
         self.render(window);
     }
 
-    /// 줌 필 표시 + 1초 자동 숨김 타이머 (SPEC §3.6)
     fn show_zoom_pill(&mut self, window: HWND, text: String) {
         self.zoom_pill_text = Some(text);
         unsafe { SetTimer(Some(window), ZOOM_PILL_TIMER, 1000, None) };
     }
 
-    /// 슬라이드쇼 토글 (SPEC §6.3) — 상태 필 "Slideshow: Start/Stop" (SPEC §3.6)
     fn toggle_slideshow(&mut self, window: HWND) {
         if self.slideshow_active {
             self.cancel_slideshow(window);
@@ -478,8 +435,6 @@ impl Application {
         }
     }
 
-    /// 수동 파일 로드·드롭·폴더 끝(루프 off) 시 자동 취소 (SPEC §6.3) —
-    /// 자동 취소도 상태 필로 알림
     fn cancel_slideshow(&mut self, window: HWND) {
         if self.slideshow_active {
             let _ = unsafe { KillTimer(Some(window), SLIDESHOW_TIMER) };
@@ -489,7 +444,6 @@ impl Application {
         }
     }
 
-    /// 디바이스 로스트 시 전체 재구축 (SPEC §3.4)
     fn rebuild_renderer(&mut self, window: HWND) -> Result<()> {
         let (width, height) = client_size(window);
         let hdr_mode = color::monitor_is_hdr(window);
@@ -502,7 +456,6 @@ impl Application {
         )?;
         self.renderer.set_sdr_white_boost(self.sdr_white_boost);
         if let Some(image) = &self.display {
-            // 애니메이션 중이면 현재 프레임 유지
             let frame_index = self
                 .animation
                 .as_ref()
@@ -520,7 +473,6 @@ impl Application {
         Ok(())
     }
 
-    /// 오버레이 내용 스냅샷 조립 (SPEC §3.6)
     fn overlay_content(&self, background: D2D1_COLOR_F) -> OverlayContent {
         let error_text = self.image_core.load_error.as_ref().map(|(path, error)| {
             overlay::build_error_text(path, &error.message, error.code, error.store_extension)
@@ -538,7 +490,6 @@ impl Application {
         } else {
             None
         };
-        // perceived brightness > 0.5 → 검정 에러 텍스트 (SPEC §3.6)
         let brightness = 0.299 * background.r + 0.587 * background.g + 0.114 * background.b;
         OverlayContent {
             error_text,
@@ -561,7 +512,6 @@ impl Application {
         let interpolation = self.interpolation_mode();
         let background = self.background_color();
         let content = self.overlay_content(background);
-        // 클리어 색 = 타깃 모드 색 (SPEC §7 A안 — HDR=linear scRGB×백레벨, SDR=원값)
         let clear_color = color::output_color(background, self.scrgb_boost());
         let overlay = &self.overlay;
         let draw = |context: &_| overlay.draw(context, viewport.width, viewport.height, &content);
@@ -570,7 +520,7 @@ impl Application {
             .render(matrix, interpolation, clear_color, draw)
             .is_err()
         {
-            // 디바이스 로스트 — 재구축 후 1회 재시도
+            // Device lost: rebuild once and retry.
             if self.rebuild_renderer(window).is_ok() {
                 let overlay = &self.overlay;
                 let _ = self
@@ -582,7 +532,6 @@ impl Application {
         }
     }
 
-    /// 설정 변경 브로드캐스트 (SPEC §8.1~8.2, §2 핵심 계약 — 현재 줌/팬 불변)
     fn apply_options(&mut self, window: HWND) {
         self.bindings = Bindings::from_settings(
             self.settings.keyboard_bindings(),
@@ -595,7 +544,6 @@ impl Application {
         self.render(window);
     }
 
-    /// 활성화 게이트 (SPEC §5.1)
     fn gate_satisfied(&self, gate: ActivationGate) -> bool {
         match gate {
             ActivationGate::Window => true,
@@ -609,7 +557,6 @@ impl Application {
         }
     }
 
-    /// 곱셈 줌 공용 경로 — 커서가 뷰 위면 커서 앵커 (SPEC §3.2 커서 줌)
     fn zoom_by(&mut self, window: HWND, factor: f32) {
         let anchor = if self.settings.options.cursor_zoom {
             cursor_from_center(window)
@@ -619,7 +566,6 @@ impl Application {
         self.zoom_at(window, factor, anchor);
     }
 
-    /// 명시 앵커 줌 — 핀치 핫포인트(SPEC §5.3)·커서 앵커 공용. 앵커 = 중심 기준 오프셋
     fn zoom_at(&mut self, window: HWND, factor: f32, anchor: Option<(f32, f32)>) {
         let viewport = self.viewport(window);
         let image = self.image_size();
@@ -634,7 +580,6 @@ impl Application {
         self.render(window);
     }
 
-    /// 휠 줌 (SPEC §5.3) — 프랙셔널이면 스텝 × (델타/120), 아니면 노치 단위
     fn wheel_zoom(&mut self, window: HWND, wheel_delta: i16) {
         let step = 1.0 + self.settings.options.scale_factor_percent as f32 / 100.0;
         let exponent = if self.settings.options.fractional_zoom {
@@ -685,10 +630,7 @@ fn client_size(window: HWND) -> (u32, u32) {
     )
 }
 
-/// HdrToneMap 목표 휘도(nits) (SPEC §7 Q6) — HDR 모드는 모니터 최대(EDID,
-/// 부재 시 보수적 600 — 참조 뷰어 관례), SDR 모드는 **BT.2100 SDR 시청 조건 203
-/// 고정**: display-referred 백은 패널 EDID 최대와 무관(mpv target-peak 동일 규약,
-/// 실기 확인 2026-07-11)
+/// HDR: monitor peak (600 fallback); SDR: the 203-nit BT.2100 reference white.
 fn tone_map_target_luminance(window: HWND, hdr_mode: bool) -> f32 {
     if hdr_mode {
         color::display_maximum_luminance(window).unwrap_or(600.0)
@@ -697,7 +639,7 @@ fn tone_map_target_luminance(window: HWND, hdr_mode: bool) -> f32 {
     }
 }
 
-/// 커서가 뷰(클라이언트) 위에 있으면 중심 기준 오프셋 (SPEC §3.2 커서 앵커)
+/// Cursor offset from the client center while over the client area.
 fn cursor_from_center(window: HWND) -> Option<(f32, f32)> {
     let mut point = POINT::default();
     unsafe { GetCursorPos(&mut point) }.ok()?;
@@ -712,7 +654,6 @@ fn cursor_from_center(window: HWND) -> Option<(f32, f32)> {
     ))
 }
 
-/// 현재 눌린 수정자 (바인딩 인코딩과 동일 비트)
 fn current_modifiers() -> u8 {
     let pressed = |key: VIRTUAL_KEY| unsafe { GetKeyState(i32::from(key.0)) } < 0;
     let mut modifiers = 0u8;
@@ -731,21 +672,17 @@ fn current_modifiers() -> u8 {
     modifiers
 }
 
-/// 반환 = 이동 발생 여부 (슬라이드쇼 폴더 끝 취소 판단용)
 fn execute_navigation(
     application: &mut Application,
     window: HWND,
     command: NavigationCommand,
 ) -> bool {
     match application.image_core.navigate(command) {
-        // 캐시 히트 — 동기 표시 변경. 비동기 완료는 WM_APP_DECODE_COMPLETE에서 반영
         Some(true) => application.apply_current_image(window),
         Some(false) => {
             if application.image_core.load_error.is_some() {
-                // 동기 실패(파일 접근 불가 등) — 에러 텍스트 표시
                 application.apply_load_error(window);
             } else {
-                // 비동기 로드 시작 — 재생 중 애니메이션 동결 (SPEC §4.6)
                 application.freeze_animation_for_load(window);
             }
         }
@@ -754,7 +691,6 @@ fn execute_navigation(
     true
 }
 
-/// 외부 경로 열기(최근 파일·드롭·붙여넣기 공용) — 수동 로드 = 슬라이드쇼 취소 (SPEC §6.3)
 fn open_external_path(application: &mut Application, window: HWND, path: &Path) {
     application.cancel_slideshow(window);
     application.freeze_animation_for_load(window);
@@ -765,7 +701,7 @@ fn open_external_path(application: &mut Application, window: HWND, path: &Path) 
     }
 }
 
-/// 단일 디스패치 지점 (SPEC §5.1, §2 핵심 계약) — 모든 입력·메뉴가 여기로 수렴
+/// The single dispatch point; every input path converges here.
 fn dispatch_action(application: &mut Application, window: HWND, action: Action) {
     if !application.gate_satisfied(action.gate()) {
         return;
@@ -852,7 +788,6 @@ fn dispatch_action(application: &mut Application, window: HWND, action: Action) 
             let viewport = application.viewport(window);
             let image = application.image_size();
             application.view_transform.rotate(step, viewport, image);
-            // 회전 상태 필 (SPEC §3.6) — 0/R90/180°/L90 (270° = 왼쪽 90°로 표기)
             let text = match application.view_transform.rotation_quadrant {
                 1 => "Rotate: R90\u{b0}",
                 2 => "Rotate: 180\u{b0}",
@@ -889,7 +824,6 @@ fn dispatch_action(application: &mut Application, window: HWND, action: Action) 
         Action::Open => {
             let last_directory = application.settings.last_file_dialog_directory();
             let paths = open_dialog::show(window, last_directory.as_deref());
-            // 다중 선택: 첫 파일 현재 창, 나머지 = 새 창(새 프로세스) (SPEC §6.4)
             for rest in paths.iter().skip(1) {
                 open_in_new_window(rest);
             }
@@ -916,15 +850,12 @@ fn dispatch_action(application: &mut Application, window: HWND, action: Action) 
             rename_current_file(application, window);
         }
         Action::OpenWithOther => {
-            // "다른 앱 선택" — OS Open With 다이얼로그 (SPEC §6.4)
             if let Some(current) = &application.image_core.current {
                 let path = current.path.clone();
                 open_with::show_open_with_dialog(window, &path);
             }
         }
-        // OpenWith는 서브메뉴 컨테이너 — 항목 선택은 MenuSelection::OpenWithEntry 경로
         Action::OpenWith => {}
-        // 애니메이션 스케줄러 (SPEC §4.6) — 정지 이미지는 게이트가 차단
         Action::Pause => {
             if let Some(animation) = application.animation.as_mut() {
                 animation.paused = !animation.paused;
@@ -953,7 +884,6 @@ fn dispatch_action(application: &mut Application, window: HWND, action: Action) 
                 application.render(window);
             }
         }
-        // 옵션 다이얼로그 (SPEC §8.3) — Apply·OK는 WM_APP_OPTIONS_APPLIED로 수신
         Action::Options => {
             dialogs::options::show(window, &application.settings);
         }
@@ -963,7 +893,6 @@ fn dispatch_action(application: &mut Application, window: HWND, action: Action) 
     }
 }
 
-/// 삭제 흐름 (SPEC §6.4) — 확인 다이얼로그·afterdelete 이동·실패 시 재오픈
 fn delete_current_file(application: &mut Application, window: HWND, permanent: bool) {
     let Some(path) = application
         .image_core
@@ -973,7 +902,6 @@ fn delete_current_file(application: &mut Application, window: HWND, permanent: b
     else {
         return;
     };
-    // 영구 삭제는 항상 확인, 휴지통은 askdelete일 때만 (SPEC §6.4)
     if permanent || application.settings.options.ask_delete {
         let confirmation = file_ops::confirm_delete(window, &path, permanent);
         if !confirmation.confirmed {
@@ -984,12 +912,12 @@ fn delete_current_file(application: &mut Application, window: HWND, permanent: b
             unsafe { SetTimer(Some(window), RECENTS_SAVE_TIMER, 500, None) };
         }
     }
-    // afterdelete 대상은 삭제 전에 계산: 0=이전 / 1=다음 (SPEC §6.4)
     let command = if application.settings.options.after_delete == 0 {
         NavigationCommand::Previous
     } else {
         NavigationCommand::Next
     };
+    // Compute the after-delete target before the file disappears.
     let target = application
         .image_core
         .peek_navigation_target(command)
@@ -1006,7 +934,6 @@ fn delete_current_file(application: &mut Application, window: HWND, permanent: b
             }
         }
         Err(_) => {
-            // 실패 시 파일 다시 열고 에러 표시 (SPEC §6.4)
             if application.image_core.reload_current() {
                 application.apply_current_image(window);
             }
@@ -1014,8 +941,6 @@ fn delete_current_file(application: &mut Application, window: HWND, permanent: b
     }
 }
 
-/// 이름 변경 흐름 (SPEC §6.4) — 다이얼로그·성공 시 새 경로 재오픈.
-/// 디코더는 디코드 후 파일 핸들을 잡지 않으므로 별도 핸들 닫기 불필요.
 fn rename_current_file(application: &mut Application, window: HWND) {
     let Some(path) = application
         .image_core
@@ -1051,7 +976,6 @@ fn toggle_fullscreen(application: &mut Application, window: HWND) {
                 0,
                 SWP_FRAMECHANGED | SWP_NOMOVE | SWP_NOSIZE | SWP_NOZORDER | SWP_NOACTIVATE,
             );
-            // DWM 보정 원복 (SPEC §6.2)
             dwm::set_fullscreen_polish(window, false);
         } else {
             let mut placement = WINDOWPLACEMENT {
@@ -1061,7 +985,6 @@ fn toggle_fullscreen(application: &mut Application, window: HWND) {
             let _ = GetWindowPlacement(window, &mut placement);
             let style = WINDOW_STYLE(GetWindowLongPtrW(window, GWL_STYLE) as u32);
             application.fullscreen_restore = Some((placement, style));
-            // 전환 애니메이션 비활성 + 라운드 코너 해제 (SPEC §6.2 — Win11 1px 갭)
             dwm::set_fullscreen_polish(window, true);
 
             let monitor = MonitorFromWindow(window, MONITOR_DEFAULTTONEAREST);
@@ -1086,7 +1009,6 @@ fn toggle_fullscreen(application: &mut Application, window: HWND) {
     }
 }
 
-/// 키 입력 → 바인딩 조회 → 디스패치 (SPEC §5.2). 반환 = 처리 여부.
 fn handle_key(application: &mut Application, window: HWND, virtual_key: u16) -> bool {
     if [VK_CONTROL, VK_SHIFT, VK_MENU, VK_LWIN, VK_RWIN]
         .iter()
@@ -1099,7 +1021,6 @@ fn handle_key(application: &mut Application, window: HWND, virtual_key: u16) -> 
         dispatch_action(application, window, action);
         return true;
     }
-    // Escape 특례 — 어떤 액션에도 안 묶였을 때만 전체화면 나가기 전용 (SPEC §5.2)
     if virtual_key == VK_ESCAPE.0
         && application.bindings.escape_is_unbound()
         && application.fullscreen_restore.is_some()
@@ -1111,11 +1032,9 @@ fn handle_key(application: &mut Application, window: HWND, virtual_key: u16) -> 
     false
 }
 
-/// 휠 → 바인딩 (SPEC §5.3) — zoom/pan 계열은 델타 직접 소비, 그 외 노치당 1회
 fn handle_wheel(application: &mut Application, window: HWND, wheel_delta: i16) {
-    // 터치패드 휴리스틱 (Q5 1차, PORTING_PLAN §8): 노치(120) 미세분 델타 + 무수정자
-    // (Shift는 축 스왑 — SPEC §5.3 자연 팬)는 바인딩 대신 자연 팬으로 처리
     let modifiers = current_modifiers();
+    // Fine-grained deltas with no modifiers read as touchpad panning.
     if wheel_delta % 120 != 0 && modifiers & !MODIFIER_SHIFT == 0 {
         let amount = f32::from(wheel_delta) / 2.0;
         if modifiers & MODIFIER_SHIFT != 0 {
@@ -1155,8 +1074,6 @@ fn handle_wheel(application: &mut Application, window: HWND, wheel_delta: i16) {
     }
 }
 
-/// WM_GESTURE (SPEC §5.3, Q5) — 핀치 = 핫포인트 앵커 줌, 팬 = 자연 팬(터치스크린).
-/// 반환 = 처리 여부(미처리 제스처는 DefWindowProc로).
 fn handle_gesture(application: &mut Application, window: HWND, lparam: LPARAM) -> bool {
     use windows::Win32::UI::Input::Touch::{
         CloseGestureInfoHandle, GESTUREINFO, GID_PAN, GID_ZOOM, GetGestureInfo, HGESTUREINFO,
@@ -1174,7 +1091,6 @@ fn handle_gesture(application: &mut Application, window: HWND, lparam: LPARAM) -
     let began = information.dwFlags & GF_BEGIN != 0;
     let handled = match information.dwID {
         identifier if identifier == GID_ZOOM.0 => {
-            // ullArguments 하위 = 손가락 간 거리, ptsLocation = 핫포인트 (문서)
             let distance = (information.ullArguments & 0xFFFF_FFFF) as f32;
             if began {
                 application.gesture_zoom_distance = Some(distance);
@@ -1220,10 +1136,8 @@ fn handle_gesture(application: &mut Application, window: HWND, lparam: LPARAM) -
 }
 
 fn main() -> Result<()> {
-    // UI 스레드 = STA(OLE 포함 — 드래그&드롭), 디코드 워커 = MTA (PORTING_PLAN §3 매핑)
     unsafe { OleInitialize(None) }?;
 
-    // 시작 fail-fast (SPEC R3·R4·§8.1) — 승격 실행 거부, 설정 쓰기 불가 폴더면 종료
     if process_is_elevated() {
         fail_fast_dialog(
             "riv does not run elevated",
@@ -1240,10 +1154,8 @@ fn main() -> Result<()> {
         return Ok(());
     }
 
-    // 다크 컨텍스트 메뉴 — 첫 메뉴 생성 전 프로세스 전역 1회 (SPEC §6.1, R10 예외)
     window::menu_theme::enable_dark_menus();
 
-    // 실행 인자 = 열 파일 경로 하나 (SPEC §6.5 — CLI 옵션 없음, 실행마다 새 프로세스)
     let argument_path = std::env::args_os().nth(1).map(std::path::PathBuf::from);
 
     let instance = unsafe { GetModuleHandleW(None)? };
@@ -1275,14 +1187,8 @@ fn main() -> Result<()> {
     Ok(())
 }
 
-/// GWLP_USERDATA에 실린 Application 포인터 복원
-/// 메인 창 생성 + Application 설치 (SPEC §6.1 — 창=프로세스 1:1, 프로세스당 1회).
-/// 창 클래스는 main()에서 1회 등록.
 fn create_main_window(initial_path: Option<&Path>) -> Result<HWND> {
     let instance = unsafe { GetModuleHandleW(None)? };
-    // 창 기본 크기 = 640×480 (SPEC §6.1, 2026-07-10 — 화면 비율 기반(40%×30%)은
-    // 초광폭에서 부적합해 폐기), 기본 위치 = 작업 영역 중앙(2026-07-11 —
-    // 지오메트리 복원이 있으면 이후 덮어씀)
     let (default_x, default_y) =
         window::work_area_centered_origin(640, 480).unwrap_or((CW_USEDEFAULT, CW_USEDEFAULT));
     let window = unsafe {
@@ -1303,13 +1209,10 @@ fn create_main_window(initial_path: Option<&Path>) -> Result<HWND> {
     };
 
     let application = Box::new(Application::new(window, initial_path)?);
-    // 지연 첫 표시 (SPEC §6.1): 로드 진행 중이면 완료(또는 실패) 시점에,
-    // 아니면 다음 이벤트 루프 턴에 표시
     let load_pending = application.image_core.is_load_pending();
     unsafe {
         SetWindowLongPtrW(window, GWLP_USERDATA, Box::into_raw(application) as isize);
     }
-    // 핀치 줌·팬 제스처 수신 (SPEC §5.3, Q5) — 미지원 환경(wine)은 실패 무시
     {
         use windows::Win32::System::SystemServices::{GC_PAN, GC_ZOOM};
         use windows::Win32::UI::Input::Touch::{
@@ -1337,7 +1240,6 @@ fn create_main_window(initial_path: Option<&Path>) -> Result<HWND> {
         };
     }
     if let Some(application) = unsafe { application_from_window(window) } {
-        // 지오메트리 복원(숨김 유지 — 지연 첫 표시) + 다크 타이틀바 (SPEC §6.1, P14)
         application.restore_window_geometry(window);
         dwm::apply_title_bar_theme(window);
         application.drop_target = drag_drop::register(window).ok();
@@ -1349,16 +1251,13 @@ fn create_main_window(initial_path: Option<&Path>) -> Result<HWND> {
     Ok(window)
 }
 
-/// 다중 선택·드롭의 "나머지" 파일 = 새 창 (SPEC §6.4) — 창=프로세스 1:1
-/// (2026-07-11 결정: 빈 창 재사용·프로세스 내 다창 폐기), 새 riv 프로세스 스폰.
 fn open_in_new_window(path: &Path) {
     if let Ok(executable) = std::env::current_exe() {
         let _ = std::process::Command::new(executable).arg(path).spawn();
     }
 }
 
-/// 승격 실행 감지 (SPEC R3) — `TokenElevationType == Full`(UAC "관리자 권한으로 실행")만
-/// 거부. `TokenElevation`은 UAC 비활성 관리자 계정·wine 기본 토큰까지 승격으로 보고해 부적합.
+/// TokenElevation misreports admin accounts with UAC off; check the elevation type.
 fn process_is_elevated() -> bool {
     use windows::Win32::Security::{
         GetTokenInformation, TOKEN_ELEVATION_TYPE, TOKEN_QUERY, TokenElevationType,
@@ -1387,7 +1286,6 @@ fn process_is_elevated() -> bool {
     elevated
 }
 
-/// 시작 fail-fast 안내 (SPEC R4 — panic/abort 경로가 아닌 명시적 종료)
 fn fail_fast_dialog(instruction: &str, content: &str) {
     use windows::Win32::UI::Controls::{TASKDIALOGCONFIG, TDCBF_CLOSE_BUTTON, TaskDialogIndirect};
 
@@ -1419,7 +1317,6 @@ extern "system" fn window_procedure(
     lparam: LPARAM,
 ) -> LRESULT {
     match message {
-        // 동기 리사이즈 → 즉시 재렌더 (무플래시 요구, SPEC §6.2·§11)
         WM_SIZE => {
             if let Some(application) = unsafe { application_from_window(window) } {
                 let width = (lparam.0 & 0xFFFF) as u32;
@@ -1433,12 +1330,10 @@ extern "system" fn window_procedure(
             }
             LRESULT(0)
         }
-        // 렌더는 온디맨드 — WM_PAINT는 ValidateRect만 (PORTING_PLAN §3 렌더러 세부)
         WM_PAINT => {
             let _ = unsafe { ValidateRect(Some(window), None) };
             LRESULT(0)
         }
-        // 디코드 워커 완료 통지 — lparam = Box<DecodeCompletion> (PORTING_PLAN §2)
         WM_APP_DECODE_COMPLETE => {
             let completion = unsafe { Box::from_raw(lparam.0 as *mut DecodeCompletion) };
             if let Some(application) = unsafe { application_from_window(window) }
@@ -1453,7 +1348,6 @@ extern "system" fn window_procedure(
             }
             LRESULT(0)
         }
-        // 드롭 경로 수신 — 첫 파일 현재 창, 나머지 = 새 창(새 프로세스) (SPEC §5.4·§6.4)
         WM_APP_DROP_PATH => {
             let paths = unsafe { Box::from_raw(lparam.0 as *mut Vec<std::path::PathBuf>) };
             for rest in paths.iter().skip(1) {
@@ -1466,7 +1360,6 @@ extern "system" fn window_procedure(
             }
             LRESULT(0)
         }
-        // 옵션 다이얼로그 Apply·OK — 저장 + 전 컴포넌트 브로드캐스트 (SPEC §8.3)
         WM_APP_OPTIONS_APPLIED => {
             let payload = unsafe { &*(lparam.0 as *const dialogs::options::AppliedOptions) };
             if let Some(application) = unsafe { application_from_window(window) } {
@@ -1480,7 +1373,6 @@ extern "system" fn window_procedure(
             }
             LRESULT(0)
         }
-        // 옵션 다이얼로그 위치 저장 (SPEC §8.1 optionsgeometry) — lparam = (x, y) i32 2개
         WM_APP_OPTIONS_GEOMETRY => {
             if let Some(application) = unsafe { application_from_window(window) } {
                 let x = (lparam.0 & 0xFFFF_FFFF) as u32 as i32;
@@ -1490,21 +1382,18 @@ extern "system" fn window_procedure(
             }
             LRESULT(0)
         }
-        // 무인자 실행 — 다음 이벤트 루프 턴에 빈 창 표시 (SPEC §6.1)
         WM_APP_SHOW_WINDOW => {
             if let Some(application) = unsafe { application_from_window(window) } {
                 application.ensure_window_shown(window);
             }
             LRESULT(0)
         }
-        // 애니메이션 프레임 진행 — 다음 프레임 지연으로 재예약 (SPEC §4.6)
         WM_TIMER if wparam.0 == ANIMATION_TIMER => {
             if let Some(application) = unsafe { application_from_window(window) } {
                 application.advance_animation_frame(window);
             }
             LRESULT(0)
         }
-        // 줌 필 1초 자동 숨김 (SPEC §3.6)
         WM_TIMER if wparam.0 == ZOOM_PILL_TIMER => {
             let _ = unsafe { KillTimer(Some(window), ZOOM_PILL_TIMER) };
             if let Some(application) = unsafe { application_from_window(window) }
@@ -1514,7 +1403,6 @@ extern "system" fn window_procedure(
             }
             LRESULT(0)
         }
-        // 슬라이드쇼 틱 (SPEC §6.3) — 폴더 끝(루프 off) 도달 시 자동 취소
         WM_TIMER if wparam.0 == SLIDESHOW_TIMER => {
             if let Some(application) = unsafe { application_from_window(window) } {
                 let command = if application.settings.options.slideshow_reversed {
@@ -1528,7 +1416,6 @@ extern "system" fn window_procedure(
             }
             LRESULT(0)
         }
-        // 최근 파일 디바운스 저장 (SPEC §6.4)
         WM_TIMER if wparam.0 == RECENTS_SAVE_TIMER => {
             let _ = unsafe { KillTimer(Some(window), RECENTS_SAVE_TIMER) };
             if let Some(application) = unsafe { application_from_window(window) } {
@@ -1536,7 +1423,6 @@ extern "system" fn window_procedure(
             }
             LRESULT(0)
         }
-        // Open With 백그라운드 열거 시작 (250ms 디바운스 후 — SPEC §6.4)
         WM_TIMER if wparam.0 == OPEN_WITH_TIMER => {
             let _ = unsafe { KillTimer(Some(window), OPEN_WITH_TIMER) };
             if let Some(application) = unsafe { application_from_window(window) }
@@ -1546,7 +1432,6 @@ extern "system" fn window_procedure(
             }
             LRESULT(0)
         }
-        // Open With 열거 결과 수신 — 파일이 바뀌었으면 폐기 (SPEC §6.4)
         WM_APP_OPEN_WITH_LIST => {
             let list = unsafe { Box::from_raw(lparam.0 as *mut OpenWithList) };
             if let Some(application) = unsafe { application_from_window(window) } {
@@ -1570,14 +1455,12 @@ extern "system" fn window_procedure(
             let handled = unsafe { application_from_window(window) }
                 .is_some_and(|application| handle_key(application, window, wparam.0 as u16));
             if !handled && message == WM_SYSKEYDOWN {
-                // 시스템 키 기본 처리(Alt 메뉴 등) 유지
                 unsafe { DefWindowProcW(window, message, wparam, lparam) }
             } else {
                 LRESULT(0)
             }
         }
-        // 바인딩이 소비한 Alt+문자(Mirror/Flip 등)의 WM_SYSCHAR를 삼킨다 — DefWindowProc까지
-        // 가면 메뉴 니모닉 탐색 실패 비프가 울린다. 미바인딩 조합(Alt+Space 등)은 기본 처리.
+        // Swallow Alt+chars consumed by bindings; DefWindowProc would beep.
         WM_SYSCHAR => {
             let character = char::from_u32(wparam.0 as u32).unwrap_or('\0');
             let bound = character.is_ascii_alphanumeric()
@@ -1601,7 +1484,6 @@ extern "system" fn window_procedure(
             }
             unsafe { DefWindowProcW(window, message, wparam, lparam) }
         }
-        // 수평 휠·터치패드 수평 스크롤 = 수평 자연 팬 (SPEC §5.3 — 바인딩 비대상)
         WM_MOUSEHWHEEL => {
             if let Some(application) = unsafe { application_from_window(window) } {
                 let delta = ((wparam.0 >> 16) & 0xFFFF) as u16 as i16;
@@ -1616,7 +1498,6 @@ extern "system" fn window_procedure(
             }
             LRESULT(0)
         }
-        // 좌클릭 = 팬 드래그 예약, Ctrl+좌드래그 = 창 이동 (SPEC §5.3~5.4)
         WM_LBUTTONDOWN => {
             if let Some(application) = unsafe { application_from_window(window) } {
                 let move_window = current_modifiers() == MODIFIER_CONTROL
@@ -1624,7 +1505,6 @@ extern "system" fn window_procedure(
                     && application.fullscreen_restore.is_none()
                     && !unsafe { IsZoomed(window) }.as_bool();
                 if move_window {
-                    // 시스템 이동 우선 (SPEC §5.4)
                     let _ = unsafe { ReleaseCapture() };
                     unsafe {
                         SendMessageW(
@@ -1664,8 +1544,6 @@ extern "system" fn window_procedure(
             }
             LRESULT(0)
         }
-        // 팬 드래그 중 팬 피드백 커서 유지 (SPEC §5.4 — IDC_SIZEALL 확정 2026-07-11:
-        // Windows에 표준 클로즈드핸드 부재, 자체 자산 대신 OS 커서)
         WM_SETCURSOR => {
             if let Some(application) = unsafe { application_from_window(window) }
                 && application.pan_drag_position.is_some()
@@ -1700,7 +1578,6 @@ extern "system" fn window_procedure(
         }
         WM_XBUTTONDOWN => {
             if let Some(application) = unsafe { application_from_window(window) } {
-                // HIWORD(wparam): 1=XBUTTON1(Back), 2=XBUTTON2(Forward)
                 let base = if (wparam.0 >> 16) & 0xFFFF == 1 {
                     MouseBase::Back
                 } else {
@@ -1714,21 +1591,18 @@ extern "system" fn window_procedure(
                     dispatch_action(application, window, action);
                 }
             }
-            LRESULT(1) // 처리 표시 (기본 앱 커맨드 변환 방지)
+            LRESULT(1) // handled: prevent default app-command translation
         }
-        // 우클릭 예약 — 컨텍스트 메뉴 전용 (SPEC §5.3, §6.1)
         WM_CONTEXTMENU => {
             if let Some(application) = unsafe { application_from_window(window) } {
                 let mut x = (lparam.0 & 0xFFFF) as u16 as i16 as i32;
                 let mut y = ((lparam.0 >> 16) & 0xFFFF) as u16 as i16 as i32;
                 if x == -1 && y == -1 {
-                    // 키보드 메뉴 키 — 창 중앙
                     let mut bounds = RECT::default();
                     let _ = unsafe { GetWindowRect(window, &mut bounds) };
                     x = (bounds.left + bounds.right) / 2;
                     y = (bounds.top + bounds.bottom) / 2;
                 }
-                // 메뉴 구성 전 최근 파일 부재 감사 (SPEC §6.4)
                 if application.settings.prune_recent_files() {
                     unsafe { SetTimer(Some(window), RECENTS_SAVE_TIMER, 500, None) };
                 }
@@ -1784,7 +1658,6 @@ extern "system" fn window_procedure(
                         dispatch_action(application, window, action);
                     }
                     Some(MenuSelection::OpenWithEntry(index)) => {
-                        // 셸 핸들러 Invoke — UI 스레드에서 재매칭 (SPEC §6.4)
                         if let (Some(current), Some(list)) = (
                             application.image_core.current.as_ref(),
                             application.open_with_list.as_ref(),
@@ -1798,7 +1671,6 @@ extern "system" fn window_procedure(
             }
             LRESULT(0)
         }
-        // 앱 재활성화 — 설정 파일 재로드·브로드캐스트 (SPEC §8.1)
         WM_ACTIVATEAPP => {
             if wparam.0 != 0
                 && let Some(application) = unsafe { application_from_window(window) }
@@ -1808,19 +1680,16 @@ extern "system" fn window_procedure(
             }
             LRESULT(0)
         }
-        // 모니터 이동·디스플레이 설정 변경 → SDR 백레벨 재조회 (SPEC §7)
         WM_MOVE | WM_DISPLAYCHANGE => {
             if let Some(application) = unsafe { application_from_window(window) } {
                 application.refresh_display_color_state(window);
             }
             LRESULT(0)
         }
-        // Per-Monitor V2: 제안 사각형 적용 + 배율 기준 갱신
         WM_DPICHANGED => {
             if let Some(application) = unsafe { application_from_window(window) } {
                 let ratio = (wparam.0 & 0xFFFF) as f32 / 96.0;
                 application.view_transform.device_pixel_ratio = ratio;
-                // 오버레이 치수·폰트 물리 픽셀 보정 (R7 — 재렌더는 후속 WM_SIZE)
                 application.overlay.set_scale(ratio);
             }
             let suggested_bounds = unsafe { &*(lparam.0 as *const RECT) };
@@ -1837,14 +1706,12 @@ extern "system" fn window_procedure(
             };
             LRESULT(0)
         }
-        // 종료 전 지오메트리 저장 (SPEC §6.1) — 이후 기본 경로(DestroyWindow)
         WM_CLOSE => {
             if let Some(application) = unsafe { application_from_window(window) } {
                 application.save_window_geometry(window);
             }
             unsafe { DefWindowProcW(window, message, wparam, lparam) }
         }
-        // 시스템 테마 변경 — 다크 타이틀바 추종 (P14)
         WM_SETTINGCHANGE => {
             dwm::apply_title_bar_theme(window);
             unsafe { DefWindowProcW(window, message, wparam, lparam) }

@@ -1,5 +1,4 @@
-//! 로드 상태 머신 · 폴더 목록·정렬·이동 · 프리로드 캐시 · 디코드 스레드 풀
-//! (SPEC §4, PORTING_PLAN §2 스레딩 모델 — 캐시 예산·해제는 mpv demux 정책 참고)
+//! Load state machine, folder listing, preload cache, and the decode worker pool.
 
 use std::collections::{HashMap, HashSet, VecDeque};
 use std::ffi::c_void;
@@ -18,29 +17,25 @@ use windows::core::PCWSTR;
 
 use super::decode::{self, DecodeError, DecodedImage};
 
-/// 디코드 완료 통지 — lparam = Box<DecodeCompletion> 포인터 (PORTING_PLAN §2)
 pub const WM_APP_DECODE_COMPLETE: u32 = WM_APP + 1;
 
-/// 프리로드 모드 0/1/2 → (거리, 예산 바이트) (SPEC §4.5)
+/// Preload mode 0/1/2 -> (radius, cache budget in bytes).
 const PRELOAD_SPECIFICATIONS: [(usize, u64); 3] =
     [(0, 0), (1, 250 * 1024 * 1024), (4, 2 * 1024 * 1024 * 1024)];
 
-/// 목록 신선도 — 마지막 수집 3초 경과 시 이동 전 재수집 (SPEC §4.3)
+/// Folder listings older than this are rescanned before navigation.
 const FOLDER_LIST_FRESHNESS: Duration = Duration::from_secs(3);
 
-/// ImageCore가 소비하는 옵션 부분집합 — 설정 브로드캐스트로 갱신 (SPEC §8.2)
 #[derive(Clone, PartialEq)]
 pub struct CoreOptions {
     pub sort_mode: SortMode,
     pub sort_descending: bool,
-    /// 0=off / 1=인접 / 2=확장 (SPEC §4.5)
     pub preloading_mode: usize,
     pub loop_folders_enabled: bool,
     pub skip_hidden: bool,
     pub allow_mime_content_detection: bool,
 }
 
-/// 정렬 모드 (SPEC §4.3 — 랜덤은 2026-07-11 제거)
 #[derive(Clone, Copy, PartialEq, Eq)]
 pub enum SortMode {
     Name,
@@ -51,7 +46,6 @@ pub enum SortMode {
 }
 
 impl SortMode {
-    /// 설정값 `sortmode`(0~4) → 모드, 범위 밖은 기본(이름)
     pub fn from_setting(value: u32) -> Self {
         match value {
             1 => Self::Modified,
@@ -73,21 +67,17 @@ pub enum NavigationCommand {
 
 pub struct FolderEntry {
     pub path: PathBuf,
-    /// StrCmpLogicalW용 널 종단 파일명 (SPEC §4.3 자연 정렬, P15)
     wide_name: Vec<u16>,
     file_size: u64,
     modified: SystemTime,
     created: SystemTime,
 }
 
-/// 디코드 결과 단계 — RAW 2단계 로드의 프리뷰는 표시만 하고 로드를 종결하지 않는다 (SPEC §4.1)
 pub enum DecodeStage {
-    /// RAW 임베디드 프리뷰 — 캐시·in_flight·pending 불변, 풀 디코드가 이어짐
     Preview,
     Final,
 }
 
-/// 워커 → UI 완료 통지 페이로드 (WM_APP_DECODE_COMPLETE의 lparam)
 pub struct DecodeCompletion {
     pub path: PathBuf,
     pub file_size: u64,
@@ -111,15 +101,11 @@ pub struct ImageCore {
     folder_directory: Option<PathBuf>,
     entries: Vec<FolderEntry>,
     folder_scanned_at: Option<Instant>,
-    /// 진행 중 로드의 표시 대상 — 교체가 곧 이전 로드 무효화(세대 규칙, SPEC §4.1).
-    /// 프리로드 중 파일로 이동하면 경로 일치로 그 완료를 그대로 소비한다.
+    /// Path awaiting display; replacing it invalidates the previous load.
     pending_display: Option<PathBuf>,
-    /// 큐 대기·디코드 중 경로 — 중복 요청 방지 (SPEC §4.5)
     in_flight: HashSet<PathBuf>,
-    /// 키 = 절대경로, 항목에 파일 크기 보존(캐시 키 = 경로+크기, SPEC §4.1)
     cache: HashMap<PathBuf, CacheEntry>,
     pub current: Option<CurrentImage>,
-    /// 디코드 실패 보존 — 폴더 목록은 유지 (SPEC §4.2, 오버레이 표시는 R4)
     pub load_error: Option<(PathBuf, DecodeError)>,
 }
 
@@ -139,8 +125,6 @@ impl ImageCore {
         }
     }
 
-    /// 설정 브로드캐스트 수신 (SPEC §8.2) — 정렬 변경이면 재수집, 프리로드 변경이면
-    /// 예산 재적용. 현재 표시 이미지는 흐트러뜨리지 않는다 (§2 핵심 계약).
     pub fn update_options(&mut self, options: CoreOptions) {
         if options == self.options {
             return;
@@ -156,7 +140,6 @@ impl ImageCore {
         self.preload_neighbors();
     }
 
-    /// 현재 파일의 폴더 내 위치 (1-기반, 총 개수) — 타이틀바 모드 2 "i/n" (SPEC §6.1)
     pub fn folder_position(&self) -> Option<(usize, usize)> {
         let current = self.current.as_ref()?;
         let index = self.position_of(&current.path)?;
@@ -167,12 +150,10 @@ impl ImageCore {
         !self.entries.is_empty()
     }
 
-    /// 표시 대기 중 로드 존재 여부 — 지연 첫 표시 판단용 (SPEC §6.1)
     pub fn is_load_pending(&self) -> bool {
         self.pending_display.is_some()
     }
 
-    /// Reload File — 캐시 무효화 후 현재 파일 재로드 (SPEC §5.1 reloadfile)
     pub fn reload_current(&mut self) -> bool {
         let Some(path) = self
             .pending_display
@@ -188,8 +169,6 @@ impl ImageCore {
         self.load_file(&path)
     }
 
-    /// 경로 인자·탐색 공용 진입 — 디렉터리면 목록 구성 후 첫 파일 (SPEC §4.1).
-    /// 반환 = 표시 이미지가 동기적으로 바뀌었는지(캐시 히트).
     pub fn load_path(&mut self, path: &Path) -> bool {
         let Ok(path) = std::path::absolute(path) else {
             return false;
@@ -241,38 +220,33 @@ impl ImageCore {
         if self.in_flight.insert(path.to_path_buf()) {
             self.pool.submit(path.to_path_buf(), file_size, true);
         } else {
-            // 프리로드로 이미 큐에 있으면 앞으로 승격 — 새 로드 우선 (SPEC §4.1)
+            // Already queued as a preload: promote it, new loads take priority.
             self.pool.promote(path);
         }
         false
     }
 
-    /// First/Previous/Next/Last (SPEC §4.4) — 부재 파일 건너뜀·동일 파일 무시.
-    /// 반환: None = 이동 없음(대상 없음·폴더 끝·동일 파일), Some(표시 동기 변경 여부).
     pub fn navigate(&mut self, command: NavigationCommand) -> Option<bool> {
         self.refresh_folder_if_stale();
         let current_path = self.navigation_anchor();
         let target = self.navigation_target(command)?;
         if current_path.is_some_and(|current| paths_equal(&current, &target)) {
-            return None; // 같은 파일 재이동 무시
+            return None; // same file, nothing to do
         }
         Some(self.load_file(&target))
     }
 
-    /// 이동 대상 사전 계산 — 삭제 후 이동(afterdelete)용 (SPEC §6.4)
     pub fn peek_navigation_target(&mut self, command: NavigationCommand) -> Option<PathBuf> {
         self.refresh_folder_if_stale();
         self.navigation_target(command)
     }
 
-    /// 폴더 목록 강제 재수집 — 삭제·rename 직후 (SPEC §4.3)
     pub fn refresh_folder(&mut self) {
         if let Some(directory) = self.folder_directory.clone() {
             self.rescan_folder(&directory);
         }
     }
 
-    /// 위치 기준: 진행 중 로드 → 에러 파일(에러에서도 이동 가능, SPEC §4.2) → 현재 표시
     fn navigation_anchor(&self) -> Option<PathBuf> {
         self.pending_display
             .clone()
@@ -296,11 +270,8 @@ impl ImageCore {
         }
     }
 
-    /// 워커 완료 수신 (WM_APP_DECODE_COMPLETE) — 반환 = 표시 상태 변경 여부
     pub fn on_decode_complete(&mut self, completion: DecodeCompletion) -> bool {
         if matches!(completion.stage, DecodeStage::Preview) {
-            // RAW 프리뷰 — 표시 대상이면 먼저 보여주고 풀 디코드 완료를 계속 기다린다
-            // (SPEC §4.1). 캐시 미삽입, in_flight·pending 불변 — 폐기는 경로 불일치뿐.
             let is_pending = self
                 .pending_display
                 .as_deref()
@@ -353,8 +324,6 @@ impl ImageCore {
         }
     }
 
-    // ── 폴더 목록 (SPEC §4.3) ───────────────────────────────────────────────
-
     fn rescan_folder(&mut self, directory: &Path) {
         let mut entries = scan_folder(directory, &self.options);
         sort_entries(&mut entries, &self.options);
@@ -363,7 +332,6 @@ impl ImageCore {
         self.folder_scanned_at = Some(Instant::now());
     }
 
-    /// 마지막 수집 3초 경과 or 현재 파일 소실 시 재수집 (SPEC §4.3)
     fn refresh_folder_if_stale(&mut self) {
         let Some(directory) = self.folder_directory.clone() else {
             return;
@@ -401,7 +369,6 @@ impl ImageCore {
             .map(|entry| entry.path.clone())
     }
 
-    /// 현재 인덱스에서 방향으로 1개 이동 — 순환(loop) 반영, 부재 파일 건너뜀
     fn step_existing_entry(&self, current: Option<usize>, direction: isize) -> Option<PathBuf> {
         let length = self.entries.len() as isize;
         let start = current.map_or(0, |index| index as isize);
@@ -411,7 +378,7 @@ impl ImageCore {
             if self.options.loop_folders_enabled {
                 index = index.rem_euclid(length);
             } else if !(0..length).contains(&index) {
-                return None; // 끝에서 정지 (SPEC §4.4)
+                return None; // stop at folder ends when not looping
             }
             let entry = &self.entries[index as usize];
             if entry.path.is_file() {
@@ -421,12 +388,10 @@ impl ImageCore {
         None
     }
 
-    // ── 프리로드 캐시 (SPEC §4.5 — 예산·해제는 mpv demux 정책 참고) ─────────
-
     fn preload_neighbors(&mut self) {
         let (distance, budget) = PRELOAD_SPECIFICATIONS[self.options.preloading_mode.min(2)];
         if distance == 0 {
-            self.cache.clear(); // 모드 0 = off: 캐시 비움
+            self.cache.clear(); // preloading off: drop the cache
             return;
         }
         if let Some(current_index) = self
@@ -448,7 +413,6 @@ impl ImageCore {
                         continue;
                     };
                     let entry = &self.entries[index];
-                    // 파일 크기가 캐시 상한의 절반 초과면 프리로드 제외 (SPEC §4.5)
                     if entry.file_size > budget / 2
                         || self.in_flight.contains(&entry.path)
                         || self
@@ -470,7 +434,7 @@ impl ImageCore {
         self.evict_cache();
     }
 
-    /// 예산 초과 시 현재 위치에서 링 거리가 먼 항목부터 해제
+    /// Evicts entries farthest from the current position until within budget.
     fn evict_cache(&mut self) {
         let (_, budget) = PRELOAD_SPECIFICATIONS[self.options.preloading_mode.min(2)];
         let mut total: u64 = self
@@ -511,7 +475,6 @@ impl ImageCore {
     }
 }
 
-/// 순환 설정 반영 이웃 인덱스 (SPEC §4.5 — 루프 켜짐이면 랩어라운드)
 fn neighbor_index(
     current: usize,
     offset: isize,
@@ -541,15 +504,13 @@ fn ring_distance(a: usize, b: usize, length: usize, loop_enabled: bool) -> usize
     }
 }
 
-/// Windows 경로 동등 비교 — 대소문자 무시 (SPEC §4.3 인덱스 매칭)
+/// Case-insensitive path equality (Windows semantics).
 fn paths_equal(a: &Path, b: &Path) -> bool {
     a == b
         || a.as_os_str()
             .to_string_lossy()
             .eq_ignore_ascii_case(&b.as_os_str().to_string_lossy())
 }
-
-// ── 폴더 스캔·정렬 (SPEC §4.3) ──────────────────────────────────────────────
 
 fn scan_folder(directory: &Path, options: &CoreOptions) -> Vec<FolderEntry> {
     let Ok(reader) = std::fs::read_dir(directory) else {
@@ -569,7 +530,7 @@ fn scan_folder(directory: &Path, options: &CoreOptions) -> Vec<FolderEntry> {
         let file_name = entry.file_name();
         let display_name = file_name.to_string_lossy();
         if display_name.starts_with("._") {
-            continue; // macOS 메타파일 제외 (SPEC §4.3)
+            continue; // skip macOS metadata files
         }
         let extension_matched = Path::new(&file_name)
             .extension()
@@ -624,22 +585,18 @@ fn sort_entries(entries: &mut [FolderEntry], options: &CoreOptions) {
     }
 }
 
-/// 자연 정렬 — 탐색기와 동일한 StrCmpLogicalW (SPEC §4.3, P15)
 fn compare_natural_names(a: &FolderEntry, b: &FolderEntry) -> std::cmp::Ordering {
     let result =
         unsafe { StrCmpLogicalW(PCWSTR(a.wide_name.as_ptr()), PCWSTR(b.wide_name.as_ptr())) };
     result.cmp(&0)
 }
 
-/// 타입 정렬 키 — 디코더 레지스트리 포맷명 (SPEC §4.3)
 fn format_name_of(path: &Path) -> &'static str {
     path.extension()
         .map(|extension| extension.to_string_lossy().to_lowercase())
         .and_then(|extension| decode::format_name_for_extension(&extension))
         .unwrap_or("")
 }
-
-// ── 디코드 스레드 풀 (PORTING_PLAN §2 — std::thread + 큐 + PostMessageW) ────
 
 struct DecodeJob {
     path: PathBuf,
@@ -651,7 +608,6 @@ struct PoolShared {
     available: Condvar,
 }
 
-/// 소형 워커 풀 — 종료 처리는 없다(프로세스 종료 시 소멸, 뷰어 수명과 동일)
 struct DecodePool {
     shared: Arc<PoolShared>,
 }
@@ -671,7 +627,6 @@ impl DecodePool {
         Self { shared }
     }
 
-    /// immediate = 현재 로드(큐 앞), 아니면 프리로드(큐 뒤) — 새 로드 우선
     fn submit(&self, path: PathBuf, file_size: u64, immediate: bool) {
         let mut queue = self.shared.queue.lock().expect("decode queue poisoned");
         let job = DecodeJob { path, file_size };
@@ -684,7 +639,6 @@ impl DecodePool {
         self.shared.available.notify_one();
     }
 
-    /// 큐에 대기 중인 프리로드를 현재 로드로 승격
     fn promote(&self, path: &Path) {
         let mut queue = self.shared.queue.lock().expect("decode queue poisoned");
         if let Some(position) = queue.iter().position(|job| paths_equal(&job.path, path))
@@ -696,7 +650,6 @@ impl DecodePool {
 }
 
 fn worker_loop(shared: &PoolShared, window: isize) {
-    // 워커 = COM MTA, UI 스레드 = STA (PORTING_PLAN §2·§3 매핑)
     unsafe { CoInitializeEx(None, COINIT_MULTITHREADED) }
         .ok()
         .expect("CoInitializeEx MTA failed");
@@ -710,7 +663,6 @@ fn worker_loop(shared: &PoolShared, window: isize) {
                 queue = shared.available.wait(queue).expect("decode queue poisoned");
             }
         };
-        // RAW 2단계: 동일 워커에서 프리뷰 → 풀 디코드 순차 — 레이스 자체가 없다 (SPEC §4.1)
         if decode::is_raw_two_stage(&job.path)
             && let Some(preview) = decode::decode_raw_preview(&job.path)
         {
@@ -748,7 +700,6 @@ fn post_completion(window: isize, completion: Box<DecodeCompletion>) {
         )
     };
     if posted.is_err() {
-        // 창 소멸 등으로 전달 실패 — 결과 폐기
         drop(unsafe { Box::from_raw(pointer) });
     }
 }

@@ -1,5 +1,4 @@
-//! 드래그&드롭 — RegisterDragDrop + IDropTarget (SPEC §5.4).
-//! CF_HDROP 경로만 수용, URL 드롭 무시. 드롭 경로는 WM_APP 통지로 UI 흐름에 합류.
+//! OLE drop target; accepts CF_HDROP paths only.
 
 use std::path::PathBuf;
 
@@ -13,8 +12,6 @@ use windows::Win32::UI::Shell::{DragQueryFileW, HDROP};
 use windows::Win32::UI::WindowsAndMessaging::{PostMessageW, WM_APP};
 use windows::core::{Result, implement};
 
-/// 드롭 경로 통지 — lparam = Box<Vec<PathBuf>> (첫 파일 현재 창, 나머지는
-/// 빈 창 재사용 → 새 창 — SPEC §5.4·§6.1)
 pub const WM_APP_DROP_PATH: u32 = WM_APP + 3;
 
 #[implement(IDropTarget)]
@@ -22,7 +19,6 @@ struct DropTarget {
     window: HWND,
 }
 
-/// 창에 드롭 타깃 등록 — 반환된 IDropTarget은 창 수명 동안 유지할 것
 pub fn register(window: HWND) -> Result<IDropTarget> {
     let target: IDropTarget = DropTarget { window }.into();
     unsafe { RegisterDragDrop(window, &target)? };
@@ -78,7 +74,7 @@ impl IDropTarget_Impl for DropTarget_Impl {
             *effect = if has_paths(data_object.as_ref()) {
                 DROPEFFECT_COPY
             } else {
-                DROPEFFECT_NONE // URL 등 비파일 드롭 무시 (SPEC §5.4)
+                DROPEFFECT_NONE // refuse non-file drops (URLs etc.)
             };
         }
         Ok(())
@@ -90,7 +86,6 @@ impl IDropTarget_Impl for DropTarget_Impl {
         _point: &POINTL,
         effect: *mut DROPEFFECT,
     ) -> Result<()> {
-        // DragEnter에서 판정한 효과 유지 — 시스템이 전달한 값 그대로
         unsafe {
             if *effect != DROPEFFECT_NONE {
                 *effect = DROPEFFECT_COPY;

@@ -1,6 +1,4 @@
-//! 컨텍스트 메뉴 (SPEC §6.1) — 유일한 메뉴 진입점. OS 기본 스타일 그대로
-//! (P14 — 아이콘 데코 없음, Open With 포함: 2026-07-11 예외 철회). `TPM_RETURNCMD`로
-//! 선택 액션을 반환하고 디스패치는 호출자(단일 디스패처)가 수행한다.
+//! Context menu; TPM_RETURNCMD returns the selection for the single dispatcher.
 
 use std::collections::HashMap;
 
@@ -13,38 +11,30 @@ use windows::core::{HSTRING, Result};
 
 use crate::actions::{Action, ActivationGate};
 
-/// 메뉴 선택 결과 — 액션 또는 Open With 핸들러 인덱스
 #[derive(Clone, Copy)]
 pub enum MenuSelection {
     Action(Action),
     OpenWithEntry(usize),
 }
 
-/// 메뉴 enable·라벨 토글에 필요한 상태 스냅샷
 pub struct MenuState {
     pub has_image: bool,
     pub has_folder: bool,
     pub has_animation: bool,
-    /// Pause ↔ Resume 라벨 토글 (SPEC §5.1)
     pub animation_paused: bool,
     pub preserve_zoom: bool,
-    /// Mirror/Flip 체크 마커 (SPEC §6.1)
     pub mirrored: bool,
     pub flipped: bool,
     pub fullscreen: bool,
     pub slideshow_active: bool,
-    /// 최근 파일 표시명 (부재 감사 완료 목록 — SPEC §6.4)
     pub recent_names: Vec<String>,
-    /// Open With 항목 표시명 (SPEC §6.4 — 아이콘 없음)
     pub open_with_items: Vec<String>,
-    /// Open With 첫 항목 = 기본 앱 (구분선 분리)
     pub open_with_has_default: bool,
-    /// 액션 이름 → 단축키 열 텍스트 (SPEC §6.1 — "라벨\t단축키" 표준 표기)
     pub shortcuts: HashMap<&'static str, String>,
 }
 
 struct MenuBuilder {
-    /// 명령 ID = entries 인덱스 + 1 (0 = 선택 없음/취소)
+    /// Command IDs are entries index + 1; 0 means dismissed.
     entries: Vec<MenuSelection>,
     state_snapshot: MenuState,
 }
@@ -72,7 +62,6 @@ impl MenuBuilder {
         if !self.gate_satisfied(action.gate()) || clear_without_recents {
             flags |= MF_GRAYED | MF_DISABLED;
         }
-        // 상태 토글 체크 마커 (SPEC §6.1 — Preserve Zoom·Mirror·Flip)
         let checked = match action {
             Action::PreserveZoom => self.state_snapshot.preserve_zoom,
             Action::Mirror => self.state_snapshot.mirrored,
@@ -82,7 +71,7 @@ impl MenuBuilder {
         if checked {
             flags |= MF_CHECKED;
         }
-        // 탭 뒤 텍스트 = 오른쪽 정렬 단축키 열 (Win32 표준 표기)
+        // Text after a tab renders as the right-aligned shortcut column.
         let text = match self.state_snapshot.shortcuts.get(action.name()) {
             Some(shortcut) => format!("{label}\t{shortcut}"),
             None => label.to_string(),
@@ -90,7 +79,6 @@ impl MenuBuilder {
         unsafe { AppendMenuW(menu, flags, identifier, &HSTRING::from(text.as_str())) }
     }
 
-    /// Open With 핸들러 항목 (SPEC §6.4 — 아이콘 없음, 2026-07-11 P14 예외 철회)
     fn append_open_with_entry(&mut self, menu: HMENU, index: usize, label: &str) -> Result<()> {
         self.entries.push(MenuSelection::OpenWithEntry(index));
         let identifier = self.entries.len();
@@ -105,12 +93,10 @@ impl MenuBuilder {
         unsafe { AppendMenuW(menu, MF_POPUP, submenu.0 as usize, &HSTRING::from(label)) }
     }
 
-    /// SPEC §6.1 메뉴 구조
     fn build(&mut self) -> Result<HMENU> {
         let menu = unsafe { CreatePopupMenu()? };
         self.append_action(menu, Action::Open)?;
 
-        // Open Recent — 최대 10개 + Clear Recents (SPEC §6.4, 아이콘 없음 — R10)
         let recent = unsafe { CreatePopupMenu()? };
         for index in 0..self.state_snapshot.recent_names.len().min(10) {
             let name = self.state_snapshot.recent_names[index].clone();
@@ -122,7 +108,6 @@ impl MenuBuilder {
         self.append_action_labeled(recent, Action::ClearRecents, "Clear Recents")?;
         self.append_submenu(menu, recent, "Open Recent")?;
         self.append_action(menu, Action::ReloadFile)?;
-        // Open With — 기본 앱 최상단 + 구분선, 핸들러 목록, 다른 앱 선택 (SPEC §6.4)
         let open_with = unsafe { CreatePopupMenu()? };
         let open_with_items = self.state_snapshot.open_with_items.clone();
         for (index, label) in open_with_items.iter().enumerate() {
@@ -197,7 +182,6 @@ impl MenuBuilder {
     }
 }
 
-/// 메뉴 표시 → 선택 반환 (취소 시 None). (x, y) = 화면 좌표.
 pub fn show(window: HWND, state: MenuState, x: i32, y: i32) -> Option<MenuSelection> {
     let mut builder = MenuBuilder {
         entries: Vec::new(),

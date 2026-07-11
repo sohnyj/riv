@@ -1,21 +1,20 @@
 #!/bin/sh
-# C/C++ fallback 코덱 정적 빌드 (PORTING_PLAN §6.2-4) — clang-cl + xwin, /arch:AVX2.
-# 레시피 원전: github.com/sohnyj/qView buildtools/packages (사용자 작성, 2026-07-10 승인).
-# 산출물: deps/prefix/{lib,include} — riv의 build.rs가 링크한다.
+# Static builds of the C/C++ fallback codecs with clang-cl + xwin (/arch:AVX2).
+# Output: deps/prefix/{lib,include}, linked by build.rs.
 set -e
 cd "$(dirname "$0")"
 ROOT=$PWD
 PREFIX=$ROOT/prefix
-# cmake 4는 3.5 미만 요구 프로젝트를 거부 — 하위 호환 하한 고정
+# cmake 4 rejects projects requiring <3.5; pin the compatibility floor.
 export CMAKE_POLICY_VERSION_MINIMUM=3.5
 
-clone() { # <디렉터리> <저장소> <브랜치>
+clone() { # <directory> <repository> <branch>
     if [ ! -d "sources/$1" ]; then
         git clone --depth 1 --branch "$3" --filter=tree:0 "$2" "sources/$1"
     fi
 }
 
-configure_and_install() { # <디렉터리> [추가 cmake 인자...]
+configure_and_install() { # <directory> [extra cmake args...]
     directory=$1
     shift
     cmake -S "sources/$directory" -B "build/$directory" -G Ninja \
@@ -33,7 +32,7 @@ configure_and_install() { # <디렉터리> [추가 cmake 인자...]
 
 mkdir -p sources build
 
-# ── libwebp (+libwebpdemux — 기본 포함) — 애니 WebP 전담 (SPEC §10) ────────────
+# libwebp (+libwebpdemux) for animated WebP
 clone libwebp https://chromium.googlesource.com/webm/libwebp.git main
 configure_and_install libwebp \
     -DWEBP_BUILD_ANIM_UTILS=OFF \
@@ -47,18 +46,17 @@ configure_and_install libwebp \
     -DWEBP_BUILD_WEBPINFO=OFF \
     -DWEBP_BUILD_WEBPMUX=OFF
 
-# ── libde265 — HEVC 디코더 (HEIF fallback 하위) ────────────────────────────────
-# ENABLE_DECODER는 dec265 CLI 빌드 옵션 — getopt가 없는 MSVC 타깃에서 실패하고
-# 라이브러리에는 불필요해 qView 레시피(mingw)와 달리 OFF (2026-07-11)
+# libde265 (HEVC for the HEIF fallback). ENABLE_DECODER only builds the dec265
+# CLI, which fails on MSVC targets without getopt; the library does not need it.
 clone libde265 https://github.com/strukturag/libde265.git master
 configure_and_install libde265 \
     -DENABLE_SDL=OFF \
     -DENABLE_DECODER=OFF \
     -DENABLE_ENCODER=OFF
 
-# ── libheif — WIC 부재 시 HEIF 런타임 fallback (PORTING_PLAN §5) ───────────────
-# LIBDE265_STATIC_BUILD는 CMAKE_*_FLAGS 지정(툴체인 INIT 플래그를 덮어씀) 대신
-# 환경 변수로 주입 — cmake가 INIT 플래그와 병합한다 (2026-07-11, clang-cl 경로 수정)
+# libheif (HEIF runtime fallback). LIBDE265_STATIC_BUILD goes through the
+# environment so cmake merges it with the toolchain INIT flags instead of
+# overwriting them.
 clone libheif https://github.com/strukturag/libheif.git master
 (
     export CFLAGS="-DLIBDE265_STATIC_BUILD"
@@ -75,7 +73,7 @@ clone libheif https://github.com/strukturag/libheif.git master
         -DWITH_X265=OFF
 )
 
-# ── Imath + libdeflate — OpenEXR 외부 의존 ─────────────────────────────────────
+# Imath + libdeflate (OpenEXR dependencies)
 clone imath https://github.com/AcademySoftwareFoundation/Imath.git main
 configure_and_install imath \
     -DBUILD_TESTING=OFF \
@@ -89,9 +87,8 @@ configure_and_install libdeflate \
     -DLIBDEFLATE_BUILD_GZIP=OFF \
     -DLIBDEFLATE_BUILD_TESTS=OFF
 
-# ── OpenEXR — EXR 전담 (SPEC §10, 성능 우선 2026-07-10) ────────────────────────
-# qView(mingw)의 win32-semaphore 패치는 불채택(2026-07-11): clang-cl(MSVC 타깃)은
-# 원 조건식(WIN32 AND NOT MINGW)이 이미 Win32 세마포어 분기를 탄다 — 무패치 빌드로 확인
+# OpenEXR. clang-cl (MSVC target) already takes the Win32 semaphore branch,
+# so no patching is needed.
 clone openexr https://github.com/AcademySoftwareFoundation/openexr.git release
 configure_and_install openexr \
     -DBUILD_TESTING=OFF \
@@ -103,7 +100,7 @@ configure_and_install openexr \
     -DOPENEXR_FORCE_INTERNAL_DEFLATE=OFF \
     -DOPENEXR_ENABLE_THREADING=ON
 
-# ── EXR 심 — C++ RgbaInputFile을 extern "C"로 노출 ────────────────────────────
+# EXR shim: expose the C++ RgbaInputFile through extern "C"
 cmake -S shim -B build/shim -G Ninja \
     -DCMAKE_BUILD_TYPE=Release \
     -DCMAKE_TOOLCHAIN_FILE="$ROOT/toolchain-clang-cl.cmake" \

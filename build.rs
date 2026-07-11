@@ -15,8 +15,7 @@ fn main() {
     let output_directory = PathBuf::from(env::var("OUT_DIR").unwrap());
     let compiled_resource = output_directory.join("riv.res");
 
-    // 버전 단일 소스 = Cargo.toml: 매니페스트 @VERSION@ 치환 + VERSIONINFO 생성
-    // (About의 CARGO_PKG_VERSION과 함께 세 지점이 전부 패키지 버전을 따른다)
+    // The package version is the single source: manifest substitution + VERSIONINFO.
     let version = env::var("CARGO_PKG_VERSION").unwrap();
     let four_part = format!("{version}.0");
     let numeric = four_part.replace('.', ",");
@@ -41,7 +40,7 @@ fn main() {
             "BEGIN\n",
             "  BLOCK \"StringFileInfo\"\n",
             "  BEGIN\n",
-            "    BLOCK \"040904B0\"\n", // en-US · Unicode
+            "    BLOCK \"040904B0\"\n", // en-US, Unicode
             "  BEGIN\n",
             "      VALUE \"FileDescription\", \"riv image viewer\"\n",
             "      VALUE \"FileVersion\", \"{version}\"\n",
@@ -73,8 +72,7 @@ fn main() {
 
     println!("cargo:rustc-link-arg-bins={}", compiled_resource.display());
 
-    // C/C++ fallback 코덱 정적 링크 (PORTING_PLAN §5·§6.2) —
-    // deps/build_deps.sh 산출물(버전 접미사 포함)을 전부 링크한다
+    // Link every static library produced by deps/build_deps.sh.
     let manifest_directory = PathBuf::from(env::var("CARGO_MANIFEST_DIR").unwrap());
     let codec_library_directory = manifest_directory.join("deps/prefix/lib");
     assert!(
@@ -98,6 +96,6 @@ fn main() {
             println!("cargo:rustc-link-lib=static={library_name}");
         }
     }
-    // C++ 코덱(libheif·OpenEXR)용 MSVC 정적 C++ 런타임
+    // Static MSVC C++ runtime for the C++ codecs (libheif, OpenEXR).
     println!("cargo:rustc-link-lib=libcpmt");
 }

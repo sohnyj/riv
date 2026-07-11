@@ -1,7 +1,4 @@
-//! 오버레이 — 정보 패널·줌 필·에러 텍스트 (SPEC §3.6, P8: D2D/DirectWrite).
-//!
-//! 이미지와 **같은 D2D 패스**에서 그려 qView의 "오버레이가 RHI에 가려짐" 문제를
-//! 구조적으로 제거한다(렌더러가 DrawBitmap 뒤에 호출). 폰트는 Segoe UI(R12).
+//! DirectWrite overlays: info panel, zoom pill, error text.
 
 use std::path::Path;
 use std::time::{SystemTime, UNIX_EPOCH};
@@ -28,7 +25,6 @@ const PANEL_MARGIN: f32 = 12.0;
 const PANEL_PADDING_X: f32 = 12.0;
 const PANEL_PADDING_Y: f32 = 8.0;
 const PANEL_CORNER_RADIUS: f32 = 8.0;
-/// 반투명 검정 rgba(0,0,0,165) (SPEC §3.6)
 const PANEL_BACKGROUND: D2D1_COLOR_F = D2D1_COLOR_F {
     r: 0.0,
     g: 0.0,
@@ -48,18 +44,11 @@ const BLACK: D2D1_COLOR_F = D2D1_COLOR_F {
     a: 1.0,
 };
 
-/// 렌더 패스에 넘기는 오버레이 내용 스냅샷
 pub struct OverlayContent {
-    /// 에러 텍스트 — "Error occurred opening\n<파일명>\n<사유> (Error <코드>)"
     pub error_text: Option<String>,
-    /// 정보 패널 본문 (필드 8종 조립 완료 — SPEC §3.6)
     pub info_text: Option<String>,
-    /// 줌 필 텍스트 ("Zoom: N%" 등, 1초 자동 숨김은 창 타이머가 관리)
     pub zoom_pill_text: Option<String>,
-    /// 배경 perceived brightness > 0.5 → 에러 글자 검정 (SPEC §3.6)
     pub background_is_bright: bool,
-    /// 브러시 색 보정 (SPEC §7 A안) — Some(boost)=HDR FP16 scRGB(선형화×백레벨),
-    /// None=SDR/ACM B8G8R8A8(sRGB 원값)
     pub scrgb_boost: Option<f32>,
 }
 
@@ -67,8 +56,6 @@ pub struct Overlay {
     text_format: IDWriteTextFormat,
     error_format: IDWriteTextFormat,
     dwrite_factory: IDWriteFactory,
-    /// 창 DPI 배율 — D2D 타깃이 96 DPI 고정이라 치수·폰트를 물리 픽셀로 보정
-    /// (R7 — 150% DPI 과소 표시 수정, SPEC R12·§3.6)
     scale: f32,
 }
 
@@ -85,7 +72,6 @@ impl Overlay {
         })
     }
 
-    /// 창 DPI 변경 반영 — 텍스트 포맷 재생성 (WM_DPICHANGED·시작 시)
     pub fn set_scale(&mut self, scale: f32) {
         let scale = scale.max(0.5);
         if (scale - self.scale).abs() < f32::EPSILON {
@@ -98,7 +84,6 @@ impl Overlay {
         }
     }
 
-    /// 렌더러의 D2D 패스 내부에서 호출 (BeginDraw~EndDraw 사이, 변환 identity)
     pub fn draw(
         &self,
         context: &ID2D1DeviceContext,
@@ -115,8 +100,6 @@ impl Overlay {
             None
         };
         if let Some(pill_text) = &content.zoom_pill_text {
-            // 줌 필 = 상단 중앙 (2026-07-10 — qView의 좌측 배치는 Qt 중앙 정렬 제약의
-            // 우회였음. DWrite 메트릭 기반 정밀 중앙 배치). 정보 패널과 겹치면 그 아래로.
             let pill_width = self.measure_panel_width(pill_text, viewport_width)?;
             let centered_left = ((viewport_width - pill_width) / 2.0).max(margin);
             let top = match &info_rect {
@@ -152,7 +135,6 @@ impl Overlay {
         )
     }
 
-    /// 패널 전체 폭(패딩 포함) 측정 — 중앙 배치 계산용
     fn measure_panel_width(&self, text: &str, viewport_width: f32) -> Result<f32> {
         let layout = self.panel_layout(text, viewport_width)?;
         let mut metrics = DWRITE_TEXT_METRICS::default();
@@ -160,7 +142,6 @@ impl Overlay {
         Ok(metrics.width + PANEL_PADDING_X * 2.0 * self.scale)
     }
 
-    /// 반투명 라운드 패널 + 흰 글자. 반환 = 패널 사각형.
     fn draw_panel(
         &self,
         context: &ID2D1DeviceContext,
@@ -204,7 +185,6 @@ impl Overlay {
         Ok(panel.rect)
     }
 
-    /// 뷰포트 중앙 에러 텍스트 — 배경 밝기에 따라 검정/흰색 (SPEC §3.6)
     fn draw_error_text(
         &self,
         context: &ID2D1DeviceContext,
@@ -249,8 +229,6 @@ impl Overlay {
     }
 }
 
-/// 정보 패널 본문 조립 — 필드 8종 (SPEC §3.6)
-/// Segoe UI 텍스트 포맷 2종(패널 14pt·에러 16pt) × DPI 배율 (R12)
 fn create_text_formats(
     dwrite_factory: &IDWriteFactory,
     scale: f32,
@@ -284,8 +262,6 @@ pub fn build_info_text(
     let file_name = path
         .file_name()
         .map_or_else(String::new, |name| name.to_string_lossy().into_owned());
-    // 필드 순서 = 파일명/Format/Size/Resolution/Path/Modified (2026-07-11 조정,
-    // Ratio 제거) — EXIF 확장은 그 뒤
     let megapixels = f64::from(image.width) * f64::from(image.height) / 1_000_000.0;
     let mut lines = vec![
         file_name,
@@ -303,7 +279,6 @@ pub fn build_info_text(
     if image.frames.len() > 1 {
         lines.push(format!("Frames: {}", image.frames.len()));
     }
-    // 고심도·HDR 판별 결과 (SPEC §3.6, Q6) — 톤맵 파라미터 실기 진단 겸용
     if image.storage == PixelStorage::RgbaHalf {
         match image.hdr_content {
             Some((transfer, peak)) => {
@@ -323,8 +298,6 @@ pub fn build_info_text(
     lines.join("\n")
 }
 
-/// EXIF 확장 표시 (SPEC §3.6, 2026-07-11) — 존재 필드만, 탐색기 세부 정보 순서.
-/// 날짜는 기존 로캘 포맷 재사용, 라벨은 영어 고정.
 fn append_exif_lines(lines: &mut Vec<String>, exif: &crate::image::decode::ExifInfo) {
     if let Some(taken) = exif.date_taken {
         lines.push(format!("Date taken: {}", format_locale_datetime(taken)));
@@ -384,7 +357,6 @@ fn append_exif_lines(lines: &mut Vec<String>, exif: &crate::image::decode::ExifI
         lines.push(format!("Metering mode: {text}"));
     }
     if let Some(flash) = exif.flash {
-        // EXIF Flash 비트필드: bit0 = 발광, bits3-4 = 모드(1/2=강제, 3=자동)
         let fired = flash & 0x1 != 0;
         let mode = (flash >> 3) & 0x3;
         let mut text = String::from(if fired { "Flash" } else { "No flash" });
@@ -400,7 +372,6 @@ fn append_exif_lines(lines: &mut Vec<String>, exif: &crate::image::decode::ExifI
     }
 }
 
-/// 소수 표시 — 지정 자릿수로 반올림 후 후행 0·소수점 제거 ("13.0" → "13")
 fn trim_number(value: f64, decimals: usize) -> String {
     let text = format!("{value:.decimals$}");
     let trimmed = text.trim_end_matches('0').trim_end_matches('.');
@@ -411,7 +382,6 @@ fn trim_number(value: f64, decimals: usize) -> String {
     }
 }
 
-/// 에러 텍스트 조립 (SPEC §3.6)
 pub fn build_error_text(
     path: &Path,
     message: &str,
@@ -427,7 +397,6 @@ pub fn build_error_text(
         message.trim().to_string()
     };
     let mut text = format!("Error occurred opening\n{file_name}\n{reason} (Error 0x{code:08X})");
-    // WIC 확장 부재 — 설치 안내 문구만, 링크 없음 (SPEC §10)
     if let Some(extension_name) = store_extension {
         text.push_str(&format!(
             "\nInstall \"{extension_name}\" from the Microsoft Store to view this file."
@@ -436,7 +405,6 @@ pub fn build_error_text(
     text
 }
 
-/// "1.2 MiB (1,234,567 bytes)" (SPEC §3.6)
 fn format_file_size(bytes: u64) -> String {
     let units: [(&str, u64); 3] = [("GiB", 1 << 30), ("MiB", 1 << 20), ("KiB", 1 << 10)];
     let scaled = units.iter().find(|(_, unit)| bytes >= *unit).map_or_else(
@@ -458,12 +426,10 @@ fn group_thousands(value: u64) -> String {
     grouped
 }
 
-/// 수정일시 로캘 포맷 (SPEC §3.6) — OS 로캘 API 위임 (P15)
 fn format_locale_datetime(time: SystemTime) -> String {
     let Ok(elapsed) = time.duration_since(UNIX_EPOCH) else {
         return String::new();
     };
-    // UNIX epoch → FILETIME(1601 기준, 100ns 단위)
     let intervals = elapsed.as_nanos() / 100 + 116_444_736_000_000_000;
     let file_time = FILETIME {
         dwLowDateTime: intervals as u32,

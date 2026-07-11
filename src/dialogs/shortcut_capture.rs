@@ -1,10 +1,4 @@
-//! 단축키 캡처 다이얼로그 (SPEC §8.3) — 키 시퀀스 캡처 / 마우스 클릭-투-레코드.
-//!
-//! 캡처 필드는 등록 클래스(RivKeyCapture·RivMouseCapture)로 raw Win32 메시지를
-//! 직접 받는다: 수정자는 `GetKeyState`, 더블클릭은 `CS_DBLCLKS`(마우스), 우클릭은
-//! 컨텍스트 메뉴 예약이라 무시. qView의 Qualifier 콤보 + Double 체크박스는 Qt 캡처
-//! 제약의 우회 UI라 이식하지 않음(2026-07-10 결정).
-//! 충돌 검사는 qView와 동일하게 OK 시점 경고 + 차단 (qvshortcutdialog.cpp).
+//! Shortcut capture dialogs: raw key sequences and click-to-record mouse bindings.
 
 use windows::Win32::Foundation::{COLORREF, HWND, LPARAM, LRESULT, RECT, WPARAM};
 use windows::Win32::Graphics::Gdi::{
@@ -39,23 +33,16 @@ use crate::dialogs::resource::{
 
 const IDOK: usize = 1;
 const IDCANCEL: usize = 2;
-/// DWLP_USER (x64) — rename.rs와 동일 파생
 const DWLP_USER: WINDOW_LONG_PTR_INDEX = WINDOW_LONG_PTR_INDEX(16);
 
-/// 캡처 필드 → 부모 다이얼로그 통지. wparam = (수정자 << 16) | 가상 키
 const WM_RIV_KEY_CAPTURED: u32 = WM_APP + 0x40;
-/// wparam = (수정자 << 8) | (Double << 7) | 베이스 인덱스
 const WM_RIV_MOUSE_CAPTURED: u32 = WM_APP + 0x41;
-/// 리스트박스 X 아이콘 클릭 → 부모 다이얼로그. wparam = 항목 인덱스
 const WM_RIV_KEY_REMOVE: u32 = WM_APP + 0x42;
 
-/// 항목 X 아이콘 (Windows 닫기 버튼 계열 빨강)
-const REMOVE_ICON_RED: COLORREF = COLORREF(0x001C_2BC4); // BGR — #C42B1C
+const REMOVE_ICON_RED: COLORREF = COLORREF(0x001C_2BC4); // BGR of #C42B1C
 
-/// 다른 액션이 이미 소유한 인코딩 목록 — (인코딩 문자열, 액션 라벨). 충돌 검사용.
 pub type TakenBindings = Vec<(String, &'static str)>;
 
-/// 키 시퀀스 편집 — 확정 시 새 목록(빈 목록 = 바인딩 제거), 취소 시 None
 pub fn capture_keyboard_sequences(
     parent: HWND,
     current: &[String],
@@ -76,7 +63,6 @@ pub fn capture_keyboard_sequences(
     state.accepted.then_some(state.sequences)
 }
 
-/// 마우스 바인딩 편집 — 확정 시 새 목록(0 또는 1개 — qView 패리티), 취소 시 None
 pub fn capture_mouse_binding(
     parent: HWND,
     current: Option<&str>,
@@ -117,7 +103,6 @@ fn show_capture_dialog(
     };
 }
 
-/// "X is already bound to Y" 경고 (qvshortcutdialog.cpp 패리티 — OK 차단)
 fn warn_conflict(dialog: HWND, encoding: &str, owner_label: &str) {
     let content: Vec<u16> = format!("\"{encoding}\" is already bound to \"{owner_label}\"")
         .encode_utf16()
@@ -135,7 +120,6 @@ fn warn_conflict(dialog: HWND, encoding: &str, owner_label: &str) {
     };
 }
 
-/// 현재 눌린 수정자 (main.rs current_modifiers와 동일 규칙)
 fn held_modifiers() -> u8 {
     let pressed = |key: i32| (unsafe { GetKeyState(key) } as u16 & 0x8000) != 0;
     let mut modifiers = 0u8;
@@ -153,8 +137,6 @@ fn held_modifiers() -> u8 {
     }
     modifiers
 }
-
-// ── 키보드 캡처 다이얼로그 ──────────────────────────────────────────────────
 
 struct KeyboardCaptureState {
     sequences: Vec<String>,
@@ -175,14 +157,12 @@ unsafe extern "system" fn keyboard_procedure(
             for sequence in &state.sequences {
                 listbox_add(dialog, IDC_CAPTURE_KEY_LIST, sequence);
             }
-            // 항목 X 아이콘 클릭 감지용 서브클래스 (WM_RIV_KEY_REMOVE 통지)
             if let Ok(listbox) = unsafe { GetDlgItem(Some(dialog), IDC_CAPTURE_KEY_LIST) } {
                 let procedure = key_list_procedure as *const core::ffi::c_void;
                 let original =
                     unsafe { SetWindowLongPtrW(listbox, GWLP_WNDPROC, procedure as isize) };
                 unsafe { SetWindowLongPtrW(listbox, GWLP_USERDATA, original) };
             }
-            // 초기 포커스 = 캡처 필드 (바로 누르면 캡처)
             if let Ok(field) = unsafe { GetDlgItem(Some(dialog), IDC_CAPTURE_KEY_FIELD) } {
                 let _ = unsafe { SetFocus(Some(field)) };
             }
@@ -237,7 +217,7 @@ unsafe extern "system" fn keyboard_procedure(
                                 .find(|(encoding, _)| encoding == sequence)
                             {
                                 warn_conflict(dialog, encoding, owner);
-                                return 1; // 충돌 — 확정 차단 (qView 패리티)
+                                return 1; // conflict: block confirmation
                             }
                         }
                         state.accepted = true;
@@ -255,8 +235,6 @@ unsafe extern "system" fn keyboard_procedure(
         _ => 0,
     }
 }
-
-// ── 마우스 캡처 다이얼로그 ──────────────────────────────────────────────────
 
 struct MouseCaptureState {
     binding: Option<String>,
@@ -342,9 +320,6 @@ fn set_mouse_field_text(dialog: HWND, binding: Option<&str>) {
     }
 }
 
-// ── 키 시퀀스 리스트박스 (owner-draw — 선택 항목 우측 X 아이콘으로 제거) ────
-
-/// 항목 우측 X 아이콘 히트 영역 — 항목 높이와 같은 정사각형
 fn remove_icon_bounds(item: &RECT) -> RECT {
     let side = item.bottom - item.top;
     RECT {
@@ -355,7 +330,6 @@ fn remove_icon_bounds(item: &RECT) -> RECT {
     }
 }
 
-/// 항목 렌더 — 선택 항목은 하이라이트 배경 + 우측 빨강 X (SPEC §8.3, 2026-07-11)
 fn draw_sequence_item(draw: &DRAWITEMSTRUCT) {
     let selected = draw.itemState.0 & ODS_SELECTED.0 != 0;
     unsafe {
@@ -370,7 +344,7 @@ fn draw_sequence_item(draw: &DRAWITEMSTRUCT) {
         );
     }
     if draw.itemID == u32::MAX {
-        return; // 빈 리스트 — 배경만
+        return; // empty list: background only
     }
     const LB_GETTEXT: u32 = 0x0189;
     let mut text = [0u16; 128];
@@ -420,7 +394,6 @@ fn draw_sequence_item(draw: &DRAWITEMSTRUCT) {
     }
 }
 
-/// 리스트박스 서브클래스 — 선택 항목의 X 아이콘 클릭을 WM_RIV_KEY_REMOVE로 통지
 unsafe extern "system" fn key_list_procedure(
     listbox: HWND,
     message: u32,
@@ -458,14 +431,12 @@ unsafe extern "system" fn key_list_procedure(
                         )
                     };
                 }
-                return LRESULT(0); // 클릭 소비 — 선택 이동 방지
+                return LRESULT(0); // consume so the selection does not move
             }
         }
     }
     unsafe { CallWindowProcW(original, listbox, message, wparam, lparam) }
 }
-
-// ── 다이얼로그 상태·리스트박스 헬퍼 ─────────────────────────────────────────
 
 fn state_mut<State>(dialog: HWND) -> Option<&'static mut State> {
     let pointer = unsafe { GetWindowLongPtrW(dialog, DWLP_USER) } as *mut State;
@@ -501,9 +472,6 @@ fn listbox_clear(dialog: HWND, control: i32) {
     }
 }
 
-// ── 캡처 필드 클래스 ────────────────────────────────────────────────────────
-
-/// 캡처 필드 클래스 등록 — 다이얼로그 생성 전 1회 (템플릿이 클래스명 참조)
 pub fn ensure_capture_classes() {
     static REGISTER: std::sync::Once = std::sync::Once::new();
     REGISTER.call_once(|| {
@@ -531,7 +499,6 @@ pub fn ensure_capture_classes() {
     });
 }
 
-/// GWLP_USERDATA = WM_SETFONT로 받은 HFONT (캡처 필드 공용)
 fn field_font(field: HWND) -> HFONT {
     HFONT(unsafe { GetWindowLongPtrW(field, WINDOW_LONG_PTR_INDEX(-21)) } as *mut _)
 }
@@ -650,7 +617,6 @@ unsafe extern "system" fn mouse_field_procedure(
     wparam: WPARAM,
     lparam: LPARAM,
 ) -> LRESULT {
-    /// (Double << 7) | 베이스 인덱스 — WM_RIV_MOUSE_CAPTURED 포장
     fn notify(field: HWND, double_click: bool, base_index: usize) -> LRESULT {
         let packed =
             ((held_modifiers() as usize) << 8) | (usize::from(double_click) << 7) | base_index;
@@ -664,7 +630,6 @@ unsafe extern "system" fn mouse_field_procedure(
             unsafe { SetWindowLongPtrW(field, WINDOW_LONG_PTR_INDEX(-21), wparam.0 as isize) };
             LRESULT(0)
         }
-        // Left 단일 프레스는 팬 예약(SPEC §5.3) — 포커스 이동만, Double만 기록
         WM_LBUTTONDOWN => {
             let _ = unsafe { SetFocus(Some(field)) };
             LRESULT(0)
@@ -672,7 +637,6 @@ unsafe extern "system" fn mouse_field_procedure(
         WM_LBUTTONDBLCLK => notify(field, true, 0),
         WM_MBUTTONDOWN | WM_MBUTTONDBLCLK => notify(field, false, 1),
         WM_XBUTTONDOWN | WM_XBUTTONDBLCLK => {
-            // HIWORD(wParam): XBUTTON1 = Back, XBUTTON2 = Forward
             let base_index = if (wparam.0 >> 16) & 0x2 != 0 { 3 } else { 2 };
             notify(field, false, base_index)
         }

@@ -1,7 +1,7 @@
-//! 파일 조작 — 휴지통/영구 삭제(IFileOperation)·rename·explorer select
-//! (SPEC §6.4, PORTING_PLAN §3 매핑). 확인 다이얼로그는 TaskDialogIndirect.
+//! File operations: recycle/permanent delete, rename, Explorer select.
 
 use std::os::windows::ffi::OsStrExt;
+
 use std::path::{Path, PathBuf};
 
 use windows::Win32::Foundation::HWND;
@@ -17,7 +17,6 @@ use windows::Win32::UI::Shell::{
 use windows::Win32::UI::WindowsAndMessaging::{IDCANCEL, IDYES, SW_SHOWNORMAL};
 use windows::core::{HSTRING, PCWSTR, Result, w};
 
-/// Show in Explorer — `explorer /select,<경로>` (SPEC §6.4)
 pub fn show_in_explorer(path: &Path) {
     let argument = HSTRING::from(format!("/select,\"{}\"", path.display()));
     unsafe {
@@ -32,14 +31,11 @@ pub fn show_in_explorer(path: &Path) {
     };
 }
 
-/// 삭제 확인 결과
 pub struct DeleteConfirmation {
     pub confirmed: bool,
-    /// "다시 묻지 않기" 체크 (휴지통 삭제만 — SPEC §6.4 `askdelete`)
     pub do_not_ask_again: bool,
 }
 
-/// 삭제 확인 TaskDialog — 영구 삭제는 항상, 휴지통은 `askdelete`일 때 호출자가 띄운다
 pub fn confirm_delete(window: HWND, path: &Path, permanent: bool) -> DeleteConfirmation {
     let file_name = path
         .file_name()
@@ -85,7 +81,6 @@ pub fn confirm_delete(window: HWND, path: &Path, permanent: bool) -> DeleteConfi
     }
 }
 
-/// 휴지통(FOF_ALLOWUNDO) 또는 영구 삭제 — IFileOperation (SPEC §6.4, P15)
 pub fn delete_file(path: &Path, permanent: bool) -> Result<()> {
     unsafe {
         let operation: IFileOperation =
@@ -101,7 +96,6 @@ pub fn delete_file(path: &Path, permanent: bool) -> Result<()> {
     }
 }
 
-/// 이름 변경 — 같은 디렉터리 내 새 이름, 성공 시 새 경로 반환 (SPEC §6.4)
 pub fn rename_file(path: &Path, new_name: &str) -> std::io::Result<PathBuf> {
     let destination = path.with_file_name(new_name);
     if destination

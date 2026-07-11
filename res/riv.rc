@@ -1,14 +1,9 @@
-// 1 = 앱 아이콘 리소스 ID (창 클래스 hIcon과 탐색기 표시가 공유)
+// Icon id 1 is shared with the window class. Version info and the manifest
+// are appended by the build script.
 1 ICON "riv.ico"
-// 매니페스트(RT_MANIFEST)·VERSIONINFO는 build.rs 생성 rc가 추가 —
-// 버전 단일 소스 = Cargo.toml (CARGO_PKG_VERSION)
-
-// ── R6 다이얼로그 템플릿 (PORTING_PLAN §4, SPEC §8.3) ───────────────────────
-// 폰트는 전부 FONT 9, "Segoe UI" — MS Shell Dlg 계열 금지 (SPEC R12)
 
 #include "resource.h"
 
-// 옵션 프레임 — 탭 + OK/Apply(변경 시 활성)/Restore Defaults(기본값과 다를 때 활성)/Cancel
 IDD_OPTIONS DIALOGEX 0, 0, 320, 252
 STYLE DS_MODALFRAME | WS_POPUP | WS_CAPTION | WS_SYSMENU
 CAPTION "Settings"
@@ -21,7 +16,6 @@ BEGIN
     PUSHBUTTON "Apply", IDC_APPLY, 263, 231, 50, 14
 END
 
-// Window 탭 (배치는 qView qvoptionsdialog.ui Window 탭 계승)
 IDD_PAGE_WINDOW DIALOGEX 0, 0, 292, 196
 STYLE DS_CONTROL | WS_CHILD
 FONT 9, "Segoe UI"
@@ -38,7 +32,6 @@ BEGIN
     AUTOCHECKBOX "Ctrl + drag to move window", IDC_WINDOW_CTRL_DRAG, 12, 116, 260, 10
 END
 
-// Image 탭
 IDD_PAGE_IMAGE DIALOGEX 0, 0, 292, 196
 STYLE DS_CONTROL | WS_CHILD
 FONT 9, "Segoe UI"
@@ -53,7 +46,6 @@ BEGIN
     AUTOCHECKBOX "Fractional zooming", IDC_IMAGE_FRACTIONAL_ZOOM, 12, 70, 260, 10
 END
 
-// Miscellaneous 탭
 IDD_PAGE_MISC DIALOGEX 0, 0, 292, 196
 STYLE DS_CONTROL | WS_CHILD
 FONT 9, "Segoe UI"
@@ -79,7 +71,6 @@ BEGIN
     AUTOCHECKBOX "Skip hidden files", IDC_MISC_SKIP_HIDDEN, 12, 176, 260, 10
 END
 
-// Shortcuts 탭 — 3컬럼 ListView(액션명|Keyboard|Mouse), 더블클릭 편집 (SPEC §8.3)
 IDD_PAGE_SHORTCUTS DIALOGEX 0, 0, 292, 196
 STYLE DS_CONTROL | WS_CHILD
 FONT 9, "Segoe UI"
@@ -89,7 +80,6 @@ BEGIN
     CONTROL "", IDC_SHORTCUTS_LIST, "SysListView32", LVS_REPORT | LVS_SINGLESEL | LVS_SHOWSELALWAYS | LVS_NOSORTHEADER | WS_BORDER | WS_TABSTOP, 7, 26, 278, 163
 END
 
-// File Association 탭 — tri-state 트리(상태 이미지 3종) (PORTING_PLAN §4, SPEC §8.3)
 IDD_PAGE_ASSOCIATION DIALOGEX 0, 0, 292, 196
 STYLE DS_CONTROL | WS_CHILD
 FONT 9, "Segoe UI"
@@ -99,7 +89,6 @@ BEGIN
     CONTROL "", IDC_ASSOC_TREE, "SysTreeView32", TVS_HASBUTTONS | TVS_LINESATROOT | TVS_DISABLEDRAGDROP | TVS_SHOWSELALWAYS | WS_BORDER | WS_TABSTOP, 7, 26, 278, 163
 END
 
-// 키 시퀀스 캡처 (SPEC §8.3 — 캡처 필드는 등록 클래스 RivKeyCapture)
 IDD_CAPTURE_KEYBOARD DIALOGEX 0, 0, 220, 120
 STYLE DS_MODALFRAME | WS_POPUP | WS_CAPTION | WS_SYSMENU
 CAPTION "Modify Shortcuts"
@@ -113,7 +102,6 @@ BEGIN
     PUSHBUTTON "Cancel", 2, 163, 99, 50, 14
 END
 
-// 마우스 클릭-투-레코드 캡처 (SPEC §8.3 — 직접 캡처, Qualifier 콤보·Double 체크 미이식)
 IDD_CAPTURE_MOUSE DIALOGEX 0, 0, 220, 72
 STYLE DS_MODALFRAME | WS_POPUP | WS_CAPTION | WS_SYSMENU
 CAPTION "Modify Shortcuts"
@@ -126,8 +114,6 @@ BEGIN
     PUSHBUTTON "Cancel", 2, 163, 51, 50, 14
 END
 
-// About (qView qvaboutdialog 참고 — 대형 타이틀·version·빌드/라이선스, 전부 중앙 정렬.
-// 타이틀·버전 폰트는 코드에서 지정(WM_SETFONT), 링크는 SysLink, 버튼 없음)
 IDD_ABOUT DIALOGEX 0, 0, 200, 100
 STYLE DS_MODALFRAME | WS_POPUP | WS_CAPTION | WS_SYSMENU
 CAPTION "About"

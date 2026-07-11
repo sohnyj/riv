@@ -1,22 +1,16 @@
-//! 액션 정의·메타 (SPEC §5.1) — 메뉴·키보드·마우스 입력이 전부 액션 하나로
-//! 수렴하고, 디스패치는 main의 단일 지점에서 분기한다 (§2 핵심 계약).
+//! Action definitions; every input path converges on one dispatcher.
 
-/// 활성화 게이트 (SPEC §5.1) — 메뉴 enable·디스패치 가드 공용
+/// Enablement gate shared by menu items and the dispatcher.
 #[derive(Clone, Copy, PartialEq, Eq)]
 pub enum ActivationGate {
-    /// 창만 필요 (windowdisable)
     Window,
-    /// 이미지 로드 필요 (disable)
     Image,
-    /// 애니메이션 필요 (gifdisable)
     Animation,
-    /// 폴더 목록 필요 (folderdisable)
     Folder,
 }
 
 #[derive(Clone, Copy, PartialEq, Eq)]
 pub enum Action {
-    // 파일
     Open,
     OpenWith,
     OpenWithOther,
@@ -29,12 +23,10 @@ pub enum Action {
     Recent(u8),
     ClearRecents,
     Quit,
-    // 탐색
     FirstFile,
     PreviousFile,
     NextFile,
     LastFile,
-    // 보기
     ZoomIn,
     ZoomOut,
     ResetZoom,
@@ -48,20 +40,17 @@ pub enum Action {
     Mirror,
     Flip,
     Fullscreen,
-    // 애니메이션
     Pause,
     NextFrame,
     DecreaseSpeed,
     ResetSpeed,
     IncreaseSpeed,
-    // 기타
     Slideshow,
     Options,
     About,
 }
 
-/// (액션, 이름, 라벨, 게이트) — 이름 = 바인딩·디스패치 키 (SPEC §5.1).
-/// recent0..9는 이름이 동적이라 표 밖에서 처리.
+/// (action, name, label, gate); the name is the binding and dispatch key.
 const ACTION_TABLE: &[(Action, &str, &str, ActivationGate)] = &[
     (Action::Open, "open", "Open...", ActivationGate::Window),
     (
@@ -232,7 +221,6 @@ const RECENT_NAMES: [&str; 10] = [
 ];
 
 impl Action {
-    /// 바인딩·디스패치 키 → 액션 (SPEC §5.1)
     pub fn from_name(name: &str) -> Option<Self> {
         if let Some(index) = RECENT_NAMES.iter().position(|recent| *recent == name) {
             return Some(Self::Recent(index as u8));
@@ -243,8 +231,6 @@ impl Action {
             .map(|(action, _, _, _)| *action)
     }
 
-    /// 단축키 편집 테이블의 행 목록 (SPEC §8.3) — Recent(동적 이름)와 OpenWith
-    /// (서브메뉴 컨테이너 — 디스패치 무동작이라 바인딩 무의미)는 제외
     pub fn all_bindable() -> impl Iterator<Item = Self> {
         ACTION_TABLE
             .iter()
@@ -263,7 +249,6 @@ impl Action {
             .expect("action in table")
     }
 
-    /// 메뉴 라벨 (상태 토글 라벨은 메뉴 구성부에서 처리)
     pub fn label(self) -> &'static str {
         if matches!(self, Self::Recent(_)) {
             return "";

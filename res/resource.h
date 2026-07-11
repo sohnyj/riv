@@ -1,10 +1,9 @@
-// 다이얼로그 리소스 ID (R6) — src/dialogs/resource.rs와 1:1 미러 유지
-// (llvm-rc는 windows.h를 포함하지 않으므로 필요한 스타일 상수도 여기서 정의)
+// Mirror of src/dialogs/resource.rs; keep both in sync.
+// Style constants are defined here because llvm-rc does not include windows.h.
 
 #ifndef RIV_RESOURCE_H
 #define RIV_RESOURCE_H
 
-// ── 다이얼로그 ──────────────────────────────────────────────────────────────
 #define IDD_OPTIONS 100
 #define IDD_PAGE_WINDOW 110
 #define IDD_PAGE_IMAGE 120
@@ -15,12 +14,10 @@
 #define IDD_CAPTURE_MOUSE 170
 #define IDD_ABOUT 180
 
-// ── 옵션 프레임 ─────────────────────────────────────────────────────────────
 #define IDC_OPTIONS_TAB 1001
 #define IDC_APPLY 1002
 #define IDC_RESTORE_DEFAULTS 1003
 
-// ── Window 탭 ───────────────────────────────────────────────────────────────
 #define IDC_WINDOW_BGCOLOR_ENABLED 1101
 #define IDC_WINDOW_BGCOLOR_BUTTON 1102
 #define IDC_WINDOW_TITLEBAR_BASIC 1103
@@ -30,14 +27,12 @@
 #define IDC_WINDOW_SAVE_POSITION 1107
 #define IDC_WINDOW_CTRL_DRAG 1108
 
-// ── Image 탭 ────────────────────────────────────────────────────────────────
 #define IDC_IMAGE_FILTERING 1201
 #define IDC_IMAGE_SCALEFACTOR_EDIT 1202
 #define IDC_IMAGE_SCALEFACTOR_SPIN 1203
 #define IDC_IMAGE_CURSOR_ZOOM 1204
 #define IDC_IMAGE_FRACTIONAL_ZOOM 1205
 
-// ── Miscellaneous 탭 ────────────────────────────────────────────────────────
 #define IDC_MISC_SORT 1301
 #define IDC_MISC_ASCENDING 1302
 #define IDC_MISC_DESCENDING 1303
@@ -52,29 +47,24 @@
 #define IDC_MISC_SKIP_HIDDEN 1312
 #define IDC_MISC_SLIDESHOW_TIMER_SPIN 1313
 
-// ── Shortcuts 탭 ────────────────────────────────────────────────────────────
 #define IDC_SHORTCUTS_LIST 1401
 #define IDC_SHORTCUTS_RESET 1402
 #define IDC_SHORTCUTS_CLEAR_ALL 1403
 
-// ── File Association 탭 ─────────────────────────────────────────────────────
 #define IDC_ASSOC_TREE 1501
 #define IDC_ASSOC_SELECT_ALL 1502
 #define IDC_ASSOC_SELECT_NONE 1503
 
-// ── 캡처 다이얼로그 ─────────────────────────────────────────────────────────
 #define IDC_CAPTURE_KEY_FIELD 1601
 #define IDC_CAPTURE_KEY_LIST 1602
 #define IDC_CAPTURE_KEY_CLEAR 1604
 #define IDC_CAPTURE_MOUSE_FIELD 1701
 #define IDC_CAPTURE_MOUSE_CLEAR 1702
 
-// ── About ───────────────────────────────────────────────────────────────────
 #define IDC_ABOUT_TITLE 1801
 #define IDC_ABOUT_VERSION 1802
 #define IDC_ABOUT_LINK 1804
 
-// ── 스타일 상수 (winuser.h·commctrl.h 발췌 — rc 전용) ───────────────────────
 #define WS_POPUP 0x80000000L
 #define WS_CAPTION 0x00C00000L
 #define WS_SYSMENU 0x00080000L

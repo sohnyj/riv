@@ -1,10 +1,4 @@
-//! C 정적 fallback 코덱 어댑터 (PORTING_PLAN §5) — 애니 WebP(libwebp+libwebpdemux)·
-//! EXR(OpenEXR C++ 심)·HEIF(libheif+libde265). 정적 라이브러리는
-//! `deps/build_deps.sh` 산출물이며 build.rs가 링크한다.
-//!
-//! FFI 선언은 각 라이브러리의 공개 C 헤더와 1:1 — 구조체 레이아웃·enum 값·ABI 버전은
-//! 빌드 시점 소스(deps/sources)에서 확인해 고정했다. 출력은 전부 premultiplied
-//! BGRA8 (SPEC §3.1).
+//! Static C codec adapters: animated WebP, EXR, and HEIF fallback.
 
 use std::ffi::{CStr, c_char, c_int, c_void};
 use std::os::windows::ffi::OsStrExt;
@@ -15,17 +9,11 @@ use super::decode::{
     fallback_error,
 };
 
-// ── 애니메이션 WebP — libwebp + libwebpdemux (SPEC §10, WIC 애니 미지원 확인) ──
-
-/// demux.h `WEBP_DEMUX_ABI_VERSION` — 빌드된 라이브러리와 불일치 시 WebPDemuxInternal이
-/// NULL을 반환한다 (런타임 안전 검증)
+/// Must match the built libwebpdemux ABI or WebPDemuxInternal returns null.
 const WEBP_DEMUX_ABI_VERSION: c_int = 0x0107;
-/// demux.h `WebPFormatFeature`
 const WEBP_FF_CANVAS_WIDTH: c_int = 1;
 const WEBP_FF_CANVAS_HEIGHT: c_int = 2;
-/// mux_types.h `WebPMuxAnimDispose`
 const WEBP_MUX_DISPOSE_BACKGROUND: c_int = 1;
-/// mux_types.h `WebPMuxAnimBlend`
 const WEBP_MUX_NO_BLEND: c_int = 1;
 
 #[repr(C)]
@@ -36,7 +24,6 @@ struct WebPData {
 
 enum WebPDemuxer {}
 
-/// demux.h `struct WebPIterator` (ABI 0x0107)
 #[repr(C)]
 struct WebPIterator {
     frame_number: c_int,
@@ -80,8 +67,6 @@ unsafe extern "C" {
     ) -> *mut u8;
 }
 
-/// 애니메이션 WebP 디코드 — ANMF 프레임을 blend/dispose 규칙으로 캔버스에 합성
-/// (GIF·APNG와 동일 모델). 호출 전 VP8X ANIM 플래그 프로빙으로 분기된다.
 pub fn decode_webp_animation(
     path: &Path,
     format_name: &'static str,
@@ -191,7 +176,6 @@ fn compose_webp_frames(
     })
 }
 
-/// 스트레이트 BGRA → premultiplied (SPEC §3.1)
 fn premultiply_bgra_in_place(pixels: &mut [u8]) {
     for pixel in pixels.chunks_exact_mut(4) {
         let alpha = u16::from(pixel[3]);
@@ -205,8 +189,6 @@ fn premultiply_bgra_in_place(pixels: &mut [u8]) {
     }
 }
 
-// ── EXR — OpenEXR C++ 심 (deps/shim, SPEC §10 성능 우선 선택) ────────────
-
 unsafe extern "C" {
     fn riv_exr_decode(
         path: *const u16,
@@ -219,9 +201,6 @@ unsafe extern "C" {
     fn riv_exr_free(pixels: *mut u16);
 }
 
-/// EXR 디코드 — 심이 준 linear RGBA half를 SDR로 톤 다운(클램프 + sRGB 인코딩,
-/// SPEC §10 "HDR→SDR 톤 다운" 1차 구현) 후 premultiplied BGRA8로 변환.
-/// EXR 관례상 픽셀은 associated(premultiplied linear) — 인코딩 전 un-premultiply.
 pub fn decode_exr(path: &Path, format_name: &'static str) -> Result<DecodedImage, DecodeError> {
     let wide_path: Vec<u16> = path.as_os_str().encode_wide().chain(Some(0)).collect();
     let mut width: c_int = 0;
@@ -253,10 +232,10 @@ pub fn decode_exr(path: &Path, format_name: &'static str) -> Result<DecodedImage
         let encode = |value: u16| {
             let mut linear = half_to_float(value);
             if alpha > 0.0 && alpha < 1.0 {
-                linear /= alpha; // associated → straight
+                linear /= alpha; // associated alpha -> straight
             }
             let encoded = linear_to_srgb(linear.clamp(0.0, 1.0));
-            (encoded * alpha * 255.0 + 0.5) as u8 // 인코딩 후 재-premultiply
+            (encoded * alpha * 255.0 + 0.5) as u8 // re-premultiply after encoding
         };
         pixels.push(encode(pixel[2]));
         pixels.push(encode(pixel[1]));
@@ -264,7 +243,6 @@ pub fn decode_exr(path: &Path, format_name: &'static str) -> Result<DecodedImage
         pixels.push((alpha * 255.0 + 0.5) as u8);
     }
     unsafe { riv_exr_free(half_pixels) };
-    // 톤 다운 결과는 sRGB 인코딩 — 프로파일 없음(sRGB 가정 경로)
     Ok(DecodedImage {
         width: width as u32,
         height: height as u32,
@@ -282,7 +260,6 @@ pub fn decode_exr(path: &Path, format_name: &'static str) -> Result<DecodedImage
     })
 }
 
-/// IEEE 754 half → f32 (의존성 없는 비트 변환 — P3)
 fn half_to_float(half: u16) -> f32 {
     let sign = u32::from(half >> 15);
     let exponent = u32::from((half >> 10) & 0x1F);
@@ -291,7 +268,6 @@ fn half_to_float(half: u16) -> f32 {
         if mantissa == 0 {
             sign << 31
         } else {
-            // 서브노멀 — 정규화
             let mut exponent = 113u32;
             let mut mantissa = mantissa;
             while mantissa & 0x400 == 0 {
@@ -316,9 +292,6 @@ fn linear_to_srgb(linear: f32) -> f32 {
     }
 }
 
-// ── HEIF — libheif + libde265 (WIC 부재 시 런타임 fallback, PORTING_PLAN §5) ───
-
-/// heif_image.h enum 값
 const HEIF_COLORSPACE_RGB: c_int = 1;
 const HEIF_CHROMA_INTERLEAVED_RGBA: c_int = 11;
 const HEIF_CHANNEL_INTERLEAVED: c_int = 10;
@@ -327,7 +300,6 @@ enum HeifContext {}
 enum HeifImageHandle {}
 enum HeifImage {}
 
-/// heif_error.h `struct heif_error` — code 0 = 성공
 #[repr(C)]
 struct HeifError {
     code: c_int,
@@ -387,7 +359,6 @@ unsafe extern "C" {
     ) -> HeifError;
 }
 
-/// HEIF 디코드 — irot/imir 등 변환은 libheif 기본 적용(옵션 NULL) (PORTING_PLAN §5)
 pub fn decode_heif(path: &Path, format_name: &'static str) -> Result<DecodedImage, DecodeError> {
     let data = std::fs::read(path).map_err(fallback_error)?;
     let context = unsafe { heif_context_alloc() };
@@ -427,7 +398,6 @@ fn decode_heif_primary_image(
         )
     }
     .into_result();
-    // ICC 바이트 — ColorManagement 이펙트 소스 (SPEC §7 "fallback 디코더는 ICC 바이트")
     let icc_profile = {
         let size = unsafe { heif_image_handle_get_raw_color_profile_size(handle) };
         if size > 0 {
@@ -456,7 +426,6 @@ fn decode_heif_primary_image(
     for row in 0..height as usize {
         let row_pointer = unsafe { plane.add(row * stride as usize) };
         let row_pixels = unsafe { std::slice::from_raw_parts(row_pointer, width as usize * 4) };
-        // 스트레이트 RGBA → premultiplied BGRA
         for pixel in row_pixels.chunks_exact(4) {
             let alpha = u16::from(pixel[3]);
             pixels.push((u16::from(pixel[2]) * alpha / 255) as u8);

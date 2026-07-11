@@ -8,8 +8,7 @@ use windows::Win32::UI::WindowsAndMessaging::{
     SPI_GETWORKAREA, SYSTEM_PARAMETERS_INFO_UPDATE_FLAGS, SystemParametersInfoW,
 };
 
-/// 작업 영역(주 모니터, 작업표시줄 제외) 중앙 배치 원점 (SPEC §6.1 — 기본 위치 =
-/// 스크린 중앙, 2026-07-11). 조회 실패 시 None(호출자 기본 배치 유지).
+/// Centered origin within the primary work area, when available.
 pub fn work_area_centered_origin(width: i32, height: i32) -> Option<(i32, i32)> {
     let mut work_area = RECT::default();
     unsafe {

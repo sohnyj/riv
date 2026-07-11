@@ -1,8 +1,4 @@
-//! 키보드/마우스 바인딩 인코딩·기본값·역참조 (SPEC §5.2~5.3)
-//!
-//! 인코딩은 `[Ctrl+][Shift+][Alt+][Meta+]<Base>`(마우스는 `Double+` 추가).
-//! 설정에 있는 액션은 그 목록으로 **대체**(빈 배열 = 바인딩 제거), 없는 액션은
-//! 기본값. 충돌(중복 배정) 경고 UI는 R6 단축키 편집에서 — 조회는 선착 매치.
+//! Keyboard/mouse binding encoding, defaults, and lookup.
 
 use serde_json::{Map, Value};
 
@@ -13,8 +9,6 @@ pub const MODIFIER_SHIFT: u8 = 1 << 1;
 pub const MODIFIER_ALT: u8 = 1 << 2;
 pub const MODIFIER_META: u8 = 1 << 3;
 
-/// 마우스 바인딩 베이스 (SPEC §5.3) — Left는 Double 전용(단일 프레스는 팬 예약),
-/// 우클릭은 컨텍스트 메뉴 예약이라 베이스에 없음.
 #[derive(Clone, Copy, PartialEq, Eq)]
 pub enum MouseBase {
     Left,
@@ -43,7 +37,6 @@ pub struct Bindings {
     mouse: Vec<MouseBinding>,
 }
 
-/// 기본 키보드 바인딩 (SPEC §5.2 — Q4: qView 기본값 계승)
 const DEFAULT_KEYBOARD: &[(&str, &[&str])] = &[
     ("open", &["Ctrl+O"]),
     ("reloadfile", &["R", "F5"]),
@@ -79,7 +72,6 @@ const DEFAULT_KEYBOARD: &[(&str, &[&str])] = &[
     ("quit", &["Ctrl+W", "Escape"]),
 ];
 
-/// 기본 마우스 바인딩 (SPEC §5.3)
 const DEFAULT_MOUSE: &[(&str, &[&str])] = &[
     ("previousfile", &["WheelUp"]),
     ("nextfile", &["WheelDown"]),
@@ -90,7 +82,6 @@ const DEFAULT_MOUSE: &[(&str, &[&str])] = &[
 ];
 
 impl Bindings {
-    /// 기본값 + 설정 재정의 병합 (SPEC §8.1 keyboardbindings/mousebindings)
     pub fn from_settings(
         keyboard_overrides: Option<&Map<String, Value>>,
         mouse_overrides: Option<&Map<String, Value>>,
@@ -110,7 +101,6 @@ impl Bindings {
                 }
             }
         }
-        // 기본값에 없는 액션(recent0..9 등)의 사용자 바인딩
         if let Some(overrides) = keyboard_overrides {
             for (name, sequences) in overrides {
                 if DEFAULT_KEYBOARD.iter().any(|(default, _)| default == name) {
@@ -193,8 +183,7 @@ impl Bindings {
             .map(|binding| binding.action)
     }
 
-    /// Escape 특례 (SPEC §5.2) — Escape가 어떤 액션에도 안 묶였을 때만
-    /// "전체화면 나가기" 전용 키로 동작
+    /// Escape acts as exit-fullscreen only while unbound.
     pub fn escape_is_unbound(&self) -> bool {
         use windows::Win32::UI::Input::KeyboardAndMouse::VK_ESCAPE;
         !self
@@ -204,7 +193,6 @@ impl Bindings {
     }
 }
 
-/// 기본 키 시퀀스 (SPEC §5.2) — 단축키 편집의 Reset to Default·저장 생략 기준
 pub fn default_keyboard_sequences(action_name: &str) -> &'static [&'static str] {
     DEFAULT_KEYBOARD
         .iter()
@@ -212,7 +200,6 @@ pub fn default_keyboard_sequences(action_name: &str) -> &'static [&'static str] 
         .map_or(&[], |(_, sequences)| sequences)
 }
 
-/// 기본 마우스 인코딩 (SPEC §5.3) — 동상
 pub fn default_mouse_encodings(action_name: &str) -> &'static [&'static str] {
     DEFAULT_MOUSE
         .iter()
@@ -220,14 +207,12 @@ pub fn default_mouse_encodings(action_name: &str) -> &'static [&'static str] {
         .map_or(&[], |(_, encodings)| encodings)
 }
 
-/// 캡처 결과 → 인코딩 문자열. 이름 없는 가상 키(한/영 전환 등)는 None —
-/// `parse_key_sequence`와 왕복 정합이 보장되는 키만 바인딩 허용 (R6 캡처)
+/// None for keys that cannot round-trip through the parser.
 pub fn format_key_sequence(modifiers: u8, virtual_key: u16) -> Option<String> {
     let base = key_name_from_virtual_key(virtual_key)?;
     Some(format!("{}{base}", modifier_prefix(modifiers)))
 }
 
-/// 캡처 결과 → 마우스 인코딩 문자열 (SPEC §5.3)
 pub fn format_mouse_encoding(modifiers: u8, double_click: bool, base: MouseBase) -> String {
     let base_name = match base {
         MouseBase::Left => "Left",
@@ -244,8 +229,6 @@ pub fn format_mouse_encoding(modifiers: u8, double_click: bool, base: MouseBase)
     )
 }
 
-/// 수정자 접두 — 파서·기본값과 같은 순서(Ctrl, Shift, Alt, Meta).
-/// 캡처 필드의 진행 중 표시(R6)에도 쓰인다.
 pub fn modifier_prefix(modifiers: u8) -> String {
     let mut prefix = String::new();
     if modifiers & MODIFIER_CONTROL != 0 {
@@ -263,8 +246,6 @@ pub fn modifier_prefix(modifiers: u8) -> String {
     prefix
 }
 
-/// 액션의 확정 키 시퀀스 목록 — 재정의가 있으면 그 목록, 없으면 기본값.
-/// 옵션 다이얼로그 Shortcuts 탭의 초기 상태 (SPEC §8.3)
 pub fn resolved_keyboard_sequences(
     overrides: Option<&Map<String, Value>>,
     action_name: &str,
@@ -276,8 +257,7 @@ pub fn resolved_keyboard_sequences(
     )
 }
 
-/// 컨텍스트 메뉴 단축키 열 (SPEC §6.1) — 첫 키보드 시퀀스 + 첫 마우스 인코딩을
-/// ", "로 병기(예: "F11, Middle"). 표기는 Shortcuts 탭과 동일한 인코딩 문자열 그대로.
+/// First keyboard sequence plus the mouse binding, comma-joined.
 pub fn menu_shortcut_text(
     keyboard_overrides: Option<&Map<String, Value>>,
     mouse_overrides: Option<&Map<String, Value>>,
@@ -294,7 +274,6 @@ pub fn menu_shortcut_text(
     (!parts.is_empty()).then(|| parts.join(", "))
 }
 
-/// 액션의 확정 마우스 인코딩 목록 — 동상
 pub fn resolved_mouse_encodings(
     overrides: Option<&Map<String, Value>>,
     action_name: &str,
@@ -302,7 +281,6 @@ pub fn resolved_mouse_encodings(
     override_or_default(overrides, action_name, default_mouse_encodings(action_name))
 }
 
-/// 설정 재정의가 있으면 그 목록(빈 배열 = 제거), 없으면 기본값
 fn override_or_default(
     overrides: Option<&Map<String, Value>>,
     name: &str,
@@ -326,12 +304,10 @@ fn string_list(value: &Value) -> Vec<String> {
         .unwrap_or_default()
 }
 
-/// "Ctrl+Shift+F5" → (수정자, 가상 키). 미지원 토큰이 있으면 None.
 fn parse_key_sequence(sequence: &str) -> Option<(u8, u16)> {
     let mut modifiers = 0u8;
     let mut virtual_key = None;
     for token in sequence.split('+') {
-        // "Ctrl++"(= '+' 키) 같은 빈 토큰은 미지원 — 기본값에 없음
         match token {
             "Ctrl" => modifiers |= MODIFIER_CONTROL,
             "Shift" => modifiers |= MODIFIER_SHIFT,
@@ -343,7 +319,6 @@ fn parse_key_sequence(sequence: &str) -> Option<(u8, u16)> {
     virtual_key.map(|key| (modifiers, key))
 }
 
-/// "[수정자+][Double+]<Base>" → (수정자, Double, 베이스) (SPEC §5.3)
 fn parse_mouse_encoding(encoding: &str) -> Option<(u8, bool, MouseBase)> {
     let mut modifiers = 0u8;
     let mut double_click = false;
@@ -365,7 +340,6 @@ fn parse_mouse_encoding(encoding: &str) -> Option<(u8, bool, MouseBase)> {
         }
     }
     let base = base?;
-    // Double은 Left 전용, Left는 Double 전용 (단일 프레스 = 팬 드래그 예약)
     if (base == MouseBase::Left) != double_click {
         return None;
     }
@@ -379,14 +353,12 @@ fn virtual_key_from_name(name: &str) -> Option<u16> {
         VK_OEM_COMMA, VK_OEM_MINUS, VK_OEM_PERIOD, VK_OEM_PLUS, VK_PRIOR, VK_RETURN, VK_RIGHT,
         VK_SPACE, VK_TAB, VK_UP,
     };
-    // 단일 영숫자: 가상 키 = ASCII 대문자
     let mut characters = name.chars();
     if let (Some(character), None) = (characters.next(), characters.next())
         && character.is_ascii_alphanumeric()
     {
         return Some(character.to_ascii_uppercase() as u16);
     }
-    // F1~F24
     if let Some(number) = name.strip_prefix('F')
         && let Ok(index) = number.parse::<u16>()
         && (1..=24).contains(&index)
@@ -425,8 +397,6 @@ fn virtual_key_from_name(name: &str) -> Option<u16> {
     Some(key.0)
 }
 
-/// 가상 키 → 시퀀스 베이스 이름 — `virtual_key_from_name`의 역 (R6 캡처).
-/// 왕복 정합: 여기서 나온 이름은 반드시 같은 가상 키로 파싱된다.
 fn key_name_from_virtual_key(virtual_key: u16) -> Option<String> {
     use windows::Win32::UI::Input::KeyboardAndMouse::{
         VK_BACK, VK_DELETE, VK_DOWN, VK_END, VK_ESCAPE, VK_F1, VK_F24, VK_HOME, VK_INSERT, VK_LEFT,
@@ -434,7 +404,6 @@ fn key_name_from_virtual_key(virtual_key: u16) -> Option<String> {
         VK_OEM_COMMA, VK_OEM_MINUS, VK_OEM_PERIOD, VK_OEM_PLUS, VK_PRIOR, VK_RETURN, VK_RIGHT,
         VK_SPACE, VK_TAB, VK_UP,
     };
-    // 영숫자: 가상 키 = ASCII 대문자
     if (u16::from(b'0')..=u16::from(b'9')).contains(&virtual_key)
         || (u16::from(b'A')..=u16::from(b'Z')).contains(&virtual_key)
     {

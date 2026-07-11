@@ -6,7 +6,7 @@ pub mod shortcut_capture;
 
 use windows::Win32::Foundation::HWND;
 
-/// 소유 창 중앙 배치 (SPEC §6.4 — Rename·About 공용, 2026-07-11)
+/// Center a dialog within its owner window.
 pub(crate) fn center_on_owner(dialog: HWND) {
     use windows::Win32::UI::WindowsAndMessaging::{
         GetParent, GetWindowRect, SWP_NOACTIVATE, SWP_NOSIZE, SWP_NOZORDER, SetWindowPos,

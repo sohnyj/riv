@@ -1,5 +1,5 @@
 #!/bin/sh
-# 빌드 진입점 — P12: 매 빌드 fmt → clippy(-D warnings) → build
+# Build entry point: fmt, clippy (-D warnings), then build.
 set -e
 cd "$(dirname "$0")"
 . "$HOME/.cargo/env"

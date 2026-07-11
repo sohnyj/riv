@@ -1,13 +1,4 @@
-//! 옵션 다이얼로그 (SPEC §8.3, PORTING_PLAN §4) — .rc 템플릿 + comctl32 v6.
-//!
-//! - 탭 5: Window / Image / Miscellaneous / Shortcuts / File Association.
-//! - transient 편집 모델: Apply 활성 = 저장값과 diff, Restore Defaults 활성 =
-//!   기본값과 diff(파일 연결은 기본값 개념 없음 — 현 레지스트리 상태가 기준).
-//! - Apply·OK: 파일 연결 레지스트리 동기화(다이얼로그가 직접) + 옵션·바인딩 저장을
-//!   `WM_APP_OPTIONS_APPLIED`로 메인 창에 위임(저장 + 전 컴포넌트 브로드캐스트).
-//! - Shortcuts: 3컬럼 ListView, 더블클릭 편집(키/마우스 캡처 — shortcut_capture.rs).
-//! - File Association: 디코더 레지스트리 기반 동적 그룹핑(decode::format_groups),
-//!   tri-state 트리(상태 이미지 3종), 단일 확장자 포맷은 헤더 생략, 알파벳 정렬.
+//! Settings dialog: five tab pages editing a transient copy applied on OK/Apply.
 
 use windows::Win32::Foundation::{COLORREF, HWND, LPARAM, POINT, RECT, WPARAM};
 use windows::Win32::Graphics::Gdi::{
@@ -46,12 +37,9 @@ use crate::image::decode;
 use crate::settings::{Options, SettingsFile};
 use crate::shell::file_association;
 
-/// Apply·OK 통지 — lparam = `*const AppliedOptions` (수신 측이 저장 + 브로드캐스트)
 pub const WM_APP_OPTIONS_APPLIED: u32 = WM_APP + 5;
-/// 다이얼로그 위치 통지 (SPEC §8.1 optionsgeometry) — lparam = x(하위 32비트)·y(상위)
 pub const WM_APP_OPTIONS_GEOMETRY: u32 = WM_APP + 6;
 
-/// Apply 페이로드 — 옵션 전 항목 + 액션별 확정 바인딩 목록
 pub struct AppliedOptions {
     pub options: Options,
     pub keyboard: Vec<(String, Vec<String>)>,
@@ -60,16 +48,13 @@ pub struct AppliedOptions {
 
 const IDOK: usize = 1;
 const IDCANCEL: usize = 2;
-/// DWLP_USER (x64) — rename.rs와 동일 파생
 const DWLP_USER: WINDOW_LONG_PTR_INDEX = WINDOW_LONG_PTR_INDEX(16);
 const BN_CLICKED: usize = 0;
 const CBN_SELCHANGE: usize = 1;
 const EN_CHANGE: usize = 0x0300;
 
-/// 트리 lparam 인코딩 — 그룹은 상위 비트, 확장자는 인덱스
 const GROUP_FLAG: isize = 0x1000_0000;
 
-/// tri-state 상태 이미지 인덱스 (1-기반 — 0은 "이미지 없음")
 const STATE_UNCHECKED: isize = 1;
 const STATE_CHECKED: isize = 2;
 const STATE_PARTIAL: isize = 3;
@@ -82,7 +67,6 @@ struct ShortcutRow {
 }
 
 struct AssociationExtension {
-    /// ".png" 형태 (레지스트리 표기)
     extension: String,
     checked: bool,
     item: HTREEITEM,
@@ -104,11 +88,10 @@ struct OptionsState {
     saved_associations: Vec<String>,
     extensions: Vec<AssociationExtension>,
     groups: Vec<AssociationGroup>,
-    /// 프로그램적 UI 갱신 중 컨트롤 알림 무시
+    /// Ignore control notifications during programmatic sync.
     syncing: bool,
     state_images: HIMAGELIST,
     custom_colors: [COLORREF; 16],
-    /// 저장된 다이얼로그 위치 (optionsgeometry) — WM_INITDIALOG에서 적용
     initial_position: Option<(i32, i32)>,
 }
 
@@ -121,14 +104,13 @@ impl OptionsState {
             .collect()
     }
 
-    /// Apply 활성 조건 = 저장 상태와 diff (SPEC §8.3)
+    /// Apply enables when the transient state differs from the saved state.
     fn dirty(&self) -> bool {
         self.transient_options != self.saved_options
             || self.transient_shortcuts != self.saved_shortcuts
             || self.desired_associations() != self.saved_associations
     }
 
-    /// Restore Defaults 활성 조건 = 기본값과 diff — 파일 연결 제외 (SPEC §8.3)
     fn differs_from_defaults(&self) -> bool {
         self.transient_options != Options::default()
             || self.transient_shortcuts != default_shortcut_rows()
@@ -151,7 +133,6 @@ fn default_shortcut_rows() -> Vec<ShortcutRow> {
         .collect()
 }
 
-/// 모달 표시 (Action::Options) — Apply·OK 시 WM_APP_OPTIONS_APPLIED가 parent로 간다
 pub fn show(parent: HWND, settings: &SettingsFile) {
     shortcut_capture::ensure_capture_classes();
     let shortcuts: Vec<ShortcutRow> = Action::all_bindable()
@@ -202,8 +183,6 @@ fn state_mut(dialog: HWND) -> Option<&'static mut OptionsState> {
 fn wide(text: &str) -> Vec<u16> {
     text.encode_utf16().chain(std::iter::once(0)).collect()
 }
-
-// ── 프레임 ──────────────────────────────────────────────────────────────────
 
 unsafe extern "system" fn frame_procedure(
     dialog: HWND,
@@ -276,7 +255,6 @@ unsafe extern "system" fn frame_procedure(
         }
         WM_DESTROY => {
             if let Some(state) = state_mut(dialog) {
-                // 위치 저장 (optionsgeometry) — OK/Cancel 무관
                 let mut bounds = RECT::default();
                 if unsafe { GetWindowRect(dialog, &mut bounds) }.is_ok() {
                     let packed = (bounds.left as u32 as isize) | ((bounds.top as isize) << 32);
@@ -294,7 +272,6 @@ unsafe extern "system" fn frame_procedure(
                         let _ = unsafe { DestroyWindow(page) };
                     }
                 }
-                // TVSIL_STATE 이미지 리스트는 트리가 소유하지 않음 — 직접 해제
                 if !state.state_images.is_invalid() {
                     let _ = unsafe {
                         windows::Win32::UI::Controls::ImageList_Destroy(Some(state.state_images))
@@ -309,7 +286,6 @@ unsafe extern "system" fn frame_procedure(
 
 fn initialize_frame(state: &mut OptionsState) {
     let dialog = state.dialog;
-    // 저장된 위치 또는 작업 영역 중앙 (SPEC §8.3 — 2026-07-11: 기본 위치 = 스크린 중앙)
     let position = state.initial_position.or_else(|| {
         let mut bounds = RECT::default();
         let _ = unsafe { GetWindowRect(dialog, &mut bounds) };
@@ -362,7 +338,6 @@ fn initialize_frame(state: &mut OptionsState) {
         };
     }
 
-    // 탭 표시 영역(다이얼로그 클라이언트 좌표) — 페이지 배치 기준
     let mut display = RECT::default();
     let _ = unsafe { GetWindowRect(tab, &mut display) };
     unsafe {
@@ -407,7 +382,6 @@ fn initialize_frame(state: &mut OptionsState) {
             )
         }
         .unwrap_or_default();
-        // Z-order를 탭 컨트롤 바로 뒤에 — 포커스 순서 = 탭 → 페이지 → 하단 버튼
         let _ = unsafe {
             SetWindowPos(
                 page,
@@ -442,7 +416,6 @@ fn update_buttons(state: &OptionsState) {
     enable(IDC_RESTORE_DEFAULTS, state.differs_from_defaults());
 }
 
-/// Apply — 연결 레지스트리는 직접, 옵션·바인딩 저장은 메인 창 위임 (SPEC §8.3)
 fn apply(state: &mut OptionsState) {
     if !state.dirty() {
         return;
@@ -477,8 +450,6 @@ fn apply(state: &mut OptionsState) {
     state.saved_shortcuts = state.transient_shortcuts.clone();
     update_buttons(state);
 }
-
-// ── 페이지 공용 프로시저 ────────────────────────────────────────────────────
 
 unsafe extern "system" fn page_procedure(
     page: HWND,
@@ -568,7 +539,6 @@ unsafe extern "system" fn page_procedure(
     }
 }
 
-/// 컨트롤 → transient 반영. 반환 = 처리 여부
 fn handle_page_command(
     state: &mut OptionsState,
     page: HWND,
@@ -578,7 +548,6 @@ fn handle_page_command(
     let options = &mut state.transient_options;
     let mut handled = true;
     match (control, notification) {
-        // ── Window ──
         (IDC_WINDOW_BGCOLOR_ENABLED, BN_CLICKED) => {
             options.background_color_enabled = is_checked(page, control);
             sync_bgcolor_button(state, page);
@@ -598,7 +567,6 @@ fn handle_page_command(
         (IDC_WINDOW_CTRL_DRAG, BN_CLICKED) => {
             options.control_drag_window = is_checked(page, control);
         }
-        // ── Image ──
         (IDC_IMAGE_FILTERING, CBN_SELCHANGE) => {
             options.scaling_filter = combo_selection(page, control);
         }
@@ -612,7 +580,6 @@ fn handle_page_command(
         (IDC_IMAGE_FRACTIONAL_ZOOM, BN_CLICKED) => {
             options.fractional_zoom = is_checked(page, control);
         }
-        // ── Miscellaneous ──
         (IDC_MISC_SORT, CBN_SELCHANGE) => options.sort_mode = combo_selection(page, control),
         (IDC_MISC_ASCENDING, BN_CLICKED) => options.sort_descending = false,
         (IDC_MISC_DESCENDING, BN_CLICKED) => options.sort_descending = true,
@@ -638,7 +605,6 @@ fn handle_page_command(
         }
         (IDC_MISC_SAVE_RECENTS, BN_CLICKED) => options.save_recents = is_checked(page, control),
         (IDC_MISC_SKIP_HIDDEN, BN_CLICKED) => options.skip_hidden = is_checked(page, control),
-        // ── Shortcuts ──
         (IDC_SHORTCUTS_RESET, BN_CLICKED) => {
             state.transient_shortcuts = default_shortcut_rows();
             refresh_shortcut_rows(state);
@@ -650,7 +616,6 @@ fn handle_page_command(
             }
             refresh_shortcut_rows(state);
         }
-        // ── File Association ──
         (IDC_ASSOC_SELECT_ALL, BN_CLICKED) => set_all_associations(state, true),
         (IDC_ASSOC_SELECT_NONE, BN_CLICKED) => set_all_associations(state, false),
         _ => handled = false,
@@ -662,8 +627,6 @@ fn handle_page_command(
         0
     }
 }
-
-// ── Window·Image·Miscellaneous 페이지 ───────────────────────────────────────
 
 fn initialize_window_page(state: &OptionsState) {
     let page = state.pages[0];
@@ -677,7 +640,6 @@ fn initialize_image_page(state: &OptionsState) {
         IDC_IMAGE_FILTERING,
         &["Nearest", "Bilinear", "Bicubic", "High Quality"],
     );
-    // 줌 스텝(%) 범위 = 1~200
     if let Ok(spin) = unsafe { GetDlgItem(Some(page), IDC_IMAGE_SCALEFACTOR_SPIN) } {
         unsafe { SendMessageW(spin, UDM_SETRANGE32, Some(WPARAM(1)), Some(LPARAM(200))) };
     }
@@ -697,13 +659,11 @@ fn initialize_misc_page(state: &OptionsState) {
     );
     combo_fill(page, IDC_MISC_SLIDESHOW_DIRECTION, &["Forward", "Backward"]);
     combo_fill(page, IDC_MISC_AFTER_DELETE, &["Move Back", "Move Forward"]);
-    // 슬라이드쇼 간격(초) 범위 = 1~3600
     if let Ok(spin) = unsafe { GetDlgItem(Some(page), IDC_MISC_SLIDESHOW_TIMER_SPIN) } {
         unsafe { SendMessageW(spin, UDM_SETRANGE32, Some(WPARAM(1)), Some(LPARAM(3600))) };
     }
 }
 
-/// transient → 전 컨트롤 반영 (초기화·Restore Defaults)
 fn sync_all_pages(state: &mut OptionsState) {
     state.syncing = true;
     let options = state.transient_options.clone();
@@ -792,7 +752,6 @@ fn sync_all_pages(state: &mut OptionsState) {
     refresh_shortcut_rows(state);
 }
 
-/// 배경색 버튼 — 체크 연동 활성화 + 색 견본 다시 그리기
 fn sync_bgcolor_button(state: &OptionsState, page: HWND) {
     if let Ok(button) = unsafe { GetDlgItem(Some(page), IDC_WINDOW_BGCOLOR_BUTTON) } {
         let _ = unsafe { EnableWindow(button, state.transient_options.background_color_enabled) };
@@ -821,8 +780,6 @@ fn choose_background_color(state: &mut OptionsState, page: HWND) {
     }
 }
 
-// ── Shortcuts 페이지 ────────────────────────────────────────────────────────
-
 fn initialize_shortcuts_page(state: &OptionsState) {
     let page = state.pages[3];
     let Ok(list) = (unsafe { GetDlgItem(Some(page), IDC_SHORTCUTS_LIST) }) else {
@@ -836,7 +793,6 @@ fn initialize_shortcuts_page(state: &OptionsState) {
             Some(LPARAM(LVS_EX_FULLROWSELECT as isize)),
         )
     };
-    // 컬럼 폭 = 리스트 실폭 비례(36/32/나머지%) — 고정 px와 달리 DPI 스케일 추종
     let mut bounds = RECT::default();
     let _ = unsafe { GetClientRect(list, &mut bounds) };
     let usable = bounds.right - bounds.left - unsafe { GetSystemMetrics(SM_CXVSCROLL) };
@@ -886,7 +842,6 @@ fn initialize_shortcuts_page(state: &OptionsState) {
     }
 }
 
-/// transient 바인딩 → Keyboard·Mouse 컬럼 텍스트 갱신
 fn refresh_shortcut_rows(state: &OptionsState) {
     let Ok(list) = (unsafe { GetDlgItem(Some(state.pages[3]), IDC_SHORTCUTS_LIST) }) else {
         return;
@@ -912,7 +867,6 @@ fn refresh_shortcut_rows(state: &OptionsState) {
     }
 }
 
-/// 더블클릭 편집 — Mouse 컬럼이면 마우스 캡처, 그 외 키 캡처 (SPEC §8.3)
 fn edit_shortcut(state: &mut OptionsState, row_index: usize, mouse_column: bool) {
     if row_index >= state.transient_shortcuts.len() {
         return;
@@ -955,8 +909,6 @@ fn edit_shortcut(state: &mut OptionsState, row_index: usize, mouse_column: bool)
     }
 }
 
-// ── File Association 페이지 ─────────────────────────────────────────────────
-
 fn initialize_association_page(state: &mut OptionsState) {
     let page = state.pages[4];
     let Ok(tree) = (unsafe { GetDlgItem(Some(page), IDC_ASSOC_TREE) }) else {
@@ -972,7 +924,6 @@ fn initialize_association_page(state: &mut OptionsState) {
         )
     };
 
-    // 디코더 레지스트리 → 알파벳 정렬, 다확장자 포맷만 그룹 헤더 (SPEC §8.3)
     let mut formats: Vec<(&'static str, &'static [&'static str])> =
         decode::format_groups().collect();
     formats.sort_by_key(|(name, _)| *name);
@@ -1039,12 +990,11 @@ fn initialize_association_page(state: &mut OptionsState) {
     }
 }
 
-/// 16×16 체크박스 3종(미확인은 인덱스 0 자리 채움) — DrawFrameControl
 fn create_tristate_images() -> HIMAGELIST {
     let images = unsafe { ImageList_Create(16, 16, ILC_COLOR32 | ILC_MASK, 4, 0) };
     let screen = unsafe { GetDC(None) };
     for style in [
-        DFCS_BUTTONCHECK, // 0: 자리 채움 (상태 인덱스 0 = 이미지 없음)
+        DFCS_BUTTONCHECK, // index 0 placeholder (state image 0 = none)
         DFCS_BUTTONCHECK,
         DFCS_BUTTONCHECK | DFCS_CHECKED,
         DFCS_BUTTON3STATE | DFCS_CHECKED,
@@ -1131,7 +1081,6 @@ fn tree_set_state_image(tree: HWND, item: HTREEITEM, state_image: isize) {
     };
 }
 
-/// 상태 아이콘 클릭 위치의 항목 토글 (NM_CLICK)
 fn toggle_association_at_cursor(state: &mut OptionsState, tree: HWND) {
     let position = unsafe { GetMessagePos() };
     let mut hit = TVHITTESTINFO {
@@ -1167,7 +1116,6 @@ fn toggle_association_item(state: &mut OptionsState, tree: HWND, item: HTREEITEM
     };
     let parameter = query.lParam.0;
     if parameter & GROUP_FLAG != 0 {
-        // 그룹 헤더 — 전체 체크 상태면 해제, 아니면 일괄 체크 (tri-state 하위 일괄 토글)
         let group_index = (parameter & !GROUP_FLAG) as usize;
         let Some(group) = state.groups.get(group_index) else {
             return;
@@ -1216,7 +1164,6 @@ fn toggle_association_item(state: &mut OptionsState, tree: HWND, item: HTREEITEM
     update_buttons(state);
 }
 
-/// 그룹 헤더 tri-state 재계산 — 전체/일부/없음
 fn refresh_group_state(state: &OptionsState, tree: HWND, group_index: usize) {
     let group = &state.groups[group_index];
     let checked_count = group
@@ -1254,8 +1201,6 @@ fn set_all_associations(state: &mut OptionsState, checked: bool) {
         refresh_group_state(state, tree, group_index);
     }
 }
-
-// ── 컨트롤 헬퍼 ─────────────────────────────────────────────────────────────
 
 fn combo_fill(page: HWND, control: i32, entries: &[&str]) {
     let Ok(combo) = (unsafe { GetDlgItem(Some(page), control) }) else {

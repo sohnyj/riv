@@ -1,8 +1,4 @@
-//! About 다이얼로그 (2026-07-11 재도입 — qView qvaboutdialog 디자인 참고).
-//!
-//! 구성(전부 중앙 정렬): 대형 "riv" 타이틀(Segoe UI Light) + "version N"(중형) +
-//! 빌드 정보 + GPLv3·GitHub 링크(SysLink → 기본 브라우저). 버튼 없음 —
-//! 시스템 닫기/Esc로 닫는다. riv 창 중앙 배치.
+//! About dialog: large title, version, build info, and a repository link.
 
 use windows::Win32::Foundation::{HWND, LPARAM, WPARAM};
 use windows::Win32::Graphics::Gdi::{
@@ -21,20 +17,16 @@ use crate::dialogs::resource::{IDC_ABOUT_LINK, IDC_ABOUT_TITLE, IDC_ABOUT_VERSIO
 
 const IDOK: usize = 1;
 const IDCANCEL: usize = 2;
-/// DWLP_USER (x64) — rename.rs와 동일 파생
 const DWLP_USER: WINDOW_LONG_PTR_INDEX = WINDOW_LONG_PTR_INDEX(16);
 
-/// 타이틀·버전 포인트 크기 (qView 72/18pt의 축소 비율 유지)
 const TITLE_POINT_SIZE: i32 = 40;
 const VERSION_POINT_SIZE: i32 = 14;
 
-/// WM_INITDIALOG ↔ WM_DESTROY 공유 — 생성 폰트 해제용
 struct AboutState {
     title_font: HFONT,
     version_font: HFONT,
 }
 
-/// 모달 표시 (Action::About)
 pub fn show(window: HWND) {
     let mut state = AboutState {
         title_font: HFONT::default(),
@@ -73,7 +65,6 @@ extern "system" fn dialog_procedure(
             }
             0
         }
-        // SysLink 클릭 → 기본 브라우저 (저장소 링크)
         WM_NOTIFY => {
             use windows::Win32::UI::Controls::{NM_CLICK, NM_RETURN, NMLINK};
             let header = unsafe { &*(lparam.0 as *const windows::Win32::UI::Controls::NMHDR) };
@@ -104,14 +95,12 @@ extern "system" fn dialog_procedure(
 }
 
 fn initialize(dialog: HWND, state: &mut AboutState) {
-    // 버전 = Cargo 패키지 버전 (빌드 정보·링크 텍스트는 rc 정적)
     set_text(
         dialog,
         IDC_ABOUT_VERSION,
         concat!("version ", env!("CARGO_PKG_VERSION")),
     );
 
-    // 타이틀·버전 폰트 (창 DPI 기준 포인트 → 논리 높이)
     let dpi = unsafe { GetDpiForWindow(dialog) }.max(96) as i32;
     state.title_font = create_segoe_font(TITLE_POINT_SIZE, dpi, FW_LIGHT.0 as i32);
     state.version_font = create_segoe_font(VERSION_POINT_SIZE, dpi, FW_NORMAL.0 as i32);
@@ -120,7 +109,7 @@ fn initialize(dialog: HWND, state: &mut AboutState) {
     center_link(dialog);
 }
 
-/// SysLink는 좌측 정렬 고정 — 이상 크기(LM_GETIDEALSIZE)로 줄여 수평 중앙 배치
+/// SysLink is left-aligned; shrink to its ideal size to center it.
 fn center_link(dialog: HWND) {
     use windows::Win32::Foundation::SIZE;
     use windows::Win32::UI::Controls::LM_GETIDEALSIZE;
@@ -147,7 +136,6 @@ fn center_link(dialog: HWND) {
     if ideal.cx <= 0 {
         return;
     }
-    // 현재 y 위치 유지 (다이얼로그 클라이언트 좌표)
     let mut bounds = windows::Win32::Foundation::RECT::default();
     if unsafe { GetWindowRect(link, &mut bounds) }.is_err() {
         return;
@@ -170,7 +158,6 @@ fn center_link(dialog: HWND) {
     };
 }
 
-/// 링크 URL 열기 — OS 위임 (ShellExecuteW "open")
 fn open_link(url_wide: &[u16]) {
     use windows::Win32::UI::Shell::ShellExecuteW;
     use windows::Win32::UI::WindowsAndMessaging::SW_SHOWNORMAL;

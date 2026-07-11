@@ -1,6 +1,4 @@
-//! 색 관리 보조 (SPEC §7, PORTING_PLAN §5 색 관리) — sRGB → linear scRGB 변환과
-//! SDR 백레벨(HDR 모드) 조회. 소스 프로파일 → ColorManagement 이펙트 배선은 렌더러가,
-//! ICC 바이트 추출은 각 디코드 어댑터가 담당한다.
+//! Color helpers: scRGB conversion and display capability queries.
 
 use windows::Win32::Devices::Display::{
     DISPLAYCONFIG_DEVICE_INFO_GET_ADVANCED_COLOR_INFO,
@@ -16,9 +14,6 @@ use windows::Win32::Graphics::Gdi::{
     GetMonitorInfoW, MONITOR_DEFAULTTONEAREST, MONITORINFOEXW, MonitorFromWindow,
 };
 
-/// 타깃 모드별 클리어·브러시 색 (SPEC §7 A안 — 스왑체인 모드 매칭):
-/// `scrgb_boost = Some(boost)` = HDR의 FP16 scRGB 타깃(선형화 × SDR 백레벨),
-/// `None` = SDR/ACM의 B8G8R8A8 타깃(sRGB 인코딩 원값 그대로).
 pub fn output_color(color: D2D1_COLOR_F, scrgb_boost: Option<f32>) -> D2D1_COLOR_F {
     match scrgb_boost {
         Some(boost) => srgb_color_to_scrgb(color, boost),
@@ -26,8 +21,7 @@ pub fn output_color(color: D2D1_COLOR_F, scrgb_boost: Option<f32>) -> D2D1_COLOR
     }
 }
 
-/// sRGB 인코딩 색 → linear scRGB(× SDR 백레벨 배율) — FP16 타깃의 클리어·브러시 색 공용.
-/// DWM은 scRGB 1.0을 SDR 화이트(80 nits)로 매핑하므로 HDR 모드에서만 boost > 1 (SPEC §7).
+/// sRGB-encoded color to linear scRGB, times the SDR white boost.
 fn srgb_color_to_scrgb(color: D2D1_COLOR_F, sdr_white_boost: f32) -> D2D1_COLOR_F {
     let linearize = |encoded: f32| {
         if encoded <= 0.04045 {
@@ -44,9 +38,7 @@ fn srgb_color_to_scrgb(color: D2D1_COLOR_F, sdr_white_boost: f32) -> D2D1_COLOR_
     }
 }
 
-/// 창이 있는 모니터의 SDR 백레벨 배율 (SPEC §7) — **HDR 모드(scene-referred)에서만**
-/// `DISPLAYCONFIG_SDR_WHITE_LEVEL`(1000 = 80 nits) 기반. SDR advanced color(ACM)는
-/// display-referred(1.0 = 디스플레이 참조 백)라 부스트 비대상, 조회 실패도 1.0.
+/// SDR white boost for HDR mode; 1.0 elsewhere (ACM output is display-referred).
 pub fn sdr_white_boost(window: HWND) -> f32 {
     if !monitor_is_hdr(window) {
         return 1.0;
@@ -54,9 +46,7 @@ pub fn sdr_white_boost(window: HWND) -> f32 {
     query_sdr_white_boost(window).unwrap_or(1.0)
 }
 
-/// HDR 활성 판별 — `IDXGIOutput6::GetDesc1().ColorSpace == G2084` (문서 권장 Win32 경로.
-/// SDR advanced color 디스플레이는 G22_P709로 보고되어 자연히 제외된다).
-/// 스왑체인 모드 매칭(A안)의 분기 기준 — 렌더러 구축·재구축 시 조회 (SPEC §7).
+/// True when the window's output reports the G2084 (HDR) color space.
 pub fn monitor_is_hdr(window: HWND) -> bool {
     use windows::Win32::Graphics::Dxgi::Common::DXGI_COLOR_SPACE_RGB_FULL_G2084_NONE_P2020;
     window_output_description(window).is_some_and(|description| {
@@ -64,15 +54,13 @@ pub fn monitor_is_hdr(window: HWND) -> bool {
     })
 }
 
-/// 창 모니터의 최대 휘도(nits) — HdrToneMap의 OutputMaxLuminance (SPEC §7 Q6).
-/// 조회 실패(wine 등)는 None — 호출자가 모드별 기본값을 정한다.
+/// Maximum luminance (nits) of the window's output, when reported.
 pub fn display_maximum_luminance(window: HWND) -> Option<f32> {
     window_output_description(window)
         .map(|description| description.MaxLuminance)
         .filter(|luminance| *luminance > 0.0)
 }
 
-/// 창이 있는 모니터의 DXGI 출력 정보 (IDXGIOutput6::GetDesc1)
 fn window_output_description(
     window: HWND,
 ) -> Option<windows::Win32::Graphics::Dxgi::DXGI_OUTPUT_DESC1> {
@@ -136,7 +124,6 @@ fn query_sdr_white_boost(window: HWND) -> Option<f32> {
     }
 
     for path in &paths[..path_count as usize] {
-        // 경로의 GDI 소스 이름 ↔ 창 모니터 매칭
         let mut source_name = DISPLAYCONFIG_SOURCE_DEVICE_NAME {
             header: DISPLAYCONFIG_DEVICE_INFO_HEADER {
                 r#type: DISPLAYCONFIG_DEVICE_INFO_GET_SOURCE_NAME,
@@ -151,7 +138,6 @@ fn query_sdr_white_boost(window: HWND) -> Option<f32> {
         {
             continue;
         }
-        // advanced color(HDR) 활성 여부 — 비활성이면 boost 없음
         let mut advanced_color = DISPLAYCONFIG_GET_ADVANCED_COLOR_INFO {
             header: DISPLAYCONFIG_DEVICE_INFO_HEADER {
                 r#type: DISPLAYCONFIG_DEVICE_INFO_GET_ADVANCED_COLOR_INFO,
@@ -164,7 +150,7 @@ fn query_sdr_white_boost(window: HWND) -> Option<f32> {
         if unsafe { DisplayConfigGetDeviceInfo(&mut advanced_color.header) } != 0 {
             return None;
         }
-        // 비트 0x2 = advancedColorEnabled
+        // Bit 0x2 = advancedColorEnabled.
         if unsafe { advanced_color.Anonymous.value } & 0x2 == 0 {
             return None;
         }

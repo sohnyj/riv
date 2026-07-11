@@ -1,6 +1,4 @@
-//! 이름 변경 다이얼로그 — 인메모리 DLGTEMPLATE + Edit 컨트롤 (SPEC §6.4,
-//! PORTING_PLAN §3 매핑: QInputDialog → DialogBoxIndirectParamW).
-//! 확장자 제외 부분 프리셀렉트, 폰트는 Segoe UI 9 (R12 — MS Shell Dlg 금지).
+//! Rename dialog built from an in-memory DLGTEMPLATE.
 
 use windows::Win32::Foundation::{HWND, LPARAM, WPARAM};
 use windows::Win32::UI::Controls::EM_SETSEL;
@@ -13,18 +11,14 @@ use windows::Win32::UI::WindowsAndMessaging::{
 const EDIT_IDENTIFIER: i32 = 100;
 const IDOK: usize = 1;
 const IDCANCEL: usize = 2;
-/// DWLP_USER = DWLP_DLGPROC(8) + 포인터 크기(8) — winuser.h 파생 상수 (x64)
 const DWLP_USER: WINDOW_LONG_PTR_INDEX = WINDOW_LONG_PTR_INDEX(16);
 
-/// WM_INITDIALOG ↔ 다이얼로그 프로시저 공유 상태
 struct RenameState {
     initial_name: Vec<u16>,
-    /// 확장자 제외 프리셀렉트 길이 (UTF-16 단위)
     stem_length: usize,
     accepted_name: Option<String>,
 }
 
-/// 모달 표시 — 확정 시 새 파일명 반환 (SPEC §6.4)
 pub fn show(window: HWND, current_name: &str) -> Option<String> {
     let stem_length = current_name.rfind('.').filter(|dot| *dot > 0).map_or_else(
         || current_name.encode_utf16().count(),
@@ -54,9 +48,6 @@ pub fn show(window: HWND, current_name: &str) -> Option<String> {
         .filter(|name| !name.trim().is_empty())
 }
 
-/// 다이얼로그 프로시저 — DWLP_USER 대신 초기화 시점에 정적 슬롯 없이 lparam 전달을
-/// GWLP_USERDATA로 보관하기엔 과하므로, 상태 포인터를 창 프로퍼티 없이 WM_INITDIALOG
-/// lparam → SetWindowLongPtrW(DWLP_USER) 경로로 유지한다.
 extern "system" fn dialog_procedure(
     dialog: HWND,
     message: u32,
@@ -76,7 +67,6 @@ extern "system" fn dialog_procedure(
                     windows::core::PCWSTR(state.initial_name.as_ptr()),
                 );
                 if let Ok(edit) = GetDlgItem(Some(dialog), EDIT_IDENTIFIER) {
-                    // 확장자 제외 프리셀렉트 (SPEC §6.4)
                     SendMessageW(
                         edit,
                         EM_SETSEL,
@@ -86,7 +76,7 @@ extern "system" fn dialog_procedure(
                     let _ = SetFocus(Some(edit));
                 }
             }
-            0 // 포커스를 직접 지정했으므로 FALSE
+            0 // FALSE: focus set explicitly
         }
         WM_COMMAND => {
             let command = wparam.0 & 0xFFFF;
@@ -115,7 +105,6 @@ extern "system" fn dialog_procedure(
     }
 }
 
-/// 인메모리 DLGTEMPLATE — Edit + OK/Cancel, FONT 9 "Segoe UI" (R12)
 fn build_template() -> Vec<u16> {
     const DS_SETFONT: u32 = 0x40;
     const DS_MODALFRAME: u32 = 0x80;
@@ -134,17 +123,16 @@ fn build_template() -> Vec<u16> {
         buffer.push((value >> 16) as u16);
     };
 
-    // DLGTEMPLATE 헤더
     push_u32(
         &mut template,
         DS_SETFONT | DS_MODALFRAME | WS_POPUP | WS_CAPTION | WS_SYSMENU | WS_VISIBLE,
     );
     push_u32(&mut template, 0); // dwExtendedStyle
     template.push(3); // cdit
-    template.extend_from_slice(&[0, 0, 220, 54]); // x, y, cx, cy (다이얼로그 단위)
-    template.push(0); // 메뉴 없음
-    template.push(0); // 기본 클래스
-    template.extend("Rename".encode_utf16().chain(std::iter::once(0))); // 타이틀
+    template.extend_from_slice(&[0, 0, 220, 54]); // x, y, cx, cy in dialog units
+    template.push(0); // no menu
+    template.push(0); // default class
+    template.extend("Rename".encode_utf16().chain(std::iter::once(0))); // title
     template.push(9); // FONT 9pt
     template.extend("Segoe UI".encode_utf16().chain(std::iter::once(0)));
 
@@ -154,7 +142,6 @@ fn build_template() -> Vec<u16> {
                      identifier: u16,
                      class_atom: u16,
                      text: &str| {
-        // DLGITEMTEMPLATE는 DWORD 정렬 — u16 버퍼 길이가 짝수여야 함
         if !buffer.len().is_multiple_of(2) {
             buffer.push(0);
         }
@@ -168,10 +155,9 @@ fn build_template() -> Vec<u16> {
         buffer.push(identifier);
         buffer.extend_from_slice(&[0xFFFF, class_atom]);
         buffer.extend(text.encode_utf16().chain(std::iter::once(0)));
-        buffer.push(0); // 생성 데이터 없음
+        buffer.push(0); // no creation data
     };
 
-    // Edit (클래스 atom 0x0081)
     push_item(
         &mut template,
         WS_VISIBLE | WS_TABSTOP | WS_BORDER | ES_AUTOHSCROLL,
@@ -180,7 +166,6 @@ fn build_template() -> Vec<u16> {
         0x0081,
         "",
     );
-    // OK / Cancel (버튼 atom 0x0080)
     push_item(
         &mut template,
         WS_VISIBLE | WS_TABSTOP | BS_DEFPUSHBUTTON,
