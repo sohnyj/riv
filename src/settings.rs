@@ -91,6 +91,11 @@ impl Options {
                 .and_then(Value::as_u64)
                 .map_or(fallback, |value| value as u32)
         };
+        // 인덱스형 설정 공용 검증 — 범위 밖 저장값은 기본값으로
+        let bounded = |key: &str, maximum: u32, fallback: u32| {
+            let value = unsigned(key, fallback);
+            if value <= maximum { value } else { fallback }
+        };
         Self {
             background_color_enabled: boolean("bgcolorenabled", default.background_color_enabled),
             background_color: options
@@ -106,16 +111,14 @@ impl Options {
             scale_factor_percent: unsigned("scalefactor", default.scale_factor_percent),
             fractional_zoom: boolean("fractionalzoom", default.fractional_zoom),
             cursor_zoom: boolean("cursorzoom", default.cursor_zoom),
-            // 구 랜덤(5)은 제거(2026-07-11) — 범위 밖은 이름 정렬로
-            sort_mode: unsigned("sortmode", default.sort_mode).min(4),
+            sort_mode: bounded("sortmode", 4, default.sort_mode),
             sort_descending: boolean("sortdescending", default.sort_descending),
             preloading_mode: unsigned("preloadingmode", default.preloading_mode),
             loop_folders_enabled: boolean("loopfoldersenabled", default.loop_folders_enabled),
             slideshow_reversed: boolean("slideshowreversed", default.slideshow_reversed),
             slideshow_timer_seconds: unsigned("slideshowtimer", default.slideshow_timer_seconds)
                 .clamp(1, 3600),
-            // 구 Do Nothing(1)은 제거(2026-07-11) — 범위 밖(구 2=다음 포함)은 다음 파일로
-            after_delete: unsigned("afterdelete", default.after_delete).min(1),
+            after_delete: bounded("afterdelete", 1, default.after_delete),
             ask_delete: boolean("askdelete", default.ask_delete),
             allow_mime_content_detection: boolean(
                 "allowmimecontentdetection",

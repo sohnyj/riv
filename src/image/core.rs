@@ -51,7 +51,7 @@ pub enum SortMode {
 }
 
 impl SortMode {
-    /// 설정값 `sortmode`(0~4) → 모드, 범위 밖(구 랜덤 5 포함)은 기본(이름)
+    /// 설정값 `sortmode`(0~4) → 모드, 범위 밖은 기본(이름)
     pub fn from_setting(value: u32) -> Self {
         match value {
             1 => Self::Modified,
