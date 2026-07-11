@@ -128,12 +128,13 @@ fn registry_key_is_empty(subkey: &str) -> bool {
     subkey_count == 0 && value_count == 0
 }
 
-/// ProgID·Capabilities·RegisteredApplications 등록 (SPEC §9)
+/// ProgID·Capabilities·RegisteredApplications 등록 (SPEC §9).
+/// ProgID 기본값(형식 표시명)은 **의도적으로 안 쓴다**(2026-07-11 결정) — riv를 기본
+/// 앱으로 지정해도 유형 열은 Windows 폴백("PNG 파일" 등 확장자별)을 유지한다.
 fn ensure_application_registration() {
     let executable = std::env::current_exe()
         .map(|path| path.to_string_lossy().into_owned())
         .unwrap_or_default();
-    registry_set_string(CLASSES_PROGID_KEY, None, "riv Image");
     registry_set_string(
         &format!("{CLASSES_PROGID_KEY}\\DefaultIcon"),
         None,
