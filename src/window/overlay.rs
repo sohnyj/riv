@@ -271,19 +271,19 @@ pub fn build_info_text(
             "Resolution: {} x {} ({megapixels:.1} MP)",
             image.width, image.height
         ),
-        format!("Path: {}", path.display()),
     ];
-    if let Some(modified) = modified {
-        lines.push(format!("Modified: {}", format_locale_datetime(modified)));
-    }
-    if image.frames.len() > 1 {
-        lines.push(format!("Frames: {}", image.frames.len()));
-    }
     if image.storage == PixelStorage::RgbaHalf {
         match image.peak_luminance_nits {
             Some(peak) => lines.push(format!("Bit depth: FP16 linear, peak {peak:.0} nits")),
             None => lines.push("Bit depth: high (FP16)".to_string()),
         }
+    }
+    lines.push(format!("Path: {}", path.display()));
+    if let Some(modified) = modified {
+        lines.push(format!("Modified: {}", format_locale_datetime(modified)));
+    }
+    if image.frames.len() > 1 {
+        lines.push(format!("Frames: {}", image.frames.len()));
     }
     if let Some(exif) = &image.exif {
         append_exif_lines(&mut lines, exif);
