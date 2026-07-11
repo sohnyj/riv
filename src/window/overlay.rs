@@ -310,6 +310,7 @@ pub fn build_info_text(
                 let transfer_name = match transfer {
                     HdrTransfer::PerceptualQuantizer => "PQ",
                     HdrTransfer::HybridLogGamma => "HLG",
+                    HdrTransfer::LinearScRgb => "Linear",
                 };
                 lines.push(format!("HDR: {transfer_name}, peak {peak:.0} nits"));
             }

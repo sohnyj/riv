@@ -14,11 +14,11 @@ use windows::Win32::Foundation::{GENERIC_READ, WINCODEC_ERR_COMPONENTNOTFOUND};
 use windows::Win32::Graphics::Imaging::{
     CLSID_WICImagingFactory, GUID_WICPixelFormat32bppPBGRA, GUID_WICPixelFormat64bppPRGBAHalf,
     IWICBitmapDecoder, IWICBitmapFrameDecode, IWICBitmapSource, IWICColorContext,
-    IWICImagingFactory, IWICMetadataQueryReader, IWICPixelFormatInfo, WICBitmapDitherTypeNone,
+    IWICImagingFactory, IWICMetadataQueryReader, IWICPixelFormatInfo2, WICBitmapDitherTypeNone,
     WICBitmapInterpolationModeFant, WICBitmapPaletteTypeCustom, WICBitmapTransformFlipHorizontal,
     WICBitmapTransformFlipVertical, WICBitmapTransformOptions, WICBitmapTransformRotate90,
     WICBitmapTransformRotate180, WICBitmapTransformRotate270, WICColorContextProfile,
-    WICDecodeMetadataCacheOnDemand,
+    WICDecodeMetadataCacheOnDemand, WICPixelFormatNumericRepresentationFloat,
 };
 use windows::Win32::System::Com::StructuredStorage::{
     PROPVARIANT, PropVariantClear, PropVariantToDouble, PropVariantToFileTime,
@@ -52,12 +52,14 @@ impl PixelStorage {
     }
 }
 
-/// HDR 전달 함수 (ICC cicp 판별, SPEC §7 Q6) — 렌더러의 소스 색 컨텍스트 선택 기준:
-/// PQ는 DXGI G2084 컨텍스트(절대 휘도 매핑), HLG는 ICC 폴백
+/// HDR 소스 인코딩 (SPEC §7 Q6) — 렌더러의 소스 색 컨텍스트 선택 기준:
+/// PQ는 DXGI G2084 컨텍스트(절대 휘도), LinearScRgb는 scRGB 컨텍스트(WIC 규약 —
+/// float/half 픽셀 포맷은 정의상 scRGB), HLG는 ICC 폴백
 #[derive(Clone, Copy, PartialEq, Eq)]
 pub enum HdrTransfer {
     PerceptualQuantizer,
     HybridLogGamma,
+    LinearScRgb,
 }
 
 pub struct DecodedImage {
@@ -656,7 +658,8 @@ fn decode_single_frame(
     let icc_profile = icc_profile_bytes(factory, &frame);
     let exif = read_exif(&frame);
     // 고심도(채널 8비트 초과) 소스는 FP16으로 (SPEC §7 Q6) — 변환 실패 시 8bpc 폴백
-    let (source, storage) = if frame_exceeds_8_bits_per_channel(factory, &frame) {
+    let (high_depth, float_native) = frame_pixel_format_traits(factory, &frame);
+    let (source, storage) = if high_depth {
         match convert_pixel_format(factory, &frame.cast()?, &GUID_WICPixelFormat64bppPRGBAHalf) {
             Ok(source) => (source, PixelStorage::RgbaHalf),
             Err(_) => (
@@ -681,8 +684,16 @@ fn decode_single_frame(
         storage.bytes_per_pixel(),
     )?;
     // HDR(PQ/HLG) 소스만 피크 휘도 산출 — HdrToneMap 게이트 (SPEC §7 Q6)
+    // float 네이티브 = 값이 이미 linear scRGB(WIC 규약, ICC 불요) — 항상 톤맵 경로에
+    // 태워 절대 휘도로 취급. 정수 네이티브는 ICC cicp(PQ/HLG) 판별
     let hdr_content = (storage == PixelStorage::RgbaHalf)
-        .then(|| icc_profile.as_deref().and_then(icc_cicp_transfer_function))
+        .then(|| {
+            if float_native {
+                Some(HdrTransfer::LinearScRgb)
+            } else {
+                icc_profile.as_deref().and_then(icc_cicp_transfer_function)
+            }
+        })
         .flatten()
         .and_then(|transfer| {
             peak_luminance_from_half_pixels(&pixels, transfer).map(|peak| (transfer, peak))
@@ -703,21 +714,26 @@ fn decode_single_frame(
     })
 }
 
-/// 프레임 네이티브 픽셀 포맷의 채널당 비트 수가 8을 넘는지 — FP16 디코드 대상 판별
-/// (SPEC §7 Q6). 조회 실패는 false(기본 8bpc 경로).
-fn frame_exceeds_8_bits_per_channel(
+/// 프레임 네이티브 픽셀 포맷 특성 — (채널당 8비트 초과, float 표현) (SPEC §7 Q6).
+/// float/half 포맷은 WIC 규약상 scRGB(선형) — 조회 실패는 (false, false)(기본 경로)
+fn frame_pixel_format_traits(
     factory: &IWICImagingFactory,
     frame: &IWICBitmapFrameDecode,
-) -> bool {
-    (|| -> windows::core::Result<bool> {
+) -> (bool, bool) {
+    (|| -> windows::core::Result<(bool, bool)> {
         let format = unsafe { frame.GetPixelFormat()? };
-        let information: IWICPixelFormatInfo =
+        let information: IWICPixelFormatInfo2 =
             unsafe { factory.CreateComponentInfo(&format)? }.cast()?;
         let bits_per_pixel = unsafe { information.GetBitsPerPixel()? };
         let channel_count = unsafe { information.GetChannelCount()? };
-        Ok(channel_count > 0 && bits_per_pixel > channel_count * 8)
+        let float_native = unsafe { information.GetNumericRepresentation()? }
+            == WICPixelFormatNumericRepresentationFloat;
+        Ok((
+            channel_count > 0 && bits_per_pixel > channel_count * 8,
+            float_native,
+        ))
     })()
-    .unwrap_or(false)
+    .unwrap_or((false, false))
 }
 
 /// ICC 'cicp' 태그(ICC 4.4)의 전달 함수 코드 — 16=PQ, 18=HLG (BT.2100).
@@ -755,7 +771,8 @@ fn icc_cicp_transfer_function(icc: &[u8]) -> Option<HdrTransfer> {
 /// EOTF 환산, HLG는 공칭 피크 1000 nits (BT.2100)
 fn peak_luminance_from_half_pixels(pixels: &[u8], transfer: HdrTransfer) -> Option<f32> {
     match transfer {
-        HdrTransfer::PerceptualQuantizer => {
+        HdrTransfer::PerceptualQuantizer | HdrTransfer::LinearScRgb => {
+            let linear = transfer == HdrTransfer::LinearScRgb;
             const BINS: usize = 4096;
             let mut histogram = [0u32; BINS];
             let mut pixel_count = 0u32;
@@ -763,7 +780,12 @@ fn peak_luminance_from_half_pixels(pixels: &[u8], transfer: HdrTransfer) -> Opti
                 let mut maximum_code = 0.0f32;
                 for channel in 0..3 {
                     let bits = u16::from_le_bytes([pixel[channel * 2], pixel[channel * 2 + 1]]);
-                    let code = half_to_f32(bits);
+                    let mut code = half_to_f32(bits);
+                    if linear {
+                        // linear scRGB(1.0=80nits) → PQ 코드 도메인으로 접어 동일
+                        // 히스토그램 사용 (지각 균등 빈)
+                        code = perceptual_quantizer_code(code * SDR_REFERENCE_WHITE_NITS);
+                    }
                     if code > maximum_code {
                         maximum_code = code;
                     }
@@ -801,6 +823,20 @@ fn half_to_f32(bits: u16) -> f32 {
     }
     let mantissa = u32::from(bits & 0x03FF);
     f32::from_bits(((u32::from(exponent) + 112) << 23) | (mantissa << 13))
+}
+
+/// SDR 참조 화이트 = 80 nits (scRGB 1.0 — D2D1_SCENE_REFERRED_SDR_WHITE_LEVEL)
+const SDR_REFERENCE_WHITE_NITS: f32 = 80.0;
+
+/// PQ(SMPTE ST 2084) 역함수 — 절대 휘도(nits) → 인코딩 코드값 [0,1]
+fn perceptual_quantizer_code(nits: f32) -> f32 {
+    const M1: f32 = 2610.0 / 16384.0;
+    const M2: f32 = 2523.0 / 4096.0 * 128.0;
+    const C1: f32 = 3424.0 / 4096.0;
+    const C2: f32 = 2413.0 / 4096.0 * 32.0;
+    const C3: f32 = 2392.0 / 4096.0 * 32.0;
+    let normalized = (nits.max(0.0) / 10000.0).powf(M1);
+    ((C1 + C2 * normalized) / (1.0 + C3 * normalized)).powf(M2)
 }
 
 /// PQ(SMPTE ST 2084) EOTF — 인코딩 코드값 [0,1] → 절대 휘도(nits)

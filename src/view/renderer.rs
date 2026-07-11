@@ -449,12 +449,15 @@ impl Renderer {
         let Some(color_management) = &self.color_management_effect else {
             return;
         };
-        // 소스 컨텍스트 — PQ는 DXGI G2084(절대 휘도 매핑) 우선: ICC(상대 색측정)로는
-        // scRGB 절대 스케일이 깨져 톤맵 파라미터와 불일치 (실기 확인 2026-07-11)
-        let hdr10_context = matches!(hdr_content, Some((HdrTransfer::PerceptualQuantizer, _)))
-            .then_some(self.hdr10_color_context.as_ref())
-            .flatten();
-        let source_context = match hdr10_context {
+        // 소스 컨텍스트 — PQ는 DXGI G2084(절대 휘도 매핑), float 네이티브(LinearScRgb)는
+        // scRGB: ICC(상대 색측정)로는 scRGB 절대 스케일이 깨져 톤맵 파라미터와 불일치
+        // (실기 확인 2026-07-11). HLG·SDR은 ICC 경로
+        let dedicated_context = match hdr_content {
+            Some((HdrTransfer::PerceptualQuantizer, _)) => self.hdr10_color_context.as_ref(),
+            Some((HdrTransfer::LinearScRgb, _)) => self.scrgb_color_context.as_ref(),
+            _ => None,
+        };
+        let source_context = match dedicated_context {
             Some(context) => context,
             None => {
                 // 프로파일이 바뀔 때만 소스 색 컨텍스트 재생성 (애니메이션 프레임 재업로드 대비)
