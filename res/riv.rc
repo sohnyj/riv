@@ -1,7 +1,7 @@
 // 1 = 앱 아이콘 리소스 ID (창 클래스 hIcon과 탐색기 표시가 공유)
 1 ICON "riv.ico"
-// 24 = RT_MANIFEST, 1 = CREATEPROCESS_MANIFEST_RESOURCE_ID
-1 24 "riv.manifest"
+// 매니페스트(RT_MANIFEST)·VERSIONINFO는 build.rs 생성 rc가 추가 —
+// 버전 단일 소스 = Cargo.toml (CARGO_PKG_VERSION)
 
 // ── R6 다이얼로그 템플릿 (PORTING_PLAN §4, SPEC §8.3) ───────────────────────
 // 폰트는 전부 FONT 9, "Segoe UI" — MS Shell Dlg 계열 금지 (SPEC R12)

@@ -1,6 +1,7 @@
 <?xml version="1.0" encoding="UTF-8" standalone="yes"?>
 <assembly xmlns="urn:schemas-microsoft-com:asm.v1" manifestVersion="1.0">
-  <assemblyIdentity type="win32" name="riv" version="0.1.0.0" processorArchitecture="amd64"/>
+  <!-- version은 build.rs가 CARGO_PKG_VERSION으로 치환 (버전 단일 소스 = Cargo.toml) -->
+  <assemblyIdentity type="win32" name="riv" version="@VERSION@" processorArchitecture="amd64"/>
 
   <!-- Windows 10/11 (Win11 전용 GUID는 없음 — Win10 GUID가 둘 다 커버) -->
   <compatibility xmlns="urn:schemas-microsoft-com:compatibility.v1">
