@@ -1676,7 +1676,8 @@ extern "system" fn window_procedure(
             }
             LRESULT(0)
         }
-        // 팬 드래그 중 클로즈드핸드 대체 커서 유지 (커서 자산은 R7)
+        // 팬 드래그 중 팬 피드백 커서 유지 (SPEC §5.4 — IDC_SIZEALL 확정 2026-07-11:
+        // Windows에 표준 클로즈드핸드 부재, 자체 자산 대신 OS 커서)
         WM_SETCURSOR => {
             if let Some(application) = unsafe { application_from_window(window) }
                 && application.pan_drag_position.is_some()
