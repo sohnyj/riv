@@ -636,7 +636,7 @@ fn frame_pixel_format_traits(
     (|| -> windows::core::Result<(bool, bool)> {
         let format = unsafe { frame.GetPixelFormat()? };
         let information: IWICPixelFormatInfo2 =
-            unsafe { factory.CreateComponentInfo(&format)? }.cast()?;
+            unsafe { factory.CreateComponentInfo(&raw const format)? }.cast()?;
         let bits_per_pixel = unsafe { information.GetBitsPerPixel()? };
         let channel_count = unsafe { information.GetChannelCount()? };
         let float_native = unsafe { information.GetNumericRepresentation()? }
@@ -754,7 +754,7 @@ fn icc_profile_bytes(
     frame: &IWICBitmapFrameDecode,
 ) -> Option<Vec<u8>> {
     let mut count = 0u32;
-    unsafe { frame.GetColorContexts(&mut [], &mut count) }.ok()?;
+    unsafe { frame.GetColorContexts(&mut [], &raw mut count) }.ok()?;
     if count == 0 {
         return None;
     }
@@ -765,19 +765,19 @@ fn icc_profile_bytes(
         return None;
     }
     let mut actual_count = 0u32;
-    unsafe { frame.GetColorContexts(&mut contexts, &mut actual_count) }.ok()?;
+    unsafe { frame.GetColorContexts(&mut contexts, &raw mut actual_count) }.ok()?;
     for context in contexts.into_iter().flatten() {
         if unsafe { context.GetType() } != Ok(WICColorContextProfile) {
             continue;
         }
         let mut size = 0u32;
-        let _ = unsafe { context.GetProfileBytes(&mut [], &mut size) };
+        let _ = unsafe { context.GetProfileBytes(&mut [], &raw mut size) };
         if size == 0 {
             continue;
         }
         let mut buffer = vec![0u8; size as usize];
         let mut written = 0u32;
-        unsafe { context.GetProfileBytes(&mut buffer, &mut written) }.ok()?;
+        unsafe { context.GetProfileBytes(&mut buffer, &raw mut written) }.ok()?;
         buffer.truncate(written as usize);
         return Some(buffer);
     }
@@ -1037,21 +1037,23 @@ fn read_exif(frame: &IWICBitmapFrameDecode) -> Option<ExifInfo> {
 
 fn query_f64(reader: &IWICMetadataQueryReader, name: PCWSTR) -> Option<f64> {
     let mut value = PROPVARIANT::default();
-    unsafe { reader.GetMetadataByName(name, &mut value) }.ok()?;
-    let result = unsafe { PropVariantToDouble(&value) }.ok();
-    let _ = unsafe { PropVariantClear(&mut value) };
+    unsafe { reader.GetMetadataByName(name, &raw mut value) }.ok()?;
+    let result = unsafe { PropVariantToDouble(&raw const value) }.ok();
+    let _ = unsafe { PropVariantClear(&raw mut value) };
     result.filter(|number| number.is_finite())
 }
 
 fn query_string(reader: &IWICMetadataQueryReader, name: PCWSTR) -> Option<String> {
     let mut value = PROPVARIANT::default();
-    unsafe { reader.GetMetadataByName(name, &mut value) }.ok()?;
-    let text = unsafe { PropVariantToStringAlloc(&value) }.ok().map(|out| {
-        let result = String::from_utf16_lossy(unsafe { out.as_wide() });
-        unsafe { windows::Win32::System::Com::CoTaskMemFree(Some(out.0.cast())) };
-        result
-    });
-    let _ = unsafe { PropVariantClear(&mut value) };
+    unsafe { reader.GetMetadataByName(name, &raw mut value) }.ok()?;
+    let text = unsafe { PropVariantToStringAlloc(&raw const value) }
+        .ok()
+        .map(|out| {
+            let result = String::from_utf16_lossy(unsafe { out.as_wide() });
+            unsafe { windows::Win32::System::Com::CoTaskMemFree(Some(out.0.cast())) };
+            result
+        });
+    let _ = unsafe { PropVariantClear(&raw mut value) };
     text.map(|text| text.trim().to_string())
         .filter(|text| !text.is_empty())
 }
@@ -1059,9 +1061,9 @@ fn query_string(reader: &IWICMetadataQueryReader, name: PCWSTR) -> Option<String
 fn query_filetime(reader: &IWICMetadataQueryReader, name: PCWSTR) -> Option<std::time::SystemTime> {
     use windows::Win32::System::Variant::PSTF_UTC;
     let mut value = PROPVARIANT::default();
-    unsafe { reader.GetMetadataByName(name, &mut value) }.ok()?;
-    let file_time = unsafe { PropVariantToFileTime(&value, PSTF_UTC) }.ok();
-    let _ = unsafe { PropVariantClear(&mut value) };
+    unsafe { reader.GetMetadataByName(name, &raw mut value) }.ok()?;
+    let file_time = unsafe { PropVariantToFileTime(&raw const value, PSTF_UTC) }.ok();
+    let _ = unsafe { PropVariantClear(&raw mut value) };
     let file_time = file_time?;
     let intervals =
         (u64::from(file_time.dwHighDateTime) << 32) | u64::from(file_time.dwLowDateTime);
@@ -1071,15 +1073,15 @@ fn query_filetime(reader: &IWICMetadataQueryReader, name: PCWSTR) -> Option<std:
 
 fn query_u32(reader: &IWICMetadataQueryReader, name: PCWSTR) -> Option<u32> {
     let mut value = PROPVARIANT::default();
-    unsafe { reader.GetMetadataByName(name, &mut value) }.ok()?;
-    let result = unsafe { PropVariantToUInt32(&value) }.ok();
-    let _ = unsafe { PropVariantClear(&mut value) };
+    unsafe { reader.GetMetadataByName(name, &raw mut value) }.ok()?;
+    let result = unsafe { PropVariantToUInt32(&raw const value) }.ok();
+    let _ = unsafe { PropVariantClear(&raw mut value) };
     result
 }
 
 fn source_size(source: &IWICBitmapSource) -> windows::core::Result<(u32, u32)> {
     let (mut width, mut height) = (0u32, 0u32);
-    unsafe { source.GetSize(&mut width, &mut height)? };
+    unsafe { source.GetSize(&raw mut width, &raw mut height)? };
     Ok((width, height))
 }
 

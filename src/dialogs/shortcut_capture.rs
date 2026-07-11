@@ -116,7 +116,7 @@ fn warn_conflict(dialog: HWND, encoding: &str, owner_label: &str) {
         ..Default::default()
     };
     let _ = unsafe {
-        windows::Win32::UI::Controls::TaskDialogIndirect(&configuration, None, None, None)
+        windows::Win32::UI::Controls::TaskDialogIndirect(&raw const configuration, None, None, None)
     };
 }
 
@@ -335,7 +335,7 @@ fn draw_sequence_item(draw: &DRAWITEMSTRUCT) {
     unsafe {
         FillRect(
             draw.hDC,
-            &draw.rcItem,
+            &raw const draw.rcItem,
             GetSysColorBrush(if selected {
                 COLOR_HIGHLIGHT
             } else {
@@ -372,7 +372,7 @@ fn draw_sequence_item(draw: &DRAWITEMSTRUCT) {
         DrawTextW(
             draw.hDC,
             &mut text[..length],
-            &mut bounds,
+            &raw mut bounds,
             DT_LEFT | DT_VCENTER | DT_SINGLELINE,
         );
     }
@@ -493,7 +493,7 @@ pub fn ensure_capture_classes() {
                 lpszClassName: class_name,
                 ..Default::default()
             };
-            let atom = unsafe { RegisterClassExW(&class) };
+            let atom = unsafe { RegisterClassExW(&raw const class) };
             assert!(atom != 0, "capture field class registration failed");
         }
     });
@@ -505,9 +505,13 @@ fn field_font(field: HWND) -> HFONT {
 
 fn field_paint(field: HWND, text: &str, hint: bool) {
     let mut paint = PAINTSTRUCT::default();
-    let device = unsafe { BeginPaint(field, &mut paint) };
+    let device = unsafe { BeginPaint(field, &raw mut paint) };
     unsafe {
-        FillRect(device, &paint.rcPaint, GetSysColorBrush(COLOR_WINDOW));
+        FillRect(
+            device,
+            &raw const paint.rcPaint,
+            GetSysColorBrush(COLOR_WINDOW),
+        );
         let font = field_font(field);
         if !font.is_invalid() {
             SelectObject(device, font.into());
@@ -527,10 +531,10 @@ fn field_paint(field: HWND, text: &str, hint: bool) {
         DrawTextW(
             device,
             &mut wide,
-            &mut bounds,
+            &raw mut bounds,
             DT_LEFT | DT_VCENTER | DT_SINGLELINE,
         );
-        let _ = EndPaint(field, &paint);
+        let _ = EndPaint(field, &raw const paint);
     }
 }
 

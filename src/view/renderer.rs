@@ -71,7 +71,7 @@ fn create_d3d_device(driver_type: D3D_DRIVER_TYPE) -> Result<ID3D11Device> {
             D3D11_CREATE_DEVICE_BGRA_SUPPORT,
             Some(&[D3D_FEATURE_LEVEL_11_0]),
             D3D11_SDK_VERSION,
-            Some(&mut device),
+            Some(&raw mut device),
             None,
             None,
         )?;
@@ -142,7 +142,13 @@ impl Renderer {
                 AlphaMode: DXGI_ALPHA_MODE_IGNORE,
                 ..Default::default()
             };
-            factory.CreateSwapChainForHwnd(&d3d_device, window, &description, None, None)?
+            factory.CreateSwapChainForHwnd(
+                &d3d_device,
+                window,
+                &raw const description,
+                None,
+                None,
+            )?
         };
         // Declare scRGB only in HDR mode; declaring it on SDR flashes DWM composition.
         if hdr_mode && let Ok(swap_chain3) = swap_chain.cast::<IDXGISwapChain3>() {
@@ -159,7 +165,7 @@ impl Renderer {
         unsafe {
             let mut rendering_controls = d2d_context.GetRenderingControls();
             rendering_controls.bufferPrecision = D2D1_BUFFER_PRECISION_16BPC_FLOAT;
-            d2d_context.SetRenderingControls(&rendering_controls);
+            d2d_context.SetRenderingControls(&raw const rendering_controls);
         }
 
         let scrgb_color_context =
@@ -298,7 +304,7 @@ impl Renderer {
             let surface: IDXGISurface = self.swap_chain.GetBuffer(0)?;
             let target = self
                 .d2d_context
-                .CreateBitmapFromDxgiSurface(&surface, Some(&properties))?;
+                .CreateBitmapFromDxgiSurface(&surface, Some(&raw const properties))?;
             self.d2d_context.SetTarget(&target);
             self.target = Some(target);
         }
@@ -349,7 +355,7 @@ impl Renderer {
                 D2D_SIZE_U { width, height },
                 Some(pixels.as_ptr().cast()),
                 width * storage.bytes_per_pixel(),
-                &properties,
+                &raw const properties,
             )?
         };
         self.image_display_size = (display_size.0 as f32, display_size.1 as f32);
@@ -505,7 +511,7 @@ impl Renderer {
     ) -> Result<()> {
         unsafe {
             self.d2d_context.BeginDraw();
-            self.d2d_context.Clear(Some(&clear_color));
+            self.d2d_context.Clear(Some(&raw const clear_color));
             if self.image.is_some() {
                 // DrawImage has no destination rect; fold the display scale into the matrix.
                 let scale_x = self.image_display_size.0 / self.image_pixel_size.0.max(1.0);
@@ -518,7 +524,7 @@ impl Renderer {
                     M31: matrix[4],
                     M32: matrix[5],
                 };
-                self.d2d_context.SetTransform(&transform);
+                self.d2d_context.SetTransform(&raw const transform);
                 match (&self.effect_output, &self.image) {
                     (Some(output), _) => {
                         self.d2d_context.DrawImage(
@@ -539,7 +545,7 @@ impl Renderer {
                         };
                         self.d2d_context.DrawBitmap(
                             image,
-                            Some(&destination),
+                            Some(&raw const destination),
                             1.0,
                             interpolation,
                             None,

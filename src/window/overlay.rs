@@ -1,4 +1,4 @@
-//! DirectWrite overlays: info panel, zoom pill, error text.
+//! DirectWrite overlays: info panel, zoom text, error text.
 
 use std::path::Path;
 use std::time::{SystemTime, UNIX_EPOCH};
@@ -47,7 +47,7 @@ const BLACK: D2D1_COLOR_F = D2D1_COLOR_F {
 pub struct OverlayContent {
     pub error_text: Option<String>,
     pub info_text: Option<String>,
-    pub zoom_pill_text: Option<String>,
+    pub zoom_text: Option<String>,
     pub background_is_bright: bool,
     pub scrgb_boost: Option<f32>,
 }
@@ -99,16 +99,16 @@ impl Overlay {
         } else {
             None
         };
-        if let Some(pill_text) = &content.zoom_pill_text {
-            let pill_width = self.measure_panel_width(pill_text, viewport_width)?;
-            let centered_left = ((viewport_width - pill_width) / 2.0).max(margin);
+        if let Some(zoom_text) = &content.zoom_text {
+            let zoom_width = self.measure_panel_width(zoom_text, viewport_width)?;
+            let centered_left = ((viewport_width - zoom_width) / 2.0).max(margin);
             let top = match &info_rect {
                 Some(info) if centered_left < info.right + panel_gap => info.bottom + panel_gap,
                 _ => margin,
             };
             self.draw_panel(
                 context,
-                pill_text,
+                zoom_text,
                 centered_left,
                 top,
                 viewport_width,
@@ -138,7 +138,7 @@ impl Overlay {
     fn measure_panel_width(&self, text: &str, viewport_width: f32) -> Result<f32> {
         let layout = self.panel_layout(text, viewport_width)?;
         let mut metrics = DWRITE_TEXT_METRICS::default();
-        unsafe { layout.GetMetrics(&mut metrics)? };
+        unsafe { layout.GetMetrics(&raw mut metrics)? };
         Ok(metrics.width + PANEL_PADDING_X * 2.0 * self.scale)
     }
 
@@ -153,7 +153,7 @@ impl Overlay {
     ) -> Result<D2D_RECT_F> {
         let layout = self.panel_layout(text, viewport_width)?;
         let mut metrics = DWRITE_TEXT_METRICS::default();
-        unsafe { layout.GetMetrics(&mut metrics)? };
+        unsafe { layout.GetMetrics(&raw mut metrics)? };
         let padding_x = PANEL_PADDING_X * self.scale;
         let padding_y = PANEL_PADDING_Y * self.scale;
         let panel = D2D1_ROUNDED_RECT {
@@ -169,7 +169,7 @@ impl Overlay {
         unsafe {
             let background = context
                 .CreateSolidColorBrush(&color::output_color(PANEL_BACKGROUND, scrgb_boost), None)?;
-            context.FillRoundedRectangle(&panel, &background);
+            context.FillRoundedRectangle(&raw const panel, &background);
             let foreground =
                 context.CreateSolidColorBrush(&color::output_color(WHITE, scrgb_boost), None)?;
             context.DrawTextLayout(
@@ -430,8 +430,8 @@ fn format_locale_datetime(time: SystemTime) -> String {
     };
     let mut utc = SYSTEMTIME::default();
     let mut local = SYSTEMTIME::default();
-    if unsafe { FileTimeToSystemTime(&file_time, &mut utc) }.is_err()
-        || unsafe { SystemTimeToTzSpecificLocalTime(None, &utc, &mut local) }.is_err()
+    if unsafe { FileTimeToSystemTime(&raw const file_time, &raw mut utc) }.is_err()
+        || unsafe { SystemTimeToTzSpecificLocalTime(None, &raw const utc, &raw mut local) }.is_err()
     {
         return String::new();
     }
@@ -440,7 +440,7 @@ fn format_locale_datetime(time: SystemTime) -> String {
         GetDateFormatEx(
             None,
             DATE_SHORTDATE,
-            Some(&local),
+            Some(&raw const local),
             None,
             Some(&mut date_buffer),
             None,
@@ -451,7 +451,7 @@ fn format_locale_datetime(time: SystemTime) -> String {
         GetTimeFormatEx(
             None,
             windows::Win32::Globalization::TIME_FORMAT_FLAGS(0),
-            Some(&local),
+            Some(&raw const local),
             None,
             Some(&mut time_buffer),
         )

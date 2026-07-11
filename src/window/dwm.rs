@@ -57,7 +57,7 @@ fn system_apps_use_dark_theme() -> bool {
             RRF_RT_REG_DWORD,
             None,
             Some((&raw mut value).cast()),
-            Some(&mut size),
+            Some(&raw mut size),
         )
     };
     result == windows::Win32::Foundation::ERROR_SUCCESS && value == 0

@@ -120,7 +120,7 @@ fn center_link(dialog: HWND) {
         return;
     };
     let mut client = windows::Win32::Foundation::RECT::default();
-    if unsafe { GetClientRect(dialog, &mut client) }.is_err() {
+    if unsafe { GetClientRect(dialog, &raw mut client) }.is_err() {
         return;
     }
     let mut ideal = SIZE::default();
@@ -137,7 +137,7 @@ fn center_link(dialog: HWND) {
         return;
     }
     let mut bounds = windows::Win32::Foundation::RECT::default();
-    if unsafe { GetWindowRect(link, &mut bounds) }.is_err() {
+    if unsafe { GetWindowRect(link, &raw mut bounds) }.is_err() {
         return;
     }
     let mut corner = [windows::Win32::Foundation::POINT {

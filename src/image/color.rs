@@ -94,7 +94,7 @@ fn query_sdr_white_boost(window: HWND) -> Option<f32> {
     let monitor = unsafe { MonitorFromWindow(window, MONITOR_DEFAULTTONEAREST) };
     let mut monitor_information = MONITORINFOEXW::default();
     monitor_information.monitorInfo.cbSize = size_of::<MONITORINFOEXW>() as u32;
-    unsafe { GetMonitorInfoW(monitor, &mut monitor_information.monitorInfo) }
+    unsafe { GetMonitorInfoW(monitor, &raw mut monitor_information.monitorInfo) }
         .as_bool()
         .then_some(())?;
     let device_name = monitor_information.szDevice;
@@ -102,7 +102,11 @@ fn query_sdr_white_boost(window: HWND) -> Option<f32> {
     let mut path_count = 0u32;
     let mut mode_count = 0u32;
     if unsafe {
-        GetDisplayConfigBufferSizes(QDC_ONLY_ACTIVE_PATHS, &mut path_count, &mut mode_count)
+        GetDisplayConfigBufferSizes(
+            QDC_ONLY_ACTIVE_PATHS,
+            &raw mut path_count,
+            &raw mut mode_count,
+        )
     } != ERROR_SUCCESS
     {
         return None;
@@ -112,9 +116,9 @@ fn query_sdr_white_boost(window: HWND) -> Option<f32> {
     if unsafe {
         QueryDisplayConfig(
             QDC_ONLY_ACTIVE_PATHS,
-            &mut path_count,
+            &raw mut path_count,
             paths.as_mut_ptr(),
-            &mut mode_count,
+            &raw mut mode_count,
             modes.as_mut_ptr(),
             None,
         )
@@ -133,7 +137,7 @@ fn query_sdr_white_boost(window: HWND) -> Option<f32> {
             },
             ..Default::default()
         };
-        if unsafe { DisplayConfigGetDeviceInfo(&mut source_name.header) } != 0
+        if unsafe { DisplayConfigGetDeviceInfo(&raw mut source_name.header) } != 0
             || source_name.viewGdiDeviceName != device_name
         {
             continue;
@@ -147,7 +151,7 @@ fn query_sdr_white_boost(window: HWND) -> Option<f32> {
             },
             ..Default::default()
         };
-        if unsafe { DisplayConfigGetDeviceInfo(&mut advanced_color.header) } != 0 {
+        if unsafe { DisplayConfigGetDeviceInfo(&raw mut advanced_color.header) } != 0 {
             return None;
         }
         // Bit 0x2 = advancedColorEnabled.
@@ -163,7 +167,7 @@ fn query_sdr_white_boost(window: HWND) -> Option<f32> {
             },
             SDRWhiteLevel: 0,
         };
-        if unsafe { DisplayConfigGetDeviceInfo(&mut white_level.header) } != 0
+        if unsafe { DisplayConfigGetDeviceInfo(&raw mut white_level.header) } != 0
             || white_level.SDRWhiteLevel == 0
         {
             return None;

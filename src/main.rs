@@ -72,7 +72,7 @@ const APPLICATION_ICON_ID: PCWSTR = PCWSTR(std::ptr::without_provenance(1));
 
 const WM_APP_SHOW_WINDOW: u32 = WM_APP + 2;
 
-const ZOOM_PILL_TIMER: usize = 2;
+const ZOOM_TEXT_TIMER: usize = 2;
 const SLIDESHOW_TIMER: usize = 3;
 const RECENTS_SAVE_TIMER: usize = 4;
 const OPEN_WITH_TIMER: usize = 5;
@@ -100,7 +100,7 @@ struct Application {
     gesture_pan_point: Option<(i32, i32)>,
     overlay: Overlay,
     show_file_info: bool,
-    zoom_pill_text: Option<String>,
+    zoom_text: Option<String>,
     slideshow_active: bool,
     animation: Option<Animation>,
     drop_target: Option<IDropTarget>,
@@ -144,7 +144,7 @@ impl Application {
             gesture_pan_point: None,
             overlay: Overlay::new()?,
             show_file_info: false,
-            zoom_pill_text: None,
+            zoom_text: None,
             slideshow_active: false,
             animation: None,
             drop_target: None,
@@ -264,7 +264,7 @@ impl Application {
             },
             ..Default::default()
         };
-        let _ = unsafe { SetWindowPlacement(window, &placement) };
+        let _ = unsafe { SetWindowPlacement(window, &raw const placement) };
     }
 
     fn save_window_geometry(&mut self, window: HWND) {
@@ -277,7 +277,7 @@ impl Application {
         };
         if let Some((saved, _)) = &self.fullscreen_restore {
             placement = *saved;
-        } else if unsafe { GetWindowPlacement(window, &mut placement) }.is_err() {
+        } else if unsafe { GetWindowPlacement(window, &raw mut placement) }.is_err() {
             return;
         }
         let bounds = placement.rcNormalPosition;
@@ -418,9 +418,9 @@ impl Application {
         self.render(window);
     }
 
-    fn show_zoom_pill(&mut self, window: HWND, text: String) {
-        self.zoom_pill_text = Some(text);
-        unsafe { SetTimer(Some(window), ZOOM_PILL_TIMER, 1000, None) };
+    fn show_zoom_text(&mut self, window: HWND, text: String) {
+        self.zoom_text = Some(text);
+        unsafe { SetTimer(Some(window), ZOOM_TEXT_TIMER, 1000, None) };
     }
 
     fn toggle_slideshow(&mut self, window: HWND) {
@@ -430,7 +430,7 @@ impl Application {
             let interval = self.settings.options.slideshow_timer_seconds * 1000;
             unsafe { SetTimer(Some(window), SLIDESHOW_TIMER, interval, None) };
             self.slideshow_active = true;
-            self.show_zoom_pill(window, "Slideshow: Start".to_string());
+            self.show_zoom_text(window, "Slideshow: Start".to_string());
             self.render(window);
         }
     }
@@ -439,7 +439,7 @@ impl Application {
         if self.slideshow_active {
             let _ = unsafe { KillTimer(Some(window), SLIDESHOW_TIMER) };
             self.slideshow_active = false;
-            self.show_zoom_pill(window, "Slideshow: Stop".to_string());
+            self.show_zoom_text(window, "Slideshow: Stop".to_string());
             self.render(window);
         }
     }
@@ -494,7 +494,7 @@ impl Application {
         OverlayContent {
             error_text,
             info_text,
-            zoom_pill_text: self.zoom_pill_text.clone(),
+            zoom_text: self.zoom_text.clone(),
             background_is_bright: brightness > 0.5,
             scrgb_boost: self.scrgb_boost(),
         }
@@ -575,7 +575,7 @@ impl Application {
             let percent = (self.view_transform.scale / self.view_transform.device_pixel_ratio
                 * 100.0)
                 .round();
-            self.show_zoom_pill(window, format!("Zoom: {percent}%"));
+            self.show_zoom_text(window, format!("Zoom: {percent}%"));
         }
         self.render(window);
     }
@@ -623,7 +623,7 @@ fn core_options(options: &Options) -> CoreOptions {
 
 fn client_size(window: HWND) -> (u32, u32) {
     let mut bounds = RECT::default();
-    let _ = unsafe { GetClientRect(window, &mut bounds) };
+    let _ = unsafe { GetClientRect(window, &raw mut bounds) };
     (
         (bounds.right - bounds.left).max(0) as u32,
         (bounds.bottom - bounds.top).max(0) as u32,
@@ -642,8 +642,8 @@ fn tone_map_target_luminance(window: HWND, hdr_mode: bool) -> f32 {
 /// Cursor offset from the client center while over the client area.
 fn cursor_from_center(window: HWND) -> Option<(f32, f32)> {
     let mut point = POINT::default();
-    unsafe { GetCursorPos(&mut point) }.ok()?;
-    let _ = unsafe { ScreenToClient(window, &mut point) };
+    unsafe { GetCursorPos(&raw mut point) }.ok()?;
+    let _ = unsafe { ScreenToClient(window, &raw mut point) };
     let (width, height) = client_size(window);
     if point.x < 0 || point.y < 0 || point.x >= width as i32 || point.y >= height as i32 {
         return None;
@@ -741,12 +741,12 @@ fn dispatch_action(application: &mut Application, window: HWND, action: Action) 
             application
                 .view_transform
                 .toggle_zoom(anchor, viewport, image);
-            let pill = if application.view_transform.fit_tracking {
+            let text = if application.view_transform.fit_tracking {
                 "Fit"
             } else {
                 "1:1"
             };
-            application.show_zoom_pill(window, pill.to_string());
+            application.show_zoom_text(window, text.to_string());
             application.render(window);
         }
         Action::PreserveZoom => {
@@ -756,7 +756,7 @@ fn dispatch_action(application: &mut Application, window: HWND, action: Action) 
             } else {
                 "Off"
             };
-            application.show_zoom_pill(window, format!("Preserve Zoom: {state}"));
+            application.show_zoom_text(window, format!("Preserve Zoom: {state}"));
             application.render(window);
         }
         Action::ShowFileInfo => {
@@ -794,7 +794,7 @@ fn dispatch_action(application: &mut Application, window: HWND, action: Action) 
                 3 => "Rotate: L90\u{b0}",
                 _ => "Rotate: 0\u{b0}",
             };
-            application.show_zoom_pill(window, text.to_string());
+            application.show_zoom_text(window, text.to_string());
             application.render(window);
         }
         Action::Mirror => {
@@ -804,7 +804,7 @@ fn dispatch_action(application: &mut Application, window: HWND, action: Action) 
             } else {
                 "Mirror: Off"
             };
-            application.show_zoom_pill(window, text.to_string());
+            application.show_zoom_text(window, text.to_string());
             application.render(window);
         }
         Action::Flip => {
@@ -814,7 +814,7 @@ fn dispatch_action(application: &mut Application, window: HWND, action: Action) 
             } else {
                 "Flip: Off"
             };
-            application.show_zoom_pill(window, text.to_string());
+            application.show_zoom_text(window, text.to_string());
             application.render(window);
         }
         Action::Fullscreen => {
@@ -872,7 +872,7 @@ fn dispatch_action(application: &mut Application, window: HWND, action: Action) 
             if let Some(animation) = application.animation.as_mut() {
                 animation.adjust_speed(action == Action::IncreaseSpeed);
                 let text = format!("Speed: {}%", animation.speed_percent());
-                application.show_zoom_pill(window, text);
+                application.show_zoom_text(window, text);
                 application.render(window);
             }
         }
@@ -880,7 +880,7 @@ fn dispatch_action(application: &mut Application, window: HWND, action: Action) 
             if let Some(animation) = application.animation.as_mut() {
                 animation.reset_speed();
                 let text = format!("Speed: {}%", animation.speed_percent());
-                application.show_zoom_pill(window, text);
+                application.show_zoom_text(window, text);
                 application.render(window);
             }
         }
@@ -966,7 +966,7 @@ fn toggle_fullscreen(application: &mut Application, window: HWND) {
     unsafe {
         if let Some((placement, style)) = application.fullscreen_restore.take() {
             SetWindowLongPtrW(window, GWL_STYLE, style.0 as isize);
-            let _ = SetWindowPlacement(window, &placement);
+            let _ = SetWindowPlacement(window, &raw const placement);
             let _ = SetWindowPos(
                 window,
                 None,
@@ -982,7 +982,7 @@ fn toggle_fullscreen(application: &mut Application, window: HWND) {
                 length: size_of::<WINDOWPLACEMENT>() as u32,
                 ..Default::default()
             };
-            let _ = GetWindowPlacement(window, &mut placement);
+            let _ = GetWindowPlacement(window, &raw mut placement);
             let style = WINDOW_STYLE(GetWindowLongPtrW(window, GWL_STYLE) as u32);
             application.fullscreen_restore = Some((placement, style));
             dwm::set_fullscreen_polish(window, true);
@@ -992,7 +992,7 @@ fn toggle_fullscreen(application: &mut Application, window: HWND) {
                 cbSize: size_of::<MONITORINFO>() as u32,
                 ..Default::default()
             };
-            let _ = GetMonitorInfoW(monitor, &mut monitor_info);
+            let _ = GetMonitorInfoW(monitor, &raw mut monitor_info);
             let bounds = monitor_info.rcMonitor;
 
             SetWindowLongPtrW(window, GWL_STYLE, ((WS_POPUP | WS_VISIBLE).0) as isize);
@@ -1085,7 +1085,7 @@ fn handle_gesture(application: &mut Application, window: HWND, lparam: LPARAM) -
         cbSize: size_of::<GESTUREINFO>() as u32,
         ..Default::default()
     };
-    if unsafe { GetGestureInfo(handle, &mut information) }.is_err() {
+    if unsafe { GetGestureInfo(handle, &raw mut information) }.is_err() {
         return false;
     }
     let began = information.dwFlags & GF_BEGIN != 0;
@@ -1101,7 +1101,7 @@ fn handle_gesture(application: &mut Application, window: HWND, lparam: LPARAM) -
                     x: i32::from(information.ptsLocation.x),
                     y: i32::from(information.ptsLocation.y),
                 };
-                let _ = unsafe { ScreenToClient(window, &mut hotpoint) };
+                let _ = unsafe { ScreenToClient(window, &raw mut hotpoint) };
                 let (width, height) = client_size(window);
                 let anchor = (
                     hotpoint.x as f32 - width as f32 / 2.0,
@@ -1174,15 +1174,15 @@ fn main() -> Result<()> {
         lpszClassName: class_name,
         ..Default::default()
     };
-    let class_atom = unsafe { RegisterClassExW(&window_class) };
+    let class_atom = unsafe { RegisterClassExW(&raw const window_class) };
     assert!(class_atom != 0, "RegisterClassExW failed");
 
     create_main_window(argument_path.as_deref())?;
 
     let mut message = MSG::default();
-    while unsafe { GetMessageW(&mut message, None, 0, 0) }.as_bool() {
-        let _ = unsafe { TranslateMessage(&message) };
-        unsafe { DispatchMessageW(&message) };
+    while unsafe { GetMessageW(&raw mut message, None, 0, 0) }.as_bool() {
+        let _ = unsafe { TranslateMessage(&raw const message) };
+        unsafe { DispatchMessageW(&raw const message) };
     }
     Ok(())
 }
@@ -1266,7 +1266,7 @@ fn process_is_elevated() -> bool {
     use windows::Win32::System::Threading::{GetCurrentProcess, OpenProcessToken};
 
     let mut token = windows::Win32::Foundation::HANDLE::default();
-    if unsafe { OpenProcessToken(GetCurrentProcess(), TOKEN_QUERY, &mut token) }.is_err() {
+    if unsafe { OpenProcessToken(GetCurrentProcess(), TOKEN_QUERY, &raw mut token) }.is_err() {
         return false;
     }
     let mut elevation_type = TOKEN_ELEVATION_TYPE::default();
@@ -1277,7 +1277,7 @@ fn process_is_elevated() -> bool {
             TokenElevationType,
             Some((&raw mut elevation_type).cast()),
             size_of::<TOKEN_ELEVATION_TYPE>() as u32,
-            &mut returned,
+            &raw mut returned,
         )
     }
     .is_ok()
@@ -1302,7 +1302,7 @@ fn fail_fast_dialog(instruction: &str, content: &str) {
         dwCommonButtons: TDCBF_CLOSE_BUTTON,
         ..Default::default()
     };
-    let _ = unsafe { TaskDialogIndirect(&configuration, None, None, None) };
+    let _ = unsafe { TaskDialogIndirect(&raw const configuration, None, None, None) };
 }
 
 unsafe fn application_from_window(window: HWND) -> Option<&'static mut Application> {
@@ -1394,10 +1394,10 @@ extern "system" fn window_procedure(
             }
             LRESULT(0)
         }
-        WM_TIMER if wparam.0 == ZOOM_PILL_TIMER => {
-            let _ = unsafe { KillTimer(Some(window), ZOOM_PILL_TIMER) };
+        WM_TIMER if wparam.0 == ZOOM_TEXT_TIMER => {
+            let _ = unsafe { KillTimer(Some(window), ZOOM_TEXT_TIMER) };
             if let Some(application) = unsafe { application_from_window(window) }
-                && application.zoom_pill_text.take().is_some()
+                && application.zoom_text.take().is_some()
             {
                 application.render(window);
             }
@@ -1599,7 +1599,7 @@ extern "system" fn window_procedure(
                 let mut y = ((lparam.0 >> 16) & 0xFFFF) as u16 as i16 as i32;
                 if x == -1 && y == -1 {
                     let mut bounds = RECT::default();
-                    let _ = unsafe { GetWindowRect(window, &mut bounds) };
+                    let _ = unsafe { GetWindowRect(window, &raw mut bounds) };
                     x = (bounds.left + bounds.right) / 2;
                     y = (bounds.top + bounds.bottom) / 2;
                 }

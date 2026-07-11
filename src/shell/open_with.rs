@@ -114,7 +114,7 @@ pub fn show_open_with_dialog(window: HWND, path: &Path) {
         pcszClass: PCWSTR::null(),
         oaifInFlags: OAIF_EXEC | OAIF_ALLOW_REGISTRATION,
     };
-    let _ = unsafe { SHOpenWithDialog(Some(window), &information) };
+    let _ = unsafe { SHOpenWithDialog(Some(window), &raw const information) };
 }
 
 fn handlers_for(path: &Path) -> Vec<IAssocHandler> {
@@ -130,7 +130,7 @@ fn handlers_for(path: &Path) -> Vec<IAssocHandler> {
     loop {
         let mut batch: [Option<IAssocHandler>; 8] = Default::default();
         let mut fetched = 0u32;
-        if unsafe { enumerator.Next(&mut batch, Some(&mut fetched)) }.is_err() || fetched == 0 {
+        if unsafe { enumerator.Next(&mut batch, Some(&raw mut fetched)) }.is_err() || fetched == 0 {
             break;
         }
         handlers.extend(batch.into_iter().take(fetched as usize).flatten());
@@ -159,7 +159,7 @@ fn default_executable_for(path: &Path) -> Option<String> {
             &extension,
             PCWSTR::null(),
             Some(windows::core::PWSTR(buffer.as_mut_ptr())),
-            &mut length,
+            &raw mut length,
         )
     };
     (status.is_ok() && length > 1).then(|| String::from_utf16_lossy(&buffer[..length as usize - 1]))

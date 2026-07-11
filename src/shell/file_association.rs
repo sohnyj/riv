@@ -32,7 +32,7 @@ fn registry_set_string(subkey: &str, value_name: Option<&str>, data: &str) {
             REG_OPTION_NON_VOLATILE,
             KEY_WRITE,
             None,
-            &mut key,
+            &raw mut key,
             None,
         )
     };
@@ -86,7 +86,7 @@ fn registry_key_is_empty(subkey: &str) -> bool {
             PCWSTR(subkey_wide.as_ptr()),
             None,
             KEY_READ,
-            &mut key,
+            &raw mut key,
         )
     };
     if opened != ERROR_SUCCESS {
@@ -100,10 +100,10 @@ fn registry_key_is_empty(subkey: &str) -> bool {
             None,
             None,
             None,
-            Some(&mut subkey_count),
+            Some(&raw mut subkey_count),
             None,
             None,
-            Some(&mut value_count),
+            Some(&raw mut value_count),
             None,
             None,
             None,
@@ -178,7 +178,7 @@ pub fn registered_extensions() -> Vec<String> {
             PCWSTR(key_wide.as_ptr()),
             None,
             KEY_READ,
-            &mut key,
+            &raw mut key,
         )
     };
     if opened != ERROR_SUCCESS {
@@ -192,7 +192,7 @@ pub fn registered_extensions() -> Vec<String> {
                 key,
                 index,
                 Some(windows::core::PWSTR(name.as_mut_ptr())),
-                &mut name_length,
+                &raw mut name_length,
                 None,
                 None,
                 None,

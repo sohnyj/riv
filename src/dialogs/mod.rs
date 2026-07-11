@@ -16,8 +16,8 @@ pub(crate) fn center_on_owner(dialog: HWND) {
     };
     let mut owner_bounds = windows::Win32::Foundation::RECT::default();
     let mut dialog_bounds = windows::Win32::Foundation::RECT::default();
-    if unsafe { GetWindowRect(owner, &mut owner_bounds) }.is_err()
-        || unsafe { GetWindowRect(dialog, &mut dialog_bounds) }.is_err()
+    if unsafe { GetWindowRect(owner, &raw mut owner_bounds) }.is_err()
+        || unsafe { GetWindowRect(dialog, &raw mut dialog_bounds) }.is_err()
     {
         return;
     }

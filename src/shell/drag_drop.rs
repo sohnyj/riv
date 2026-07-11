@@ -58,7 +58,7 @@ fn dropped_paths(data_object: Option<&IDataObject>) -> Vec<PathBuf> {
             )));
         }
     }
-    unsafe { ReleaseStgMedium(&mut medium) };
+    unsafe { ReleaseStgMedium(&raw mut medium) };
     paths
 }
 

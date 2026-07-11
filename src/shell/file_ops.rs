@@ -64,7 +64,7 @@ pub fn confirm_delete(window: HWND, path: &Path, permanent: bool) -> DeleteConfi
         pszMainInstruction: PCWSTR(instruction.as_ptr()),
         pszContent: PCWSTR(content.as_ptr()),
         cButtons: 1,
-        pButtons: &delete_button,
+        pButtons: &raw const delete_button,
         nDefaultButton: IDYES.0,
         ..Default::default()
     };
@@ -73,8 +73,14 @@ pub fn confirm_delete(window: HWND, path: &Path, permanent: bool) -> DeleteConfi
     }
     let mut pressed = IDCANCEL.0;
     let mut checked = windows::core::BOOL(0);
-    let result =
-        unsafe { TaskDialogIndirect(&configuration, Some(&mut pressed), None, Some(&mut checked)) };
+    let result = unsafe {
+        TaskDialogIndirect(
+            &raw const configuration,
+            Some(&raw mut pressed),
+            None,
+            Some(&raw mut checked),
+        )
+    };
     DeleteConfirmation {
         confirmed: result.is_ok() && pressed == IDYES.0,
         do_not_ask_again: checked.as_bool(),

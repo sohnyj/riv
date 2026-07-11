@@ -76,8 +76,14 @@ pub fn decode_webp_animation(
         bytes: data.as_ptr(),
         size: data.len(),
     };
-    let demuxer =
-        unsafe { WebPDemuxInternal(&webp_data, 0, std::ptr::null_mut(), WEBP_DEMUX_ABI_VERSION) };
+    let demuxer = unsafe {
+        WebPDemuxInternal(
+            &raw const webp_data,
+            0,
+            std::ptr::null_mut(),
+            WEBP_DEMUX_ABI_VERSION,
+        )
+    };
     if demuxer.is_null() {
         return Err(fallback_error("WebP demux failed"));
     }
@@ -96,7 +102,7 @@ fn compose_webp_frames(
         return Err(fallback_error("WebP canvas has no size"));
     }
     let mut iterator: WebPIterator = unsafe { std::mem::zeroed() };
-    if unsafe { WebPDemuxGetFrame(demuxer, 1, &mut iterator) } == 0 {
+    if unsafe { WebPDemuxGetFrame(demuxer, 1, &raw mut iterator) } == 0 {
         return Err(fallback_error("WebP has no frames"));
     }
     let mut canvas = vec![0u8; canvas_width as usize * canvas_height as usize * 4];
@@ -115,7 +121,7 @@ fn compose_webp_frames(
             )
         };
         if decoded.is_null() {
-            unsafe { WebPDemuxReleaseIterator(&mut iterator) };
+            unsafe { WebPDemuxReleaseIterator(&raw mut iterator) };
             return Err(fallback_error("WebP frame decode failed"));
         }
         premultiply_bgra_in_place(&mut frame_pixels);
@@ -157,11 +163,11 @@ fn compose_webp_frames(
                 frame_height,
             );
         }
-        if unsafe { WebPDemuxNextFrame(&mut iterator) } == 0 {
+        if unsafe { WebPDemuxNextFrame(&raw mut iterator) } == 0 {
             break;
         }
     }
-    unsafe { WebPDemuxReleaseIterator(&mut iterator) };
+    unsafe { WebPDemuxReleaseIterator(&raw mut iterator) };
     Ok(DecodedImage {
         width: canvas_width,
         height: canvas_height,
@@ -210,9 +216,9 @@ pub fn decode_exr(path: &Path, format_name: &'static str) -> Result<DecodedImage
     let status = unsafe {
         riv_exr_decode(
             wide_path.as_ptr(),
-            &mut width,
-            &mut height,
-            &mut half_pixels,
+            &raw mut width,
+            &raw mut height,
+            &raw mut half_pixels,
             error_message.as_mut_ptr().cast(),
             error_message.len(),
         )
@@ -385,13 +391,13 @@ fn decode_heif_primary_image(
     }
     .into_result()?;
     let mut handle: *mut HeifImageHandle = std::ptr::null_mut();
-    unsafe { heif_context_get_primary_image_handle(context, &mut handle) }.into_result()?;
+    unsafe { heif_context_get_primary_image_handle(context, &raw mut handle) }.into_result()?;
 
     let mut image: *mut HeifImage = std::ptr::null_mut();
     let decode_result = unsafe {
         heif_decode_image(
             handle,
-            &mut image,
+            &raw mut image,
             HEIF_COLORSPACE_RGB,
             HEIF_CHROMA_INTERLEAVED_RGBA,
             std::ptr::null(),
@@ -417,7 +423,7 @@ fn decode_heif_primary_image(
     let height = unsafe { heif_image_get_height(image, HEIF_CHANNEL_INTERLEAVED) };
     let mut stride: c_int = 0;
     let plane =
-        unsafe { heif_image_get_plane_readonly(image, HEIF_CHANNEL_INTERLEAVED, &mut stride) };
+        unsafe { heif_image_get_plane_readonly(image, HEIF_CHANNEL_INTERLEAVED, &raw mut stride) };
     if plane.is_null() || width <= 0 || height <= 0 || stride < width * 4 {
         unsafe { heif_image_release(image) };
         return Err(fallback_error("HEIF image plane unavailable"));

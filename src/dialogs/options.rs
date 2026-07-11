@@ -256,7 +256,7 @@ unsafe extern "system" fn frame_procedure(
         WM_DESTROY => {
             if let Some(state) = state_mut(dialog) {
                 let mut bounds = RECT::default();
-                if unsafe { GetWindowRect(dialog, &mut bounds) }.is_ok() {
+                if unsafe { GetWindowRect(dialog, &raw mut bounds) }.is_ok() {
                     let packed = (bounds.left as u32 as isize) | ((bounds.top as isize) << 32);
                     unsafe {
                         SendMessageW(
@@ -288,7 +288,7 @@ fn initialize_frame(state: &mut OptionsState) {
     let dialog = state.dialog;
     let position = state.initial_position.or_else(|| {
         let mut bounds = RECT::default();
-        let _ = unsafe { GetWindowRect(dialog, &mut bounds) };
+        let _ = unsafe { GetWindowRect(dialog, &raw mut bounds) };
         crate::window::work_area_centered_origin(
             bounds.right - bounds.left,
             bounds.bottom - bounds.top,
@@ -339,7 +339,7 @@ fn initialize_frame(state: &mut OptionsState) {
     }
 
     let mut display = RECT::default();
-    let _ = unsafe { GetWindowRect(tab, &mut display) };
+    let _ = unsafe { GetWindowRect(tab, &raw mut display) };
     unsafe {
         SendMessageW(
             tab,
@@ -523,10 +523,10 @@ unsafe extern "system" fn page_procedure(
                     ))
                 };
                 unsafe {
-                    FillRect(draw.hDC, &draw.rcItem, brush);
+                    FillRect(draw.hDC, &raw const draw.rcItem, brush);
                     FrameRect(
                         draw.hDC,
-                        &draw.rcItem,
+                        &raw const draw.rcItem,
                         GetSysColorBrush(windows::Win32::Graphics::Gdi::COLOR_BTNSHADOW),
                     );
                     let _ = DeleteObject(brush.into());
@@ -769,7 +769,7 @@ fn choose_background_color(state: &mut OptionsState, page: HWND) {
         Flags: CC_RGBINIT | CC_FULLOPEN,
         ..Default::default()
     };
-    if unsafe { ChooseColorW(&mut configuration) }.as_bool() {
+    if unsafe { ChooseColorW(&raw mut configuration) }.as_bool() {
         let chosen = configuration.rgbResult.0;
         state.transient_options.background_color = (
             (chosen & 0xFF) as u8,
@@ -794,7 +794,7 @@ fn initialize_shortcuts_page(state: &OptionsState) {
         )
     };
     let mut bounds = RECT::default();
-    let _ = unsafe { GetClientRect(list, &mut bounds) };
+    let _ = unsafe { GetClientRect(list, &raw mut bounds) };
     let usable = bounds.right - bounds.left - unsafe { GetSystemMetrics(SM_CXVSCROLL) };
     let action_width = usable * 36 / 100;
     let keyboard_width = usable * 32 / 100;
@@ -1019,7 +1019,7 @@ fn create_tristate_images() -> HIMAGELIST {
                 },
                 GetSysColorBrush(windows::Win32::Graphics::Gdi::COLOR_WINDOW),
             );
-            let _ = DrawFrameControl(memory, &mut bounds, DFC_BUTTON, style);
+            let _ = DrawFrameControl(memory, &raw mut bounds, DFC_BUTTON, style);
             SelectObject(memory, previous);
             ImageList_Add(images, bitmap, None);
             let _ = DeleteObject(bitmap.into());
