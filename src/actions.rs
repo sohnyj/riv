@@ -214,7 +214,7 @@ const ACTION_TABLE: &[(Action, &str, &str, ActivationGate)] = &[
     (
         Action::Slideshow,
         "slideshow",
-        "Start Slideshow",
+        "Toggle Slideshow",
         ActivationGate::Folder,
     ),
     (
