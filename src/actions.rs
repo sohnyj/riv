@@ -241,9 +241,13 @@ impl Action {
             .map(|(action, _, _, _)| *action)
     }
 
-    /// 단축키 편집 테이블의 행 목록 (SPEC §8.3) — Recent(동적 이름)는 제외
+    /// 단축키 편집 테이블의 행 목록 (SPEC §8.3) — Recent(동적 이름)와 OpenWith
+    /// (서브메뉴 컨테이너 — 디스패치 무동작이라 바인딩 무의미)는 제외
     pub fn all_bindable() -> impl Iterator<Item = Self> {
-        ACTION_TABLE.iter().map(|(action, _, _, _)| *action)
+        ACTION_TABLE
+            .iter()
+            .map(|(action, _, _, _)| *action)
+            .filter(|action| *action != Self::OpenWith)
     }
 
     pub fn name(self) -> &'static str {

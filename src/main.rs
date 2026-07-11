@@ -62,7 +62,7 @@ use windows::Win32::UI::WindowsAndMessaging::{
     WINDOWPLACEMENT, WM_ACTIVATEAPP, WM_APP, WM_CLOSE, WM_CONTEXTMENU, WM_DESTROY,
     WM_DISPLAYCHANGE, WM_DPICHANGED, WM_GESTURE, WM_KEYDOWN, WM_LBUTTONDBLCLK, WM_LBUTTONDOWN,
     WM_LBUTTONUP, WM_MBUTTONDOWN, WM_MOUSEHWHEEL, WM_MOUSEMOVE, WM_MOUSEWHEEL, WM_MOVE,
-    WM_NCDESTROY, WM_NCLBUTTONDOWN, WM_PAINT, WM_SETCURSOR, WM_SETTINGCHANGE, WM_SIZE,
+    WM_NCDESTROY, WM_NCLBUTTONDOWN, WM_PAINT, WM_SETCURSOR, WM_SETTINGCHANGE, WM_SIZE, WM_SYSCHAR,
     WM_SYSKEYDOWN, WM_TIMER, WM_XBUTTONDOWN, WNDCLASSEXW, WS_OVERLAPPEDWINDOW, WS_POPUP,
     WS_VISIBLE,
 };
@@ -849,9 +849,9 @@ fn dispatch_action(application: &mut Application, window: HWND, action: Action) 
             application.view_transform.rotate(step, viewport, image);
             // 회전 상태 필 (SPEC §3.6) — 0/R90/180°/L90 (270° = 왼쪽 90°로 표기)
             let text = match application.view_transform.rotation_quadrant {
-                1 => "Rotate: R90",
+                1 => "Rotate: R90\u{b0}",
                 2 => "Rotate: 180\u{b0}",
-                3 => "Rotate: L90",
+                3 => "Rotate: L90\u{b0}",
                 _ => "Rotate: 0\u{b0}",
             };
             application.show_zoom_pill(window, text.to_string());
@@ -1576,6 +1576,23 @@ extern "system" fn window_procedure(
                 unsafe { DefWindowProcW(window, message, wparam, lparam) }
             } else {
                 LRESULT(0)
+            }
+        }
+        // 바인딩이 소비한 Alt+문자(Mirror/Flip 등)의 WM_SYSCHAR를 삼킨다 — DefWindowProc까지
+        // 가면 메뉴 니모닉 탐색 실패 비프가 울린다. 미바인딩 조합(Alt+Space 등)은 기본 처리.
+        WM_SYSCHAR => {
+            let character = char::from_u32(wparam.0 as u32).unwrap_or('\0');
+            let bound = character.is_ascii_alphanumeric()
+                && unsafe { application_from_window(window) }.is_some_and(|application| {
+                    application
+                        .bindings
+                        .lookup_key(current_modifiers(), character.to_ascii_uppercase() as u16)
+                        .is_some()
+                });
+            if bound {
+                LRESULT(0)
+            } else {
+                unsafe { DefWindowProcW(window, message, wparam, lparam) }
             }
         }
         WM_GESTURE => {
