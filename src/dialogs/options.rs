@@ -31,9 +31,10 @@ use windows::Win32::UI::Controls::{
 use windows::Win32::UI::Input::KeyboardAndMouse::{EnableWindow, VK_SPACE};
 use windows::Win32::UI::WindowsAndMessaging::{
     CB_ADDSTRING, CB_GETCURSEL, CB_SETCURSEL, CreateDialogParamW, DestroyWindow, DialogBoxParamW,
-    EndDialog, GetDlgItem, GetDlgItemInt, GetMessagePos, GetWindowLongPtrW, GetWindowRect, SW_HIDE,
-    SW_SHOW, SendMessageW, SetDlgItemTextW, SetWindowLongPtrW, SetWindowPos, ShowWindow,
-    WINDOW_LONG_PTR_INDEX, WM_APP, WM_COMMAND, WM_DESTROY, WM_DRAWITEM, WM_INITDIALOG, WM_NOTIFY,
+    EndDialog, GetClientRect, GetDlgItem, GetDlgItemInt, GetMessagePos, GetSystemMetrics,
+    GetWindowLongPtrW, GetWindowRect, SM_CXVSCROLL, SW_HIDE, SW_SHOW, SendMessageW,
+    SetDlgItemTextW, SetWindowLongPtrW, SetWindowPos, ShowWindow, WINDOW_LONG_PTR_INDEX, WM_APP,
+    WM_COMMAND, WM_DESTROY, WM_DRAWITEM, WM_INITDIALOG, WM_NOTIFY,
 };
 use windows::core::PCWSTR;
 
@@ -835,9 +836,20 @@ fn initialize_shortcuts_page(state: &OptionsState) {
             Some(LPARAM(LVS_EX_FULLROWSELECT as isize)),
         )
     };
-    for (index, (title, width)) in [("Action", 160), ("Keyboard", 140), ("Mouse", 110)]
-        .iter()
-        .enumerate()
+    // 컬럼 폭 = 리스트 실폭 비례(36/32/나머지%) — 고정 px와 달리 DPI 스케일 추종
+    let mut bounds = RECT::default();
+    let _ = unsafe { GetClientRect(list, &mut bounds) };
+    let usable = bounds.right - bounds.left - unsafe { GetSystemMetrics(SM_CXVSCROLL) };
+    let action_width = usable * 36 / 100;
+    let keyboard_width = usable * 32 / 100;
+    let mouse_width = usable - action_width - keyboard_width;
+    for (index, (title, width)) in [
+        ("Action", action_width),
+        ("Keyboard", keyboard_width),
+        ("Mouse", mouse_width),
+    ]
+    .iter()
+    .enumerate()
     {
         let text = wide(title);
         let column = LVCOLUMNW {

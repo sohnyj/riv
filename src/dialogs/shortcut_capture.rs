@@ -6,24 +6,26 @@
 //! 제약의 우회 UI라 이식하지 않음(2026-07-10 결정).
 //! 충돌 검사는 qView와 동일하게 OK 시점 경고 + 차단 (qvshortcutdialog.cpp).
 
-use windows::Win32::Foundation::{HWND, LPARAM, LRESULT, WPARAM};
+use windows::Win32::Foundation::{COLORREF, HWND, LPARAM, LRESULT, RECT, WPARAM};
 use windows::Win32::Graphics::Gdi::{
-    BeginPaint, COLOR_GRAYTEXT, COLOR_WINDOW, COLOR_WINDOWTEXT, DT_LEFT, DT_SINGLELINE, DT_VCENTER,
-    DrawTextW, EndPaint, FillRect, GetSysColor, GetSysColorBrush, HFONT, InvalidateRect,
-    PAINTSTRUCT, SelectObject, SetBkMode, SetTextColor, TRANSPARENT,
+    BeginPaint, COLOR_GRAYTEXT, COLOR_HIGHLIGHT, COLOR_HIGHLIGHTTEXT, COLOR_WINDOW,
+    COLOR_WINDOWTEXT, CreatePen, DT_LEFT, DT_SINGLELINE, DT_VCENTER, DeleteObject, DrawTextW,
+    EndPaint, FillRect, GetSysColor, GetSysColorBrush, HFONT, InvalidateRect, LineTo, MoveToEx,
+    PAINTSTRUCT, PS_SOLID, SelectObject, SetBkMode, SetTextColor, TRANSPARENT,
 };
 use windows::Win32::System::LibraryLoader::GetModuleHandleW;
-use windows::Win32::UI::Controls::TASKDIALOGCONFIG;
+use windows::Win32::UI::Controls::{DRAWITEMSTRUCT, ODS_SELECTED, TASKDIALOGCONFIG};
 use windows::Win32::UI::Input::KeyboardAndMouse::{
     GetKeyState, SetFocus, VK_CONTROL, VK_LWIN, VK_MENU, VK_RWIN, VK_SHIFT,
 };
 use windows::Win32::UI::WindowsAndMessaging::{
-    CS_DBLCLKS, DLGC_WANTALLKEYS, DefWindowProcW, DialogBoxParamW, EndDialog, GetDlgItem,
-    GetParent, GetWindowLongPtrW, RegisterClassExW, SendMessageW, SetWindowLongPtrW,
-    SetWindowTextW, WINDOW_LONG_PTR_INDEX, WM_APP, WM_COMMAND, WM_GETDLGCODE, WM_INITDIALOG,
-    WM_KEYDOWN, WM_KEYUP, WM_KILLFOCUS, WM_LBUTTONDBLCLK, WM_LBUTTONDOWN, WM_MBUTTONDBLCLK,
-    WM_MBUTTONDOWN, WM_MOUSEWHEEL, WM_PAINT, WM_SETFOCUS, WM_SETFONT, WM_SYSKEYDOWN, WM_SYSKEYUP,
-    WM_XBUTTONDBLCLK, WM_XBUTTONDOWN, WNDCLASSEXW,
+    CS_DBLCLKS, CallWindowProcW, DLGC_WANTALLKEYS, DefWindowProcW, DialogBoxParamW, EndDialog,
+    GWLP_USERDATA, GWLP_WNDPROC, GetDlgItem, GetParent, GetWindowLongPtrW, RegisterClassExW,
+    SendMessageW, SetWindowLongPtrW, SetWindowTextW, WINDOW_LONG_PTR_INDEX, WM_APP, WM_COMMAND,
+    WM_DRAWITEM, WM_GETDLGCODE, WM_INITDIALOG, WM_KEYDOWN, WM_KEYUP, WM_KILLFOCUS,
+    WM_LBUTTONDBLCLK, WM_LBUTTONDOWN, WM_MBUTTONDBLCLK, WM_MBUTTONDOWN, WM_MOUSEWHEEL, WM_PAINT,
+    WM_SETFOCUS, WM_SETFONT, WM_SYSKEYDOWN, WM_SYSKEYUP, WM_XBUTTONDBLCLK, WM_XBUTTONDOWN,
+    WNDCLASSEXW, WNDPROC,
 };
 use windows::core::{PCWSTR, w};
 
@@ -31,8 +33,8 @@ use crate::bindings::{
     self, MODIFIER_ALT, MODIFIER_CONTROL, MODIFIER_META, MODIFIER_SHIFT, MouseBase,
 };
 use crate::dialogs::resource::{
-    IDC_CAPTURE_KEY_CLEAR, IDC_CAPTURE_KEY_FIELD, IDC_CAPTURE_KEY_LIST, IDC_CAPTURE_KEY_REMOVE,
-    IDC_CAPTURE_MOUSE_CLEAR, IDC_CAPTURE_MOUSE_FIELD, IDD_CAPTURE_KEYBOARD, IDD_CAPTURE_MOUSE,
+    IDC_CAPTURE_KEY_CLEAR, IDC_CAPTURE_KEY_FIELD, IDC_CAPTURE_KEY_LIST, IDC_CAPTURE_MOUSE_CLEAR,
+    IDC_CAPTURE_MOUSE_FIELD, IDD_CAPTURE_KEYBOARD, IDD_CAPTURE_MOUSE,
 };
 
 const IDOK: usize = 1;
@@ -44,6 +46,11 @@ const DWLP_USER: WINDOW_LONG_PTR_INDEX = WINDOW_LONG_PTR_INDEX(16);
 const WM_RIV_KEY_CAPTURED: u32 = WM_APP + 0x40;
 /// wparam = (수정자 << 8) | (Double << 7) | 베이스 인덱스
 const WM_RIV_MOUSE_CAPTURED: u32 = WM_APP + 0x41;
+/// 리스트박스 X 아이콘 클릭 → 부모 다이얼로그. wparam = 항목 인덱스
+const WM_RIV_KEY_REMOVE: u32 = WM_APP + 0x42;
+
+/// 항목 X 아이콘 (Windows 닫기 버튼 계열 빨강)
+const REMOVE_ICON_RED: COLORREF = COLORREF(0x001C_2BC4); // BGR — #C42B1C
 
 /// 다른 액션이 이미 소유한 인코딩 목록 — (인코딩 문자열, 액션 라벨). 충돌 검사용.
 pub type TakenBindings = Vec<(String, &'static str)>;
@@ -168,6 +175,13 @@ unsafe extern "system" fn keyboard_procedure(
             for sequence in &state.sequences {
                 listbox_add(dialog, IDC_CAPTURE_KEY_LIST, sequence);
             }
+            // 항목 X 아이콘 클릭 감지용 서브클래스 (WM_RIV_KEY_REMOVE 통지)
+            if let Ok(listbox) = unsafe { GetDlgItem(Some(dialog), IDC_CAPTURE_KEY_LIST) } {
+                let procedure = key_list_procedure as *const core::ffi::c_void;
+                let original =
+                    unsafe { SetWindowLongPtrW(listbox, GWLP_WNDPROC, procedure as isize) };
+                unsafe { SetWindowLongPtrW(listbox, GWLP_USERDATA, original) };
+            }
             // 초기 포커스 = 캡처 필드 (바로 누르면 캡처)
             if let Ok(field) = unsafe { GetDlgItem(Some(dialog), IDC_CAPTURE_KEY_FIELD) } {
                 let _ = unsafe { SetFocus(Some(field)) };
@@ -186,21 +200,27 @@ unsafe extern "system" fn keyboard_procedure(
             }
             1
         }
+        WM_RIV_KEY_REMOVE => {
+            if let Some(state) = state_mut::<KeyboardCaptureState>(dialog) {
+                let index = wparam.0;
+                if index < state.sequences.len() {
+                    state.sequences.remove(index);
+                    listbox_remove(dialog, IDC_CAPTURE_KEY_LIST, index);
+                }
+            }
+            1
+        }
+        WM_DRAWITEM => {
+            let draw = unsafe { &*(lparam.0 as *const DRAWITEMSTRUCT) };
+            if draw.CtlID == IDC_CAPTURE_KEY_LIST as u32 {
+                draw_sequence_item(draw);
+                return 1;
+            }
+            0
+        }
         WM_COMMAND => {
             let command = wparam.0 & 0xFFFF;
             match command as i32 {
-                IDC_CAPTURE_KEY_REMOVE => {
-                    if let Some(state) = state_mut::<KeyboardCaptureState>(dialog) {
-                        let selected = listbox_selection(dialog, IDC_CAPTURE_KEY_LIST);
-                        if let Some(index) = selected
-                            && index < state.sequences.len()
-                        {
-                            state.sequences.remove(index);
-                            listbox_remove(dialog, IDC_CAPTURE_KEY_LIST, index);
-                        }
-                    }
-                    1
-                }
                 IDC_CAPTURE_KEY_CLEAR => {
                     if let Some(state) = state_mut::<KeyboardCaptureState>(dialog) {
                         state.sequences.clear();
@@ -322,6 +342,129 @@ fn set_mouse_field_text(dialog: HWND, binding: Option<&str>) {
     }
 }
 
+// ── 키 시퀀스 리스트박스 (owner-draw — 선택 항목 우측 X 아이콘으로 제거) ────
+
+/// 항목 우측 X 아이콘 히트 영역 — 항목 높이와 같은 정사각형
+fn remove_icon_bounds(item: &RECT) -> RECT {
+    let side = item.bottom - item.top;
+    RECT {
+        left: item.right - side,
+        top: item.top,
+        right: item.right,
+        bottom: item.bottom,
+    }
+}
+
+/// 항목 렌더 — 선택 항목은 하이라이트 배경 + 우측 빨강 X (SPEC §8.3, 2026-07-11)
+fn draw_sequence_item(draw: &DRAWITEMSTRUCT) {
+    let selected = draw.itemState.0 & ODS_SELECTED.0 != 0;
+    unsafe {
+        FillRect(
+            draw.hDC,
+            &draw.rcItem,
+            GetSysColorBrush(if selected {
+                COLOR_HIGHLIGHT
+            } else {
+                COLOR_WINDOW
+            }),
+        );
+    }
+    if draw.itemID == u32::MAX {
+        return; // 빈 리스트 — 배경만
+    }
+    const LB_GETTEXT: u32 = 0x0189;
+    let mut text = [0u16; 128];
+    let length = unsafe {
+        SendMessageW(
+            draw.hwndItem,
+            LB_GETTEXT,
+            Some(WPARAM(draw.itemID as usize)),
+            Some(LPARAM(text.as_mut_ptr() as isize)),
+        )
+    };
+    let length = usize::try_from(length.0).unwrap_or(0).min(text.len());
+    unsafe {
+        SetBkMode(draw.hDC, TRANSPARENT);
+        SetTextColor(
+            draw.hDC,
+            COLORREF(GetSysColor(if selected {
+                COLOR_HIGHLIGHTTEXT
+            } else {
+                COLOR_WINDOWTEXT
+            })),
+        );
+        let mut bounds = draw.rcItem;
+        bounds.left += 4;
+        DrawTextW(
+            draw.hDC,
+            &mut text[..length],
+            &mut bounds,
+            DT_LEFT | DT_VCENTER | DT_SINGLELINE,
+        );
+    }
+    if selected {
+        let zone = remove_icon_bounds(&draw.rcItem);
+        let side = zone.bottom - zone.top;
+        let inset = side / 4;
+        let stroke = (side / 10).max(1);
+        unsafe {
+            let pen = CreatePen(PS_SOLID, stroke, REMOVE_ICON_RED);
+            let previous = SelectObject(draw.hDC, pen.into());
+            let _ = MoveToEx(draw.hDC, zone.left + inset, zone.top + inset, None);
+            let _ = LineTo(draw.hDC, zone.right - inset, zone.bottom - inset);
+            let _ = MoveToEx(draw.hDC, zone.right - inset, zone.top + inset, None);
+            let _ = LineTo(draw.hDC, zone.left + inset, zone.bottom - inset);
+            SelectObject(draw.hDC, previous);
+            let _ = DeleteObject(pen.into());
+        }
+    }
+}
+
+/// 리스트박스 서브클래스 — 선택 항목의 X 아이콘 클릭을 WM_RIV_KEY_REMOVE로 통지
+unsafe extern "system" fn key_list_procedure(
+    listbox: HWND,
+    message: u32,
+    wparam: WPARAM,
+    lparam: LPARAM,
+) -> LRESULT {
+    let original: WNDPROC = unsafe {
+        std::mem::transmute(GetWindowLongPtrW(listbox, GWLP_USERDATA) as *const core::ffi::c_void)
+    };
+    if message == WM_LBUTTONDOWN {
+        const LB_GETCURSEL: u32 = 0x0188;
+        const LB_GETITEMRECT: u32 = 0x0198;
+        let x = (lparam.0 & 0xFFFF) as i16 as i32;
+        let y = ((lparam.0 >> 16) & 0xFFFF) as i16 as i32;
+        let selected = unsafe { SendMessageW(listbox, LB_GETCURSEL, None, None) }.0;
+        if selected >= 0 {
+            let mut item = RECT::default();
+            unsafe {
+                SendMessageW(
+                    listbox,
+                    LB_GETITEMRECT,
+                    Some(WPARAM(selected as usize)),
+                    Some(LPARAM(&raw mut item as isize)),
+                )
+            };
+            let zone = remove_icon_bounds(&item);
+            if x >= zone.left && x < zone.right && y >= zone.top && y < zone.bottom {
+                if let Ok(dialog) = unsafe { GetParent(listbox) } {
+                    unsafe {
+                        SendMessageW(
+                            dialog,
+                            WM_RIV_KEY_REMOVE,
+                            Some(WPARAM(selected as usize)),
+                            None,
+                        )
+                    };
+                }
+                return LRESULT(0); // 클릭 소비 — 선택 이동 방지
+            }
+        }
+    }
+    unsafe { CallWindowProcW(original, listbox, message, wparam, lparam) }
+}
+
 // ── 다이얼로그 상태·리스트박스 헬퍼 ─────────────────────────────────────────
 
 fn state_mut<State>(dialog: HWND) -> Option<&'static mut State> {
@@ -356,14 +499,6 @@ fn listbox_clear(dialog: HWND, control: i32) {
     if let Ok(listbox) = unsafe { GetDlgItem(Some(dialog), control) } {
         unsafe { SendMessageW(listbox, LB_RESETCONTENT, None, None) };
     }
-}
-
-fn listbox_selection(dialog: HWND, control: i32) -> Option<usize> {
-    const LB_GETCURSEL: u32 = 0x0188;
-    const LB_ERR: isize = -1;
-    let listbox = unsafe { GetDlgItem(Some(dialog), control) }.ok()?;
-    let selected = unsafe { SendMessageW(listbox, LB_GETCURSEL, None, None) };
-    (selected.0 != LB_ERR).then_some(selected.0 as usize)
 }
 
 // ── 캡처 필드 클래스 ────────────────────────────────────────────────────────
