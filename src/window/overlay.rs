@@ -22,7 +22,7 @@ use windows::core::{Result, w};
 use windows_numerics::Vector2;
 
 use crate::image::color;
-use crate::image::decode::DecodedImage;
+use crate::image::decode::{DecodedImage, HdrTransfer, PixelStorage};
 
 const PANEL_MARGIN: f32 = 12.0;
 const PANEL_PADDING_X: f32 = 12.0;
@@ -302,6 +302,19 @@ pub fn build_info_text(
     }
     if image.frames.len() > 1 {
         lines.push(format!("Frames: {}", image.frames.len()));
+    }
+    // 고심도·HDR 판별 결과 (SPEC §3.6, Q6) — 톤맵 파라미터 실기 진단 겸용
+    if image.storage == PixelStorage::RgbaHalf {
+        match image.hdr_content {
+            Some((transfer, peak)) => {
+                let transfer_name = match transfer {
+                    HdrTransfer::PerceptualQuantizer => "PQ",
+                    HdrTransfer::HybridLogGamma => "HLG",
+                };
+                lines.push(format!("HDR: {transfer_name}, peak {peak:.0} nits"));
+            }
+            None => lines.push("Bit depth: high (FP16)".to_string()),
+        }
     }
     if let Some(exif) = &image.exif {
         append_exif_lines(&mut lines, exif);
