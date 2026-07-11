@@ -1,6 +1,5 @@
-// OpenEXR C++ API를 extern "C" 표면으로 감싸는 정적 심 (PORTING_PLAN §5 — EXR fallback).
-// RgbaInputFile 경로 = 채널 정규화(YC → RGB 포함) + IlmThread 전역 풀 멀티스레드 디코드.
-// 출력은 RGBA half 원본 그대로 — 톤 다운(HDR→SDR)은 Rust 어댑터가 수행한다 (SPEC §10).
+// Static shim exposing the OpenEXR RgbaInputFile path through extern "C".
+// Output stays raw RGBA half; tone mapping happens on the Rust side.
 
 #include <ImathBox.h>
 #include <ImfIO.h>
@@ -15,7 +14,7 @@
 
 namespace {
 
-// 유니코드 경로 지원 — OpenEXR 기본 파일 열기는 ANSI 경로라 _wfopen 스트림을 공급한다
+// OpenEXR opens ANSI paths only; supply a _wfopen-backed stream for Unicode.
 class WideFileStream : public Imf::IStream {
 public:
     explicit WideFileStream(const wchar_t* path)
@@ -57,8 +56,7 @@ void write_error(char* error_message, size_t error_capacity, const char* text) {
 
 extern "C" {
 
-// 성공 시 0. out_pixels = dataWindow 크기의 RGBA half 버퍼(r,g,b,a 순, malloc) —
-// riv_exr_free로 해제한다. 실패 시 error_message에 사유를 남기고 0이 아닌 값 반환.
+// Returns 0 on success; out_pixels is a malloc'd RGBA half buffer freed by riv_exr_free.
 int riv_exr_decode(const wchar_t* path, int* out_width, int* out_height,
                    unsigned short** out_pixels, char* error_message, size_t error_capacity) {
     try {
