@@ -50,6 +50,7 @@
 #define IDC_MISC_MIME_DETECTION 1310
 #define IDC_MISC_SAVE_RECENTS 1311
 #define IDC_MISC_SKIP_HIDDEN 1312
+#define IDC_MISC_SLIDESHOW_TIMER_SPIN 1313
 
 // ── Shortcuts 탭 ────────────────────────────────────────────────────────────
 #define IDC_SHORTCUTS_LIST 1401

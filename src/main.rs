@@ -464,8 +464,7 @@ impl Application {
         if self.slideshow_active {
             self.cancel_slideshow(window);
         } else {
-            let interval =
-                (self.settings.options.slideshow_timer_seconds * 1000.0).max(100.0) as u32;
+            let interval = self.settings.options.slideshow_timer_seconds * 1000;
             unsafe { SetTimer(Some(window), SLIDESHOW_TIMER, interval, None) };
             self.slideshow_active = true;
             self.show_zoom_pill(window, "Slideshow: Start".to_string());

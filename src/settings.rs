@@ -34,7 +34,8 @@ pub struct Options {
     pub loop_folders_enabled: bool,
     /// 슬라이드쇼 (R4)
     pub slideshow_reversed: bool,
-    pub slideshow_timer_seconds: f64,
+    /// 정수 초 1~3600 (2026-07-11 — 소수 허용 폐기)
+    pub slideshow_timer_seconds: u32,
     /// 삭제 후 이동 (R4)
     pub after_delete: u32,
     pub ask_delete: bool,
@@ -62,7 +63,7 @@ impl Default for Options {
             preloading_mode: 1,
             loop_folders_enabled: true,
             slideshow_reversed: false,
-            slideshow_timer_seconds: 5.0,
+            slideshow_timer_seconds: 5,
             after_delete: 1,
             ask_delete: true,
             allow_mime_content_detection: false,
@@ -111,10 +112,8 @@ impl Options {
             preloading_mode: unsigned("preloadingmode", default.preloading_mode),
             loop_folders_enabled: boolean("loopfoldersenabled", default.loop_folders_enabled),
             slideshow_reversed: boolean("slideshowreversed", default.slideshow_reversed),
-            slideshow_timer_seconds: options
-                .get("slideshowtimer")
-                .and_then(Value::as_f64)
-                .unwrap_or(default.slideshow_timer_seconds),
+            slideshow_timer_seconds: unsigned("slideshowtimer", default.slideshow_timer_seconds)
+                .clamp(1, 3600),
             // 구 Do Nothing(1)은 제거(2026-07-11) — 범위 밖(구 2=다음 포함)은 다음 파일로
             after_delete: unsigned("afterdelete", default.after_delete).min(1),
             ask_delete: boolean("askdelete", default.ask_delete),

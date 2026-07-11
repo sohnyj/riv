@@ -31,10 +31,9 @@ use windows::Win32::UI::Controls::{
 use windows::Win32::UI::Input::KeyboardAndMouse::{EnableWindow, VK_SPACE};
 use windows::Win32::UI::WindowsAndMessaging::{
     CB_ADDSTRING, CB_GETCURSEL, CB_SETCURSEL, CreateDialogParamW, DestroyWindow, DialogBoxParamW,
-    EndDialog, GetDlgItem, GetDlgItemInt, GetDlgItemTextW, GetMessagePos, GetWindowLongPtrW,
-    GetWindowRect, SW_HIDE, SW_SHOW, SendMessageW, SetDlgItemTextW, SetWindowLongPtrW,
-    SetWindowPos, ShowWindow, WINDOW_LONG_PTR_INDEX, WM_APP, WM_COMMAND, WM_DESTROY, WM_DRAWITEM,
-    WM_INITDIALOG, WM_NOTIFY,
+    EndDialog, GetDlgItem, GetDlgItemInt, GetMessagePos, GetWindowLongPtrW, GetWindowRect, SW_HIDE,
+    SW_SHOW, SendMessageW, SetDlgItemTextW, SetWindowLongPtrW, SetWindowPos, ShowWindow,
+    WINDOW_LONG_PTR_INDEX, WM_APP, WM_COMMAND, WM_DESTROY, WM_DRAWITEM, WM_INITDIALOG, WM_NOTIFY,
 };
 use windows::core::PCWSTR;
 
@@ -626,9 +625,8 @@ fn handle_page_command(
             options.slideshow_reversed = combo_selection(page, control) == 1;
         }
         (IDC_MISC_SLIDESHOW_TIMER_EDIT, EN_CHANGE) => {
-            if let Ok(seconds) = dialog_item_text(page, control).trim().parse::<f64>() {
-                options.slideshow_timer_seconds = seconds.max(0.1);
-            }
+            let value = unsafe { GetDlgItemInt(page, control, None, false) };
+            options.slideshow_timer_seconds = value.clamp(1, 3600);
         }
         (IDC_MISC_AFTER_DELETE, CBN_SELCHANGE) => {
             options.after_delete = combo_selection(page, control);
@@ -698,6 +696,10 @@ fn initialize_misc_page(state: &OptionsState) {
     );
     combo_fill(page, IDC_MISC_SLIDESHOW_DIRECTION, &["Forward", "Backward"]);
     combo_fill(page, IDC_MISC_AFTER_DELETE, &["Move Back", "Move Forward"]);
+    // 슬라이드쇼 간격(초) 범위 = 1~3600
+    if let Ok(spin) = unsafe { GetDlgItem(Some(page), IDC_MISC_SLIDESHOW_TIMER_SPIN) } {
+        unsafe { SendMessageW(spin, UDM_SETRANGE32, Some(WPARAM(1)), Some(LPARAM(3600))) };
+    }
 }
 
 /// transient → 전 컨트롤 반영 (초기화·Restore Defaults)
@@ -773,7 +775,7 @@ fn sync_all_pages(state: &mut OptionsState) {
     set_dialog_item_text(
         misc_page,
         IDC_MISC_SLIDESHOW_TIMER_EDIT,
-        &format_seconds(options.slideshow_timer_seconds),
+        &options.slideshow_timer_seconds.to_string(),
     );
     combo_select(misc_page, IDC_MISC_AFTER_DELETE, options.after_delete);
     set_check(misc_page, IDC_MISC_ASK_DELETE, options.ask_delete);
@@ -815,14 +817,6 @@ fn choose_background_color(state: &mut OptionsState, page: HWND) {
             ((chosen >> 16) & 0xFF) as u8,
         );
         sync_bgcolor_button(state, page);
-    }
-}
-
-fn format_seconds(seconds: f64) -> String {
-    if seconds.fract() == 0.0 {
-        format!("{}", seconds as u64)
-    } else {
-        format!("{seconds}")
     }
 }
 
@@ -1297,10 +1291,4 @@ fn is_checked(page: HWND, control: i32) -> bool {
 fn set_dialog_item_text(page: HWND, control: i32, text: &str) {
     let wide_text = wide(text);
     let _ = unsafe { SetDlgItemTextW(page, control, PCWSTR(wide_text.as_ptr())) };
-}
-
-fn dialog_item_text(page: HWND, control: i32) -> String {
-    let mut buffer = [0u16; 64];
-    let length = unsafe { GetDlgItemTextW(page, control, &mut buffer) };
-    String::from_utf16_lossy(&buffer[..length as usize])
 }
