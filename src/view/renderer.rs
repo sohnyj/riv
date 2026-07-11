@@ -29,13 +29,13 @@ use windows::Win32::Graphics::Direct2D::{
     D2D1_COLORMANAGEMENT_PROP_DESTINATION_COLOR_CONTEXT, D2D1_COLORMANAGEMENT_PROP_QUALITY,
     D2D1_COLORMANAGEMENT_PROP_SOURCE_COLOR_CONTEXT, D2D1_COLORMANAGEMENT_QUALITY_BEST,
     D2D1_DEVICE_CONTEXT_OPTIONS_NONE, D2D1_FACTORY_TYPE_SINGLE_THREADED,
-    D2D1_HDRTONEMAP_DISPLAY_MODE_HDR, D2D1_HDRTONEMAP_DISPLAY_MODE_SDR,
-    D2D1_HDRTONEMAP_PROP_DISPLAY_MODE, D2D1_HDRTONEMAP_PROP_INPUT_MAX_LUMINANCE,
-    D2D1_HDRTONEMAP_PROP_OUTPUT_MAX_LUMINANCE, D2D1_INTERPOLATION_MODE,
-    D2D1_PROPERTY_TYPE_COLOR_CONTEXT, D2D1_PROPERTY_TYPE_ENUM, D2D1_PROPERTY_TYPE_FLOAT,
-    D2D1_WHITELEVELADJUSTMENT_PROP_INPUT_WHITE_LEVEL,
+    D2D1_HDRTONEMAP_DISPLAY_MODE_HDR, D2D1_HDRTONEMAP_PROP_DISPLAY_MODE,
+    D2D1_HDRTONEMAP_PROP_INPUT_MAX_LUMINANCE, D2D1_HDRTONEMAP_PROP_OUTPUT_MAX_LUMINANCE,
+    D2D1_INTERPOLATION_MODE, D2D1_PROPERTY_TYPE_COLOR_CONTEXT, D2D1_PROPERTY_TYPE_ENUM,
+    D2D1_PROPERTY_TYPE_FLOAT, D2D1_WHITELEVELADJUSTMENT_PROP_INPUT_WHITE_LEVEL,
     D2D1_WHITELEVELADJUSTMENT_PROP_OUTPUT_WHITE_LEVEL, D2D1CreateFactory, ID2D1Bitmap1,
-    ID2D1ColorContext, ID2D1DeviceContext, ID2D1Effect, ID2D1Factory1, ID2D1Image,
+    ID2D1ColorContext, ID2D1DeviceContext, ID2D1DeviceContext5, ID2D1Effect, ID2D1Factory1,
+    ID2D1Image,
 };
 use windows::Win32::Graphics::Direct3D::{
     D3D_DRIVER_TYPE, D3D_DRIVER_TYPE_HARDWARE, D3D_DRIVER_TYPE_WARP, D3D_FEATURE_LEVEL_11_0,
@@ -44,7 +44,8 @@ use windows::Win32::Graphics::Direct3D11::{
     D3D11_CREATE_DEVICE_BGRA_SUPPORT, D3D11_SDK_VERSION, D3D11CreateDevice, ID3D11Device,
 };
 use windows::Win32::Graphics::Dxgi::Common::{
-    DXGI_ALPHA_MODE_IGNORE, DXGI_COLOR_SPACE_RGB_FULL_G10_NONE_P709, DXGI_FORMAT_B8G8R8A8_UNORM,
+    DXGI_ALPHA_MODE_IGNORE, DXGI_COLOR_SPACE_RGB_FULL_G10_NONE_P709,
+    DXGI_COLOR_SPACE_RGB_FULL_G2084_NONE_P2020, DXGI_FORMAT_B8G8R8A8_UNORM,
     DXGI_FORMAT_R16G16B16A16_FLOAT, DXGI_FORMAT_UNKNOWN, DXGI_SAMPLE_DESC,
 };
 use windows::Win32::Graphics::Dxgi::{
@@ -55,11 +56,13 @@ use windows::Win32::Graphics::Dxgi::{
 use windows::core::{Interface, Result};
 use windows_numerics::Matrix3x2;
 
-use crate::image::decode::PixelStorage;
+use crate::image::decode::{HdrTransfer, PixelStorage};
 
 pub struct Renderer {
     /// 구축 시점의 스왑체인 모드 (A안) — 현재 모니터와 불일치하면 재구축 대상
     hdr_mode: bool,
+    /// 창 모니터 최대 휘도(nits) — 톤맵 목표·SDR 재해석 스케일 기준 (SPEC §7 Q6)
+    display_maximum_luminance: f32,
     swap_chain: IDXGISwapChain1,
     d2d_context: ID2D1DeviceContext,
     target: Option<ID2D1Bitmap1>,
@@ -79,6 +82,9 @@ pub struct Renderer {
     /// 타깃 색공간 컨텍스트 — CM 목적지는 소스 종류별로 전환 (Q6: SDR 모드 HDR 소스 = scRGB)
     scrgb_color_context: Option<ID2D1ColorContext>,
     srgb_color_context: Option<ID2D1ColorContext>,
+    /// PQ(HDR10) 소스 컨텍스트 — DXGI G2084 기반 절대 휘도 매핑 (ICC는 상대 색측정이라
+    /// 부적합 — 실기 확인 2026-07-11). ID2D1DeviceContext5 미지원 환경은 None
+    hdr10_color_context: Option<ID2D1ColorContext>,
     /// 현재 소스 프로파일 캐시 — 애니메이션 프레임 재업로드 시 재생성 회피
     source_icc_profile: Option<Vec<u8>>,
     source_color_context: Option<ID2D1ColorContext>,
@@ -205,6 +211,19 @@ impl Renderer {
             unsafe { d2d_context.CreateColorContext(D2D1_COLOR_SPACE_SCRGB, None) }.ok();
         let srgb_color_context =
             unsafe { d2d_context.CreateColorContext(D2D1_COLOR_SPACE_SRGB, None) }.ok();
+        let hdr10_color_context =
+            d2d_context
+                .cast::<ID2D1DeviceContext5>()
+                .ok()
+                .and_then(|device_context5| {
+                    unsafe {
+                        device_context5.CreateColorContextFromDxgiColorSpace(
+                            DXGI_COLOR_SPACE_RGB_FULL_G2084_NONE_P2020,
+                        )
+                    }
+                    .ok()
+                    .and_then(|context| context.cast::<ID2D1ColorContext>().ok())
+                });
         // 품질 BEST 필수 — 부동소수점 정밀도·scRGB 색공간 지원 조건. 기본(NORMAL)이면
         // scRGB 변환이 적용되지 않아 이중 감마 인코딩(실기 washed-out, 2026-07-11 확인)
         let create_color_management = || {
@@ -232,23 +251,21 @@ impl Renderer {
                 )
             }
             .ok()?;
-            let display_mode = if hdr_mode {
-                D2D1_HDRTONEMAP_DISPLAY_MODE_HDR
-            } else {
-                D2D1_HDRTONEMAP_DISPLAY_MODE_SDR
-            };
+            // 커브 모드는 SDR 출력에서도 HDR — SDR 모드는 미드톤을 크게 올린다
+            // (참조 뷰어 HDRImageViewer 관례, 2026-07-11)
             unsafe {
                 effect.SetValue(
                     D2D1_HDRTONEMAP_PROP_DISPLAY_MODE.0 as u32,
                     D2D1_PROPERTY_TYPE_ENUM,
-                    &display_mode.0.to_ne_bytes(),
+                    &D2D1_HDRTONEMAP_DISPLAY_MODE_HDR.0.to_ne_bytes(),
                 )
             }
             .ok()?;
             Some(effect)
         });
-        // SDR 모드 톤맵 후처리 2종 (SPEC §7 Q6): 정규화(×80/패널 최대 —
-        // display-referred 백 매핑) → scRGB→sRGB 재인코딩(8bpc 타깃)
+        // SDR 모드 톤맵 후처리 2종 (SPEC §7 Q6): scene-referred → display-referred
+        // 재해석(In=80, Out=min(패널 최대, 이미지 피크) — rewire에서 이미지별 설정,
+        // 참조 뷰어 관례) → scRGB→sRGB 재인코딩(8bpc 타깃)
         let tone_map_normalize_effect = (!hdr_mode)
             .then_some(())
             .and(hdr_tone_map_effect.as_ref())
@@ -256,14 +273,6 @@ impl Renderer {
                 let effect =
                     unsafe { d2d_context.CreateEffect(&CLSID_D2D1WhiteLevelAdjustment) }.ok()?;
                 set_white_level_input(&effect, SDR_REFERENCE_WHITE_NITS).ok()?;
-                unsafe {
-                    effect.SetValue(
-                        D2D1_WHITELEVELADJUSTMENT_PROP_OUTPUT_WHITE_LEVEL.0 as u32,
-                        D2D1_PROPERTY_TYPE_FLOAT,
-                        &display_maximum_luminance.to_ne_bytes(),
-                    )
-                }
-                .ok()?;
                 Some(effect)
             });
         let output_color_management_effect = (!hdr_mode)
@@ -311,6 +320,7 @@ impl Renderer {
 
         let mut renderer = Self {
             hdr_mode,
+            display_maximum_luminance,
             swap_chain,
             d2d_context,
             target: None,
@@ -323,6 +333,7 @@ impl Renderer {
             output_color_management_effect,
             scrgb_color_context,
             srgb_color_context,
+            hdr10_color_context,
             source_icc_profile: None,
             source_color_context: None,
             image_display_size: (0.0, 0.0),
@@ -389,7 +400,7 @@ impl Renderer {
 
     /// premultiplied 픽셀 업로드 (SPEC §3.1·§7 Q6) + 이펙트 체인 재배선.
     /// `display_size` = 논리(원본) 크기, `icc_profile` = 소스 프로파일(없으면 sRGB 가정),
-    /// `peak_luminance_nits` = HDR(PQ/HLG) 소스의 콘텐츠 피크 — Some이면 톤맵 경로
+    /// `hdr_content` = HDR(PQ/HLG) 전달 함수 + 콘텐츠 피크(nits) — Some이면 톤맵 경로
     #[expect(clippy::too_many_arguments)]
     pub fn set_image(
         &mut self,
@@ -399,7 +410,7 @@ impl Renderer {
         display_size: (u32, u32),
         icc_profile: Option<&[u8]>,
         storage: PixelStorage,
-        peak_luminance_nits: Option<f32>,
+        hdr_content: Option<(HdrTransfer, f32)>,
     ) -> Result<()> {
         let properties = D2D1_BITMAP_PROPERTIES1 {
             pixelFormat: source_pixel_format(storage),
@@ -418,49 +429,65 @@ impl Renderer {
         };
         self.image_display_size = (display_size.0 as f32, display_size.1 as f32);
         self.image_pixel_size = (width as f32, height as f32);
-        self.rewire_effect_chain(&bitmap, icc_profile, peak_luminance_nits);
+        self.rewire_effect_chain(&bitmap, icc_profile, hdr_content);
         self.image = Some(bitmap);
         Ok(())
     }
 
     /// 소스 프로파일 → ColorManagement → (HdrToneMap) → 백레벨/인코딩 (SPEC §7·Q6).
     /// SDR 소스: CM(→타깃) → HDR 모드만 WLA(백레벨 부스트).
-    /// HDR(PQ/HLG) 소스: CM(→scRGB) → 톤맵 — HDR 모드는 절대 휘도 그대로(WLA 비적용),
-    /// SDR 모드는 정규화(×80/패널 최대) → scRGB→sRGB 재인코딩.
+    /// HDR(PQ/HLG) 소스: CM(→scRGB) → 톤맵(커브 모드 HDR 고정) — HDR 모드는 절대 휘도
+    /// 그대로(WLA 비적용), SDR 모드는 display-referred 재해석(×80/min(패널 최대, 피크))
+    /// → scRGB→sRGB 재인코딩 (참조 뷰어 HDRImageViewer 관례, 2026-07-11).
     fn rewire_effect_chain(
         &mut self,
         bitmap: &ID2D1Bitmap1,
         icc_profile: Option<&[u8]>,
-        peak_luminance_nits: Option<f32>,
+        hdr_content: Option<(HdrTransfer, f32)>,
     ) {
         self.effect_output = None;
         let Some(color_management) = &self.color_management_effect else {
             return;
         };
-        // 프로파일이 바뀔 때만 소스 색 컨텍스트 재생성 (애니메이션 프레임 재업로드 대비)
-        if self.source_color_context.is_none() || self.source_icc_profile.as_deref() != icc_profile
-        {
-            self.source_color_context = match icc_profile {
-                Some(profile) => unsafe {
-                    self.d2d_context
-                        .CreateColorContext(D2D1_COLOR_SPACE_CUSTOM, Some(profile))
+        // 소스 컨텍스트 — PQ는 DXGI G2084(절대 휘도 매핑) 우선: ICC(상대 색측정)로는
+        // scRGB 절대 스케일이 깨져 톤맵 파라미터와 불일치 (실기 확인 2026-07-11)
+        let hdr10_context = matches!(hdr_content, Some((HdrTransfer::PerceptualQuantizer, _)))
+            .then_some(self.hdr10_color_context.as_ref())
+            .flatten();
+        let source_context = match hdr10_context {
+            Some(context) => context,
+            None => {
+                // 프로파일이 바뀔 때만 소스 색 컨텍스트 재생성 (애니메이션 프레임 재업로드 대비)
+                if self.source_color_context.is_none()
+                    || self.source_icc_profile.as_deref() != icc_profile
+                {
+                    self.source_color_context = match icc_profile {
+                        Some(profile) => unsafe {
+                            self.d2d_context
+                                .CreateColorContext(D2D1_COLOR_SPACE_CUSTOM, Some(profile))
+                        }
+                        .ok(),
+                        None => None,
+                    }
+                    .or_else(|| {
+                        unsafe {
+                            self.d2d_context
+                                .CreateColorContext(D2D1_COLOR_SPACE_SRGB, None)
+                        }
+                        .ok()
+                    });
+                    self.source_icc_profile = icc_profile.map(<[u8]>::to_vec);
                 }
-                .ok(),
-                None => None,
+                let Some(source_context) = &self.source_color_context else {
+                    return;
+                };
+                source_context
             }
-            .or_else(|| {
-                unsafe {
-                    self.d2d_context
-                        .CreateColorContext(D2D1_COLOR_SPACE_SRGB, None)
-                }
-                .ok()
-            });
-            self.source_icc_profile = icc_profile.map(<[u8]>::to_vec);
-        }
-        let Some(source_context) = &self.source_color_context else {
-            return;
         };
-        let tone_map = self.hdr_tone_map_effect.as_ref().zip(peak_luminance_nits);
+        let tone_map = self
+            .hdr_tone_map_effect
+            .as_ref()
+            .zip(hdr_content.map(|(_, peak)| peak));
         // CM 목적지 — 톤맵은 linear scRGB 입력 전제(sRGB 직행이면 >1.0이 선클리핑됨)
         let destination_context = if self.hdr_mode || tone_map.is_some() {
             &self.scrgb_color_context
@@ -495,11 +522,13 @@ impl Renderer {
         };
         self.effect_output = match tone_map {
             Some((tone_map_effect, peak)) => {
+                // 과소 입력은 톤매퍼 오동작 — 80 nits 하한 (참조 뷰어 관례)
+                let input_maximum = peak.max(SDR_REFERENCE_WHITE_NITS);
                 let input_set = unsafe {
                     tone_map_effect.SetValue(
                         D2D1_HDRTONEMAP_PROP_INPUT_MAX_LUMINANCE.0 as u32,
                         D2D1_PROPERTY_TYPE_FLOAT,
-                        &peak.to_ne_bytes(),
+                        &input_maximum.to_ne_bytes(),
                     )
                 }
                 .is_ok();
@@ -515,6 +544,17 @@ impl Renderer {
                     tone_mapped.and_then(|tone_mapped| {
                         let normalize = self.tone_map_normalize_effect.as_ref()?;
                         let output_encoding = self.output_color_management_effect.as_ref()?;
+                        // scene-referred(1.0=80nits) → display-referred(1.0=패널 백)
+                        // 재해석 — 피크가 패널 최대에 못 미치면 피크를 백으로
+                        let display_white = self.display_maximum_luminance.min(input_maximum);
+                        unsafe {
+                            normalize.SetValue(
+                                D2D1_WHITELEVELADJUSTMENT_PROP_OUTPUT_WHITE_LEVEL.0 as u32,
+                                D2D1_PROPERTY_TYPE_FLOAT,
+                                &display_white.to_ne_bytes(),
+                            )
+                        }
+                        .ok()?;
                         unsafe { normalize.SetInput(0, &tone_mapped, true) };
                         let normalized = unsafe { normalize.GetOutput() }.ok()?;
                         unsafe { output_encoding.SetInput(0, &normalized, true) };

@@ -52,6 +52,14 @@ impl PixelStorage {
     }
 }
 
+/// HDR 전달 함수 (ICC cicp 판별, SPEC §7 Q6) — 렌더러의 소스 색 컨텍스트 선택 기준:
+/// PQ는 DXGI G2084 컨텍스트(절대 휘도 매핑), HLG는 ICC 폴백
+#[derive(Clone, Copy, PartialEq, Eq)]
+pub enum HdrTransfer {
+    PerceptualQuantizer,
+    HybridLogGamma,
+}
+
 pub struct DecodedImage {
     /// 논리 크기 = 원본 픽셀 — 표시 크기 기준 (DP3 다운스케일과 무관, SPEC §3.4)
     pub width: u32,
@@ -66,9 +74,9 @@ pub struct DecodedImage {
     /// EXIF 촬영 정보 (SPEC §3.6 확장, 2026-07-11) — WIC 경로만, 전 필드 부재면 None
     pub exif: Option<ExifInfo>,
     pub storage: PixelStorage,
-    /// HDR 소스(PQ/HLG)의 콘텐츠 피크 휘도(nits) — HdrToneMap 게이트·InputMaxLuminance
-    /// (SPEC §7 Q6). SDR 색공간 소스는 고심도여도 None(톤맵 비대상)
-    pub peak_luminance_nits: Option<f32>,
+    /// HDR(PQ/HLG) 전달 함수 + 콘텐츠 피크 휘도(nits) — HdrToneMap 게이트·
+    /// InputMaxLuminance (SPEC §7 Q6). SDR 색공간 소스는 고심도여도 None(톤맵 비대상)
+    pub hdr_content: Option<(HdrTransfer, f32)>,
     pub frames: Vec<Frame>,
 }
 
@@ -516,7 +524,7 @@ pub fn decode_raw_preview(path: &Path) -> Option<DecodedImage> {
             icc_profile,
             exif,
             storage: PixelStorage::Bgra8,
-            peak_luminance_nits: None,
+            hdr_content: None,
             frames: vec![Frame {
                 pixels,
                 delay_milliseconds: 0,
@@ -533,7 +541,7 @@ pub fn decode_raw_preview(path: &Path) -> Option<DecodedImage> {
         icc_profile: decoded.icc_profile,
         exif: decoded.exif,
         storage: decoded.storage,
-        peak_luminance_nits: decoded.peak_luminance_nits,
+        hdr_content: decoded.hdr_content,
         frames: decoded.frames,
     })
 }
@@ -566,7 +574,7 @@ struct DecodedFrames {
     icc_profile: Option<Vec<u8>>,
     exif: Option<ExifInfo>,
     storage: PixelStorage,
-    peak_luminance_nits: Option<f32>,
+    hdr_content: Option<(HdrTransfer, f32)>,
     frames: Vec<Frame>,
 }
 
@@ -606,7 +614,7 @@ fn decode_with_wic(
         icc_profile: decoded.icc_profile,
         exif: decoded.exif,
         storage: decoded.storage,
-        peak_luminance_nits: decoded.peak_luminance_nits,
+        hdr_content: decoded.hdr_content,
         frames: decoded.frames,
     })
 }
@@ -673,10 +681,12 @@ fn decode_single_frame(
         storage.bytes_per_pixel(),
     )?;
     // HDR(PQ/HLG) 소스만 피크 휘도 산출 — HdrToneMap 게이트 (SPEC §7 Q6)
-    let peak_luminance_nits = (storage == PixelStorage::RgbaHalf)
+    let hdr_content = (storage == PixelStorage::RgbaHalf)
         .then(|| icc_profile.as_deref().and_then(icc_cicp_transfer_function))
         .flatten()
-        .and_then(|transfer| peak_luminance_from_half_pixels(&pixels, transfer));
+        .and_then(|transfer| {
+            peak_luminance_from_half_pixels(&pixels, transfer).map(|peak| (transfer, peak))
+        });
     Ok(DecodedFrames {
         width,
         height,
@@ -685,7 +695,7 @@ fn decode_single_frame(
         icc_profile,
         exif,
         storage,
-        peak_luminance_nits,
+        hdr_content,
         frames: vec![Frame {
             pixels,
             delay_milliseconds: 0,
@@ -712,7 +722,7 @@ fn frame_exceeds_8_bits_per_channel(
 
 /// ICC 'cicp' 태그(ICC 4.4)의 전달 함수 코드 — 16=PQ, 18=HLG (BT.2100).
 /// 태그 부재·비 HDR 전달 함수는 None (톤맵 비대상)
-fn icc_cicp_transfer_function(icc: &[u8]) -> Option<u8> {
+fn icc_cicp_transfer_function(icc: &[u8]) -> Option<HdrTransfer> {
     const TRANSFER_PQ: u8 = 16;
     const TRANSFER_HLG: u8 = 18;
     let read_u32 = |offset: usize| -> Option<u32> {
@@ -731,19 +741,26 @@ fn icc_cicp_transfer_function(icc: &[u8]) -> Option<u8> {
         if icc.get(offset..offset + 4)? != b"cicp" {
             return None;
         }
-        let transfer = *icc.get(offset + 9)?;
-        return matches!(transfer, TRANSFER_PQ | TRANSFER_HLG).then_some(transfer);
+        return match *icc.get(offset + 9)? {
+            TRANSFER_PQ => Some(HdrTransfer::PerceptualQuantizer),
+            TRANSFER_HLG => Some(HdrTransfer::HybridLogGamma),
+            _ => None,
+        };
     }
     None
 }
 
-/// FP16 픽셀에서 콘텐츠 피크 휘도(nits) — PQ는 최대 코드값의 EOTF 환산(정확),
-/// HLG는 공칭 피크 1000 nits (BT.2100)
-fn peak_luminance_from_half_pixels(pixels: &[u8], transfer: u8) -> Option<f32> {
+/// FP16 픽셀에서 콘텐츠 피크 휘도(nits) — PQ는 픽셀별 최대 채널 코드값의
+/// 99.9 백분위(손실 압축 아웃라이어 제외 — 참조 뷰어의 MaxCLL 백분위 관례)를
+/// EOTF 환산, HLG는 공칭 피크 1000 nits (BT.2100)
+fn peak_luminance_from_half_pixels(pixels: &[u8], transfer: HdrTransfer) -> Option<f32> {
     match transfer {
-        16 => {
-            let mut maximum_code = 0.0f32;
+        HdrTransfer::PerceptualQuantizer => {
+            const BINS: usize = 4096;
+            let mut histogram = [0u32; BINS];
+            let mut pixel_count = 0u32;
             for pixel in pixels.chunks_exact(8) {
+                let mut maximum_code = 0.0f32;
                 for channel in 0..3 {
                     let bits = u16::from_le_bytes([pixel[channel * 2], pixel[channel * 2 + 1]]);
                     let code = half_to_f32(bits);
@@ -751,11 +768,28 @@ fn peak_luminance_from_half_pixels(pixels: &[u8], transfer: u8) -> Option<f32> {
                         maximum_code = code;
                     }
                 }
+                let bin =
+                    ((maximum_code.clamp(0.0, 1.0) * (BINS - 1) as f32) as usize).min(BINS - 1);
+                histogram[bin] += 1;
+                pixel_count += 1;
             }
-            Some(perceptual_quantizer_nits(maximum_code.min(1.0)))
+            if pixel_count == 0 {
+                return None;
+            }
+            let threshold = (u64::from(pixel_count) * 999 / 1000) as u32;
+            let mut accumulated = 0u32;
+            let mut percentile_bin = BINS - 1;
+            for (bin, count) in histogram.iter().enumerate() {
+                accumulated += count;
+                if accumulated >= threshold {
+                    percentile_bin = bin;
+                    break;
+                }
+            }
+            let code = (percentile_bin as f32 + 1.0) / BINS as f32;
+            Some(perceptual_quantizer_nits(code.min(1.0)))
         }
-        18 => Some(1000.0),
-        _ => None,
+        HdrTransfer::HybridLogGamma => Some(1000.0),
     }
 }
 
@@ -940,7 +974,7 @@ fn decode_animation(
         icc_profile,
         exif: None,
         storage: PixelStorage::Bgra8,
-        peak_luminance_nits: None,
+        hdr_content: None,
         frames,
     })
 }
@@ -1259,7 +1293,7 @@ fn decode_apng(path: &Path, format_name: &'static str) -> Result<DecodedImage, D
         icc_profile,
         exif: None,
         storage: PixelStorage::Bgra8,
-        peak_luminance_nits: None,
+        hdr_content: None,
         frames,
     })
 }
@@ -1357,7 +1391,7 @@ fn decode_svg(path: &Path, format_name: &'static str) -> Result<DecodedImage, De
         icc_profile: None,
         exif: None,
         storage: PixelStorage::Bgra8,
-        peak_luminance_nits: None,
+        hdr_content: None,
         frames: vec![Frame {
             pixels,
             delay_milliseconds: 0,
