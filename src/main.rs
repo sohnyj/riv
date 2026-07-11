@@ -140,7 +140,7 @@ impl Application {
             width.max(1),
             height.max(1),
             hdr_mode,
-            display_maximum_luminance(window, hdr_mode),
+            tone_map_target_luminance(window, hdr_mode),
         )?;
         let device_pixel_ratio = unsafe { GetDpiForWindow(window) } as f32 / 96.0;
         let settings = SettingsFile::load();
@@ -498,7 +498,7 @@ impl Application {
             width.max(1),
             height.max(1),
             hdr_mode,
-            display_maximum_luminance(window, hdr_mode),
+            tone_map_target_luminance(window, hdr_mode),
         )?;
         self.renderer.set_sdr_white_boost(self.sdr_white_boost);
         if let Some(image) = &self.display {
@@ -685,10 +685,16 @@ fn client_size(window: HWND) -> (u32, u32) {
     )
 }
 
-/// 창 모니터의 최대 휘도(nits) — HdrToneMap 목표 (SPEC §7 Q6).
-/// 조회 실패(wine 등)는 모드별 통상값: HDR 1000 / SDR 270
-fn display_maximum_luminance(window: HWND, hdr_mode: bool) -> f32 {
-    color::display_maximum_luminance(window).unwrap_or(if hdr_mode { 1000.0 } else { 270.0 })
+/// HdrToneMap 목표 휘도(nits) (SPEC §7 Q6) — HDR 모드는 모니터 최대(EDID,
+/// 부재 시 보수적 600 — 참조 뷰어 관례), SDR 모드는 **BT.2100 SDR 시청 조건 203
+/// 고정**: display-referred 백은 패널 EDID 최대와 무관(mpv target-peak 동일 규약,
+/// 실기 확인 2026-07-11)
+fn tone_map_target_luminance(window: HWND, hdr_mode: bool) -> f32 {
+    if hdr_mode {
+        color::display_maximum_luminance(window).unwrap_or(600.0)
+    } else {
+        203.0
+    }
 }
 
 /// 커서가 뷰(클라이언트) 위에 있으면 중심 기준 오프셋 (SPEC §3.2 커서 앵커)

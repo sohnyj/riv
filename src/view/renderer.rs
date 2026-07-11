@@ -61,8 +61,8 @@ use crate::image::decode::{HdrTransfer, PixelStorage};
 pub struct Renderer {
     /// 구축 시점의 스왑체인 모드 (A안) — 현재 모니터와 불일치하면 재구축 대상
     hdr_mode: bool,
-    /// 창 모니터 최대 휘도(nits) — 톤맵 목표·SDR 재해석 스케일 기준 (SPEC §7 Q6)
-    display_maximum_luminance: f32,
+    /// 톤맵 목표 휘도(nits) — HDR=모니터 최대, SDR=203(BT.2100 시청 조건) (SPEC §7 Q6)
+    tone_map_target_nits: f32,
     swap_chain: IDXGISwapChain1,
     d2d_context: ID2D1DeviceContext,
     target: Option<ID2D1Bitmap1>,
@@ -145,13 +145,13 @@ fn set_white_level_input(effect: &ID2D1Effect, input_white_nits: f32) -> Result<
 impl Renderer {
     /// `hdr_mode` = 창이 있는 모니터의 HDR(G2084) 여부 (A안 — 호출자가
     /// `color::monitor_is_hdr`로 조회, 모드 변경 시 재구축).
-    /// `display_maximum_luminance` = 모니터 최대 휘도(nits) — 톤맵 목표 (SPEC §7 Q6)
+    /// `tone_map_target_nits` = 톤맵 목표 휘도 — HDR=모니터 최대, SDR=203 (SPEC §7 Q6)
     pub fn new(
         window: HWND,
         width: u32,
         height: u32,
         hdr_mode: bool,
-        display_maximum_luminance: f32,
+        tone_map_target_nits: f32,
     ) -> Result<Self> {
         // WARP 폴백은 런타임 위임(P7) — 하드웨어 실패 시 1회 재시도만
         let d3d_device = create_d3d_device(D3D_DRIVER_TYPE_HARDWARE)
@@ -247,7 +247,7 @@ impl Renderer {
                 effect.SetValue(
                     D2D1_HDRTONEMAP_PROP_OUTPUT_MAX_LUMINANCE.0 as u32,
                     D2D1_PROPERTY_TYPE_FLOAT,
-                    &display_maximum_luminance.to_ne_bytes(),
+                    &tone_map_target_nits.to_ne_bytes(),
                 )
             }
             .ok()?;
@@ -320,7 +320,7 @@ impl Renderer {
 
         let mut renderer = Self {
             hdr_mode,
-            display_maximum_luminance,
+            tone_map_target_nits,
             swap_chain,
             d2d_context,
             target: None,
@@ -546,7 +546,7 @@ impl Renderer {
                         let output_encoding = self.output_color_management_effect.as_ref()?;
                         // scene-referred(1.0=80nits) → display-referred(1.0=패널 백)
                         // 재해석 — 피크가 패널 최대에 못 미치면 피크를 백으로
-                        let display_white = self.display_maximum_luminance.min(input_maximum);
+                        let display_white = self.tone_map_target_nits.min(input_maximum);
                         unsafe {
                             normalize.SetValue(
                                 D2D1_WHITELEVELADJUSTMENT_PROP_OUTPUT_WHITE_LEVEL.0 as u32,
