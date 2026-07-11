@@ -105,7 +105,7 @@ const ACTION_TABLE: &[(Action, &str, &str, ActivationGate)] = &[
     (
         Action::ClearRecents,
         "clearrecents",
-        "Clear Menu",
+        "Clear Recents",
         ActivationGate::Window,
     ),
     (Action::Quit, "quit", "Exit", ActivationGate::Window),

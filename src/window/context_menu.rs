@@ -101,7 +101,7 @@ impl MenuBuilder {
         let menu = unsafe { CreatePopupMenu()? };
         self.append_action(menu, Action::Open)?;
 
-        // Open Recent — 최대 10개 + Clear Menu (SPEC §6.4, 아이콘 없음 — R10)
+        // Open Recent — 최대 10개 + Clear Recents (SPEC §6.4, 아이콘 없음 — R10)
         let recent = unsafe { CreatePopupMenu()? };
         for index in 0..self.state_snapshot.recent_names.len().min(10) {
             let name = self.state_snapshot.recent_names[index].clone();
@@ -110,7 +110,7 @@ impl MenuBuilder {
         if !self.state_snapshot.recent_names.is_empty() {
             self.append_separator(recent)?;
         }
-        self.append_action_labeled(recent, Action::ClearRecents, "Clear Menu")?;
+        self.append_action_labeled(recent, Action::ClearRecents, "Clear Recents")?;
         self.append_submenu(menu, recent, "Open Recent")?;
         self.append_action(menu, Action::ReloadFile)?;
         // Open With — 기본 앱 최상단 + 구분선, 핸들러 목록, 다른 앱 선택 (SPEC §6.4)
