@@ -46,10 +46,10 @@ pub struct Bindings {
 /// 기본 키보드 바인딩 (SPEC §5.2 — Q4: qView 기본값 계승)
 const DEFAULT_KEYBOARD: &[(&str, &[&str])] = &[
     ("open", &["Ctrl+O"]),
-    ("reloadfile", &["F5", "R"]),
+    ("reloadfile", &["R", "F5"]),
     ("opencontainingfolder", &["Ctrl+E"]),
     ("showfileinfo", &["I"]),
-    ("rename", &["F2", "Ctrl+R"]),
+    ("rename", &["Ctrl+R", "F2"]),
     ("delete", &["Delete"]),
     ("deletepermanent", &["Shift+Delete"]),
     ("firstfile", &["Home"]),
@@ -73,10 +73,10 @@ const DEFAULT_KEYBOARD: &[(&str, &[&str])] = &[
     ("decreasespeed", &["["]),
     ("resetspeed", &["\\"]),
     ("increasespeed", &["]"]),
-    ("fullscreen", &["F11", "F"]),
+    ("fullscreen", &["F", "F11"]),
     ("slideshow", &["S"]),
     ("options", &["Ctrl+,"]),
-    ("quit", &["Escape", "Ctrl+W"]),
+    ("quit", &["Ctrl+W", "Escape"]),
 ];
 
 /// 기본 마우스 바인딩 (SPEC §5.3)
