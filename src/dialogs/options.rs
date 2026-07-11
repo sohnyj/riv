@@ -697,11 +697,7 @@ fn initialize_misc_page(state: &OptionsState) {
         &["Disabled", "Adjacent", "Extended"],
     );
     combo_fill(page, IDC_MISC_SLIDESHOW_DIRECTION, &["Forward", "Backward"]);
-    combo_fill(
-        page,
-        IDC_MISC_AFTER_DELETE,
-        &["Move Back", "Do Nothing", "Move Forward"],
-    );
+    combo_fill(page, IDC_MISC_AFTER_DELETE, &["Move Back", "Move Forward"]);
 }
 
 /// transient → 전 컨트롤 반영 (초기화·Restore Defaults)

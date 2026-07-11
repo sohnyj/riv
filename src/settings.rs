@@ -63,7 +63,7 @@ impl Default for Options {
             loop_folders_enabled: true,
             slideshow_reversed: false,
             slideshow_timer_seconds: 5.0,
-            after_delete: 2,
+            after_delete: 1,
             ask_delete: true,
             allow_mime_content_detection: false,
             save_recents: true,
@@ -115,7 +115,8 @@ impl Options {
                 .get("slideshowtimer")
                 .and_then(Value::as_f64)
                 .unwrap_or(default.slideshow_timer_seconds),
-            after_delete: unsigned("afterdelete", default.after_delete),
+            // 구 Do Nothing(1)은 제거(2026-07-11) — 범위 밖(구 2=다음 포함)은 다음 파일로
+            after_delete: unsigned("afterdelete", default.after_delete).min(1),
             ask_delete: boolean("askdelete", default.ask_delete),
             allow_mime_content_detection: boolean(
                 "allowmimecontentdetection",

@@ -986,16 +986,15 @@ fn delete_current_file(application: &mut Application, window: HWND, permanent: b
             unsafe { SetTimer(Some(window), RECENTS_SAVE_TIMER, 500, None) };
         }
     }
-    // afterdelete 대상은 삭제 전에 계산: 0=이전 / 1=유지 / 2=다음 (SPEC §6.4)
-    let target = match application.settings.options.after_delete {
-        0 => application
-            .image_core
-            .peek_navigation_target(NavigationCommand::Previous),
-        2 => application
-            .image_core
-            .peek_navigation_target(NavigationCommand::Next),
-        _ => None,
-    }
+    // afterdelete 대상은 삭제 전에 계산: 0=이전 / 1=다음 (SPEC §6.4)
+    let command = if application.settings.options.after_delete == 0 {
+        NavigationCommand::Previous
+    } else {
+        NavigationCommand::Next
+    };
+    let target = application
+        .image_core
+        .peek_navigation_target(command)
     .filter(|candidate| {
         !candidate
             .to_string_lossy()
