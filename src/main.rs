@@ -9,7 +9,6 @@ mod shell;
 mod view;
 mod window;
 
-use std::collections::VecDeque;
 use std::path::Path;
 use std::sync::Arc;
 
@@ -74,8 +73,6 @@ const APPLICATION_ICON_ID: PCWSTR = PCWSTR(std::ptr::without_provenance(1));
 /// 무인자 실행 시 다음 이벤트 루프 턴에 빈 창 표시 (SPEC §6.1 지연 첫 표시)
 const WM_APP_SHOW_WINDOW: u32 = WM_APP + 2;
 
-/// R3 게이트 검증용 액션 스크립트 타이머 (임시 — wine 합성 키 입력 불가, R4 검증 후 제거)
-const ACTION_SCRIPT_TIMER: usize = 1;
 /// 줌 필 1초 자동 숨김 (SPEC §3.6)
 const ZOOM_PILL_TIMER: usize = 2;
 /// 슬라이드쇼 간격 (SPEC §6.3)
@@ -132,8 +129,6 @@ struct Application {
     drop_target: Option<IDropTarget>,
     /// Open With 핸들러 목록 — 백그라운드 열거 결과, 파일 전환 시 폐기 (SPEC §6.4)
     open_with_list: Option<Box<OpenWithList>>,
-    /// R3 게이트 검증용 액션 스크립트 (임시)
-    action_script: VecDeque<Action>,
 }
 
 impl Application {
@@ -176,7 +171,6 @@ impl Application {
             animation: None,
             drop_target: None,
             open_with_list: None,
-            action_script: parse_action_script(),
         };
         application
             .renderer
@@ -276,9 +270,6 @@ impl Application {
                 },
             )
         };
-        if !self.action_script.is_empty() {
-            unsafe { SetTimer(Some(window), ACTION_SCRIPT_TIMER, 700, None) };
-        }
     }
 
     /// 시작 시 창 지오메트리 복원 (SPEC §6.1) — 숨김 유지(지연 첫 표시가 표시 담당)
@@ -719,20 +710,6 @@ fn current_modifiers() -> u8 {
     modifiers
 }
 
-/// R3 게이트 검증용 액션 스크립트 (임시 — wine 합성 키 불가, 액션 계층을 구동.
-/// 키 디코드 계층은 실기 확인). 예: RIV_R3_ACTIONS="nextfile;zoomin;rotateright"
-fn parse_action_script() -> VecDeque<Action> {
-    std::env::var("RIV_R3_ACTIONS").map_or_else(
-        |_| VecDeque::new(),
-        |script| {
-            script
-                .split(';')
-                .filter_map(|token| Action::from_name(token.trim()))
-                .collect()
-        },
-    )
-}
-
 /// 반환 = 이동 발생 여부 (슬라이드쇼 폴더 끝 취소 판단용)
 fn execute_navigation(
     application: &mut Application,
@@ -995,11 +972,11 @@ fn delete_current_file(application: &mut Application, window: HWND, permanent: b
     let target = application
         .image_core
         .peek_navigation_target(command)
-    .filter(|candidate| {
-        !candidate
-            .to_string_lossy()
-            .eq_ignore_ascii_case(&path.to_string_lossy())
-    });
+        .filter(|candidate| {
+            !candidate
+                .to_string_lossy()
+                .eq_ignore_ascii_case(&path.to_string_lossy())
+        });
     match file_ops::delete_file(&path, permanent) {
         Ok(()) => {
             application.image_core.refresh_folder();
@@ -1496,18 +1473,6 @@ extern "system" fn window_procedure(
         WM_APP_SHOW_WINDOW => {
             if let Some(application) = unsafe { application_from_window(window) } {
                 application.ensure_window_shown(window);
-            }
-            LRESULT(0)
-        }
-        // R3 검증 스크립트 스텝 (임시)
-        WM_TIMER if wparam.0 == ACTION_SCRIPT_TIMER => {
-            if let Some(application) = unsafe { application_from_window(window) } {
-                match application.action_script.pop_front() {
-                    Some(action) => dispatch_action(application, window, action),
-                    None => {
-                        let _ = unsafe { KillTimer(Some(window), ACTION_SCRIPT_TIMER) };
-                    }
-                }
             }
             LRESULT(0)
         }

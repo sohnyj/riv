@@ -6,7 +6,7 @@ use std::ffi::c_void;
 use std::os::windows::ffi::OsStrExt;
 use std::os::windows::fs::MetadataExt;
 use std::path::{Path, PathBuf};
-use std::sync::{Arc, Condvar, Mutex, OnceLock};
+use std::sync::{Arc, Condvar, Mutex};
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 use windows::Win32::Foundation::{HWND, LPARAM, WPARAM};
@@ -214,7 +214,6 @@ impl ImageCore {
         let file_size = match std::fs::metadata(path) {
             Ok(metadata) => metadata.len(),
             Err(error) => {
-                trace(|| format!("load {} failed: {error}", path.display()));
                 self.load_error = Some((
                     path.to_path_buf(),
                     DecodeError {
@@ -229,7 +228,6 @@ impl ImageCore {
         if let Some(entry) = self.cache.get(path)
             && entry.file_size == file_size
         {
-            trace(|| format!("load {} cache-hit", path.display()));
             self.current = Some(CurrentImage {
                 path: path.to_path_buf(),
                 image: entry.image.clone(),
@@ -239,7 +237,6 @@ impl ImageCore {
             self.preload_neighbors();
             return true;
         }
-        trace(|| format!("load {} queued", path.display()));
         self.pending_display = Some(path.to_path_buf());
         if self.in_flight.insert(path.to_path_buf()) {
             self.pool.submit(path.to_path_buf(), file_size, true);
@@ -309,7 +306,6 @@ impl ImageCore {
                 .as_deref()
                 .is_some_and(|pending| paths_equal(pending, &completion.path));
             if is_pending && let Ok(image) = completion.result {
-                trace(|| format!("preview {} displayed", completion.path.display()));
                 self.current = Some(CurrentImage {
                     path: completion.path,
                     image,
@@ -334,7 +330,6 @@ impl ImageCore {
                     },
                 );
                 if is_pending {
-                    trace(|| format!("decoded {} displayed", completion.path.display()));
                     self.current = Some(CurrentImage {
                         path: completion.path,
                         image,
@@ -344,20 +339,11 @@ impl ImageCore {
                     self.preload_neighbors();
                     true
                 } else {
-                    trace(|| format!("decoded {} cached", completion.path.display()));
                     self.evict_cache();
                     false
                 }
             }
             Err(error) => {
-                trace(|| {
-                    format!(
-                        "decode-error {} 0x{:08X} {}",
-                        completion.path.display(),
-                        error.code,
-                        error.message
-                    )
-                });
                 if is_pending {
                     self.pending_display = None;
                     self.load_error = Some((completion.path, error));
@@ -375,13 +361,6 @@ impl ImageCore {
         self.entries = entries;
         self.folder_directory = Some(directory.to_path_buf());
         self.folder_scanned_at = Some(Instant::now());
-        trace(|| {
-            format!(
-                "folder {} entries={}",
-                directory.display(),
-                self.entries.len()
-            )
-        });
     }
 
     /// 마지막 수집 3초 경과 or 현재 파일 소실 시 재수집 (SPEC §4.3)
@@ -483,7 +462,6 @@ impl ImageCore {
                     {
                         continue;
                     }
-                    trace(|| format!("preload {}", entry.path.display()));
                     self.in_flight.insert(entry.path.clone());
                     self.pool.submit(entry.path.clone(), entry.file_size, false);
                 }
@@ -527,7 +505,6 @@ impl ImageCore {
             if total <= budget {
                 break;
             }
-            trace(|| format!("evict {}", path.display()));
             self.cache.remove(&path);
             total -= cost;
         }
@@ -773,14 +750,5 @@ fn post_completion(window: isize, completion: Box<DecodeCompletion>) {
     if posted.is_err() {
         // 창 소멸 등으로 전달 실패 — 결과 폐기
         drop(unsafe { Box::from_raw(pointer) });
-    }
-}
-
-/// R2 검증 트레이스 (임시 — wine은 합성 키 입력 불가라 stderr 로그로 캐시 히트·
-/// 디코드 흐름을 확인한다. RIV_R2_TRACE=1로 활성화, R3 입력 구현 후 제거)
-fn trace(message: impl FnOnce() -> String) {
-    static ENABLED: OnceLock<bool> = OnceLock::new();
-    if *ENABLED.get_or_init(|| std::env::var_os("RIV_R2_TRACE").is_some()) {
-        eprintln!("[riv] {}", message());
     }
 }
