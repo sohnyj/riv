@@ -173,6 +173,7 @@ impl MenuBuilder {
         self.append_action_labeled(tools, Action::Slideshow, slideshow_label)?;
         self.append_separator(tools)?;
         self.append_action(tools, Action::Options)?;
+        self.append_action(tools, Action::About)?;
         self.append_submenu(menu, tools, "Tools")?;
 
         let fullscreen_label = if self.state_snapshot.fullscreen {

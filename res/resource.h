@@ -13,6 +13,7 @@
 #define IDD_PAGE_ASSOCIATION 150
 #define IDD_CAPTURE_KEYBOARD 160
 #define IDD_CAPTURE_MOUSE 170
+#define IDD_ABOUT 180
 
 // ── 옵션 프레임 ─────────────────────────────────────────────────────────────
 #define IDC_OPTIONS_TAB 1001
@@ -67,6 +68,11 @@
 #define IDC_CAPTURE_KEY_CLEAR 1604
 #define IDC_CAPTURE_MOUSE_FIELD 1701
 #define IDC_CAPTURE_MOUSE_CLEAR 1702
+
+// ── About ───────────────────────────────────────────────────────────────────
+#define IDC_ABOUT_TITLE 1801
+#define IDC_ABOUT_VERSION 1802
+#define IDC_ABOUT_LINK 1804
 
 // ── 스타일 상수 (winuser.h·commctrl.h 발췌 — rc 전용) ───────────────────────
 #define WS_POPUP 0x80000000L

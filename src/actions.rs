@@ -57,6 +57,7 @@ pub enum Action {
     // 기타
     Slideshow,
     Options,
+    About,
 }
 
 /// (액션, 이름, 라벨, 게이트) — 이름 = 바인딩·디스패치 키 (SPEC §5.1).
@@ -222,6 +223,7 @@ const ACTION_TABLE: &[(Action, &str, &str, ActivationGate)] = &[
         "Settings...",
         ActivationGate::Window,
     ),
+    (Action::About, "about", "About", ActivationGate::Window),
 ];
 
 const RECENT_NAMES: [&str; 10] = [
