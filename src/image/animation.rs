@@ -55,6 +55,11 @@ impl Animation {
         };
     }
 
+    /// 현재 재생 속도 (%) — 속도 필 표시 (SPEC §3.6)
+    pub fn speed_percent(&self) -> u32 {
+        self.speed_percent
+    }
+
     pub fn reset_speed(&mut self) {
         self.speed_percent = SPEED_DEFAULT_PERCENT;
     }

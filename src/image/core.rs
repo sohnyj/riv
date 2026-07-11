@@ -40,7 +40,7 @@ pub struct CoreOptions {
     pub allow_mime_content_detection: bool,
 }
 
-/// 정렬 모드 (SPEC §4.3)
+/// 정렬 모드 (SPEC §4.3 — 랜덤은 2026-07-11 제거)
 #[derive(Clone, Copy, PartialEq, Eq)]
 pub enum SortMode {
     Name,
@@ -48,18 +48,16 @@ pub enum SortMode {
     Created,
     Size,
     Type,
-    Random,
 }
 
 impl SortMode {
-    /// 설정값 `sortmode`(0~5) → 모드, 범위 밖은 기본(이름)
+    /// 설정값 `sortmode`(0~4) → 모드, 범위 밖(구 랜덤 5 포함)은 기본(이름)
     pub fn from_setting(value: u32) -> Self {
         match value {
             1 => Self::Modified,
             2 => Self::Created,
             3 => Self::Size,
             4 => Self::Type,
-            5 => Self::Random,
             _ => Self::Name,
         }
     }
@@ -372,29 +370,8 @@ impl ImageCore {
     // ── 폴더 목록 (SPEC §4.3) ───────────────────────────────────────────────
 
     fn rescan_folder(&mut self, directory: &Path) {
-        // 랜덤 정렬은 폴더가 바뀔 때만 재셔플 (SPEC §4.3) — 같은 폴더 재수집이면
-        // 기존 순서 보존(신규 파일은 뒤)
-        let preserved_order: HashMap<PathBuf, usize> = if self.options.sort_mode == SortMode::Random
-            && self.folder_directory.as_deref() == Some(directory)
-        {
-            self.entries
-                .iter()
-                .enumerate()
-                .map(|(index, entry)| (entry.path.clone(), index))
-                .collect()
-        } else {
-            HashMap::new()
-        };
         let mut entries = scan_folder(directory, &self.options);
         sort_entries(&mut entries, &self.options);
-        if !preserved_order.is_empty() {
-            entries.sort_by_key(|entry| {
-                preserved_order
-                    .get(&entry.path)
-                    .copied()
-                    .unwrap_or(usize::MAX)
-            });
-        }
         self.entries = entries;
         self.folder_directory = Some(directory.to_path_buf());
         self.folder_scanned_at = Some(Instant::now());
@@ -664,10 +641,8 @@ fn sort_entries(entries: &mut [FolderEntry], options: &CoreOptions) {
                 .cmp(format_name_of(&b.path))
                 .then(compare_natural_names(a, b))
         }),
-        // 랜덤 재셔플 규칙(폴더 변경 시에만, SPEC §4.3)은 rescan_folder가 순서 보존으로 처리
-        SortMode::Random => shuffle(entries),
     }
-    if options.sort_descending && options.sort_mode != SortMode::Random {
+    if options.sort_descending {
         entries.reverse();
     }
 }
@@ -685,20 +660,6 @@ fn format_name_of(path: &Path) -> &'static str {
         .map(|extension| extension.to_string_lossy().to_lowercase())
         .and_then(|extension| decode::format_name_for_extension(&extension))
         .unwrap_or("")
-}
-
-/// 의존성 없는 Fisher–Yates + xorshift (P3 — 유틸 crate 금지)
-fn shuffle(entries: &mut [FolderEntry]) {
-    let mut state = SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .map_or(0x9E3779B9, |duration| duration.as_nanos() as u64)
-        | 1;
-    for index in (1..entries.len()).rev() {
-        state ^= state << 13;
-        state ^= state >> 7;
-        state ^= state << 17;
-        entries.swap(index, (state % (index as u64 + 1)) as usize);
-    }
 }
 
 // ── 디코드 스레드 풀 (PORTING_PLAN §2 — std::thread + 큐 + PostMessageW) ────

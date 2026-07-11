@@ -309,7 +309,16 @@ unsafe extern "system" fn frame_procedure(
 
 fn initialize_frame(state: &mut OptionsState) {
     let dialog = state.dialog;
-    if let Some((x, y)) = state.initial_position {
+    // 저장된 위치 또는 작업 영역 중앙 (SPEC §8.3 — 2026-07-11: 기본 위치 = 스크린 중앙)
+    let position = state.initial_position.or_else(|| {
+        let mut bounds = RECT::default();
+        let _ = unsafe { GetWindowRect(dialog, &mut bounds) };
+        crate::window::work_area_centered_origin(
+            bounds.right - bounds.left,
+            bounds.bottom - bounds.top,
+        )
+    });
+    if let Some((x, y)) = position {
         let _ = unsafe {
             SetWindowPos(
                 dialog,
@@ -589,9 +598,6 @@ fn handle_page_command(
         (IDC_WINDOW_CTRL_DRAG, BN_CLICKED) => {
             options.control_drag_window = is_checked(page, control);
         }
-        (IDC_WINDOW_SINGLE_INSTANCE, BN_CLICKED) => {
-            options.single_instance = is_checked(page, control);
-        }
         // ── Image ──
         (IDC_IMAGE_FILTERING, CBN_SELCHANGE) => {
             options.scaling_filter = combo_selection(page, control);
@@ -682,14 +688,7 @@ fn initialize_misc_page(state: &OptionsState) {
     combo_fill(
         page,
         IDC_MISC_SORT,
-        &[
-            "Name",
-            "Date Modified",
-            "Date Created",
-            "Size",
-            "Type",
-            "Random",
-        ],
+        &["Name", "Date Modified", "Date Created", "Size", "Type"],
     );
     combo_fill(
         page,
@@ -732,11 +731,6 @@ fn sync_all_pages(state: &mut OptionsState) {
         window_page,
         IDC_WINDOW_CTRL_DRAG,
         options.control_drag_window,
-    );
-    set_check(
-        window_page,
-        IDC_WINDOW_SINGLE_INSTANCE,
-        options.single_instance,
     );
     sync_bgcolor_button(state, window_page);
 

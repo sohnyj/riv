@@ -20,8 +20,6 @@ pub struct Options {
     pub control_drag_window: bool,
     /// 창 지오메트리 저장/복원 (R7)
     pub save_window_position: bool,
-    /// 단일 인스턴스 모드 (SPEC §6.5 — R7)
-    pub single_instance: bool,
     /// Scaling: 0=Nearest/1=Bilinear/2=Cubic/3=High Quality (SPEC §3.3)
     pub scaling_filter: u32,
     /// fit 축: 0=Width/1=Height (SPEC §3.2)
@@ -54,7 +52,6 @@ impl Default for Options {
             title_bar_mode: 1,
             control_drag_window: true,
             save_window_position: true,
-            single_instance: false,
             scaling_filter: 1,
             fit_mode: 0,
             scale_factor_percent: 25,
@@ -103,13 +100,13 @@ impl Options {
             title_bar_mode: unsigned("titlebarmode", default.title_bar_mode),
             control_drag_window: boolean("ctrldragwindow", default.control_drag_window),
             save_window_position: boolean("savewindowposition", default.save_window_position),
-            single_instance: boolean("singleinstance", default.single_instance),
             scaling_filter: unsigned("filteringenabled", default.scaling_filter),
             fit_mode: unsigned("fitmode", default.fit_mode),
             scale_factor_percent: unsigned("scalefactor", default.scale_factor_percent),
             fractional_zoom: boolean("fractionalzoom", default.fractional_zoom),
             cursor_zoom: boolean("cursorzoom", default.cursor_zoom),
-            sort_mode: unsigned("sortmode", default.sort_mode),
+            // 구 랜덤(5)은 제거(2026-07-11) — 범위 밖은 이름 정렬로
+            sort_mode: unsigned("sortmode", default.sort_mode).min(4),
             sort_descending: boolean("sortdescending", default.sort_descending),
             preloading_mode: unsigned("preloadingmode", default.preloading_mode),
             loop_folders_enabled: boolean("loopfoldersenabled", default.loop_folders_enabled),
@@ -235,7 +232,7 @@ impl SettingsFile {
     /// 쓰지 않음"(SPEC §8.1)을 유지하고, 스냅샷을 갱신한다.
     pub fn set_options(&mut self, options: &Options) {
         let default = Options::default();
-        let entries: [(&str, Value, Value); 22] = [
+        let entries: [(&str, Value, Value); 21] = [
             (
                 "bgcolorenabled",
                 Value::Bool(options.background_color_enabled),
@@ -260,11 +257,6 @@ impl SettingsFile {
                 "savewindowposition",
                 Value::Bool(options.save_window_position),
                 Value::Bool(default.save_window_position),
-            ),
-            (
-                "singleinstance",
-                Value::Bool(options.single_instance),
-                Value::Bool(default.single_instance),
             ),
             (
                 "filteringenabled",
@@ -361,6 +353,12 @@ impl SettingsFile {
             } else {
                 options_object.insert(key.to_string(), value);
             }
+        }
+        // saverecents 해제 = recents 절 전체 제거 (2026-07-11 — lastFileDialogDir 포함)
+        if !options.save_recents
+            && let Some(document) = self.document.as_object_mut()
+        {
+            document.remove("recents");
         }
         self.options = Options::from_document(&self.document);
     }

@@ -1,13 +1,11 @@
-//! 컨텍스트 메뉴 (SPEC §6.1) — 유일한 메뉴 진입점. OS 기본 스타일 그대로(P14,
-//! 아이콘 데코 없음 — Open With 앱 아이콘만 예외, R4). `TPM_RETURNCMD`로 선택
-//! 액션을 반환하고 디스패치는 호출자(단일 디스패처)가 수행한다.
+//! 컨텍스트 메뉴 (SPEC §6.1) — 유일한 메뉴 진입점. OS 기본 스타일 그대로
+//! (P14 — 아이콘 데코 없음, Open With 포함: 2026-07-11 예외 철회). `TPM_RETURNCMD`로
+//! 선택 액션을 반환하고 디스패치는 호출자(단일 디스패처)가 수행한다.
 
 use windows::Win32::Foundation::HWND;
-use windows::Win32::Graphics::Gdi::HBITMAP;
 use windows::Win32::UI::WindowsAndMessaging::{
-    AppendMenuW, CreatePopupMenu, DestroyMenu, HMENU, MENUITEMINFOW, MF_CHECKED, MF_DISABLED,
-    MF_GRAYED, MF_POPUP, MF_SEPARATOR, MF_STRING, MIIM_BITMAP, SetMenuItemInfoW, TPM_RETURNCMD,
-    TPM_RIGHTBUTTON, TrackPopupMenuEx,
+    AppendMenuW, CreatePopupMenu, DestroyMenu, HMENU, MF_CHECKED, MF_DISABLED, MF_GRAYED, MF_POPUP,
+    MF_SEPARATOR, MF_STRING, TPM_RETURNCMD, TPM_RIGHTBUTTON, TrackPopupMenuEx,
 };
 use windows::core::{HSTRING, Result};
 
@@ -28,12 +26,15 @@ pub struct MenuState {
     /// Pause ↔ Resume 라벨 토글 (SPEC §5.1)
     pub animation_paused: bool,
     pub preserve_zoom: bool,
+    /// Mirror/Flip 체크 마커 (SPEC §6.1)
+    pub mirrored: bool,
+    pub flipped: bool,
     pub fullscreen: bool,
     pub slideshow_active: bool,
     /// 최근 파일 표시명 (부재 감사 완료 목록 — SPEC §6.4)
     pub recent_names: Vec<String>,
-    /// Open With 항목: (표시명, ARGB HBITMAP — P14 유일 예외) (SPEC §6.4)
-    pub open_with_items: Vec<(String, Option<isize>)>,
+    /// Open With 항목 표시명 (SPEC §6.4 — 아이콘 없음)
+    pub open_with_items: Vec<String>,
     /// Open With 첫 항목 = 기본 앱 (구분선 분리)
     pub open_with_has_default: bool,
 }
@@ -45,11 +46,6 @@ struct MenuBuilder {
 }
 
 impl MenuBuilder {
-    /// 아직 배선되지 않은 액션(R7 멀티윈도우) — 항상 비활성 표시
-    fn is_wired(action: Action) -> bool {
-        !matches!(action, Action::NewWindow | Action::CloseAllWindows)
-    }
-
     fn gate_satisfied(&self, gate: ActivationGate) -> bool {
         match gate {
             ActivationGate::Window => true,
@@ -69,36 +65,27 @@ impl MenuBuilder {
         let mut flags = MF_STRING;
         let clear_without_recents =
             action == Action::ClearRecents && self.state_snapshot.recent_names.is_empty();
-        if !Self::is_wired(action) || !self.gate_satisfied(action.gate()) || clear_without_recents {
+        if !self.gate_satisfied(action.gate()) || clear_without_recents {
             flags |= MF_GRAYED | MF_DISABLED;
         }
-        if action == Action::PreserveZoom && self.state_snapshot.preserve_zoom {
+        // 상태 토글 체크 마커 (SPEC §6.1 — Preserve Zoom·Mirror·Flip)
+        let checked = match action {
+            Action::PreserveZoom => self.state_snapshot.preserve_zoom,
+            Action::Mirror => self.state_snapshot.mirrored,
+            Action::Flip => self.state_snapshot.flipped,
+            _ => false,
+        };
+        if checked {
             flags |= MF_CHECKED;
         }
         unsafe { AppendMenuW(menu, flags, identifier, &HSTRING::from(label)) }
     }
 
-    /// Open With 핸들러 항목 — 앱 아이콘 표시 (P14 유일 예외, SPEC §6.4)
-    fn append_open_with_entry(
-        &mut self,
-        menu: HMENU,
-        index: usize,
-        label: &str,
-        icon: Option<isize>,
-    ) -> Result<()> {
+    /// Open With 핸들러 항목 (SPEC §6.4 — 아이콘 없음, 2026-07-11 P14 예외 철회)
+    fn append_open_with_entry(&mut self, menu: HMENU, index: usize, label: &str) -> Result<()> {
         self.entries.push(MenuSelection::OpenWithEntry(index));
         let identifier = self.entries.len();
-        unsafe { AppendMenuW(menu, MF_STRING, identifier, &HSTRING::from(label))? };
-        if let Some(icon) = icon {
-            let information = MENUITEMINFOW {
-                cbSize: size_of::<MENUITEMINFOW>() as u32,
-                fMask: MIIM_BITMAP,
-                hbmpItem: HBITMAP(icon as *mut core::ffi::c_void),
-                ..Default::default()
-            };
-            let _ = unsafe { SetMenuItemInfoW(menu, identifier as u32, false, &information) };
-        }
-        Ok(())
+        unsafe { AppendMenuW(menu, MF_STRING, identifier, &HSTRING::from(label)) }
     }
 
     fn append_separator(&self, menu: HMENU) -> Result<()> {
@@ -129,8 +116,8 @@ impl MenuBuilder {
         // Open With — 기본 앱 최상단 + 구분선, 핸들러 목록, 다른 앱 선택 (SPEC §6.4)
         let open_with = unsafe { CreatePopupMenu()? };
         let open_with_items = self.state_snapshot.open_with_items.clone();
-        for (index, (label, icon)) in open_with_items.iter().enumerate() {
-            self.append_open_with_entry(open_with, index, label, *icon)?;
+        for (index, label) in open_with_items.iter().enumerate() {
+            self.append_open_with_entry(open_with, index, label)?;
             if index == 0 && self.state_snapshot.open_with_has_default {
                 self.append_separator(open_with)?;
             }
@@ -148,10 +135,8 @@ impl MenuBuilder {
         self.append_action(menu, Action::Delete)?;
         self.append_separator(menu)?;
 
-        self.append_action(menu, Action::FirstFile)?;
         self.append_action(menu, Action::PreviousFile)?;
         self.append_action(menu, Action::NextFile)?;
-        self.append_action(menu, Action::LastFile)?;
         self.append_separator(menu)?;
 
         let view = unsafe { CreatePopupMenu()? };
@@ -175,6 +160,10 @@ impl MenuBuilder {
         };
         self.append_action_labeled(tools, Action::Pause, pause_label)?;
         self.append_action(tools, Action::NextFrame)?;
+        self.append_separator(tools)?;
+        self.append_action(tools, Action::DecreaseSpeed)?;
+        self.append_action(tools, Action::IncreaseSpeed)?;
+        self.append_action(tools, Action::ResetSpeed)?;
         self.append_separator(tools)?;
         let slideshow_label = if self.state_snapshot.slideshow_active {
             "Stop Slideshow"

@@ -49,8 +49,6 @@ const DEFAULT_KEYBOARD: &[(&str, &[&str])] = &[
     ("reloadfile", &["F5", "R"]),
     ("opencontainingfolder", &["Ctrl+E"]),
     ("showfileinfo", &["I"]),
-    ("copy", &["Ctrl+C"]),
-    ("paste", &["Ctrl+V"]),
     ("rename", &["F2", "Ctrl+R"]),
     ("delete", &["Delete"]),
     ("deletepermanent", &["Shift+Delete"]),

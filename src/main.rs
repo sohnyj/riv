@@ -25,7 +25,6 @@ use image::core::{
 };
 use image::decode::DecodedImage;
 use settings::{Options, SettingsFile};
-use shell::clipboard::{self, BakedOrientation};
 use shell::drag_drop::{self, WM_APP_DROP_PATH};
 use shell::open_with::{self, OpenWithList, WM_APP_OPEN_WITH_LIST};
 use shell::{file_ops, open_dialog};
@@ -33,7 +32,6 @@ use view::renderer::Renderer;
 use view::transform::{FitMode, Size, ViewTransform};
 use window::context_menu::{self, MenuSelection, MenuState};
 use window::dwm;
-use window::instances;
 use window::overlay::{self, Overlay, OverlayContent};
 use windows::Win32::Foundation::{HWND, LPARAM, LRESULT, POINT, RECT, WPARAM};
 use windows::Win32::Graphics::Direct2D::Common::D2D1_COLOR_F;
@@ -61,10 +59,10 @@ use windows::Win32::UI::WindowsAndMessaging::{
     RegisterClassExW, SW_HIDE, SW_SHOW, SW_SHOWMAXIMIZED, SWP_FRAMECHANGED, SWP_NOACTIVATE,
     SWP_NOMOVE, SWP_NOSIZE, SWP_NOZORDER, SendMessageW, SetCursor, SetTimer, SetWindowLongPtrW,
     SetWindowPlacement, SetWindowPos, SetWindowTextW, ShowWindow, TranslateMessage, WINDOW_STYLE,
-    WINDOWPLACEMENT, WM_ACTIVATE, WM_ACTIVATEAPP, WM_APP, WM_CLOSE, WM_CONTEXTMENU, WM_COPYDATA,
-    WM_DESTROY, WM_DISPLAYCHANGE, WM_DPICHANGED, WM_GESTURE, WM_KEYDOWN, WM_LBUTTONDBLCLK,
-    WM_LBUTTONDOWN, WM_LBUTTONUP, WM_MBUTTONDOWN, WM_MOUSEHWHEEL, WM_MOUSEMOVE, WM_MOUSEWHEEL,
-    WM_MOVE, WM_NCDESTROY, WM_NCLBUTTONDOWN, WM_PAINT, WM_SETCURSOR, WM_SETTINGCHANGE, WM_SIZE,
+    WINDOWPLACEMENT, WM_ACTIVATEAPP, WM_APP, WM_CLOSE, WM_CONTEXTMENU, WM_DESTROY,
+    WM_DISPLAYCHANGE, WM_DPICHANGED, WM_GESTURE, WM_KEYDOWN, WM_LBUTTONDBLCLK, WM_LBUTTONDOWN,
+    WM_LBUTTONUP, WM_MBUTTONDOWN, WM_MOUSEHWHEEL, WM_MOUSEMOVE, WM_MOUSEWHEEL, WM_MOVE,
+    WM_NCDESTROY, WM_NCLBUTTONDOWN, WM_PAINT, WM_SETCURSOR, WM_SETTINGCHANGE, WM_SIZE,
     WM_SYSKEYDOWN, WM_TIMER, WM_XBUTTONDOWN, WNDCLASSEXW, WS_OVERLAPPEDWINDOW, WS_POPUP,
     WS_VISIBLE,
 };
@@ -776,17 +774,8 @@ fn dispatch_action(application: &mut Application, window: HWND, action: Action) 
     }
     let zoom_step = 1.0 + application.settings.options.scale_factor_percent as f32 / 100.0;
     match action {
-        Action::CloseWindow => {
+        Action::Quit => {
             let _ = unsafe { PostMessageW(Some(window), WM_CLOSE, WPARAM(0), LPARAM(0)) };
-        }
-        // Exit·Close All = 프로세스 내 전 창 닫기 (SPEC §6.1 — 마지막 창이 루프 종료)
-        Action::Quit | Action::CloseAllWindows => {
-            for target in instances::all_windows() {
-                let _ = unsafe { PostMessageW(Some(target), WM_CLOSE, WPARAM(0), LPARAM(0)) };
-            }
-        }
-        Action::NewWindow => {
-            let _ = create_main_window(None);
         }
         Action::FirstFile => {
             execute_navigation(application, window, NavigationCommand::First);
@@ -858,14 +847,34 @@ fn dispatch_action(application: &mut Application, window: HWND, action: Action) 
             let viewport = application.viewport(window);
             let image = application.image_size();
             application.view_transform.rotate(step, viewport, image);
+            // 회전 상태 필 (SPEC §3.6) — 0/R90/180°/L90 (270° = 왼쪽 90°로 표기)
+            let text = match application.view_transform.rotation_quadrant {
+                1 => "Rotate: R90",
+                2 => "Rotate: 180\u{b0}",
+                3 => "Rotate: L90",
+                _ => "Rotate: 0\u{b0}",
+            };
+            application.show_zoom_pill(window, text.to_string());
             application.render(window);
         }
         Action::Mirror => {
             application.view_transform.mirror();
+            let text = if application.view_transform.mirrored {
+                "Mirror: On"
+            } else {
+                "Mirror: Off"
+            };
+            application.show_zoom_pill(window, text.to_string());
             application.render(window);
         }
         Action::Flip => {
             application.view_transform.flip();
+            let text = if application.view_transform.flipped {
+                "Flip: On"
+            } else {
+                "Flip: Off"
+            };
+            application.show_zoom_pill(window, text.to_string());
             application.render(window);
         }
         Action::Fullscreen => {
@@ -875,9 +884,9 @@ fn dispatch_action(application: &mut Application, window: HWND, action: Action) 
         Action::Open => {
             let last_directory = application.settings.last_file_dialog_directory();
             let paths = open_dialog::show(window, last_directory.as_deref());
-            // 다중 선택: 첫 파일 현재 창, 나머지 = 빈 창 재사용 → 새 창 (SPEC §6.4)
+            // 다중 선택: 첫 파일 현재 창, 나머지 = 새 창(새 프로세스) (SPEC §6.4)
             for rest in paths.iter().skip(1) {
-                let _ = open_in_empty_or_new_window(rest);
+                open_in_new_window(rest);
             }
             if let Some(first) = paths.first() {
                 if let Some(parent) = first.parent() {
@@ -900,36 +909,6 @@ fn dispatch_action(application: &mut Application, window: HWND, action: Action) 
         }
         Action::Rename => {
             rename_current_file(application, window);
-        }
-        Action::Copy => {
-            if let Some(current) = &application.image_core.current {
-                let image = current.image.clone();
-                let path = current.path.clone();
-                let orientation = BakedOrientation {
-                    rotation_quadrant: application.view_transform.rotation_quadrant,
-                    mirrored: application.view_transform.mirrored,
-                    flipped: application.view_transform.flipped,
-                };
-                let _ = clipboard::copy_image(
-                    window,
-                    &path,
-                    &image.frames[0].pixels,
-                    image.pixel_width,
-                    image.pixel_height,
-                    &orientation,
-                );
-            }
-        }
-        Action::Paste => {
-            // CF_HDROP 경로만 — 첫 항목 현재 창, 나머지 = 빈 창 재사용 → 새 창 (SPEC §6.4)
-            let paths = clipboard::paste_paths(window);
-            for rest in paths.iter().skip(1) {
-                let _ = open_in_empty_or_new_window(rest);
-            }
-            if let Some(first) = paths.first() {
-                let first = first.clone();
-                open_external_path(application, window, &first);
-            }
         }
         Action::OpenWithOther => {
             // "다른 앱 선택" — OS Open With 다이얼로그 (SPEC §6.4)
@@ -956,11 +935,17 @@ fn dispatch_action(application: &mut Application, window: HWND, action: Action) 
         Action::DecreaseSpeed | Action::IncreaseSpeed => {
             if let Some(animation) = application.animation.as_mut() {
                 animation.adjust_speed(action == Action::IncreaseSpeed);
+                let text = format!("Speed: {}%", animation.speed_percent());
+                application.show_zoom_pill(window, text);
+                application.render(window);
             }
         }
         Action::ResetSpeed => {
             if let Some(animation) = application.animation.as_mut() {
                 animation.reset_speed();
+                let text = format!("Speed: {}%", animation.speed_percent());
+                application.show_zoom_pill(window, text);
+                application.render(window);
             }
         }
         // 옵션 다이얼로그 (SPEC §8.3) — Apply·OK는 WM_APP_OPTIONS_APPLIED로 수신
@@ -1248,15 +1233,8 @@ fn main() -> Result<()> {
         return Ok(());
     }
 
-    // 실행 인자 = 열 파일 경로 하나 (SPEC §6.5 — CLI 옵션 없음)
+    // 실행 인자 = 열 파일 경로 하나 (SPEC §6.5 — CLI 옵션 없음, 실행마다 새 프로세스)
     let argument_path = std::env::args_os().nth(1).map(std::path::PathBuf::from);
-
-    // 단일 인스턴스 (SPEC §6.5) — 기존 인스턴스에 위임했으면 즉시 종료
-    if SettingsFile::load().options.single_instance
-        && !instances::claim_single_instance(argument_path.as_deref())
-    {
-        return Ok(());
-    }
 
     let instance = unsafe { GetModuleHandleW(None)? };
     let class_name = w!("riv");
@@ -1288,20 +1266,23 @@ fn main() -> Result<()> {
 }
 
 /// GWLP_USERDATA에 실린 Application 포인터 복원
-/// 메인 창 생성 + Application 설치 (SPEC §6.1) — 최초 실행·New Window·
-/// "없으면 새 창" 정책 공용. 창 클래스는 main()에서 1회 등록.
+/// 메인 창 생성 + Application 설치 (SPEC §6.1 — 창=프로세스 1:1, 프로세스당 1회).
+/// 창 클래스는 main()에서 1회 등록.
 fn create_main_window(initial_path: Option<&Path>) -> Result<HWND> {
     let instance = unsafe { GetModuleHandleW(None)? };
     // 창 기본 크기 = 640×480 (SPEC §6.1, 2026-07-10 — 화면 비율 기반(40%×30%)은
-    // 초광폭에서 부적합해 폐기)
+    // 초광폭에서 부적합해 폐기), 기본 위치 = 작업 영역 중앙(2026-07-11 —
+    // 지오메트리 복원이 있으면 이후 덮어씀)
+    let (default_x, default_y) =
+        window::work_area_centered_origin(640, 480).unwrap_or((CW_USEDEFAULT, CW_USEDEFAULT));
     let window = unsafe {
         CreateWindowExW(
             Default::default(),
             w!("riv"),
             w!("riv"),
             WS_OVERLAPPEDWINDOW,
-            CW_USEDEFAULT,
-            CW_USEDEFAULT,
+            default_x,
+            default_y,
             640,
             480,
             None,
@@ -1318,7 +1299,6 @@ fn create_main_window(initial_path: Option<&Path>) -> Result<HWND> {
     unsafe {
         SetWindowLongPtrW(window, GWLP_USERDATA, Box::into_raw(application) as isize);
     }
-    instances::register_window(window);
     // 핀치 줌·팬 제스처 수신 (SPEC §5.3, Q5) — 미지원 환경(wine)은 실패 무시
     {
         use windows::Win32::System::SystemServices::{GC_PAN, GC_ZOOM};
@@ -1359,19 +1339,12 @@ fn create_main_window(initial_path: Option<&Path>) -> Result<HWND> {
     Ok(window)
 }
 
-/// 빈 창 재사용 → 없으면 새 창 (SPEC §6.1) — 다중 선택·붙여넣기·드롭의 "나머지",
-/// 단일 인스턴스 수신 공용. 반환 = 연 창.
-fn open_in_empty_or_new_window(path: &Path) -> Option<HWND> {
-    for candidate in instances::windows_by_recency() {
-        if let Some(application) = unsafe { application_from_window(candidate) }
-            && application.image_core.current.is_none()
-            && !application.image_core.is_load_pending()
-        {
-            open_external_path(application, candidate, path);
-            return Some(candidate);
-        }
+/// 다중 선택·드롭의 "나머지" 파일 = 새 창 (SPEC §6.4) — 창=프로세스 1:1
+/// (2026-07-11 결정: 빈 창 재사용·프로세스 내 다창 폐기), 새 riv 프로세스 스폰.
+fn open_in_new_window(path: &Path) {
+    if let Ok(executable) = std::env::current_exe() {
+        let _ = std::process::Command::new(executable).arg(path).spawn();
     }
-    create_main_window(Some(path)).ok()
 }
 
 /// 승격 실행 감지 (SPEC R3) — `TokenElevationType == Full`(UAC "관리자 권한으로 실행")만
@@ -1470,11 +1443,11 @@ extern "system" fn window_procedure(
             }
             LRESULT(0)
         }
-        // 드롭 경로 수신 — 첫 파일 현재 창, 나머지 = 빈 창 재사용 → 새 창 (SPEC §5.4·§6.1)
+        // 드롭 경로 수신 — 첫 파일 현재 창, 나머지 = 새 창(새 프로세스) (SPEC §5.4·§6.4)
         WM_APP_DROP_PATH => {
             let paths = unsafe { Box::from_raw(lparam.0 as *mut Vec<std::path::PathBuf>) };
             for rest in paths.iter().skip(1) {
-                let _ = open_in_empty_or_new_window(rest);
+                open_in_new_window(rest);
             }
             if let Some(application) = unsafe { application_from_window(window) }
                 && let Some(first) = paths.first()
@@ -1757,6 +1730,8 @@ extern "system" fn window_procedure(
                         .as_ref()
                         .is_some_and(|animation| animation.paused),
                     preserve_zoom: application.preserve_zoom,
+                    mirrored: application.view_transform.mirrored,
+                    flipped: application.view_transform.flipped,
                     fullscreen: application.fullscreen_restore.is_some(),
                     slideshow_active: application.slideshow_active,
                     recent_names: application
@@ -1770,7 +1745,7 @@ extern "system" fn window_procedure(
                         |list| {
                             list.items
                                 .iter()
-                                .map(|item| (item.display_name.clone(), item.icon))
+                                .map(|item| item.display_name.clone())
                                 .collect()
                         },
                     ),
@@ -1805,23 +1780,6 @@ extern "system" fn window_procedure(
                 && application.settings.reload()
             {
                 application.apply_options(window);
-            }
-            LRESULT(0)
-        }
-        // 최근 활성 창 추적 (SPEC §6.1 — 빈 창 재사용 탐색 순서)
-        WM_ACTIVATE => {
-            if wparam.0 & 0xFFFF != 0 {
-                instances::note_window_activated(window);
-            }
-            LRESULT(0)
-        }
-        // 단일 인스턴스 경로 수신 (SPEC §6.5) — 빈 창 재사용 정책 + 전면 활성화
-        WM_COPYDATA => {
-            if let Some(path) = instances::parse_open_path(lparam) {
-                if let Some(target) = open_in_empty_or_new_window(&path) {
-                    instances::bring_to_foreground(target);
-                }
-                return LRESULT(1);
             }
             LRESULT(0)
         }
@@ -1876,10 +1834,7 @@ extern "system" fn window_procedure(
             unsafe { DefWindowProcW(window, message, wparam, lparam) }
         }
         WM_DESTROY => {
-            // 마지막 창이 닫힐 때만 메시지 루프 종료 (SPEC §6.1 멀티윈도우)
-            if instances::unregister_window(window) == 0 {
-                unsafe { PostQuitMessage(0) };
-            }
+            unsafe { PostQuitMessage(0) };
             LRESULT(0)
         }
         _ => unsafe { DefWindowProcW(window, message, wparam, lparam) },

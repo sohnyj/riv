@@ -28,7 +28,6 @@
 #define IDC_WINDOW_FITMODE 1106
 #define IDC_WINDOW_SAVE_POSITION 1107
 #define IDC_WINDOW_CTRL_DRAG 1108
-#define IDC_WINDOW_SINGLE_INSTANCE 1109
 
 // ── Image 탭 ────────────────────────────────────────────────────────────────
 #define IDC_IMAGE_FILTERING 1201

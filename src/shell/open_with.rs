@@ -1,41 +1,30 @@
 //! Open With — 셸 등록 핸들러 열거·실행·다른 앱 선택 (SPEC §6.4).
 //!
-//! 열거(추천 필터·자연 정렬·기본 앱 최상단·자기 자신/무효 제외)와 아이콘 추출은
-//! **백그라운드 스레드**에서 수행하고(250ms 디바운스는 창 타이머), 결과는 Send 안전한
-//! 데이터(이름·실행 파일 경로·HBITMAP)만 UI로 넘긴다. 실행은 UI 스레드에서 실행 파일
-//! 경로로 핸들러를 재열거해 매칭 — COM 아파트먼트 경계를 넘기지 않는다.
-//! 앱 아이콘은 창·메뉴 기본 스타일 금지(P14)의 **유일한 예외**.
+//! 열거(추천 필터·자연 정렬·기본 앱 최상단·자기 자신/무효 제외)는 **백그라운드
+//! 스레드**에서 수행하고(250ms 디바운스는 창 타이머), 결과는 Send 안전한 데이터
+//! (이름·실행 파일 경로)만 UI로 넘긴다. 실행은 UI 스레드에서 실행 파일 경로로
+//! 핸들러를 재열거해 매칭 — COM 아파트먼트 경계를 넘기지 않는다.
+//! 앱 아이콘은 미표시(2026-07-11 — P14 예외 철회, 메뉴 기본 스타일 일원화).
 
 use std::os::windows::ffi::OsStrExt;
 use std::path::{Path, PathBuf};
 
 use windows::Win32::Foundation::{HWND, LPARAM, WPARAM};
-use windows::Win32::Graphics::Gdi::{
-    BI_RGB, BITMAPINFO, BITMAPINFOHEADER, CreateCompatibleDC, CreateDIBSection, DIB_RGB_COLORS,
-    DeleteDC, DeleteObject, HBITMAP, SelectObject,
-};
 use windows::Win32::System::Com::{COINIT_MULTITHREADED, CoInitializeEx, IDataObject};
 use windows::Win32::UI::Shell::{
     ASSOC_FILTER_RECOMMENDED, ASSOCF_INIT_IGNOREUNKNOWN, ASSOCSTR_EXECUTABLE, AssocQueryStringW,
     BHID_DataObject, IAssocHandler, IShellItem, OAIF_ALLOW_REGISTRATION, OAIF_EXEC, OPENASINFO,
-    SHAssocEnumHandlers, SHCreateItemFromParsingName, SHDefExtractIconW, SHOpenWithDialog,
+    SHAssocEnumHandlers, SHCreateItemFromParsingName, SHOpenWithDialog,
 };
-use windows::Win32::UI::WindowsAndMessaging::{
-    DI_NORMAL, DestroyIcon, DrawIconEx, HICON, PostMessageW, WM_APP,
-};
+use windows::Win32::UI::WindowsAndMessaging::{PostMessageW, WM_APP};
 use windows::core::{HSTRING, PCWSTR, Result};
 
 /// 열거 완료 통지 — lparam = Box<OpenWithList> (250ms 디바운스 후 백그라운드 결과)
 pub const WM_APP_OPEN_WITH_LIST: u32 = WM_APP + 4;
 
-/// 메뉴 아이콘 한 변 (픽셀) — 시스템 소형 아이콘 크기
-const ICON_SIZE: i32 = 16;
-
 pub struct OpenWithItem {
     pub display_name: String,
     pub executable_path: String,
-    /// 32bpp ARGB HBITMAP — 메뉴 hbmpItem (P14 유일 예외). 소유권은 목록이 가진다.
-    pub icon: Option<isize>,
 }
 
 pub struct OpenWithList {
@@ -44,16 +33,6 @@ pub struct OpenWithList {
     /// 기본 앱이 있으면 첫 항목 (메뉴에서 구분선으로 분리 — SPEC §6.4)
     pub has_default: bool,
     pub items: Vec<OpenWithItem>,
-}
-
-impl Drop for OpenWithList {
-    fn drop(&mut self) {
-        for item in &self.items {
-            if let Some(icon) = item.icon {
-                let _ = unsafe { DeleteObject(HBITMAP(icon as *mut core::ffi::c_void).into()) };
-            }
-        }
-    }
 }
 
 /// 백그라운드 열거 시작 — 완료 시 WM_APP_OPEN_WITH_LIST 게시 (SPEC §6.4)
@@ -95,11 +74,9 @@ fn enumerate(path: &Path) -> OpenWithList {
             continue;
         }
         let display_name = handler_ui_name(&handler).unwrap_or_else(|| executable_path.clone());
-        let icon = extract_icon(&handler);
         items.push(OpenWithItem {
             display_name,
             executable_path,
-            icon,
         });
     }
     // 자연 정렬 후 기본 앱 최상단 (SPEC §6.4)
@@ -200,87 +177,6 @@ fn default_executable_for(path: &Path) -> Option<String> {
         )
     };
     (status.is_ok() && length > 1).then(|| String::from_utf16_lossy(&buffer[..length as usize - 1]))
-}
-
-/// GetIconLocation → SHDefExtractIconW → 32bpp ARGB HBITMAP (P14 유일 예외)
-fn extract_icon(handler: &IAssocHandler) -> Option<isize> {
-    let mut location = windows::core::PWSTR::null();
-    let mut index = 0i32;
-    unsafe { handler.GetIconLocation(&mut location, &mut index) }.ok()?;
-    if location.is_null() {
-        return None;
-    }
-    let location_text = HSTRING::from(String::from_utf16_lossy(unsafe { location.as_wide() }));
-    let mut icon = HICON::default();
-    let status = unsafe {
-        SHDefExtractIconW(
-            &location_text,
-            index,
-            0,
-            Some(&mut icon),
-            None,
-            ICON_SIZE as u32,
-        )
-    };
-    if !status.is_ok() || icon.is_invalid() {
-        return None;
-    }
-    let bitmap = icon_to_argb_bitmap(icon);
-    let _ = unsafe { DestroyIcon(icon) };
-    bitmap
-}
-
-/// HICON → 32bpp ARGB DIB 섹션 (메뉴 hbmpItem용)
-fn icon_to_argb_bitmap(icon: HICON) -> Option<isize> {
-    unsafe {
-        let device_context = CreateCompatibleDC(None);
-        if device_context.is_invalid() {
-            return None;
-        }
-        let header = BITMAPINFO {
-            bmiHeader: BITMAPINFOHEADER {
-                biSize: size_of::<BITMAPINFOHEADER>() as u32,
-                biWidth: ICON_SIZE,
-                biHeight: -ICON_SIZE, // top-down
-                biPlanes: 1,
-                biBitCount: 32,
-                biCompression: BI_RGB.0,
-                ..Default::default()
-            },
-            ..Default::default()
-        };
-        let mut bits = std::ptr::null_mut();
-        let Ok(bitmap) = CreateDIBSection(
-            Some(device_context),
-            &header,
-            DIB_RGB_COLORS,
-            &mut bits,
-            None,
-            0,
-        ) else {
-            let _ = DeleteDC(device_context);
-            return None;
-        };
-        let previous = SelectObject(device_context, bitmap.into());
-        let drawn = DrawIconEx(
-            device_context,
-            0,
-            0,
-            icon,
-            ICON_SIZE,
-            ICON_SIZE,
-            0,
-            None,
-            DI_NORMAL,
-        );
-        SelectObject(device_context, previous);
-        let _ = DeleteDC(device_context);
-        if drawn.is_err() {
-            let _ = DeleteObject(bitmap.into());
-            return None;
-        }
-        Some(bitmap.0 as isize)
-    }
 }
 
 /// 자연 정렬 (SPEC §6.4) — StrCmpLogicalW
