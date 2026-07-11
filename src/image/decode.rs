@@ -20,7 +20,8 @@ use windows::Win32::Graphics::Imaging::{
     WICBitmapTransformRotate270, WICColorContextProfile, WICDecodeMetadataCacheOnDemand,
 };
 use windows::Win32::System::Com::StructuredStorage::{
-    PROPVARIANT, PropVariantClear, PropVariantToUInt32,
+    PROPVARIANT, PropVariantClear, PropVariantToDouble, PropVariantToFileTime,
+    PropVariantToStringAlloc, PropVariantToUInt32,
 };
 use windows::Win32::System::Com::{CLSCTX_INPROC_SERVER, CoCreateInstance};
 use windows::core::{HSTRING, Interface, PCWSTR, w};
@@ -43,7 +44,48 @@ pub struct DecodedImage {
     pub format_name: &'static str,
     /// 임베디드 색 프로파일(ICC 바이트) — ColorManagement 이펙트 소스, 없으면 sRGB 가정 (SPEC §7)
     pub icc_profile: Option<Vec<u8>>,
+    /// EXIF 촬영 정보 (SPEC §3.6 확장, 2026-07-11) — WIC 경로만, 전 필드 부재면 None
+    pub exif: Option<ExifInfo>,
     pub frames: Vec<Frame>,
+}
+
+/// EXIF 촬영 정보 — WIC 포토 메타데이터 정책 조회 (System.Photo.*, System.Rating).
+/// 노출 포맷 = JPEG·TIFF·HEIC·RAW·JXL(실측) — 그 외·fallback 디코더는 필드 부재.
+pub struct ExifInfo {
+    pub date_taken: Option<std::time::SystemTime>,
+    /// System.Rating 원값 (1~99 — 별 환산은 표시 측)
+    pub rating: Option<u32>,
+    pub camera_maker: Option<String>,
+    pub camera_model: Option<String>,
+    pub f_stop: Option<f64>,
+    pub exposure_time_seconds: Option<f64>,
+    pub iso_speed: Option<u32>,
+    pub exposure_bias: Option<f64>,
+    pub focal_length_millimeters: Option<f64>,
+    pub max_aperture: Option<f64>,
+    /// EXIF MeteringMode 원값 (표시 문자열 매핑은 표시 측)
+    pub metering_mode: Option<u32>,
+    /// EXIF Flash 비트필드 원값
+    pub flash: Option<u32>,
+    pub focal_length_35mm: Option<u32>,
+}
+
+impl ExifInfo {
+    fn any_present(&self) -> bool {
+        self.date_taken.is_some()
+            || self.rating.is_some()
+            || self.camera_maker.is_some()
+            || self.camera_model.is_some()
+            || self.f_stop.is_some()
+            || self.exposure_time_seconds.is_some()
+            || self.iso_speed.is_some()
+            || self.exposure_bias.is_some()
+            || self.focal_length_millimeters.is_some()
+            || self.max_aperture.is_some()
+            || self.metering_mode.is_some()
+            || self.flash.is_some()
+            || self.focal_length_35mm.is_some()
+    }
 }
 
 impl DecodedImage {
@@ -436,6 +478,7 @@ pub fn decode_raw_preview(path: &Path) -> Option<DecodedImage> {
         let icc_profile = frame
             .as_ref()
             .and_then(|frame| icc_profile_bytes(factory, frame));
+        let exif = frame.as_ref().and_then(read_exif);
         let source = convert_to_pbgra(factory, &preview)?;
         let source = apply_orientation(factory, source, orientation)?;
         let (width, height) = source_size(&source)?;
@@ -448,6 +491,7 @@ pub fn decode_raw_preview(path: &Path) -> Option<DecodedImage> {
             pixel_width,
             pixel_height,
             icc_profile,
+            exif,
             frames: vec![Frame {
                 pixels,
                 delay_milliseconds: 0,
@@ -462,6 +506,7 @@ pub fn decode_raw_preview(path: &Path) -> Option<DecodedImage> {
         pixel_height: decoded.pixel_height,
         format_name: "RAW",
         icc_profile: decoded.icc_profile,
+        exif: decoded.exif,
         frames: decoded.frames,
     })
 }
@@ -492,6 +537,7 @@ struct DecodedFrames {
     pixel_width: u32,
     pixel_height: u32,
     icc_profile: Option<Vec<u8>>,
+    exif: Option<ExifInfo>,
     frames: Vec<Frame>,
 }
 
@@ -529,6 +575,7 @@ fn decode_with_wic(
         pixel_height: decoded.pixel_height,
         format_name,
         icc_profile: decoded.icc_profile,
+        exif: decoded.exif,
         frames: decoded.frames,
     })
 }
@@ -568,6 +615,7 @@ fn decode_single_frame(
     let frame = unsafe { decoder.GetFrame(index)? };
     let orientation = exif_orientation(&frame);
     let icc_profile = icc_profile_bytes(factory, &frame);
+    let exif = read_exif(&frame);
     let source = convert_to_pbgra(factory, &frame.cast()?)?;
     let source = apply_orientation(factory, source, orientation)?;
     let (width, height) = source_size(&source)?;
@@ -580,6 +628,7 @@ fn decode_single_frame(
         pixel_width,
         pixel_height,
         icc_profile,
+        exif,
         frames: vec![Frame {
             pixels,
             delay_milliseconds: 0,
@@ -743,6 +792,7 @@ fn decode_animation(
         pixel_width: canvas_width,
         pixel_height: canvas_height,
         icc_profile,
+        exif: None,
         frames,
     })
 }
@@ -853,6 +903,64 @@ fn exif_orientation(frame: &IWICBitmapFrameDecode) -> u32 {
         return 1;
     };
     query_u32(&reader, w!("System.Photo.Orientation")).unwrap_or(1)
+}
+
+/// EXIF 촬영 정보 조회 (SPEC §3.6 확장) — 포토 정책 이름은 컨테이너 무관.
+/// 전 필드 부재(EXIF 없는 포맷·파일)면 None.
+fn read_exif(frame: &IWICBitmapFrameDecode) -> Option<ExifInfo> {
+    let reader = unsafe { frame.GetMetadataQueryReader() }.ok()?;
+    let information = ExifInfo {
+        date_taken: query_filetime(&reader, w!("System.Photo.DateTaken")),
+        rating: query_u32(&reader, w!("System.Rating")),
+        camera_maker: query_string(&reader, w!("System.Photo.CameraManufacturer")),
+        camera_model: query_string(&reader, w!("System.Photo.CameraModel")),
+        f_stop: query_f64(&reader, w!("System.Photo.FNumber")),
+        exposure_time_seconds: query_f64(&reader, w!("System.Photo.ExposureTime")),
+        iso_speed: query_u32(&reader, w!("System.Photo.ISOSpeed")),
+        exposure_bias: query_f64(&reader, w!("System.Photo.ExposureBias")),
+        focal_length_millimeters: query_f64(&reader, w!("System.Photo.FocalLength")),
+        max_aperture: query_f64(&reader, w!("System.Photo.MaxAperture")),
+        metering_mode: query_u32(&reader, w!("System.Photo.MeteringMode")),
+        flash: query_u32(&reader, w!("System.Photo.Flash")),
+        focal_length_35mm: query_u32(&reader, w!("System.Photo.FocalLengthInFilm")),
+    };
+    information.any_present().then_some(information)
+}
+
+fn query_f64(reader: &IWICMetadataQueryReader, name: PCWSTR) -> Option<f64> {
+    let mut value = PROPVARIANT::default();
+    unsafe { reader.GetMetadataByName(name, &mut value) }.ok()?;
+    let result = unsafe { PropVariantToDouble(&value) }.ok();
+    let _ = unsafe { PropVariantClear(&mut value) };
+    result.filter(|number| number.is_finite())
+}
+
+fn query_string(reader: &IWICMetadataQueryReader, name: PCWSTR) -> Option<String> {
+    let mut value = PROPVARIANT::default();
+    unsafe { reader.GetMetadataByName(name, &mut value) }.ok()?;
+    let text = unsafe { PropVariantToStringAlloc(&value) }.ok().map(|out| {
+        let result = String::from_utf16_lossy(unsafe { out.as_wide() });
+        unsafe { windows::Win32::System::Com::CoTaskMemFree(Some(out.0.cast())) };
+        result
+    });
+    let _ = unsafe { PropVariantClear(&mut value) };
+    text.map(|text| text.trim().to_string())
+        .filter(|text| !text.is_empty())
+}
+
+/// FILETIME 조회 → SystemTime (UTC — 로캘 표시 변환은 오버레이 측)
+fn query_filetime(reader: &IWICMetadataQueryReader, name: PCWSTR) -> Option<std::time::SystemTime> {
+    use windows::Win32::System::Variant::PSTF_UTC;
+    let mut value = PROPVARIANT::default();
+    unsafe { reader.GetMetadataByName(name, &mut value) }.ok()?;
+    let file_time = unsafe { PropVariantToFileTime(&value, PSTF_UTC) }.ok();
+    let _ = unsafe { PropVariantClear(&mut value) };
+    let file_time = file_time?;
+    let intervals =
+        (u64::from(file_time.dwHighDateTime) << 32) | u64::from(file_time.dwLowDateTime);
+    // FILETIME(1601 기준 100ns) → UNIX epoch
+    let unix_intervals = intervals.checked_sub(116_444_736_000_000_000)?;
+    Some(std::time::UNIX_EPOCH + std::time::Duration::from_nanos(unix_intervals * 100))
 }
 
 fn query_u32(reader: &IWICMetadataQueryReader, name: PCWSTR) -> Option<u32> {
@@ -993,6 +1101,7 @@ fn decode_apng(path: &Path, format_name: &'static str) -> Result<DecodedImage, D
         pixel_height: canvas_height,
         format_name,
         icc_profile,
+        exif: None,
         frames,
     })
 }
@@ -1088,6 +1197,7 @@ fn decode_svg(path: &Path, format_name: &'static str) -> Result<DecodedImage, De
         pixel_height,
         format_name,
         icc_profile: None,
+        exif: None,
         frames: vec![Frame {
             pixels,
             delay_milliseconds: 0,

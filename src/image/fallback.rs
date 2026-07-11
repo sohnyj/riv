@@ -183,6 +183,7 @@ fn compose_webp_frames(
         pixel_height: canvas_height,
         format_name,
         icc_profile: None,
+        exif: None,
         frames,
     })
 }
@@ -268,6 +269,7 @@ pub fn decode_exr(path: &Path, format_name: &'static str) -> Result<DecodedImage
         pixel_height: height as u32,
         format_name,
         icc_profile: None,
+        exif: None,
         frames: vec![Frame {
             pixels,
             delay_milliseconds: 0,
@@ -466,6 +468,7 @@ fn decode_heif_primary_image(
         pixel_height: height as u32,
         format_name,
         icc_profile,
+        exif: None,
         frames: vec![Frame {
             pixels,
             delay_milliseconds: 0,

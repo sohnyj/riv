@@ -307,7 +307,98 @@ pub fn build_info_text(
     if image.frames.len() > 1 {
         lines.push(format!("Frames: {}", image.frames.len()));
     }
+    if let Some(exif) = &image.exif {
+        append_exif_lines(&mut lines, exif);
+    }
     lines.join("\n")
+}
+
+/// EXIF 확장 표시 (SPEC §3.6, 2026-07-11) — 존재 필드만, 탐색기 세부 정보 순서.
+/// 날짜는 기존 로캘 포맷 재사용, 라벨은 영어 고정.
+fn append_exif_lines(lines: &mut Vec<String>, exif: &crate::image::decode::ExifInfo) {
+    if let Some(taken) = exif.date_taken {
+        lines.push(format!("Date taken: {}", format_locale_datetime(taken)));
+    }
+    if let Some(rating) = exif.rating {
+        let stars = match rating {
+            1..=12 => 1,
+            13..=37 => 2,
+            38..=62 => 3,
+            63..=87 => 4,
+            _ => 5,
+        };
+        lines.push(format!(
+            "Rating: {stars} star{}",
+            if stars == 1 { "" } else { "s" }
+        ));
+    }
+    if let Some(maker) = &exif.camera_maker {
+        lines.push(format!("Camera maker: {maker}"));
+    }
+    if let Some(model) = &exif.camera_model {
+        lines.push(format!("Camera model: {model}"));
+    }
+    if let Some(f_stop) = exif.f_stop {
+        lines.push(format!("F-stop: F/{}", trim_number(f_stop, 1)));
+    }
+    if let Some(seconds) = exif.exposure_time_seconds {
+        let text = if seconds > 0.0 && seconds < 1.0 {
+            format!("1/{} s", (1.0 / seconds).round() as u64)
+        } else {
+            format!("{} s", trim_number(seconds, 1))
+        };
+        lines.push(format!("Exposure time: {text}"));
+    }
+    if let Some(iso) = exif.iso_speed {
+        lines.push(format!("ISO speed: ISO-{iso}"));
+    }
+    if let Some(bias) = exif.exposure_bias {
+        lines.push(format!("Exposure bias: {} step", trim_number(bias, 1)));
+    }
+    if let Some(focal) = exif.focal_length_millimeters {
+        lines.push(format!("Focal length: {} mm", trim_number(focal, 1)));
+    }
+    if let Some(aperture) = exif.max_aperture {
+        lines.push(format!("Max aperture: {}", trim_number(aperture, 2)));
+    }
+    if let Some(mode) = exif.metering_mode {
+        let text = match mode {
+            1 => "Average",
+            2 => "Center weighted average",
+            3 => "Spot",
+            4 => "Multi-spot",
+            5 => "Pattern",
+            6 => "Partial",
+            _ => "Unknown",
+        };
+        lines.push(format!("Metering mode: {text}"));
+    }
+    if let Some(flash) = exif.flash {
+        // EXIF Flash 비트필드: bit0 = 발광, bits3-4 = 모드(1/2=강제, 3=자동)
+        let fired = flash & 0x1 != 0;
+        let mode = (flash >> 3) & 0x3;
+        let mut text = String::from(if fired { "Flash" } else { "No flash" });
+        match mode {
+            1 | 2 => text.push_str(", compulsory"),
+            3 => text.push_str(", auto"),
+            _ => {}
+        }
+        lines.push(format!("Flash mode: {text}"));
+    }
+    if let Some(focal_35mm) = exif.focal_length_35mm {
+        lines.push(format!("Focal length (35mm): {focal_35mm}"));
+    }
+}
+
+/// 소수 표시 — 지정 자릿수로 반올림 후 후행 0·소수점 제거 ("13.0" → "13")
+fn trim_number(value: f64, decimals: usize) -> String {
+    let text = format!("{value:.decimals$}");
+    let trimmed = text.trim_end_matches('0').trim_end_matches('.');
+    if trimmed.is_empty() || trimmed == "-" {
+        "0".to_string()
+    } else {
+        trimmed.to_string()
+    }
 }
 
 /// 에러 텍스트 조립 (SPEC §3.6)
