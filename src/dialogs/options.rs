@@ -604,7 +604,7 @@ fn handle_page_command(
         }
         (IDC_IMAGE_SCALEFACTOR_EDIT, EN_CHANGE) => {
             let value = unsafe { GetDlgItemInt(page, control, None, false) };
-            options.scale_factor_percent = value.clamp(1, 500);
+            options.scale_factor_percent = value.clamp(1, 200);
         }
         (IDC_IMAGE_CURSOR_ZOOM, BN_CLICKED) => {
             options.cursor_zoom = is_checked(page, control);
@@ -678,8 +678,9 @@ fn initialize_image_page(state: &OptionsState) {
         IDC_IMAGE_FILTERING,
         &["Nearest", "Bilinear", "Bicubic", "High Quality"],
     );
+    // 줌 스텝(%) 범위 = 1~200
     if let Ok(spin) = unsafe { GetDlgItem(Some(page), IDC_IMAGE_SCALEFACTOR_SPIN) } {
-        unsafe { SendMessageW(spin, UDM_SETRANGE32, Some(WPARAM(1)), Some(LPARAM(500))) };
+        unsafe { SendMessageW(spin, UDM_SETRANGE32, Some(WPARAM(1)), Some(LPARAM(200))) };
     }
 }
 
