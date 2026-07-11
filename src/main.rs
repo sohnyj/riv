@@ -1782,6 +1782,16 @@ extern "system" fn window_procedure(
                         .open_with_list
                         .as_ref()
                         .is_some_and(|list| list.has_default),
+                    shortcuts: Action::all_bindable()
+                        .filter_map(|action| {
+                            bindings::menu_shortcut_text(
+                                application.settings.keyboard_bindings(),
+                                application.settings.mouse_bindings(),
+                                action.name(),
+                            )
+                            .map(|text| (action.name(), text))
+                        })
+                        .collect(),
                 };
                 match context_menu::show(window, state, x, y) {
                     Some(MenuSelection::Action(action)) => {

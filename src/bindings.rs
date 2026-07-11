@@ -276,6 +276,24 @@ pub fn resolved_keyboard_sequences(
     )
 }
 
+/// 컨텍스트 메뉴 단축키 열 (SPEC §6.1) — 첫 키보드 시퀀스 + 첫 마우스 인코딩을
+/// ", "로 병기(예: "F11, Middle"). 표기는 Shortcuts 탭과 동일한 인코딩 문자열 그대로.
+pub fn menu_shortcut_text(
+    keyboard_overrides: Option<&Map<String, Value>>,
+    mouse_overrides: Option<&Map<String, Value>>,
+    action_name: &str,
+) -> Option<String> {
+    let keyboard_sequences = resolved_keyboard_sequences(keyboard_overrides, action_name);
+    let mouse_encodings = resolved_mouse_encodings(mouse_overrides, action_name);
+    let parts: Vec<&str> = keyboard_sequences
+        .first()
+        .into_iter()
+        .chain(mouse_encodings.first())
+        .map(String::as_str)
+        .collect();
+    (!parts.is_empty()).then(|| parts.join(", "))
+}
+
 /// 액션의 확정 마우스 인코딩 목록 — 동상
 pub fn resolved_mouse_encodings(
     overrides: Option<&Map<String, Value>>,

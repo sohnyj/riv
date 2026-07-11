@@ -2,6 +2,8 @@
 //! (P14 — 아이콘 데코 없음, Open With 포함: 2026-07-11 예외 철회). `TPM_RETURNCMD`로
 //! 선택 액션을 반환하고 디스패치는 호출자(단일 디스패처)가 수행한다.
 
+use std::collections::HashMap;
+
 use windows::Win32::Foundation::HWND;
 use windows::Win32::UI::WindowsAndMessaging::{
     AppendMenuW, CreatePopupMenu, DestroyMenu, HMENU, MF_CHECKED, MF_DISABLED, MF_GRAYED, MF_POPUP,
@@ -37,6 +39,8 @@ pub struct MenuState {
     pub open_with_items: Vec<String>,
     /// Open With 첫 항목 = 기본 앱 (구분선 분리)
     pub open_with_has_default: bool,
+    /// 액션 이름 → 단축키 열 텍스트 (SPEC §6.1 — "라벨\t단축키" 표준 표기)
+    pub shortcuts: HashMap<&'static str, String>,
 }
 
 struct MenuBuilder {
@@ -78,7 +82,12 @@ impl MenuBuilder {
         if checked {
             flags |= MF_CHECKED;
         }
-        unsafe { AppendMenuW(menu, flags, identifier, &HSTRING::from(label)) }
+        // 탭 뒤 텍스트 = 오른쪽 정렬 단축키 열 (Win32 표준 표기)
+        let text = match self.state_snapshot.shortcuts.get(action.name()) {
+            Some(shortcut) => format!("{label}\t{shortcut}"),
+            None => label.to_string(),
+        };
+        unsafe { AppendMenuW(menu, flags, identifier, &HSTRING::from(text.as_str())) }
     }
 
     /// Open With 핸들러 항목 (SPEC §6.4 — 아이콘 없음, 2026-07-11 P14 예외 철회)
