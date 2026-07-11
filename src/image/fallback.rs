@@ -171,7 +171,7 @@ fn compose_webp_frames(
         icc_profile: None,
         exif: None,
         storage: PixelStorage::Bgra8,
-        hdr_content: None,
+        peak_luminance_nits: None,
         frames,
     })
 }
@@ -252,7 +252,7 @@ pub fn decode_exr(path: &Path, format_name: &'static str) -> Result<DecodedImage
         icc_profile: None,
         exif: None,
         storage: PixelStorage::Bgra8,
-        hdr_content: None,
+        peak_luminance_nits: None,
         frames: vec![Frame {
             pixels,
             delay_milliseconds: 0,
@@ -444,7 +444,7 @@ fn decode_heif_primary_image(
         icc_profile,
         exif: None,
         storage: PixelStorage::Bgra8,
-        hdr_content: None,
+        peak_luminance_nits: None,
         frames: vec![Frame {
             pixels,
             delay_milliseconds: 0,

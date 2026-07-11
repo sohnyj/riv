@@ -19,7 +19,7 @@ use windows::core::{Result, w};
 use windows_numerics::Vector2;
 
 use crate::image::color;
-use crate::image::decode::{DecodedImage, HdrTransfer, PixelStorage};
+use crate::image::decode::{DecodedImage, PixelStorage};
 
 const PANEL_MARGIN: f32 = 12.0;
 const PANEL_PADDING_X: f32 = 12.0;
@@ -280,15 +280,8 @@ pub fn build_info_text(
         lines.push(format!("Frames: {}", image.frames.len()));
     }
     if image.storage == PixelStorage::RgbaHalf {
-        match image.hdr_content {
-            Some((transfer, peak)) => {
-                let transfer_name = match transfer {
-                    HdrTransfer::PerceptualQuantizer => "PQ",
-                    HdrTransfer::HybridLogGamma => "HLG",
-                    HdrTransfer::LinearScRgb => "Linear",
-                };
-                lines.push(format!("HDR: {transfer_name}, peak {peak:.0} nits"));
-            }
+        match image.peak_luminance_nits {
+            Some(peak) => lines.push(format!("Bit depth: FP16 linear, peak {peak:.0} nits")),
             None => lines.push("Bit depth: high (FP16)".to_string()),
         }
     }

@@ -332,7 +332,7 @@ impl Application {
             (image.width, image.height),
             image.icc_profile.as_deref(),
             image.storage,
-            image.hdr_content,
+            image.peak_luminance_nits,
         );
         self.display = Some(image);
         self.displayed_path = Some(path.clone());
@@ -410,7 +410,7 @@ impl Application {
             (image.width, image.height),
             image.icc_profile.as_deref(),
             image.storage,
-            image.hdr_content,
+            image.peak_luminance_nits,
         );
         if !paused {
             unsafe { SetTimer(Some(window), ANIMATION_TIMER, delay, None) };
@@ -467,7 +467,7 @@ impl Application {
                 (image.width, image.height),
                 image.icc_profile.as_deref(),
                 image.storage,
-                image.hdr_content,
+                image.peak_luminance_nits,
             )?;
         }
         Ok(())

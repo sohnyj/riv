@@ -18,8 +18,7 @@ use windows::Win32::Graphics::Direct2D::{
     D2D1_INTERPOLATION_MODE, D2D1_PROPERTY_TYPE_COLOR_CONTEXT, D2D1_PROPERTY_TYPE_ENUM,
     D2D1_PROPERTY_TYPE_FLOAT, D2D1_WHITELEVELADJUSTMENT_PROP_INPUT_WHITE_LEVEL,
     D2D1_WHITELEVELADJUSTMENT_PROP_OUTPUT_WHITE_LEVEL, D2D1CreateFactory, ID2D1Bitmap1,
-    ID2D1ColorContext, ID2D1DeviceContext, ID2D1DeviceContext5, ID2D1Effect, ID2D1Factory1,
-    ID2D1Image,
+    ID2D1ColorContext, ID2D1DeviceContext, ID2D1Effect, ID2D1Factory1, ID2D1Image,
 };
 use windows::Win32::Graphics::Direct3D::{
     D3D_DRIVER_TYPE, D3D_DRIVER_TYPE_HARDWARE, D3D_DRIVER_TYPE_WARP, D3D_FEATURE_LEVEL_11_0,
@@ -28,8 +27,7 @@ use windows::Win32::Graphics::Direct3D11::{
     D3D11_CREATE_DEVICE_BGRA_SUPPORT, D3D11_SDK_VERSION, D3D11CreateDevice, ID3D11Device,
 };
 use windows::Win32::Graphics::Dxgi::Common::{
-    DXGI_ALPHA_MODE_IGNORE, DXGI_COLOR_SPACE_RGB_FULL_G10_NONE_P709,
-    DXGI_COLOR_SPACE_RGB_FULL_G2084_NONE_P2020, DXGI_FORMAT_B8G8R8A8_UNORM,
+    DXGI_ALPHA_MODE_IGNORE, DXGI_COLOR_SPACE_RGB_FULL_G10_NONE_P709, DXGI_FORMAT_B8G8R8A8_UNORM,
     DXGI_FORMAT_R16G16B16A16_FLOAT, DXGI_FORMAT_UNKNOWN, DXGI_SAMPLE_DESC,
 };
 use windows::Win32::Graphics::Dxgi::{
@@ -40,7 +38,7 @@ use windows::Win32::Graphics::Dxgi::{
 use windows::core::{Interface, Result};
 use windows_numerics::Matrix3x2;
 
-use crate::image::decode::{HdrTransfer, PixelStorage};
+use crate::image::decode::PixelStorage;
 
 pub struct Renderer {
     hdr_mode: bool,
@@ -57,7 +55,6 @@ pub struct Renderer {
     output_color_management_effect: Option<ID2D1Effect>,
     scrgb_color_context: Option<ID2D1ColorContext>,
     srgb_color_context: Option<ID2D1ColorContext>,
-    hdr10_color_context: Option<ID2D1ColorContext>,
     source_icc_profile: Option<Vec<u8>>,
     source_color_context: Option<ID2D1ColorContext>,
     image_display_size: (f32, f32),
@@ -169,19 +166,6 @@ impl Renderer {
             unsafe { d2d_context.CreateColorContext(D2D1_COLOR_SPACE_SCRGB, None) }.ok();
         let srgb_color_context =
             unsafe { d2d_context.CreateColorContext(D2D1_COLOR_SPACE_SRGB, None) }.ok();
-        let hdr10_color_context =
-            d2d_context
-                .cast::<ID2D1DeviceContext5>()
-                .ok()
-                .and_then(|device_context5| {
-                    unsafe {
-                        device_context5.CreateColorContextFromDxgiColorSpace(
-                            DXGI_COLOR_SPACE_RGB_FULL_G2084_NONE_P2020,
-                        )
-                    }
-                    .ok()
-                    .and_then(|context| context.cast::<ID2D1ColorContext>().ok())
-                });
         // BEST quality is required for float precision and scRGB conversions.
         let create_color_management = || {
             let effect = unsafe { d2d_context.CreateEffect(&CLSID_D2D1ColorManagement) }.ok()?;
@@ -282,7 +266,6 @@ impl Renderer {
             output_color_management_effect,
             scrgb_color_context,
             srgb_color_context,
-            hdr10_color_context,
             source_icc_profile: None,
             source_color_context: None,
             image_display_size: (0.0, 0.0),
@@ -352,7 +335,7 @@ impl Renderer {
         display_size: (u32, u32),
         icc_profile: Option<&[u8]>,
         storage: PixelStorage,
-        hdr_content: Option<(HdrTransfer, f32)>,
+        peak_luminance_nits: Option<f32>,
     ) -> Result<()> {
         let properties = D2D1_BITMAP_PROPERTIES1 {
             pixelFormat: source_pixel_format(storage),
@@ -371,7 +354,7 @@ impl Renderer {
         };
         self.image_display_size = (display_size.0 as f32, display_size.1 as f32);
         self.image_pixel_size = (width as f32, height as f32);
-        self.rewire_effect_chain(&bitmap, icc_profile, hdr_content);
+        self.rewire_effect_chain(&bitmap, icc_profile, storage, peak_luminance_nits);
         self.image = Some(bitmap);
         Ok(())
     }
@@ -380,17 +363,17 @@ impl Renderer {
         &mut self,
         bitmap: &ID2D1Bitmap1,
         icc_profile: Option<&[u8]>,
-        hdr_content: Option<(HdrTransfer, f32)>,
+        storage: PixelStorage,
+        peak_luminance_nits: Option<f32>,
     ) {
         self.effect_output = None;
         let Some(color_management) = &self.color_management_effect else {
             return;
         };
-        // PQ needs the DXGI G2084 context; ICC profiles are relative-colorimetric.
-        let dedicated_context = match hdr_content {
-            Some((HdrTransfer::PerceptualQuantizer, _)) => self.hdr10_color_context.as_ref(),
-            Some((HdrTransfer::LinearScRgb, _)) => self.scrgb_color_context.as_ref(),
-            _ => None,
+        // FP16 pixels are linear scRGB; the embedded ICC does not describe them.
+        let dedicated_context = match storage {
+            PixelStorage::RgbaHalf => self.scrgb_color_context.as_ref(),
+            PixelStorage::Bgra8 => None,
         };
         let source_context = match dedicated_context {
             Some(context) => context,
@@ -421,10 +404,11 @@ impl Renderer {
                 source_context
             }
         };
+        // Content within SDR white skips the tone map but keeps the white boost.
         let tone_map = self
             .hdr_tone_map_effect
             .as_ref()
-            .zip(hdr_content.map(|(_, peak)| peak));
+            .zip(peak_luminance_nits.filter(|peak| *peak > SDR_REFERENCE_WHITE_NITS));
         let destination_context = if self.hdr_mode || tone_map.is_some() {
             &self.scrgb_color_context
         } else {

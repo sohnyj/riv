@@ -43,13 +43,6 @@ impl PixelStorage {
     }
 }
 
-#[derive(Clone, Copy, PartialEq, Eq)]
-pub enum HdrTransfer {
-    PerceptualQuantizer,
-    HybridLogGamma,
-    LinearScRgb,
-}
-
 pub struct DecodedImage {
     pub width: u32,
     pub height: u32,
@@ -59,7 +52,8 @@ pub struct DecodedImage {
     pub icc_profile: Option<Vec<u8>>,
     pub exif: Option<ExifInfo>,
     pub storage: PixelStorage,
-    pub hdr_content: Option<(HdrTransfer, f32)>,
+    /// Content peak (nits) of FP16 sources; pixels are linear scRGB (1.0 = 80 nits).
+    pub peak_luminance_nits: Option<f32>,
     pub frames: Vec<Frame>,
 }
 
@@ -457,7 +451,7 @@ pub fn decode_raw_preview(path: &Path) -> Option<DecodedImage> {
             icc_profile,
             exif,
             storage: PixelStorage::Bgra8,
-            hdr_content: None,
+            peak_luminance_nits: None,
             frames: vec![Frame {
                 pixels,
                 delay_milliseconds: 0,
@@ -474,7 +468,7 @@ pub fn decode_raw_preview(path: &Path) -> Option<DecodedImage> {
         icc_profile: decoded.icc_profile,
         exif: decoded.exif,
         storage: decoded.storage,
-        hdr_content: decoded.hdr_content,
+        peak_luminance_nits: decoded.peak_luminance_nits,
         frames: decoded.frames,
     })
 }
@@ -505,7 +499,7 @@ struct DecodedFrames {
     icc_profile: Option<Vec<u8>>,
     exif: Option<ExifInfo>,
     storage: PixelStorage,
-    hdr_content: Option<(HdrTransfer, f32)>,
+    peak_luminance_nits: Option<f32>,
     frames: Vec<Frame>,
 }
 
@@ -543,7 +537,7 @@ fn decode_with_wic(
         icc_profile: decoded.icc_profile,
         exif: decoded.exif,
         storage: decoded.storage,
-        hdr_content: decoded.hdr_content,
+        peak_luminance_nits: decoded.peak_luminance_nits,
         frames: decoded.frames,
     })
 }
@@ -583,7 +577,13 @@ fn decode_single_frame(
     let icc_profile = icc_profile_bytes(factory, &frame);
     let exif = read_exif(&frame);
     let (high_depth, float_native) = frame_pixel_format_traits(factory, &frame);
-    let (source, storage) = if high_depth {
+    // Integer-to-half conversion linearizes (WIC treats integers as sRGB, floats as
+    // scRGB), which would corrupt PQ/HLG code values: keep those at 8bpc for now.
+    let integer_hdr_encoded = !float_native
+        && icc_profile
+            .as_deref()
+            .is_some_and(icc_declares_hdr_transfer);
+    let (source, storage) = if high_depth && !integer_hdr_encoded {
         match convert_pixel_format(factory, &frame.cast()?, &GUID_WICPixelFormat64bppPRGBAHalf) {
             Ok(source) => (source, PixelStorage::RgbaHalf),
             Err(_) => (
@@ -607,19 +607,11 @@ fn decode_single_frame(
         pixel_height,
         storage.bytes_per_pixel(),
     )?;
-    // Float-native WIC formats are linear scRGB by convention; integers use ICC cicp.
-    let hdr_content = (storage == PixelStorage::RgbaHalf)
-        .then(|| {
-            if float_native {
-                Some(HdrTransfer::LinearScRgb)
-            } else {
-                icc_profile.as_deref().and_then(icc_cicp_transfer_function)
-            }
-        })
-        .flatten()
-        .and_then(|transfer| {
-            peak_luminance_from_half_pixels(&pixels, transfer).map(|peak| (transfer, peak))
-        });
+    // Half-stored pixels are linear scRGB: float natives by WIC convention, and
+    // converted integers because the converter linearizes on the way to float.
+    let peak_luminance_nits = (storage == PixelStorage::RgbaHalf)
+        .then(|| peak_luminance_from_half_pixels(&pixels))
+        .flatten();
     Ok(DecodedFrames {
         width,
         height,
@@ -628,7 +620,7 @@ fn decode_single_frame(
         icc_profile,
         exif,
         storage,
-        hdr_content,
+        peak_luminance_nits,
         frames: vec![Frame {
             pixels,
             delay_milliseconds: 0,
@@ -657,77 +649,67 @@ fn frame_pixel_format_traits(
     .unwrap_or((false, false))
 }
 
-/// Reads the ICC v4.4 'cicp' tag: transfer 16 = PQ, 18 = HLG.
-fn icc_cicp_transfer_function(icc: &[u8]) -> Option<HdrTransfer> {
-    const TRANSFER_PQ: u8 = 16;
-    const TRANSFER_HLG: u8 = 18;
-    let read_u32 = |offset: usize| -> Option<u32> {
-        Some(u32::from_be_bytes(
-            icc.get(offset..offset + 4)?.try_into().ok()?,
-        ))
-    };
-    let tag_count = read_u32(128)? as usize;
-    for index in 0..tag_count {
-        let entry = 132 + index * 12;
-        if icc.get(entry..entry + 4)? != b"cicp" {
-            continue;
-        }
-        let offset = read_u32(entry + 4)? as usize;
-        if icc.get(offset..offset + 4)? != b"cicp" {
-            return None;
-        }
-        return match *icc.get(offset + 9)? {
-            TRANSFER_PQ => Some(HdrTransfer::PerceptualQuantizer),
-            TRANSFER_HLG => Some(HdrTransfer::HybridLogGamma),
-            _ => None,
+/// True when the ICC v4.4 'cicp' tag declares an HDR transfer (16 = PQ, 18 = HLG).
+fn icc_declares_hdr_transfer(icc: &[u8]) -> bool {
+    fn probe(icc: &[u8]) -> Option<bool> {
+        const TRANSFER_PQ: u8 = 16;
+        const TRANSFER_HLG: u8 = 18;
+        let read_u32 = |offset: usize| -> Option<u32> {
+            Some(u32::from_be_bytes(
+                icc.get(offset..offset + 4)?.try_into().ok()?,
+            ))
         };
+        let tag_count = read_u32(128)? as usize;
+        for index in 0..tag_count {
+            let entry = 132 + index * 12;
+            if icc.get(entry..entry + 4)? != b"cicp" {
+                continue;
+            }
+            let offset = read_u32(entry + 4)? as usize;
+            if icc.get(offset..offset + 4)? != b"cicp" {
+                return Some(false);
+            }
+            return Some(matches!(*icc.get(offset + 9)?, TRANSFER_PQ | TRANSFER_HLG));
+        }
+        Some(false)
     }
-    None
+    probe(icc).unwrap_or(false)
 }
 
-/// Content peak: 99.9th-percentile per-pixel max channel in the PQ code domain.
-fn peak_luminance_from_half_pixels(pixels: &[u8], transfer: HdrTransfer) -> Option<f32> {
-    match transfer {
-        HdrTransfer::PerceptualQuantizer | HdrTransfer::LinearScRgb => {
-            let linear = transfer == HdrTransfer::LinearScRgb;
-            const BINS: usize = 4096;
-            let mut histogram = [0u32; BINS];
-            let mut pixel_count = 0u32;
-            for pixel in pixels.chunks_exact(8) {
-                let mut maximum_code = 0.0f32;
-                for channel in 0..3 {
-                    let bits = u16::from_le_bytes([pixel[channel * 2], pixel[channel * 2 + 1]]);
-                    let mut code = half_to_f32(bits);
-                    if linear {
-                        code = perceptual_quantizer_code(code * SDR_REFERENCE_WHITE_NITS);
-                    }
-                    if code > maximum_code {
-                        maximum_code = code;
-                    }
-                }
-                let bin =
-                    ((maximum_code.clamp(0.0, 1.0) * (BINS - 1) as f32) as usize).min(BINS - 1);
-                histogram[bin] += 1;
-                pixel_count += 1;
+/// Content peak: 99.9th-percentile per-pixel max channel, binned in the PQ code
+/// domain for perceptually even buckets. Input pixels are linear scRGB halves.
+fn peak_luminance_from_half_pixels(pixels: &[u8]) -> Option<f32> {
+    const BINS: usize = 4096;
+    let mut histogram = [0u32; BINS];
+    let mut pixel_count = 0u32;
+    for pixel in pixels.chunks_exact(8) {
+        let mut maximum_code = 0.0f32;
+        for channel in 0..3 {
+            let bits = u16::from_le_bytes([pixel[channel * 2], pixel[channel * 2 + 1]]);
+            let code = perceptual_quantizer_code(half_to_f32(bits) * SDR_REFERENCE_WHITE_NITS);
+            if code > maximum_code {
+                maximum_code = code;
             }
-            if pixel_count == 0 {
-                return None;
-            }
-            let threshold = (u64::from(pixel_count) * 999 / 1000) as u32;
-            let mut accumulated = 0u32;
-            let mut percentile_bin = BINS - 1;
-            for (bin, count) in histogram.iter().enumerate() {
-                accumulated += count;
-                if accumulated >= threshold {
-                    percentile_bin = bin;
-                    break;
-                }
-            }
-            let code = (percentile_bin as f32 + 1.0) / BINS as f32;
-            Some(perceptual_quantizer_nits(code.min(1.0)))
         }
-        HdrTransfer::HybridLogGamma => Some(1000.0),
+        let bin = ((maximum_code.clamp(0.0, 1.0) * (BINS - 1) as f32) as usize).min(BINS - 1);
+        histogram[bin] += 1;
+        pixel_count += 1;
     }
+    if pixel_count == 0 {
+        return None;
+    }
+    let threshold = (u64::from(pixel_count) * 999 / 1000) as u32;
+    let mut accumulated = 0u32;
+    let mut percentile_bin = BINS - 1;
+    for (bin, count) in histogram.iter().enumerate() {
+        accumulated += count;
+        if accumulated >= threshold {
+            percentile_bin = bin;
+            break;
+        }
+    }
+    let code = (percentile_bin as f32 + 1.0) / BINS as f32;
+    Some(perceptual_quantizer_nits(code.min(1.0)))
 }
 
 /// Peak-scan only: negatives, subnormals, and non-finite values map to 0.
@@ -915,7 +897,7 @@ fn decode_animation(
         icc_profile,
         exif: None,
         storage: PixelStorage::Bgra8,
-        hdr_content: None,
+        peak_luminance_nits: None,
         frames,
     })
 }
@@ -1217,7 +1199,7 @@ fn decode_apng(path: &Path, format_name: &'static str) -> Result<DecodedImage, D
         icc_profile,
         exif: None,
         storage: PixelStorage::Bgra8,
-        hdr_content: None,
+        peak_luminance_nits: None,
         frames,
     })
 }
@@ -1310,7 +1292,7 @@ fn decode_svg(path: &Path, format_name: &'static str) -> Result<DecodedImage, De
         icc_profile: None,
         exif: None,
         storage: PixelStorage::Bgra8,
-        hdr_content: None,
+        peak_luminance_nits: None,
         frames: vec![Frame {
             pixels,
             delay_milliseconds: 0,
