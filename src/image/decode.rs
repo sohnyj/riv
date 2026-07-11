@@ -70,7 +70,6 @@ pub struct ExifInfo {
     pub max_aperture: Option<f64>,
     pub metering_mode: Option<u32>,
     pub flash: Option<u32>,
-    pub focal_length_35mm: Option<u32>,
 }
 
 impl ExifInfo {
@@ -87,7 +86,6 @@ impl ExifInfo {
             || self.max_aperture.is_some()
             || self.metering_mode.is_some()
             || self.flash.is_some()
-            || self.focal_length_35mm.is_some()
     }
 }
 
@@ -1030,7 +1028,6 @@ fn read_exif(frame: &IWICBitmapFrameDecode) -> Option<ExifInfo> {
         max_aperture: query_f64(&reader, w!("System.Photo.MaxAperture")),
         metering_mode: query_u32(&reader, w!("System.Photo.MeteringMode")),
         flash: query_u32(&reader, w!("System.Photo.Flash")),
-        focal_length_35mm: query_u32(&reader, w!("System.Photo.FocalLengthInFilm")),
     };
     information.any_present().then_some(information)
 }

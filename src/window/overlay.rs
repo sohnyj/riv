@@ -360,9 +360,6 @@ fn append_exif_lines(lines: &mut Vec<String>, exif: &crate::image::decode::ExifI
         }
         lines.push(format!("Flash mode: {text}"));
     }
-    if let Some(focal_35mm) = exif.focal_length_35mm {
-        lines.push(format!("Focal length (35mm): {focal_35mm}"));
-    }
 }
 
 fn trim_number(value: f64, decimals: usize) -> String {
