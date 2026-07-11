@@ -284,26 +284,22 @@ pub fn build_info_text(
     let file_name = path
         .file_name()
         .map_or_else(String::new, |name| name.to_string_lossy().into_owned());
+    // 필드 순서 = 파일명/Format/Size/Resolution/Path/Modified (2026-07-11 조정,
+    // Ratio 제거) — EXIF 확장은 그 뒤
+    let megapixels = f64::from(image.width) * f64::from(image.height) / 1_000_000.0;
     let mut lines = vec![
         file_name,
         format!("Format: {}", image.format_name),
-        format!("Path: {}", path.display()),
         format!("Size: {}", format_file_size(file_size)),
+        format!(
+            "Resolution: {} x {} ({megapixels:.1} MP)",
+            image.width, image.height
+        ),
+        format!("Path: {}", path.display()),
     ];
     if let Some(modified) = modified {
         lines.push(format!("Modified: {}", format_locale_datetime(modified)));
     }
-    let megapixels = f64::from(image.width) * f64::from(image.height) / 1_000_000.0;
-    lines.push(format!(
-        "Resolution: {} x {} ({megapixels:.1} MP)",
-        image.width, image.height
-    ));
-    let divisor = greatest_common_divisor(image.width.max(1), image.height.max(1));
-    lines.push(format!(
-        "Ratio: {}:{}",
-        image.width.max(1) / divisor,
-        image.height.max(1) / divisor
-    ));
     if image.frames.len() > 1 {
         lines.push(format!("Frames: {}", image.frames.len()));
     }
@@ -446,13 +442,6 @@ fn group_thousands(value: u64) -> String {
         grouped.push(digit);
     }
     grouped
-}
-
-fn greatest_common_divisor(mut a: u32, mut b: u32) -> u32 {
-    while b != 0 {
-        (a, b) = (b, a % b);
-    }
-    a.max(1)
 }
 
 /// 수정일시 로캘 포맷 (SPEC §3.6) — OS 로캘 API 위임 (P15)
