@@ -1242,6 +1242,9 @@ fn main() -> Result<()> {
         return Ok(());
     }
 
+    // 다크 컨텍스트 메뉴 — 첫 메뉴 생성 전 프로세스 전역 1회 (SPEC §6.1, R10 예외)
+    window::menu_theme::enable_dark_menus();
+
     // 실행 인자 = 열 파일 경로 하나 (SPEC §6.5 — CLI 옵션 없음, 실행마다 새 프로세스)
     let argument_path = std::env::args_os().nth(1).map(std::path::PathBuf::from);
 

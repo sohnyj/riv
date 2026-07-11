@@ -1,5 +1,6 @@
 pub mod context_menu;
 pub mod dwm;
+pub mod menu_theme;
 pub mod overlay;
 
 use windows::Win32::Foundation::RECT;
