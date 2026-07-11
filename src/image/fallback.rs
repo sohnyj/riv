@@ -11,7 +11,8 @@ use std::os::windows::ffi::OsStrExt;
 use std::path::Path;
 
 use super::decode::{
-    DecodeError, DecodedImage, Frame, blend_over, clear_rectangle, copy_rectangle, fallback_error,
+    DecodeError, DecodedImage, Frame, PixelStorage, blend_over, clear_rectangle, copy_rectangle,
+    fallback_error,
 };
 
 // ── 애니메이션 WebP — libwebp + libwebpdemux (SPEC §10, WIC 애니 미지원 확인) ──
@@ -184,6 +185,8 @@ fn compose_webp_frames(
         format_name,
         icc_profile: None,
         exif: None,
+        storage: PixelStorage::Bgra8,
+        peak_luminance_nits: None,
         frames,
     })
 }
@@ -270,6 +273,8 @@ pub fn decode_exr(path: &Path, format_name: &'static str) -> Result<DecodedImage
         format_name,
         icc_profile: None,
         exif: None,
+        storage: PixelStorage::Bgra8,
+        peak_luminance_nits: None,
         frames: vec![Frame {
             pixels,
             delay_milliseconds: 0,
@@ -469,6 +474,8 @@ fn decode_heif_primary_image(
         format_name,
         icc_profile,
         exif: None,
+        storage: PixelStorage::Bgra8,
+        peak_luminance_nits: None,
         frames: vec![Frame {
             pixels,
             delay_milliseconds: 0,

@@ -12,12 +12,13 @@ use std::sync::OnceLock;
 
 use windows::Win32::Foundation::{GENERIC_READ, WINCODEC_ERR_COMPONENTNOTFOUND};
 use windows::Win32::Graphics::Imaging::{
-    CLSID_WICImagingFactory, GUID_WICPixelFormat32bppPBGRA, IWICBitmapDecoder,
-    IWICBitmapFrameDecode, IWICBitmapSource, IWICColorContext, IWICImagingFactory,
-    IWICMetadataQueryReader, WICBitmapDitherTypeNone, WICBitmapInterpolationModeFant,
-    WICBitmapPaletteTypeCustom, WICBitmapTransformFlipHorizontal, WICBitmapTransformFlipVertical,
-    WICBitmapTransformOptions, WICBitmapTransformRotate90, WICBitmapTransformRotate180,
-    WICBitmapTransformRotate270, WICColorContextProfile, WICDecodeMetadataCacheOnDemand,
+    CLSID_WICImagingFactory, GUID_WICPixelFormat32bppPBGRA, GUID_WICPixelFormat64bppPRGBAHalf,
+    IWICBitmapDecoder, IWICBitmapFrameDecode, IWICBitmapSource, IWICColorContext,
+    IWICImagingFactory, IWICMetadataQueryReader, IWICPixelFormatInfo, WICBitmapDitherTypeNone,
+    WICBitmapInterpolationModeFant, WICBitmapPaletteTypeCustom, WICBitmapTransformFlipHorizontal,
+    WICBitmapTransformFlipVertical, WICBitmapTransformOptions, WICBitmapTransformRotate90,
+    WICBitmapTransformRotate180, WICBitmapTransformRotate270, WICColorContextProfile,
+    WICDecodeMetadataCacheOnDemand,
 };
 use windows::Win32::System::Com::StructuredStorage::{
     PROPVARIANT, PropVariantClear, PropVariantToDouble, PropVariantToFileTime,
@@ -26,11 +27,29 @@ use windows::Win32::System::Com::StructuredStorage::{
 use windows::Win32::System::Com::{CLSCTX_INPROC_SERVER, CoCreateInstance};
 use windows::core::{HSTRING, Interface, PCWSTR, w};
 
-/// 디코드 결과 프레임 — premultiplied BGRA8, 캔버스 전체로 합성 완료 (SPEC §3.1·§4.6)
+/// 디코드 결과 프레임 — `PixelStorage` 형식, 캔버스 전체로 합성 완료 (SPEC §3.1·§4.6)
 pub struct Frame {
     pub pixels: Vec<u8>,
     /// 정지 이미지는 0 — 애니메이션 스케줄러가 소비 (SPEC §4.6)
     pub delay_milliseconds: u32,
+}
+
+/// 소스 픽셀 저장 형식 (SPEC §7 Q6) — 렌더러의 비트맵 포맷·스트라이드 결정
+#[derive(Clone, Copy, PartialEq, Eq)]
+pub enum PixelStorage {
+    /// premultiplied BGRA 8bpc — 기본 (SPEC §3.1)
+    Bgra8,
+    /// premultiplied RGBA FP16 — 고심도 소스 (WIC 64bppPRGBAHalf, Q6 2026-07-11)
+    RgbaHalf,
+}
+
+impl PixelStorage {
+    pub fn bytes_per_pixel(self) -> u32 {
+        match self {
+            Self::Bgra8 => 4,
+            Self::RgbaHalf => 8,
+        }
+    }
 }
 
 pub struct DecodedImage {
@@ -46,6 +65,10 @@ pub struct DecodedImage {
     pub icc_profile: Option<Vec<u8>>,
     /// EXIF 촬영 정보 (SPEC §3.6 확장, 2026-07-11) — WIC 경로만, 전 필드 부재면 None
     pub exif: Option<ExifInfo>,
+    pub storage: PixelStorage,
+    /// HDR 소스(PQ/HLG)의 콘텐츠 피크 휘도(nits) — HdrToneMap 게이트·InputMaxLuminance
+    /// (SPEC §7 Q6). SDR 색공간 소스는 고심도여도 None(톤맵 비대상)
+    pub peak_luminance_nits: Option<f32>,
     pub frames: Vec<Frame>,
 }
 
@@ -484,7 +507,7 @@ pub fn decode_raw_preview(path: &Path) -> Option<DecodedImage> {
         let (width, height) = source_size(&source)?;
         let (source, pixel_width, pixel_height) =
             downscale_to_device_limit(factory, source, width, height)?;
-        let pixels = copy_pixels(&source, pixel_width, pixel_height)?;
+        let pixels = copy_pixels(&source, pixel_width, pixel_height, 4)?;
         Ok(DecodedFrames {
             width,
             height,
@@ -492,6 +515,8 @@ pub fn decode_raw_preview(path: &Path) -> Option<DecodedImage> {
             pixel_height,
             icc_profile,
             exif,
+            storage: PixelStorage::Bgra8,
+            peak_luminance_nits: None,
             frames: vec![Frame {
                 pixels,
                 delay_milliseconds: 0,
@@ -507,6 +532,8 @@ pub fn decode_raw_preview(path: &Path) -> Option<DecodedImage> {
         format_name: "RAW",
         icc_profile: decoded.icc_profile,
         exif: decoded.exif,
+        storage: decoded.storage,
+        peak_luminance_nits: decoded.peak_luminance_nits,
         frames: decoded.frames,
     })
 }
@@ -538,6 +565,8 @@ struct DecodedFrames {
     pixel_height: u32,
     icc_profile: Option<Vec<u8>>,
     exif: Option<ExifInfo>,
+    storage: PixelStorage,
+    peak_luminance_nits: Option<f32>,
     frames: Vec<Frame>,
 }
 
@@ -576,6 +605,8 @@ fn decode_with_wic(
         format_name,
         icc_profile: decoded.icc_profile,
         exif: decoded.exif,
+        storage: decoded.storage,
+        peak_luminance_nits: decoded.peak_luminance_nits,
         frames: decoded.frames,
     })
 }
@@ -616,12 +647,36 @@ fn decode_single_frame(
     let orientation = exif_orientation(&frame);
     let icc_profile = icc_profile_bytes(factory, &frame);
     let exif = read_exif(&frame);
-    let source = convert_to_pbgra(factory, &frame.cast()?)?;
+    // 고심도(채널 8비트 초과) 소스는 FP16으로 (SPEC §7 Q6) — 변환 실패 시 8bpc 폴백
+    let (source, storage) = if frame_exceeds_8_bits_per_channel(factory, &frame) {
+        match convert_pixel_format(factory, &frame.cast()?, &GUID_WICPixelFormat64bppPRGBAHalf) {
+            Ok(source) => (source, PixelStorage::RgbaHalf),
+            Err(_) => (
+                convert_to_pbgra(factory, &frame.cast()?)?,
+                PixelStorage::Bgra8,
+            ),
+        }
+    } else {
+        (
+            convert_to_pbgra(factory, &frame.cast()?)?,
+            PixelStorage::Bgra8,
+        )
+    };
     let source = apply_orientation(factory, source, orientation)?;
     let (width, height) = source_size(&source)?;
     let (source, pixel_width, pixel_height) =
         downscale_to_device_limit(factory, source, width, height)?;
-    let pixels = copy_pixels(&source, pixel_width, pixel_height)?;
+    let pixels = copy_pixels(
+        &source,
+        pixel_width,
+        pixel_height,
+        storage.bytes_per_pixel(),
+    )?;
+    // HDR(PQ/HLG) 소스만 피크 휘도 산출 — HdrToneMap 게이트 (SPEC §7 Q6)
+    let peak_luminance_nits = (storage == PixelStorage::RgbaHalf)
+        .then(|| icc_profile.as_deref().and_then(icc_cicp_transfer_function))
+        .flatten()
+        .and_then(|transfer| peak_luminance_from_half_pixels(&pixels, transfer));
     Ok(DecodedFrames {
         width,
         height,
@@ -629,11 +684,102 @@ fn decode_single_frame(
         pixel_height,
         icc_profile,
         exif,
+        storage,
+        peak_luminance_nits,
         frames: vec![Frame {
             pixels,
             delay_milliseconds: 0,
         }],
     })
+}
+
+/// 프레임 네이티브 픽셀 포맷의 채널당 비트 수가 8을 넘는지 — FP16 디코드 대상 판별
+/// (SPEC §7 Q6). 조회 실패는 false(기본 8bpc 경로).
+fn frame_exceeds_8_bits_per_channel(
+    factory: &IWICImagingFactory,
+    frame: &IWICBitmapFrameDecode,
+) -> bool {
+    (|| -> windows::core::Result<bool> {
+        let format = unsafe { frame.GetPixelFormat()? };
+        let information: IWICPixelFormatInfo =
+            unsafe { factory.CreateComponentInfo(&format)? }.cast()?;
+        let bits_per_pixel = unsafe { information.GetBitsPerPixel()? };
+        let channel_count = unsafe { information.GetChannelCount()? };
+        Ok(channel_count > 0 && bits_per_pixel > channel_count * 8)
+    })()
+    .unwrap_or(false)
+}
+
+/// ICC 'cicp' 태그(ICC 4.4)의 전달 함수 코드 — 16=PQ, 18=HLG (BT.2100).
+/// 태그 부재·비 HDR 전달 함수는 None (톤맵 비대상)
+fn icc_cicp_transfer_function(icc: &[u8]) -> Option<u8> {
+    const TRANSFER_PQ: u8 = 16;
+    const TRANSFER_HLG: u8 = 18;
+    let read_u32 = |offset: usize| -> Option<u32> {
+        Some(u32::from_be_bytes(
+            icc.get(offset..offset + 4)?.try_into().ok()?,
+        ))
+    };
+    let tag_count = read_u32(128)? as usize;
+    for index in 0..tag_count {
+        let entry = 132 + index * 12;
+        if icc.get(entry..entry + 4)? != b"cicp" {
+            continue;
+        }
+        let offset = read_u32(entry + 4)? as usize;
+        // 태그 데이터 = 타입 시그니처(4) + 예약(4) + 원색·전달·행렬·범위 각 1바이트
+        if icc.get(offset..offset + 4)? != b"cicp" {
+            return None;
+        }
+        let transfer = *icc.get(offset + 9)?;
+        return matches!(transfer, TRANSFER_PQ | TRANSFER_HLG).then_some(transfer);
+    }
+    None
+}
+
+/// FP16 픽셀에서 콘텐츠 피크 휘도(nits) — PQ는 최대 코드값의 EOTF 환산(정확),
+/// HLG는 공칭 피크 1000 nits (BT.2100)
+fn peak_luminance_from_half_pixels(pixels: &[u8], transfer: u8) -> Option<f32> {
+    match transfer {
+        16 => {
+            let mut maximum_code = 0.0f32;
+            for pixel in pixels.chunks_exact(8) {
+                for channel in 0..3 {
+                    let bits = u16::from_le_bytes([pixel[channel * 2], pixel[channel * 2 + 1]]);
+                    let code = half_to_f32(bits);
+                    if code > maximum_code {
+                        maximum_code = code;
+                    }
+                }
+            }
+            Some(perceptual_quantizer_nits(maximum_code.min(1.0)))
+        }
+        18 => Some(1000.0),
+        _ => None,
+    }
+}
+
+/// FP16 → f32 (피크 스캔 전용) — 음수·서브노멀·Inf/NaN은 피크 후보가 아니므로 0
+fn half_to_f32(bits: u16) -> f32 {
+    let exponent = (bits >> 10) & 0x1F;
+    if bits & 0x8000 != 0 || exponent == 0 || exponent == 31 {
+        return 0.0;
+    }
+    let mantissa = u32::from(bits & 0x03FF);
+    f32::from_bits(((u32::from(exponent) + 112) << 23) | (mantissa << 13))
+}
+
+/// PQ(SMPTE ST 2084) EOTF — 인코딩 코드값 [0,1] → 절대 휘도(nits)
+fn perceptual_quantizer_nits(code: f32) -> f32 {
+    const M1: f32 = 2610.0 / 16384.0;
+    const M2: f32 = 2523.0 / 4096.0 * 128.0;
+    const C1: f32 = 3424.0 / 4096.0;
+    const C2: f32 = 2413.0 / 4096.0 * 32.0;
+    const C3: f32 = 2392.0 / 4096.0 * 32.0;
+    let power = code.max(0.0).powf(1.0 / M2);
+    let numerator = (power - C1).max(0.0);
+    let denominator = C2 - C3 * power;
+    10000.0 * (numerator / denominator).powf(1.0 / M1)
 }
 
 /// 임베디드 색 프로파일(ICC 바이트) 추출 (SPEC §7) — 프로파일 타입 컨텍스트만 대상,
@@ -755,7 +901,7 @@ fn decode_animation(
         if canvas.is_empty() {
             canvas = vec![0u8; canvas_width as usize * canvas_height as usize * 4];
         }
-        let frame_pixels = copy_pixels(&source, frame_width, frame_height)?;
+        let frame_pixels = copy_pixels(&source, frame_width, frame_height, 4)?;
 
         let restore_previous = (metadata.disposal == 3).then(|| canvas.clone());
         blend_over(
@@ -793,6 +939,8 @@ fn decode_animation(
         pixel_height: canvas_height,
         icc_profile,
         exif: None,
+        storage: PixelStorage::Bgra8,
+        peak_luminance_nits: None,
         frames,
     })
 }
@@ -857,11 +1005,19 @@ fn convert_to_pbgra(
     factory: &IWICImagingFactory,
     source: &IWICBitmapSource,
 ) -> windows::core::Result<IWICBitmapSource> {
+    convert_pixel_format(factory, source, &GUID_WICPixelFormat32bppPBGRA)
+}
+
+fn convert_pixel_format(
+    factory: &IWICImagingFactory,
+    source: &IWICBitmapSource,
+    target: &windows::core::GUID,
+) -> windows::core::Result<IWICBitmapSource> {
     let converter = unsafe { factory.CreateFormatConverter()? };
     unsafe {
         converter.Initialize(
             source,
-            &GUID_WICPixelFormat32bppPBGRA,
+            target,
             WICBitmapDitherTypeNone,
             None,
             0.0,
@@ -1102,6 +1258,8 @@ fn decode_apng(path: &Path, format_name: &'static str) -> Result<DecodedImage, D
         format_name,
         icc_profile,
         exif: None,
+        storage: PixelStorage::Bgra8,
+        peak_luminance_nits: None,
         frames,
     })
 }
@@ -1198,6 +1356,8 @@ fn decode_svg(path: &Path, format_name: &'static str) -> Result<DecodedImage, De
         format_name,
         icc_profile: None,
         exif: None,
+        storage: PixelStorage::Bgra8,
+        peak_luminance_nits: None,
         frames: vec![Frame {
             pixels,
             delay_milliseconds: 0,
@@ -1251,8 +1411,9 @@ fn copy_pixels(
     source: &IWICBitmapSource,
     width: u32,
     height: u32,
+    bytes_per_pixel: u32,
 ) -> windows::core::Result<Vec<u8>> {
-    let stride = width * 4;
+    let stride = width * bytes_per_pixel;
     let mut pixels = vec![0u8; stride as usize * height as usize];
     unsafe { source.CopyPixels(std::ptr::null(), stride, &mut pixels)? };
     Ok(pixels)

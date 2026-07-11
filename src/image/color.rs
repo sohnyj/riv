@@ -59,13 +59,28 @@ pub fn sdr_white_boost(window: HWND) -> f32 {
 /// 스왑체인 모드 매칭(A안)의 분기 기준 — 렌더러 구축·재구축 시 조회 (SPEC §7).
 pub fn monitor_is_hdr(window: HWND) -> bool {
     use windows::Win32::Graphics::Dxgi::Common::DXGI_COLOR_SPACE_RGB_FULL_G2084_NONE_P2020;
+    window_output_description(window).is_some_and(|description| {
+        description.ColorSpace == DXGI_COLOR_SPACE_RGB_FULL_G2084_NONE_P2020
+    })
+}
+
+/// 창 모니터의 최대 휘도(nits) — HdrToneMap의 OutputMaxLuminance (SPEC §7 Q6).
+/// 조회 실패(wine 등)는 None — 호출자가 모드별 기본값을 정한다.
+pub fn display_maximum_luminance(window: HWND) -> Option<f32> {
+    window_output_description(window)
+        .map(|description| description.MaxLuminance)
+        .filter(|luminance| *luminance > 0.0)
+}
+
+/// 창이 있는 모니터의 DXGI 출력 정보 (IDXGIOutput6::GetDesc1)
+fn window_output_description(
+    window: HWND,
+) -> Option<windows::Win32::Graphics::Dxgi::DXGI_OUTPUT_DESC1> {
     use windows::Win32::Graphics::Dxgi::{CreateDXGIFactory1, IDXGIFactory1, IDXGIOutput6};
     use windows::core::Interface;
 
     let monitor = unsafe { MonitorFromWindow(window, MONITOR_DEFAULTTONEAREST) };
-    let Ok(factory) = (unsafe { CreateDXGIFactory1::<IDXGIFactory1>() }) else {
-        return false;
-    };
+    let factory = unsafe { CreateDXGIFactory1::<IDXGIFactory1>() }.ok()?;
     let mut adapter_index = 0;
     while let Ok(adapter) = unsafe { factory.EnumAdapters1(adapter_index) } {
         adapter_index += 1;
@@ -78,14 +93,13 @@ pub fn monitor_is_hdr(window: HWND) -> bool {
             if description.Monitor != monitor {
                 continue;
             }
-            return output.cast::<IDXGIOutput6>().is_ok_and(|output6| {
-                unsafe { output6.GetDesc1() }.is_ok_and(|description1| {
-                    description1.ColorSpace == DXGI_COLOR_SPACE_RGB_FULL_G2084_NONE_P2020
-                })
-            });
+            return output
+                .cast::<IDXGIOutput6>()
+                .ok()
+                .and_then(|output6| unsafe { output6.GetDesc1() }.ok());
         }
     }
-    false
+    None
 }
 
 fn query_sdr_white_boost(window: HWND) -> Option<f32> {

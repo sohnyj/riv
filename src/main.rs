@@ -134,11 +134,13 @@ struct Application {
 impl Application {
     fn new(window: HWND, initial_path: Option<&Path>) -> Result<Self> {
         let (width, height) = client_size(window);
+        let hdr_mode = color::monitor_is_hdr(window);
         let renderer = Renderer::new(
             window,
             width.max(1),
             height.max(1),
-            color::monitor_is_hdr(window),
+            hdr_mode,
+            display_maximum_luminance(window, hdr_mode),
         )?;
         let device_pixel_ratio = unsafe { GetDpiForWindow(window) } as f32 / 96.0;
         let settings = SettingsFile::load();
@@ -362,6 +364,8 @@ impl Application {
             image.pixel_height,
             (image.width, image.height),
             image.icc_profile.as_deref(),
+            image.storage,
+            image.peak_luminance_nits,
         );
         self.display = Some(image);
         self.displayed_path = Some(path.clone());
@@ -446,6 +450,8 @@ impl Application {
             image.pixel_height,
             (image.width, image.height),
             image.icc_profile.as_deref(),
+            image.storage,
+            image.peak_luminance_nits,
         );
         if !paused {
             unsafe { SetTimer(Some(window), ANIMATION_TIMER, delay, None) };
@@ -486,11 +492,13 @@ impl Application {
     /// 디바이스 로스트 시 전체 재구축 (SPEC §3.4)
     fn rebuild_renderer(&mut self, window: HWND) -> Result<()> {
         let (width, height) = client_size(window);
+        let hdr_mode = color::monitor_is_hdr(window);
         self.renderer = Renderer::new(
             window,
             width.max(1),
             height.max(1),
-            color::monitor_is_hdr(window),
+            hdr_mode,
+            display_maximum_luminance(window, hdr_mode),
         )?;
         self.renderer.set_sdr_white_boost(self.sdr_white_boost);
         if let Some(image) = &self.display {
@@ -505,6 +513,8 @@ impl Application {
                 image.pixel_height,
                 (image.width, image.height),
                 image.icc_profile.as_deref(),
+                image.storage,
+                image.peak_luminance_nits,
             )?;
         }
         Ok(())
@@ -673,6 +683,12 @@ fn client_size(window: HWND) -> (u32, u32) {
         (bounds.right - bounds.left).max(0) as u32,
         (bounds.bottom - bounds.top).max(0) as u32,
     )
+}
+
+/// 창 모니터의 최대 휘도(nits) — HdrToneMap 목표 (SPEC §7 Q6).
+/// 조회 실패(wine 등)는 모드별 통상값: HDR 1000 / SDR 270
+fn display_maximum_luminance(window: HWND, hdr_mode: bool) -> f32 {
+    color::display_maximum_luminance(window).unwrap_or(if hdr_mode { 1000.0 } else { 270.0 })
 }
 
 /// 커서가 뷰(클라이언트) 위에 있으면 중심 기준 오프셋 (SPEC §3.2 커서 앵커)
