@@ -72,6 +72,18 @@ fn main() {
 
     println!("cargo:rustc-link-arg-bins={}", compiled_resource.display());
 
+    // xwin CRT/SDK import libraries; override the splat location with XWIN_ROOT.
+    println!("cargo:rerun-if-env-changed=XWIN_ROOT");
+    let xwin_root = env::var("XWIN_ROOT").unwrap_or_else(|_| {
+        let home = env::var("HOME")
+            .or_else(|_| env::var("USERPROFILE"))
+            .expect("HOME or USERPROFILE set");
+        format!("{home}/.xwin")
+    });
+    for library_directory in ["crt/lib/x86_64", "sdk/lib/um/x86_64", "sdk/lib/ucrt/x86_64"] {
+        println!("cargo:rustc-link-search=native={xwin_root}/{library_directory}");
+    }
+
     // Link every static library produced by deps/build_deps.sh.
     let manifest_directory = PathBuf::from(env::var("CARGO_MANIFEST_DIR").unwrap());
     let codec_library_directory = manifest_directory.join("deps/prefix/lib");
