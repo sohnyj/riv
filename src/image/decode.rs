@@ -5,8 +5,9 @@ use std::fs::File;
 use std::io::{BufReader, Read};
 use std::path::Path;
 use std::sync::OnceLock;
+use std::sync::atomic::{AtomicBool, Ordering};
 
-use windows::Win32::Foundation::{GENERIC_READ, WINCODEC_ERR_COMPONENTNOTFOUND};
+use windows::Win32::Foundation::{E_ABORT, GENERIC_READ, WINCODEC_ERR_COMPONENTNOTFOUND};
 use windows::Win32::Graphics::Imaging::{
     CLSID_WICImagingFactory, GUID_WICPixelFormat32bppPBGRA, GUID_WICPixelFormat64bppPRGBAHalf,
     GUID_WICPixelFormat64bppRGBA, IWICBitmapDecoder, IWICBitmapFrameDecode, IWICBitmapSource,
@@ -15,7 +16,7 @@ use windows::Win32::Graphics::Imaging::{
     WICBitmapTransformFlipHorizontal, WICBitmapTransformFlipVertical, WICBitmapTransformOptions,
     WICBitmapTransformRotate90, WICBitmapTransformRotate180, WICBitmapTransformRotate270,
     WICColorContextProfile, WICDecodeMetadataCacheOnDemand,
-    WICPixelFormatNumericRepresentationFloat,
+    WICPixelFormatNumericRepresentationFloat, WICRect,
 };
 use windows::Win32::System::Com::StructuredStorage::{
     PROPVARIANT, PropVariantClear, PropVariantToDouble, PropVariantToFileTime,
@@ -101,6 +102,20 @@ pub struct DecodeError {
     pub code: i32,
     pub message: String,
     pub store_extension: Option<&'static str>,
+}
+
+impl DecodeError {
+    pub fn cancelled() -> Self {
+        Self {
+            code: E_ABORT.0,
+            message: "cancelled".to_string(),
+            store_extension: None,
+        }
+    }
+
+    pub fn is_cancelled(&self) -> bool {
+        self.code == E_ABORT.0
+    }
 }
 
 impl From<windows::core::Error> for DecodeError {
@@ -382,27 +397,31 @@ fn read_header(path: &Path) -> Option<Vec<u8>> {
 }
 
 /// Decode entry point; runs on an MTA decode worker.
-pub fn decode_file(path: &Path) -> Result<DecodedImage, DecodeError> {
+pub fn decode_file(path: &Path, cancellation: &AtomicBool) -> Result<DecodedImage, DecodeError> {
+    if cancellation.load(Ordering::Relaxed) {
+        return Err(DecodeError::cancelled());
+    }
     let descriptor = descriptor_for_path(path);
     let format_name = descriptor.map_or("Unknown", |descriptor| descriptor.name);
     let semantics = descriptor.map_or(&FrameSemantics::Single, |descriptor| &descriptor.semantics);
     let adapter = descriptor.map_or(&Adapter::Wic, |descriptor| &descriptor.adapter);
     match adapter {
-        Adapter::Wic | Adapter::WicRawTwoStage => decode_with_wic(path, format_name, semantics)
-            .map_err(|mut error| {
+        Adapter::Wic | Adapter::WicRawTwoStage => {
+            decode_with_wic(path, format_name, semantics, cancellation).map_err(|mut error| {
                 if error.code == WINCODEC_ERR_COMPONENTNOTFOUND.0
                     && let Some(descriptor) = descriptor
                 {
                     error.store_extension = descriptor.store_extension;
                 }
                 error
-            }),
-        Adapter::Apng => decode_apng(path, format_name),
+            })
+        }
+        Adapter::Apng => decode_apng(path, format_name, cancellation),
         Adapter::Svg => decode_svg(path, format_name),
         Adapter::WebPAnimation => super::fallback::decode_webp_animation(path, format_name),
         Adapter::Exr => super::fallback::decode_exr(path, format_name),
         Adapter::HeifWithWicPreferred => {
-            decode_with_wic(path, format_name, semantics).or_else(|error| {
+            decode_with_wic(path, format_name, semantics, cancellation).or_else(|error| {
                 if error.code == WINCODEC_ERR_COMPONENTNOTFOUND.0 {
                     super::fallback::decode_heif(path, format_name)
                 } else {
@@ -418,7 +437,7 @@ pub fn is_raw_two_stage(path: &Path) -> bool {
         .is_some_and(|descriptor| matches!(descriptor.adapter, Adapter::WicRawTwoStage))
 }
 
-pub fn decode_raw_preview(path: &Path) -> Option<DecodedImage> {
+pub fn decode_raw_preview(path: &Path, cancellation: &AtomicBool) -> Option<DecodedImage> {
     let decoded = with_wic_factory(|factory| {
         let decoder = unsafe {
             factory.CreateDecoderFromFilename(
@@ -441,7 +460,7 @@ pub fn decode_raw_preview(path: &Path) -> Option<DecodedImage> {
         let (width, height) = source_size(&source)?;
         let (source, pixel_width, pixel_height) =
             downscale_to_device_limit(factory, source, width, height)?;
-        let pixels = copy_pixels(&source, pixel_width, pixel_height, 4)?;
+        let pixels = copy_pixels(&source, pixel_width, pixel_height, 4, cancellation)?;
         Ok(DecodedFrames {
             width,
             height,
@@ -506,6 +525,7 @@ fn decode_with_wic(
     path: &Path,
     format_name: &'static str,
     semantics: &FrameSemantics,
+    cancellation: &AtomicBool,
 ) -> Result<DecodedImage, DecodeError> {
     let decoded = with_wic_factory(|factory| {
         let decoder = unsafe {
@@ -519,12 +539,12 @@ fn decode_with_wic(
         let frame_count = unsafe { decoder.GetFrameCount()? }.max(1);
         match semantics {
             FrameSemantics::Animation if frame_count > 1 => {
-                decode_animation(factory, &decoder, frame_count)
+                decode_animation(factory, &decoder, frame_count, cancellation)
             }
             FrameSemantics::SizeVariants if frame_count > 1 => {
-                decode_largest_frame(factory, &decoder, frame_count)
+                decode_largest_frame(factory, &decoder, frame_count, cancellation)
             }
-            _ => decode_single_frame(factory, &decoder, 0),
+            _ => decode_single_frame(factory, &decoder, 0, cancellation),
         }
     })?;
     Ok(DecodedImage {
@@ -570,6 +590,7 @@ fn decode_single_frame(
     factory: &IWICImagingFactory,
     decoder: &IWICBitmapDecoder,
     index: u32,
+    cancellation: &AtomicBool,
 ) -> windows::core::Result<DecodedFrames> {
     let frame = unsafe { decoder.GetFrame(index)? };
     let orientation = exif_orientation(&frame);
@@ -616,6 +637,7 @@ fn decode_single_frame(
         pixel_width,
         pixel_height,
         storage.bytes_per_pixel(),
+        cancellation,
     )?;
     if let Some(encoding) = hdr_encoding {
         linearize_hdr_pixels(&mut pixels, encoding);
@@ -979,6 +1001,7 @@ fn decode_largest_frame(
     factory: &IWICImagingFactory,
     decoder: &IWICBitmapDecoder,
     frame_count: u32,
+    cancellation: &AtomicBool,
 ) -> windows::core::Result<DecodedFrames> {
     let mut largest_index = 0;
     let mut largest_pixels = 0u64;
@@ -991,7 +1014,7 @@ fn decode_largest_frame(
             largest_index = index;
         }
     }
-    decode_single_frame(factory, decoder, largest_index)
+    decode_single_frame(factory, decoder, largest_index, cancellation)
 }
 
 struct FrameMetadata {
@@ -1021,6 +1044,7 @@ fn decode_animation(
     factory: &IWICImagingFactory,
     decoder: &IWICBitmapDecoder,
     frame_count: u32,
+    cancellation: &AtomicBool,
 ) -> windows::core::Result<DecodedFrames> {
     let container_reader = unsafe { decoder.GetMetadataQueryReader() }.ok();
     let container_query = |name: PCWSTR| {
@@ -1035,6 +1059,9 @@ fn decode_animation(
     let mut frames = Vec::with_capacity(frame_count as usize);
     let mut icc_profile = None;
     for index in 0..frame_count {
+        if cancellation.load(Ordering::Relaxed) {
+            return Err(E_ABORT.into());
+        }
         let frame = unsafe { decoder.GetFrame(index)? };
         if index == 0 {
             icc_profile = icc_profile_bytes(factory, &frame);
@@ -1049,7 +1076,7 @@ fn decode_animation(
         if canvas.is_empty() {
             canvas = vec![0u8; canvas_width as usize * canvas_height as usize * 4];
         }
-        let frame_pixels = copy_pixels(&source, frame_width, frame_height, 4)?;
+        let frame_pixels = copy_pixels(&source, frame_width, frame_height, 4, cancellation)?;
 
         let restore_previous = (metadata.disposal == 3).then(|| canvas.clone());
         blend_over(
@@ -1283,7 +1310,11 @@ pub(crate) fn fallback_error(message: impl std::fmt::Display) -> DecodeError {
     }
 }
 
-fn decode_apng(path: &Path, format_name: &'static str) -> Result<DecodedImage, DecodeError> {
+fn decode_apng(
+    path: &Path,
+    format_name: &'static str,
+    cancellation: &AtomicBool,
+) -> Result<DecodedImage, DecodeError> {
     let file = File::open(path).map_err(fallback_error)?;
     let mut decoder = png::Decoder::new(BufReader::new(file));
     decoder.set_transformations(png::Transformations::normalize_to_color8());
@@ -1317,6 +1348,9 @@ fn decode_apng(path: &Path, format_name: &'static str) -> Result<DecodedImage, D
     let mut canvas = vec![0u8; canvas_width as usize * canvas_height as usize * 4];
     let mut frames = Vec::with_capacity(animation_frame_count as usize);
     for index in 0..animation_frame_count {
+        if cancellation.load(Ordering::Relaxed) {
+            return Err(DecodeError::cancelled());
+        }
         if !(index == 0 && (default_image_is_first_frame || !has_animation)) {
             reader.next_frame_info().map_err(fallback_error)?;
         }
@@ -1532,15 +1566,34 @@ fn largest_monitor_long_side() -> u32 {
     if longest > 0 { longest as u32 } else { 1920 }
 }
 
+/// Copies in strips so a cancelled decode can stop between them.
 fn copy_pixels(
     source: &IWICBitmapSource,
     width: u32,
     height: u32,
     bytes_per_pixel: u32,
+    cancellation: &AtomicBool,
 ) -> windows::core::Result<Vec<u8>> {
+    const STRIP_ROWS: u32 = 256;
     let stride = width * bytes_per_pixel;
     let mut pixels = vec![0u8; stride as usize * height as usize];
-    unsafe { source.CopyPixels(std::ptr::null(), stride, &mut pixels)? };
+    let mut row = 0;
+    while row < height {
+        if cancellation.load(Ordering::Relaxed) {
+            return Err(E_ABORT.into());
+        }
+        let rows = STRIP_ROWS.min(height - row);
+        let rectangle = WICRect {
+            X: 0,
+            Y: row as i32,
+            Width: width as i32,
+            Height: rows as i32,
+        };
+        let start = (row * stride) as usize;
+        let end = start + (rows * stride) as usize;
+        unsafe { source.CopyPixels(&raw const rectangle, stride, &mut pixels[start..end])? };
+        row += rows;
+    }
     Ok(pixels)
 }
 

@@ -5,6 +5,7 @@ use std::ffi::c_void;
 use std::os::windows::ffi::OsStrExt;
 use std::os::windows::fs::MetadataExt;
 use std::path::{Path, PathBuf};
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Condvar, Mutex};
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
@@ -19,12 +20,12 @@ use super::decode::{self, DecodeError, DecodedImage};
 
 pub const WM_APP_DECODE_COMPLETE: u32 = WM_APP + 1;
 
+/// Folder listings older than this are rescanned before navigation.
+const FOLDER_LIST_FRESHNESS: Duration = Duration::from_secs(3);
+
 /// Preload mode 0/1/2 -> (radius, cache budget in bytes).
 const PRELOAD_SPECIFICATIONS: [(usize, u64); 3] =
     [(0, 0), (1, 250 * 1024 * 1024), (4, 2 * 1024 * 1024 * 1024)];
-
-/// Folder listings older than this are rescanned before navigation.
-const FOLDER_LIST_FRESHNESS: Duration = Duration::from_secs(3);
 
 #[derive(Clone, PartialEq)]
 pub struct CoreOptions {
@@ -103,7 +104,7 @@ pub struct ImageCore {
     folder_scanned_at: Option<Instant>,
     /// Path awaiting display; replacing it invalidates the previous load.
     pending_display: Option<PathBuf>,
-    in_flight: HashSet<PathBuf>,
+    in_flight: HashMap<PathBuf, Arc<AtomicBool>>,
     cache: HashMap<PathBuf, CacheEntry>,
     pub current: Option<CurrentImage>,
     pub load_error: Option<(PathBuf, DecodeError)>,
@@ -118,7 +119,7 @@ impl ImageCore {
             entries: Vec::new(),
             folder_scanned_at: None,
             pending_display: None,
-            in_flight: HashSet::new(),
+            in_flight: HashMap::new(),
             cache: HashMap::new(),
             current: None,
             load_error: None,
@@ -213,12 +214,18 @@ impl ImageCore {
             return true;
         }
         self.pending_display = Some(path.to_path_buf());
-        if self.in_flight.insert(path.to_path_buf()) {
-            self.pool.submit(path.to_path_buf(), file_size, true);
-        } else {
-            // Already queued as a preload: promote it, new loads take priority.
+        if let Some(cancellation) = self.in_flight.get(path) {
+            // Already queued as a preload: revoke any cancellation and promote.
+            cancellation.store(false, Ordering::Relaxed);
             self.pool.promote(path);
+        } else {
+            let cancellation = Arc::new(AtomicBool::new(false));
+            self.in_flight
+                .insert(path.to_path_buf(), cancellation.clone());
+            self.pool
+                .submit(path.to_path_buf(), file_size, cancellation, true);
         }
+        self.cancel_irrelevant_decodes();
         false
     }
 
@@ -287,6 +294,19 @@ impl ImageCore {
             .pending_display
             .as_deref()
             .is_some_and(|pending| paths_equal(pending, &completion.path));
+        if let Err(error) = &completion.result
+            && error.is_cancelled()
+        {
+            // Navigation can return to a path while its decode is cancelling.
+            if is_pending {
+                let cancellation = Arc::new(AtomicBool::new(false));
+                self.in_flight
+                    .insert(completion.path.clone(), cancellation.clone());
+                self.pool
+                    .submit(completion.path, completion.file_size, cancellation, true);
+            }
+            return false;
+        }
         match completion.result {
             Ok(image) => {
                 self.cache.insert(
@@ -410,7 +430,7 @@ impl ImageCore {
                     };
                     let entry = &self.entries[index];
                     if entry.file_size > budget / 2
-                        || self.in_flight.contains(&entry.path)
+                        || self.in_flight.contains_key(&entry.path)
                         || self
                             .cache
                             .get(&entry.path)
@@ -422,12 +442,56 @@ impl ImageCore {
                     {
                         continue;
                     }
-                    self.in_flight.insert(entry.path.clone());
-                    self.pool.submit(entry.path.clone(), entry.file_size, false);
+                    let cancellation = Arc::new(AtomicBool::new(false));
+                    self.in_flight
+                        .insert(entry.path.clone(), cancellation.clone());
+                    self.pool
+                        .submit(entry.path.clone(), entry.file_size, cancellation, false);
                 }
             }
         }
+        self.cancel_irrelevant_decodes();
         self.evict_cache();
+    }
+
+    /// Decodes for paths outside the pending/current preload neighborhood are
+    /// dropped from the queue (no completion follows) or flagged if running.
+    fn cancel_irrelevant_decodes(&mut self) {
+        let mut relevant: HashSet<PathBuf> = HashSet::new();
+        if let Some(pending) = &self.pending_display {
+            relevant.insert(pending.clone());
+        }
+        if let Some(current) = &self.current {
+            relevant.insert(current.path.clone());
+        }
+        let (distance, _) = PRELOAD_SPECIFICATIONS[self.options.preloading_mode.min(2)];
+        let anchor_index = self
+            .navigation_anchor()
+            .as_deref()
+            .and_then(|path| self.position_of(path));
+        if let Some(anchor_index) = anchor_index {
+            let length = self.entries.len();
+            for step in 1..=distance {
+                for direction in [1isize, -1] {
+                    if let Some(index) = neighbor_index(
+                        anchor_index,
+                        step as isize * direction,
+                        length,
+                        self.options.loop_folders_enabled,
+                    ) {
+                        relevant.insert(self.entries[index].path.clone());
+                    }
+                }
+            }
+        }
+        for path in self.pool.remove_queued_except(&relevant) {
+            self.in_flight.remove(&path);
+        }
+        for (path, cancellation) in &self.in_flight {
+            if !relevant.contains(path) {
+                cancellation.store(true, Ordering::Relaxed);
+            }
+        }
     }
 
     /// Evicts entries farthest from the current position until within budget.
@@ -597,6 +661,7 @@ fn format_name_of(path: &Path) -> &'static str {
 struct DecodeJob {
     path: PathBuf,
     file_size: u64,
+    cancellation: Arc<AtomicBool>,
 }
 
 struct PoolShared {
@@ -623,9 +688,19 @@ impl DecodePool {
         Self { shared }
     }
 
-    fn submit(&self, path: PathBuf, file_size: u64, immediate: bool) {
+    fn submit(
+        &self,
+        path: PathBuf,
+        file_size: u64,
+        cancellation: Arc<AtomicBool>,
+        immediate: bool,
+    ) {
         let mut queue = self.shared.queue.lock().expect("decode queue poisoned");
-        let job = DecodeJob { path, file_size };
+        let job = DecodeJob {
+            path,
+            file_size,
+            cancellation,
+        };
         if immediate {
             queue.push_front(job);
         } else {
@@ -642,6 +717,21 @@ impl DecodePool {
         {
             queue.push_front(job);
         }
+    }
+
+    /// Removes queued jobs outside the relevant set; running jobs are unaffected.
+    fn remove_queued_except(&self, relevant: &HashSet<PathBuf>) -> Vec<PathBuf> {
+        let mut queue = self.shared.queue.lock().expect("decode queue poisoned");
+        let mut removed = Vec::new();
+        queue.retain(|job| {
+            if relevant.contains(&job.path) {
+                true
+            } else {
+                removed.push(job.path.clone());
+                false
+            }
+        });
+        removed
     }
 }
 
@@ -660,7 +750,7 @@ fn worker_loop(shared: &PoolShared, window: isize) {
             }
         };
         if decode::is_raw_two_stage(&job.path)
-            && let Some(preview) = decode::decode_raw_preview(&job.path)
+            && let Some(preview) = decode::decode_raw_preview(&job.path, &job.cancellation)
         {
             post_completion(
                 window,
@@ -672,7 +762,7 @@ fn worker_loop(shared: &PoolShared, window: isize) {
                 }),
             );
         }
-        let result = decode::decode_file(&job.path).map(Arc::new);
+        let result = decode::decode_file(&job.path, &job.cancellation).map(Arc::new);
         post_completion(
             window,
             Box::new(DecodeCompletion {
