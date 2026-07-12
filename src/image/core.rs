@@ -7,7 +7,7 @@ use std::os::windows::fs::MetadataExt;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Condvar, Mutex};
-use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
+use std::time::{SystemTime, UNIX_EPOCH};
 
 use windows::Win32::Foundation::{HWND, LPARAM, WPARAM};
 use windows::Win32::Storage::FileSystem::FILE_ATTRIBUTE_HIDDEN;
@@ -19,9 +19,6 @@ use windows::core::PCWSTR;
 use super::decode::{self, DecodeError, DecodedImage};
 
 pub const WM_APP_DECODE_COMPLETE: u32 = WM_APP + 1;
-
-/// Folder listings older than this are rescanned before navigation.
-const FOLDER_LIST_FRESHNESS: Duration = Duration::from_secs(3);
 
 /// Preload mode 0/1/2 -> (radius, cache budget in bytes).
 const PRELOAD_SPECIFICATIONS: [(usize, u64); 3] =
@@ -101,7 +98,6 @@ pub struct ImageCore {
     options: CoreOptions,
     folder_directory: Option<PathBuf>,
     entries: Vec<FolderEntry>,
-    folder_scanned_at: Option<Instant>,
     /// Path awaiting display; replacing it invalidates the previous load.
     pending_display: Option<PathBuf>,
     in_flight: HashMap<PathBuf, Arc<AtomicBool>>,
@@ -117,7 +113,6 @@ impl ImageCore {
             options,
             folder_directory: None,
             entries: Vec::new(),
-            folder_scanned_at: None,
             pending_display: None,
             in_flight: HashMap::new(),
             cache: HashMap::new(),
@@ -230,7 +225,7 @@ impl ImageCore {
     }
 
     pub fn navigate(&mut self, command: NavigationCommand) -> Option<bool> {
-        self.refresh_folder_if_stale();
+        self.refresh_folder_if_current_missing();
         let current_path = self.navigation_anchor();
         let target = self.navigation_target(command)?;
         if current_path.is_some_and(|current| paths_equal(&current, &target)) {
@@ -240,7 +235,7 @@ impl ImageCore {
     }
 
     pub fn peek_navigation_target(&mut self, command: NavigationCommand) -> Option<PathBuf> {
-        self.refresh_folder_if_stale();
+        self.refresh_folder_if_current_missing();
         self.navigation_target(command)
     }
 
@@ -345,21 +340,19 @@ impl ImageCore {
         sort_entries(&mut entries, &self.options);
         self.entries = entries;
         self.folder_directory = Some(directory.to_path_buf());
-        self.folder_scanned_at = Some(Instant::now());
     }
 
-    fn refresh_folder_if_stale(&mut self) {
+    /// The listing is fixed at load time; only a vanished current file forces
+    /// a rescan (files added later belong to a new instance).
+    fn refresh_folder_if_current_missing(&mut self) {
         let Some(directory) = self.folder_directory.clone() else {
             return;
         };
-        let stale = self
-            .folder_scanned_at
-            .is_none_or(|at| at.elapsed() > FOLDER_LIST_FRESHNESS)
-            || self
-                .current
-                .as_ref()
-                .is_some_and(|current| !current.path.is_file());
-        if stale {
+        let current_missing = self
+            .current
+            .as_ref()
+            .is_some_and(|current| !current.path.is_file());
+        if current_missing {
             self.rescan_folder(&directory);
         }
     }
