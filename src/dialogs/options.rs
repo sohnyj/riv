@@ -570,6 +570,9 @@ fn handle_page_command(
         (IDC_IMAGE_FILTERING, CBN_SELCHANGE) => {
             options.scaling_filter = combo_selection(page, control);
         }
+        (IDC_IMAGE_DITHER, CBN_SELCHANGE) => {
+            options.dither = combo_selection(page, control);
+        }
         (IDC_IMAGE_SCALEFACTOR_EDIT, EN_CHANGE) => {
             let value = unsafe { GetDlgItemInt(page, control, None, false) };
             options.scale_factor_percent = value.clamp(1, 200);
@@ -640,6 +643,7 @@ fn initialize_image_page(state: &OptionsState) {
         IDC_IMAGE_FILTERING,
         &["Nearest", "Bilinear", "Bicubic", "High Quality"],
     );
+    combo_fill(page, IDC_IMAGE_DITHER, &["None", "Ordered", "Fruit"]);
     if let Ok(spin) = unsafe { GetDlgItem(Some(page), IDC_IMAGE_SCALEFACTOR_SPIN) } {
         unsafe { SendMessageW(spin, UDM_SETRANGE32, Some(WPARAM(1)), Some(LPARAM(200))) };
     }
@@ -696,6 +700,7 @@ fn sync_all_pages(state: &mut OptionsState) {
 
     let image_page = state.pages[1];
     combo_select(image_page, IDC_IMAGE_FILTERING, options.scaling_filter);
+    combo_select(image_page, IDC_IMAGE_DITHER, options.dither);
     set_dialog_item_text(
         image_page,
         IDC_IMAGE_SCALEFACTOR_EDIT,

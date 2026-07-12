@@ -27,6 +27,7 @@ use settings::{Options, SettingsFile};
 use shell::drag_drop::{self, WM_APP_DROP_PATH};
 use shell::open_with::{self, OpenWithList, WM_APP_OPEN_WITH_LIST};
 use shell::{file_ops, open_dialog};
+use view::dither::DitherMode;
 use view::renderer::Renderer;
 use view::transform::{FitMode, Size, ViewTransform};
 use window::context_menu::{self, MenuSelection, MenuState};
@@ -153,6 +154,11 @@ impl Application {
         application
             .renderer
             .set_sdr_white_boost(application.sdr_white_boost);
+        application
+            .renderer
+            .set_dither_mode(DitherMode::from_setting(
+                application.settings.options.dither,
+            ));
         application.overlay.set_scale(device_pixel_ratio);
         if let Some(path) = initial_path {
             application.image_core.load_path(path);
@@ -455,6 +461,8 @@ impl Application {
             tone_map_target_luminance(window, hdr_mode),
         )?;
         self.renderer.set_sdr_white_boost(self.sdr_white_boost);
+        self.renderer
+            .set_dither_mode(DitherMode::from_setting(self.settings.options.dither));
         if let Some(image) = &self.display {
             let frame_index = self
                 .animation
@@ -538,6 +546,8 @@ impl Application {
             self.settings.mouse_bindings(),
         );
         self.view_transform.fit_mode = FitMode::from_setting(self.settings.options.fit_mode);
+        self.renderer
+            .set_dither_mode(DitherMode::from_setting(self.settings.options.dither));
         self.image_core
             .update_options(core_options(&self.settings.options));
         self.update_window_title(window);

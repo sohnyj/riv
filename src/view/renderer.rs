@@ -7,16 +7,19 @@ use windows::Win32::Graphics::Direct2D::Common::{
 };
 use windows::Win32::Graphics::Direct2D::{
     CLSID_D2D1ColorManagement, CLSID_D2D1HdrToneMap, CLSID_D2D1WhiteLevelAdjustment,
-    D2D1_BITMAP_OPTIONS_CANNOT_DRAW, D2D1_BITMAP_OPTIONS_NONE, D2D1_BITMAP_OPTIONS_TARGET,
-    D2D1_BITMAP_PROPERTIES1, D2D1_BUFFER_PRECISION_16BPC_FLOAT, D2D1_COLOR_SPACE_CUSTOM,
-    D2D1_COLOR_SPACE_SCRGB, D2D1_COLOR_SPACE_SRGB,
-    D2D1_COLORMANAGEMENT_PROP_DESTINATION_COLOR_CONTEXT, D2D1_COLORMANAGEMENT_PROP_QUALITY,
-    D2D1_COLORMANAGEMENT_PROP_SOURCE_COLOR_CONTEXT, D2D1_COLORMANAGEMENT_QUALITY_BEST,
-    D2D1_DEVICE_CONTEXT_OPTIONS_NONE, D2D1_FACTORY_TYPE_SINGLE_THREADED,
-    D2D1_HDRTONEMAP_DISPLAY_MODE_HDR, D2D1_HDRTONEMAP_PROP_DISPLAY_MODE,
-    D2D1_HDRTONEMAP_PROP_INPUT_MAX_LUMINANCE, D2D1_HDRTONEMAP_PROP_OUTPUT_MAX_LUMINANCE,
-    D2D1_INTERPOLATION_MODE, D2D1_PROPERTY_TYPE_COLOR_CONTEXT, D2D1_PROPERTY_TYPE_ENUM,
-    D2D1_PROPERTY_TYPE_FLOAT, D2D1_WHITELEVELADJUSTMENT_PROP_INPUT_WHITE_LEVEL,
+    CLSID_D2D12DAffineTransform, D2D1_2DAFFINETRANSFORM_PROP_INTERPOLATION_MODE,
+    D2D1_2DAFFINETRANSFORM_PROP_TRANSFORM_MATRIX, D2D1_BITMAP_OPTIONS_CANNOT_DRAW,
+    D2D1_BITMAP_OPTIONS_NONE, D2D1_BITMAP_OPTIONS_TARGET, D2D1_BITMAP_PROPERTIES1,
+    D2D1_BUFFER_PRECISION_16BPC_FLOAT, D2D1_COLOR_SPACE_CUSTOM, D2D1_COLOR_SPACE_SCRGB,
+    D2D1_COLOR_SPACE_SRGB, D2D1_COLORMANAGEMENT_PROP_DESTINATION_COLOR_CONTEXT,
+    D2D1_COLORMANAGEMENT_PROP_QUALITY, D2D1_COLORMANAGEMENT_PROP_SOURCE_COLOR_CONTEXT,
+    D2D1_COLORMANAGEMENT_QUALITY_BEST, D2D1_DEVICE_CONTEXT_OPTIONS_NONE,
+    D2D1_FACTORY_TYPE_SINGLE_THREADED, D2D1_HDRTONEMAP_DISPLAY_MODE_HDR,
+    D2D1_HDRTONEMAP_PROP_DISPLAY_MODE, D2D1_HDRTONEMAP_PROP_INPUT_MAX_LUMINANCE,
+    D2D1_HDRTONEMAP_PROP_OUTPUT_MAX_LUMINANCE, D2D1_INTERPOLATION_MODE,
+    D2D1_INTERPOLATION_MODE_NEAREST_NEIGHBOR, D2D1_PROPERTY_TYPE_COLOR_CONTEXT,
+    D2D1_PROPERTY_TYPE_ENUM, D2D1_PROPERTY_TYPE_FLOAT, D2D1_PROPERTY_TYPE_MATRIX_3X2,
+    D2D1_WHITELEVELADJUSTMENT_PROP_INPUT_WHITE_LEVEL,
     D2D1_WHITELEVELADJUSTMENT_PROP_OUTPUT_WHITE_LEVEL, D2D1CreateFactory, ID2D1Bitmap1,
     ID2D1ColorContext, ID2D1DeviceContext, ID2D1Effect, ID2D1Factory1, ID2D1Image,
 };
@@ -39,6 +42,7 @@ use windows::core::{Interface, Result};
 use windows_numerics::Matrix3x2;
 
 use crate::image::decode::PixelStorage;
+use crate::view::dither::{self, DitherMode};
 
 pub struct Renderer {
     hdr_mode: bool,
@@ -53,6 +57,11 @@ pub struct Renderer {
     hdr_tone_map_effect: Option<ID2D1Effect>,
     tone_map_normalize_effect: Option<ID2D1Effect>,
     output_color_management_effect: Option<ID2D1Effect>,
+    affine_transform_effect: Option<ID2D1Effect>,
+    dither_ordered_effect: Option<ID2D1Effect>,
+    dither_fruit_effect: Option<ID2D1Effect>,
+    dither_mode: DitherMode,
+    image_storage: PixelStorage,
     scrgb_color_context: Option<ID2D1ColorContext>,
     srgb_color_context: Option<ID2D1ColorContext>,
     source_icc_profile: Option<Vec<u8>>,
@@ -155,9 +164,9 @@ impl Renderer {
             let _ = unsafe { swap_chain3.SetColorSpace1(DXGI_COLOR_SPACE_RGB_FULL_G10_NONE_P709) };
         }
 
+        let d2d_factory: ID2D1Factory1 =
+            unsafe { D2D1CreateFactory(D2D1_FACTORY_TYPE_SINGLE_THREADED, None)? };
         let d2d_context = unsafe {
-            let d2d_factory: ID2D1Factory1 =
-                D2D1CreateFactory(D2D1_FACTORY_TYPE_SINGLE_THREADED, None)?;
             let d2d_device = d2d_factory.CreateDevice(&dxgi_device)?;
             d2d_device.CreateDeviceContext(D2D1_DEVICE_CONTEXT_OPTIONS_NONE)?
         };
@@ -256,6 +265,23 @@ impl Renderer {
                 .ok()?;
                 Some(effect)
             });
+        // Output dither is SDR-only; failure here leaves rendering undithered.
+        let (affine_transform_effect, dither_ordered_effect, dither_fruit_effect) =
+            if !hdr_mode && dither::register_dither_effects(&d2d_factory).is_ok() {
+                unsafe {
+                    (
+                        d2d_context.CreateEffect(&CLSID_D2D12DAffineTransform).ok(),
+                        d2d_context
+                            .CreateEffect(&dither::CLSID_RIV_DITHER_ORDERED)
+                            .ok(),
+                        d2d_context
+                            .CreateEffect(&dither::CLSID_RIV_DITHER_FRUIT)
+                            .ok(),
+                    )
+                }
+            } else {
+                (None, None, None)
+            };
 
         let mut renderer = Self {
             hdr_mode,
@@ -270,6 +296,11 @@ impl Renderer {
             hdr_tone_map_effect,
             tone_map_normalize_effect,
             output_color_management_effect,
+            affine_transform_effect,
+            dither_ordered_effect,
+            dither_fruit_effect,
+            dither_mode: DitherMode::None,
+            image_storage: PixelStorage::Bgra8,
             scrgb_color_context,
             srgb_color_context,
             source_icc_profile: None,
@@ -360,9 +391,14 @@ impl Renderer {
         };
         self.image_display_size = (display_size.0 as f32, display_size.1 as f32);
         self.image_pixel_size = (width as f32, height as f32);
+        self.image_storage = storage;
         self.rewire_effect_chain(&bitmap, icc_profile, storage, peak_luminance_nits);
         self.image = Some(bitmap);
         Ok(())
+    }
+
+    pub fn set_dither_mode(&mut self, mode: DitherMode) {
+        self.dither_mode = mode;
     }
 
     fn rewire_effect_chain(
@@ -524,16 +560,21 @@ impl Renderer {
                     M31: matrix[4],
                     M32: matrix[5],
                 };
-                self.d2d_context.SetTransform(&raw const transform);
                 match (&self.effect_output, &self.image) {
                     (Some(output), _) => {
-                        self.d2d_context.DrawImage(
-                            output,
-                            None,
-                            None,
-                            interpolation,
-                            D2D1_COMPOSITE_MODE_SOURCE_OVER,
-                        );
+                        // Dither runs in destination pixel space: the transform moves
+                        // into the graph and the context transform stays identity.
+                        if !self.draw_image_dithered(output, &transform, interpolation) {
+                            self.d2d_context.SetTransform(&raw const transform);
+                            self.d2d_context.DrawImage(
+                                output,
+                                None,
+                                None,
+                                interpolation,
+                                D2D1_COMPOSITE_MODE_SOURCE_OVER,
+                            );
+                            self.d2d_context.SetTransform(&Matrix3x2::identity());
+                        }
                     }
                     // No effect support (e.g. wine): draw the bitmap directly.
                     (None, Some(image)) => {
@@ -543,6 +584,7 @@ impl Renderer {
                             right: self.image_pixel_size.0,
                             bottom: self.image_pixel_size.1,
                         };
+                        self.d2d_context.SetTransform(&raw const transform);
                         self.d2d_context.DrawBitmap(
                             image,
                             Some(&raw const destination),
@@ -551,10 +593,10 @@ impl Renderer {
                             None,
                             None,
                         );
+                        self.d2d_context.SetTransform(&Matrix3x2::identity());
                     }
                     _ => {}
                 }
-                self.d2d_context.SetTransform(&Matrix3x2::identity());
             }
             // Overlay failure must not block presenting the frame.
             let overlay_result = draw_overlay(&self.d2d_context);
@@ -563,4 +605,76 @@ impl Renderer {
             overlay_result
         }
     }
+
+    /// SDR high-depth output path: scene -> 2DAffineTransform -> dither -> target.
+    /// Returns false when unavailable so the caller draws the undithered path.
+    fn draw_image_dithered(
+        &self,
+        output: &ID2D1Image,
+        transform: &Matrix3x2,
+        interpolation: D2D1_INTERPOLATION_MODE,
+    ) -> bool {
+        if self.hdr_mode || self.image_storage != PixelStorage::RgbaHalf {
+            return false;
+        }
+        let dither_effect = match self.dither_mode {
+            DitherMode::None => return false,
+            DitherMode::Ordered => &self.dither_ordered_effect,
+            DitherMode::Fruit => &self.dither_fruit_effect,
+        };
+        let (Some(dither_effect), Some(affine_transform)) =
+            (dither_effect, &self.affine_transform_effect)
+        else {
+            return false;
+        };
+        let wired = unsafe {
+            affine_transform.SetValue(
+                D2D1_2DAFFINETRANSFORM_PROP_TRANSFORM_MATRIX.0 as u32,
+                D2D1_PROPERTY_TYPE_MATRIX_3X2,
+                &matrix_property_bytes(transform),
+            )
+        }
+        .is_ok()
+            && unsafe {
+                // The affine interpolation enum shares the interpolation mode values.
+                affine_transform.SetValue(
+                    D2D1_2DAFFINETRANSFORM_PROP_INTERPOLATION_MODE.0 as u32,
+                    D2D1_PROPERTY_TYPE_ENUM,
+                    &interpolation.0.to_ne_bytes(),
+                )
+            }
+            .is_ok();
+        if !wired {
+            return false;
+        }
+        unsafe { affine_transform.SetInput(0, output, true) };
+        let Ok(scaled) = (unsafe { affine_transform.GetOutput() }) else {
+            return false;
+        };
+        unsafe { dither_effect.SetInput(0, &scaled, true) };
+        let Ok(dithered) = (unsafe { dither_effect.GetOutput() }) else {
+            return false;
+        };
+        unsafe {
+            self.d2d_context.DrawImage(
+                &dithered,
+                None,
+                None,
+                D2D1_INTERPOLATION_MODE_NEAREST_NEIGHBOR,
+                D2D1_COMPOSITE_MODE_SOURCE_OVER,
+            );
+        }
+        true
+    }
+}
+
+fn matrix_property_bytes(matrix: &Matrix3x2) -> [u8; 24] {
+    let elements = [
+        matrix.M11, matrix.M12, matrix.M21, matrix.M22, matrix.M31, matrix.M32,
+    ];
+    let mut bytes = [0u8; 24];
+    for (index, element) in elements.iter().enumerate() {
+        bytes[index * 4..index * 4 + 4].copy_from_slice(&element.to_ne_bytes());
+    }
+    bytes
 }

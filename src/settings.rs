@@ -14,6 +14,7 @@ pub struct Options {
     pub scaling_filter: u32,
     pub fit_mode: u32,
     pub scale_factor_percent: u32,
+    pub dither: u32,
     pub fractional_zoom: bool,
     pub cursor_zoom: bool,
     pub sort_mode: u32,
@@ -40,6 +41,7 @@ impl Default for Options {
             scaling_filter: 1,
             fit_mode: 0,
             scale_factor_percent: 25,
+            dither: 2,
             fractional_zoom: true,
             cursor_zoom: true,
             sort_mode: 0,
@@ -93,6 +95,7 @@ impl Options {
             scaling_filter: unsigned("filteringenabled", default.scaling_filter),
             fit_mode: unsigned("fitmode", default.fit_mode),
             scale_factor_percent: unsigned("scalefactor", default.scale_factor_percent),
+            dither: bounded("dither", 2, default.dither),
             fractional_zoom: boolean("fractionalzoom", default.fractional_zoom),
             cursor_zoom: boolean("cursorzoom", default.cursor_zoom),
             sort_mode: bounded("sortmode", 4, default.sort_mode),
@@ -206,7 +209,7 @@ impl SettingsFile {
 
     pub fn set_options(&mut self, options: &Options) {
         let default = Options::default();
-        let entries: [(&str, Value, Value); 21] = [
+        let entries: [(&str, Value, Value); 22] = [
             (
                 "bgcolorenabled",
                 Value::Bool(options.background_color_enabled),
@@ -246,6 +249,11 @@ impl SettingsFile {
                 "scalefactor",
                 Value::from(options.scale_factor_percent),
                 Value::from(default.scale_factor_percent),
+            ),
+            (
+                "dither",
+                Value::from(options.dither),
+                Value::from(default.dither),
             ),
             (
                 "fractionalzoom",
