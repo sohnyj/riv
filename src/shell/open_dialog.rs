@@ -11,6 +11,7 @@ use windows::Win32::UI::Shell::{
 };
 use windows::core::{HSTRING, PCWSTR, w};
 
+use crate::archive::reader as archive_reader;
 use crate::image::decode;
 
 pub fn show(window: HWND, initial_directory: Option<&str>) -> Vec<PathBuf> {
@@ -24,10 +25,15 @@ fn show_inner(
     let dialog: IFileOpenDialog =
         unsafe { CoCreateInstance(&FileOpenDialog, None, CLSCTX_INPROC_SERVER)? };
 
-    let patterns: Vec<String> = decode::supported_extensions()
+    let mut patterns: Vec<String> = decode::supported_extensions()
         .map(|extension| format!("*.{extension}"))
         .collect();
-    let display = HSTRING::from(format!("Supported Images ({})", patterns.join(" ")));
+    if archive_reader::available() {
+        patterns.extend(
+            archive_reader::supported_extensions().map(|extension| format!("*.{extension}")),
+        );
+    }
+    let display = HSTRING::from(format!("Supported Files ({})", patterns.join(" ")));
     let pattern = HSTRING::from(patterns.join(";"));
     let filters = [
         COMDLG_FILTERSPEC {

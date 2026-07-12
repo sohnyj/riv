@@ -1,6 +1,7 @@
 #![windows_subsystem = "windows"]
 
 mod actions;
+mod archive;
 mod bindings;
 mod dialogs;
 mod image;
@@ -20,7 +21,8 @@ use dialogs::options::{WM_APP_OPTIONS_APPLIED, WM_APP_OPTIONS_GEOMETRY};
 use image::animation::Animation;
 use image::color;
 use image::core::{
-    CoreOptions, DecodeCompletion, ImageCore, NavigationCommand, SortMode, WM_APP_DECODE_COMPLETE,
+    CoreOptions, DecodeCompletion, ImageCore, ItemLocation, NavigationCommand, SortMode,
+    WM_APP_DECODE_COMPLETE, locations_equal,
 };
 use image::decode::DecodedImage;
 use settings::{Options, SettingsFile};
@@ -86,7 +88,7 @@ struct Application {
     view_transform: ViewTransform,
     image_core: ImageCore,
     display: Option<Arc<DecodedImage>>,
-    displayed_path: Option<std::path::PathBuf>,
+    displayed_location: Option<ItemLocation>,
     settings: SettingsFile,
     bindings: Bindings,
     preserve_zoom: bool,
@@ -130,7 +132,7 @@ impl Application {
             view_transform,
             image_core: ImageCore::new(window, core_options(&settings.options)),
             display: None,
-            displayed_path: None,
+            displayed_location: None,
             settings,
             bindings,
             preserve_zoom: false,
@@ -298,12 +300,12 @@ impl Application {
     }
 
     fn update_window_title(&self, window: HWND) {
-        let file_name = self.image_core.current.as_ref().and_then(|current| {
-            current
-                .path
-                .file_name()
-                .map(|name| name.to_string_lossy().into_owned())
-        });
+        let file_name = self
+            .image_core
+            .current
+            .as_ref()
+            .map(|current| current.location.display_name())
+            .filter(|name| !name.is_empty());
         let title = match (self.settings.options.title_bar_mode, file_name) {
             (0, _) | (_, None) => "riv".to_string(),
             (2, Some(name)) => match self.image_core.folder_position() {
@@ -321,15 +323,15 @@ impl Application {
             return;
         };
         let image = current.image.clone();
-        let path = current.path.clone();
-        let same_view = self.displayed_path.as_deref().is_some_and(|displayed| {
-            displayed
-                .to_string_lossy()
-                .eq_ignore_ascii_case(&path.to_string_lossy())
-            // Same file at the same logical size (RAW preview swap, reload): keep the view.
-        }) && self.display.as_ref().is_some_and(|previous| {
-            previous.width == image.width && previous.height == image.height
-        });
+        let location = current.location.clone();
+        // Same item at the same logical size (RAW preview swap, reload): keep the view.
+        let same_view = self
+            .displayed_location
+            .as_ref()
+            .is_some_and(|displayed| locations_equal(displayed, &location))
+            && self.display.as_ref().is_some_and(|previous| {
+                previous.width == image.width && previous.height == image.height
+            });
         let frame = &image.frames[0];
         let upload = self.renderer.set_image(
             &frame.pixels,
@@ -341,7 +343,7 @@ impl Application {
             image.peak_luminance_nits,
         );
         self.display = Some(image);
-        self.displayed_path = Some(path.clone());
+        self.displayed_location = Some(location.clone());
         if !same_view {
             let transform = &mut self.view_transform;
             transform.rotation_quadrant = 0;
@@ -370,11 +372,14 @@ impl Application {
             };
         }
         if !same_view {
-            if self.settings.add_recent_file(&path) {
+            // Members list the archive itself; add_recent_file deduplicates.
+            if self.settings.add_recent_file(location.containing_file()) {
                 unsafe { SetTimer(Some(window), RECENTS_SAVE_TIMER, 500, None) };
             }
             self.open_with_list = None;
-            unsafe { SetTimer(Some(window), OPEN_WITH_TIMER, 250, None) };
+            if location.as_file().is_some() {
+                unsafe { SetTimer(Some(window), OPEN_WITH_TIMER, 250, None) };
+            }
         }
         self.update_window_title(window);
         self.render(window);
@@ -384,7 +389,7 @@ impl Application {
         let _ = unsafe { KillTimer(Some(window), ANIMATION_TIMER) };
         self.animation = None;
         self.display = None;
-        self.displayed_path = None;
+        self.displayed_location = None;
         self.renderer.clear_image();
         self.update_window_title(window);
         self.render(window);
@@ -484,17 +489,28 @@ impl Application {
     }
 
     fn overlay_content(&self, background: D2D1_COLOR_F) -> OverlayContent {
-        let error_text = self.image_core.load_error.as_ref().map(|(path, error)| {
-            overlay::build_error_text(path, &error.message, error.code, error.store_extension)
-        });
+        let error_text = self
+            .image_core
+            .load_error
+            .as_ref()
+            .map(|(location, error)| {
+                overlay::build_error_text(
+                    &location.display_name(),
+                    &error.message,
+                    error.code,
+                    error.store_extension,
+                )
+            });
         let info_text = if self.show_file_info {
             self.image_core.current.as_ref().map(|current| {
-                let metadata = std::fs::metadata(&current.path).ok();
+                let (file_size, modified) =
+                    self.image_core.current_item_metadata().unwrap_or((0, None));
                 overlay::build_info_text(
-                    &current.path,
+                    &current.location.display_name(),
+                    &current.location.display_text(),
                     &current.image,
-                    metadata.as_ref().map_or(0, std::fs::Metadata::len),
-                    metadata.and_then(|metadata| metadata.modified().ok()),
+                    file_size,
+                    modified,
                 )
             })
         } else {
@@ -560,6 +576,11 @@ impl Application {
         match gate {
             ActivationGate::Window => true,
             ActivationGate::Image => self.image_core.current.is_some(),
+            ActivationGate::FileOnDisk => self
+                .image_core
+                .current
+                .as_ref()
+                .is_some_and(|current| current.location.as_file().is_some()),
             ActivationGate::Animation => self
                 .image_core
                 .current
@@ -852,7 +873,7 @@ fn dispatch_action(application: &mut Application, window: HWND, action: Action) 
         }
         Action::OpenContainingFolder => {
             if let Some(current) = &application.image_core.current {
-                file_ops::show_in_explorer(&current.path);
+                file_ops::show_in_explorer(current.location.containing_file());
             }
         }
         Action::Delete | Action::DeletePermanent => {
@@ -862,8 +883,13 @@ fn dispatch_action(application: &mut Application, window: HWND, action: Action) 
             rename_current_file(application, window);
         }
         Action::OpenWithOther => {
-            if let Some(current) = &application.image_core.current {
-                let path = current.path.clone();
+            if let Some(path) = application
+                .image_core
+                .current
+                .as_ref()
+                .and_then(|current| current.location.as_file())
+            {
+                let path = path.to_path_buf();
                 open_with::show_open_with_dialog(window, &path);
             }
         }
@@ -906,11 +932,13 @@ fn dispatch_action(application: &mut Application, window: HWND, action: Action) 
 }
 
 fn delete_current_file(application: &mut Application, window: HWND, permanent: bool) {
+    // The FileOnDisk gate keeps archive members out of here.
     let Some(path) = application
         .image_core
         .current
         .as_ref()
-        .map(|current| current.path.clone())
+        .and_then(|current| current.location.as_file())
+        .map(Path::to_path_buf)
     else {
         return;
     };
@@ -929,15 +957,13 @@ fn delete_current_file(application: &mut Application, window: HWND, permanent: b
     } else {
         NavigationCommand::Next
     };
+    let deleted = ItemLocation::File(path.clone());
     // Compute the after-delete target before the file disappears.
     let target = application
         .image_core
         .peek_navigation_target(command)
-        .filter(|candidate| {
-            !candidate
-                .to_string_lossy()
-                .eq_ignore_ascii_case(&path.to_string_lossy())
-        });
+        .filter(|candidate| !locations_equal(candidate, &deleted))
+        .and_then(|candidate| candidate.as_file().map(Path::to_path_buf));
     match file_ops::delete_file(&path, permanent) {
         Ok(()) => {
             application.image_core.refresh_folder();
@@ -958,7 +984,8 @@ fn rename_current_file(application: &mut Application, window: HWND) {
         .image_core
         .current
         .as_ref()
-        .map(|current| current.path.clone())
+        .and_then(|current| current.location.as_file())
+        .map(Path::to_path_buf)
     else {
         return;
     };
@@ -1436,9 +1463,13 @@ extern "system" fn window_procedure(
         WM_TIMER if wparam.0 == OPEN_WITH_TIMER => {
             let _ = unsafe { KillTimer(Some(window), OPEN_WITH_TIMER) };
             if let Some(application) = unsafe { application_from_window(window) }
-                && let Some(current) = &application.image_core.current
+                && let Some(path) = application
+                    .image_core
+                    .current
+                    .as_ref()
+                    .and_then(|current| current.location.as_file())
             {
-                open_with::enumerate_in_background(window, current.path.clone());
+                open_with::enumerate_in_background(window, path.to_path_buf());
             }
             LRESULT(0)
         }
@@ -1449,10 +1480,9 @@ extern "system" fn window_procedure(
                     .image_core
                     .current
                     .as_ref()
-                    .is_some_and(|current| {
-                        current
-                            .path
-                            .to_string_lossy()
+                    .and_then(|current| current.location.as_file())
+                    .is_some_and(|path| {
+                        path.to_string_lossy()
                             .eq_ignore_ascii_case(&list.path.to_string_lossy())
                     });
                 if is_current {
@@ -1618,6 +1648,11 @@ extern "system" fn window_procedure(
                 }
                 let state = MenuState {
                     has_image: application.image_core.current.is_some(),
+                    has_file_on_disk: application
+                        .image_core
+                        .current
+                        .as_ref()
+                        .is_some_and(|current| current.location.as_file().is_some()),
                     has_folder: application.image_core.has_folder_entries(),
                     has_animation: application
                         .image_core
@@ -1668,12 +1703,16 @@ extern "system" fn window_procedure(
                         dispatch_action(application, window, action);
                     }
                     Some(MenuSelection::OpenWithEntry(index)) => {
-                        if let (Some(current), Some(list)) = (
-                            application.image_core.current.as_ref(),
+                        if let (Some(path), Some(list)) = (
+                            application
+                                .image_core
+                                .current
+                                .as_ref()
+                                .and_then(|current| current.location.as_file()),
                             application.open_with_list.as_ref(),
                         ) && let Some(item) = list.items.get(index)
                         {
-                            let _ = open_with::invoke(&current.path, &item.executable_path);
+                            let _ = open_with::invoke(path, &item.executable_path);
                         }
                     }
                     None => {}

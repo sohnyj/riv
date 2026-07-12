@@ -2,7 +2,7 @@
 
 use std::cell::RefCell;
 use std::fs::File;
-use std::io::{BufReader, Read};
+use std::io::{BufRead, BufReader, Cursor, Read, Seek};
 use std::path::Path;
 use std::sync::OnceLock;
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -388,6 +388,17 @@ fn descriptor_for_path(path: &Path) -> Option<&'static FormatDescriptor> {
     }
 }
 
+fn descriptor_for_bytes(data: &[u8], extension: Option<&str>) -> Option<&'static FormatDescriptor> {
+    let header = &data[..data.len().min(4096)];
+    match extension
+        .map(str::to_lowercase)
+        .and_then(|extension| descriptor_for_extension(&extension))
+    {
+        Some(descriptor) => Some(refine_by_content(descriptor, header)),
+        None => probe_magic(header).map(|descriptor| refine_by_content(descriptor, header)),
+    }
+}
+
 fn read_header(path: &Path) -> Option<Vec<u8>> {
     let mut file = File::open(path).ok()?;
     let mut buffer = vec![0u8; 4096];
@@ -398,16 +409,59 @@ fn read_header(path: &Path) -> Option<Vec<u8>> {
 
 /// Decode entry point; runs on an MTA decode worker.
 pub fn decode_file(path: &Path, cancellation: &AtomicBool) -> Result<DecodedImage, DecodeError> {
+    decode_input(&DecodeInput::File(path), cancellation)
+}
+
+/// Decodes an in-memory image (an extracted archive member).
+pub fn decode_bytes(
+    data: &[u8],
+    extension: Option<&str>,
+    cancellation: &AtomicBool,
+) -> Result<DecodedImage, DecodeError> {
+    decode_input(&DecodeInput::Memory { data, extension }, cancellation)
+}
+
+enum DecodeInput<'a> {
+    File(&'a Path),
+    Memory {
+        data: &'a [u8],
+        extension: Option<&'a str>,
+    },
+}
+
+impl DecodeInput<'_> {
+    fn descriptor(&self) -> Option<&'static FormatDescriptor> {
+        match self {
+            DecodeInput::File(path) => descriptor_for_path(path),
+            DecodeInput::Memory { data, extension } => descriptor_for_bytes(data, *extension),
+        }
+    }
+
+    /// Whole input bytes for the adapters that decode from memory.
+    fn read_all(&self) -> Result<std::borrow::Cow<'_, [u8]>, DecodeError> {
+        match self {
+            DecodeInput::File(path) => std::fs::read(path)
+                .map(std::borrow::Cow::Owned)
+                .map_err(fallback_error),
+            DecodeInput::Memory { data, .. } => Ok(std::borrow::Cow::Borrowed(*data)),
+        }
+    }
+}
+
+fn decode_input(
+    input: &DecodeInput,
+    cancellation: &AtomicBool,
+) -> Result<DecodedImage, DecodeError> {
     if cancellation.load(Ordering::Relaxed) {
         return Err(DecodeError::cancelled());
     }
-    let descriptor = descriptor_for_path(path);
+    let descriptor = input.descriptor();
     let format_name = descriptor.map_or("Unknown", |descriptor| descriptor.name);
     let semantics = descriptor.map_or(&FrameSemantics::Single, |descriptor| &descriptor.semantics);
     let adapter = descriptor.map_or(&Adapter::Wic, |descriptor| &descriptor.adapter);
     match adapter {
         Adapter::Wic | Adapter::WicRawTwoStage => {
-            decode_with_wic(path, format_name, semantics, cancellation).map_err(|mut error| {
+            decode_with_wic(input, format_name, semantics, cancellation).map_err(|mut error| {
                 if error.code == WINCODEC_ERR_COMPONENTNOTFOUND.0
                     && let Some(descriptor) = descriptor
                 {
@@ -416,14 +470,29 @@ pub fn decode_file(path: &Path, cancellation: &AtomicBool) -> Result<DecodedImag
                 error
             })
         }
-        Adapter::Apng => decode_apng(path, format_name, cancellation),
-        Adapter::Svg => decode_svg(path, format_name),
-        Adapter::WebPAnimation => super::fallback::decode_webp_animation(path, format_name),
-        Adapter::Exr => super::fallback::decode_exr(path, format_name),
+        Adapter::Apng => match input {
+            DecodeInput::File(path) => {
+                let file = File::open(path).map_err(fallback_error)?;
+                decode_apng(BufReader::new(file), format_name, cancellation)
+            }
+            DecodeInput::Memory { data, .. } => {
+                decode_apng(Cursor::new(*data), format_name, cancellation)
+            }
+        },
+        Adapter::Svg => decode_svg(&input.read_all()?, format_name),
+        Adapter::WebPAnimation => {
+            super::fallback::decode_webp_animation(&input.read_all()?, format_name)
+        }
+        Adapter::Exr => match input {
+            DecodeInput::File(path) => super::fallback::decode_exr(path, format_name),
+            DecodeInput::Memory { data, .. } => {
+                super::fallback::decode_exr_bytes(data, format_name)
+            }
+        },
         Adapter::HeifWithWicPreferred => {
-            decode_with_wic(path, format_name, semantics, cancellation).or_else(|error| {
+            decode_with_wic(input, format_name, semantics, cancellation).or_else(|error| {
                 if error.code == WINCODEC_ERR_COMPONENTNOTFOUND.0 {
-                    super::fallback::decode_heif(path, format_name)
+                    super::fallback::decode_heif(&input.read_all()?, format_name)
                 } else {
                     Err(error)
                 }
@@ -522,20 +591,13 @@ struct DecodedFrames {
 }
 
 fn decode_with_wic(
-    path: &Path,
+    input: &DecodeInput,
     format_name: &'static str,
     semantics: &FrameSemantics,
     cancellation: &AtomicBool,
 ) -> Result<DecodedImage, DecodeError> {
     let decoded = with_wic_factory(|factory| {
-        let decoder = unsafe {
-            factory.CreateDecoderFromFilename(
-                &HSTRING::from(path.as_os_str()),
-                None,
-                GENERIC_READ,
-                WICDecodeMetadataCacheOnDemand,
-            )?
-        };
+        let decoder = create_wic_decoder(factory, input)?;
         let frame_count = unsafe { decoder.GetFrameCount()? }.max(1);
         match semantics {
             FrameSemantics::Animation if frame_count > 1 => {
@@ -559,6 +621,32 @@ fn decode_with_wic(
         peak_luminance_nits: decoded.peak_luminance_nits,
         frames: decoded.frames,
     })
+}
+
+fn create_wic_decoder(
+    factory: &IWICImagingFactory,
+    input: &DecodeInput,
+) -> windows::core::Result<IWICBitmapDecoder> {
+    match input {
+        DecodeInput::File(path) => unsafe {
+            factory.CreateDecoderFromFilename(
+                &HSTRING::from(path.as_os_str()),
+                None,
+                GENERIC_READ,
+                WICDecodeMetadataCacheOnDemand,
+            )
+        },
+        // The stream borrows the buffer; decoder and stream stay within this call.
+        DecodeInput::Memory { data, .. } => unsafe {
+            let stream = factory.CreateStream()?;
+            stream.InitializeFromMemory(data)?;
+            factory.CreateDecoderFromStream(
+                &stream,
+                std::ptr::null(),
+                WICDecodeMetadataCacheOnDemand,
+            )
+        },
+    }
 }
 
 fn downscale_to_device_limit(
@@ -1310,13 +1398,12 @@ pub(crate) fn fallback_error(message: impl std::fmt::Display) -> DecodeError {
     }
 }
 
-fn decode_apng(
-    path: &Path,
+fn decode_apng<Input: BufRead + Seek>(
+    input: Input,
     format_name: &'static str,
     cancellation: &AtomicBool,
 ) -> Result<DecodedImage, DecodeError> {
-    let file = File::open(path).map_err(fallback_error)?;
-    let mut decoder = png::Decoder::new(BufReader::new(file));
+    let mut decoder = png::Decoder::new(input);
     decoder.set_transformations(png::Transformations::normalize_to_color8());
     let mut reader = decoder.read_info().map_err(fallback_error)?;
 
@@ -1483,13 +1570,12 @@ pub(crate) fn copy_rectangle(
     }
 }
 
-fn decode_svg(path: &Path, format_name: &'static str) -> Result<DecodedImage, DecodeError> {
-    let data = std::fs::read(path).map_err(fallback_error)?;
+fn decode_svg(data: &[u8], format_name: &'static str) -> Result<DecodedImage, DecodeError> {
     let options = resvg::usvg::Options {
         fontdb: font_database().clone(),
         ..Default::default()
     };
-    let tree = resvg::usvg::Tree::from_data(&data, &options).map_err(fallback_error)?;
+    let tree = resvg::usvg::Tree::from_data(data, &options).map_err(fallback_error)?;
     let size = tree.size();
     if !(size.width() > 0.0 && size.height() > 0.0) {
         return Err(fallback_error("SVG has no intrinsic size"));
@@ -1595,6 +1681,48 @@ fn copy_pixels(
         row += rows;
     }
     Ok(pixels)
+}
+
+#[cfg(test)]
+mod descriptor_probe_tests {
+    use super::*;
+
+    /// PNG signature + IHDR(13 bytes) + an acTL chunk header.
+    fn animated_png_header() -> Vec<u8> {
+        let mut header = b"\x89PNG\r\n\x1a\n".to_vec();
+        header.extend_from_slice(&13u32.to_be_bytes());
+        header.extend_from_slice(b"IHDR");
+        header.extend_from_slice(&[0u8; 13 + 4]); // data + CRC
+        header.extend_from_slice(&8u32.to_be_bytes());
+        header.extend_from_slice(b"acTL");
+        header
+    }
+
+    #[test]
+    fn magic_wins_without_an_extension_hint() {
+        let descriptor = descriptor_for_bytes(b"\x89PNG\r\n\x1a\nrest", None).expect("descriptor");
+        assert_eq!(descriptor.name, "PNG");
+    }
+
+    #[test]
+    fn extension_hint_selects_the_descriptor() {
+        let descriptor =
+            descriptor_for_bytes(b"\xFF\xD8\xFFdata", Some("JPG")).expect("descriptor");
+        assert_eq!(descriptor.name, "JPEG");
+    }
+
+    #[test]
+    fn content_refinement_promotes_apng() {
+        let descriptor =
+            descriptor_for_bytes(&animated_png_header(), Some("png")).expect("descriptor");
+        assert_eq!(descriptor.name, "APNG");
+    }
+
+    #[test]
+    fn unknown_bytes_yield_none() {
+        assert!(descriptor_for_bytes(b"plain text", None).is_none());
+        assert!(descriptor_for_bytes(&[], None).is_none());
+    }
 }
 
 #[cfg(test)]

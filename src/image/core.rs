@@ -1,4 +1,4 @@
-//! Load state machine, folder listing, preload cache, and the decode worker pool.
+//! Load state machine, item listing, preload cache, and the decode worker pool.
 
 use std::collections::{HashMap, HashSet, VecDeque};
 use std::ffi::c_void;
@@ -17,8 +17,96 @@ use windows::Win32::UI::WindowsAndMessaging::{PostMessageW, WM_APP};
 use windows::core::PCWSTR;
 
 use super::decode::{self, DecodeError, DecodedImage};
+use crate::archive::reader as archive_reader;
 
 pub const WM_APP_DECODE_COMPLETE: u32 = WM_APP + 1;
+
+/// Viewable item identity; hashing is exact, locations_equal compares paths.
+#[derive(Clone, PartialEq, Eq, Hash)]
+pub enum ItemLocation {
+    File(PathBuf),
+    ArchiveMember { archive: PathBuf, member: String },
+}
+
+impl ItemLocation {
+    /// Leaf name for titles and messages (member basename inside archives).
+    pub fn display_name(&self) -> String {
+        match self {
+            Self::File(path) => path
+                .file_name()
+                .map_or_else(String::new, |name| name.to_string_lossy().into_owned()),
+            Self::ArchiveMember { member, .. } => member
+                .rsplit(['/', '\\'])
+                .next()
+                .unwrap_or(member)
+                .to_string(),
+        }
+    }
+
+    /// Full user-facing location text ("archive \u{203a} member" for members).
+    pub fn display_text(&self) -> String {
+        match self {
+            Self::File(path) => path.display().to_string(),
+            Self::ArchiveMember { archive, member } => {
+                format!("{} \u{203a} {member}", archive.display())
+            }
+        }
+    }
+
+    /// The file that carries this item on disk (the archive for members).
+    pub fn containing_file(&self) -> &Path {
+        match self {
+            Self::File(path) => path,
+            Self::ArchiveMember { archive, .. } => archive,
+        }
+    }
+
+    /// Some only for plain files; members cannot take file operations.
+    pub fn as_file(&self) -> Option<&Path> {
+        match self {
+            Self::File(path) => Some(path),
+            Self::ArchiveMember { .. } => None,
+        }
+    }
+
+    fn exists(&self) -> bool {
+        self.containing_file().is_file()
+    }
+
+    fn extension_lowercase(&self) -> Option<String> {
+        let name_path = match self {
+            Self::File(path) => path.as_path(),
+            Self::ArchiveMember { member, .. } => Path::new(member),
+        };
+        name_path
+            .extension()
+            .map(|extension| extension.to_string_lossy().to_lowercase())
+    }
+}
+
+/// Case-insensitive equality on the path parts (Windows semantics).
+pub fn locations_equal(a: &ItemLocation, b: &ItemLocation) -> bool {
+    match (a, b) {
+        (ItemLocation::File(a), ItemLocation::File(b)) => paths_equal(a, b),
+        (
+            ItemLocation::ArchiveMember {
+                archive: first_archive,
+                member: first_member,
+            },
+            ItemLocation::ArchiveMember {
+                archive: second_archive,
+                member: second_member,
+            },
+        ) => paths_equal(first_archive, second_archive) && first_member == second_member,
+        _ => false,
+    }
+}
+
+/// What the entry listing was scanned from.
+enum ListingScope {
+    Directory(PathBuf),
+    Archive(PathBuf),
+}
 
 /// Preload mode 0/1/2 -> (radius, cache budget in bytes).
 const PRELOAD_SPECIFICATIONS: [(usize, u64); 3] =
@@ -64,7 +152,7 @@ pub enum NavigationCommand {
 }
 
 pub struct FolderEntry {
-    pub path: PathBuf,
+    pub location: ItemLocation,
     wide_name: Vec<u16>,
     file_size: u64,
     modified: SystemTime,
@@ -77,14 +165,14 @@ pub enum DecodeStage {
 }
 
 pub struct DecodeCompletion {
-    pub path: PathBuf,
+    pub location: ItemLocation,
     pub file_size: u64,
     pub stage: DecodeStage,
     pub result: Result<Arc<DecodedImage>, DecodeError>,
 }
 
 pub struct CurrentImage {
-    pub path: PathBuf,
+    pub location: ItemLocation,
     pub image: Arc<DecodedImage>,
 }
 
@@ -96,14 +184,14 @@ struct CacheEntry {
 pub struct ImageCore {
     pool: DecodePool,
     options: CoreOptions,
-    folder_directory: Option<PathBuf>,
+    listing_scope: Option<ListingScope>,
     entries: Vec<FolderEntry>,
-    /// Path awaiting display; replacing it invalidates the previous load.
-    pending_display: Option<PathBuf>,
-    in_flight: HashMap<PathBuf, Arc<AtomicBool>>,
-    cache: HashMap<PathBuf, CacheEntry>,
+    /// Item awaiting display; replacing it invalidates the previous load.
+    pending_display: Option<ItemLocation>,
+    in_flight: HashMap<ItemLocation, Arc<AtomicBool>>,
+    cache: HashMap<ItemLocation, CacheEntry>,
     pub current: Option<CurrentImage>,
-    pub load_error: Option<(PathBuf, DecodeError)>,
+    pub load_error: Option<(ItemLocation, DecodeError)>,
 }
 
 impl ImageCore {
@@ -111,7 +199,7 @@ impl ImageCore {
         Self {
             pool: DecodePool::new(window.0 as isize),
             options,
-            folder_directory: None,
+            listing_scope: None,
             entries: Vec::new(),
             pending_display: None,
             in_flight: HashMap::new(),
@@ -130,15 +218,15 @@ impl ImageCore {
             || options.skip_hidden != self.options.skip_hidden
             || options.allow_mime_content_detection != self.options.allow_mime_content_detection;
         self.options = options;
-        if list_affected && let Some(directory) = self.folder_directory.clone() {
-            self.rescan_folder(&directory);
+        if list_affected {
+            self.rescan_listing();
         }
         self.preload_neighbors();
     }
 
     pub fn folder_position(&self) -> Option<(usize, usize)> {
         let current = self.current.as_ref()?;
-        let index = self.position_of(&current.path)?;
+        let index = self.position_of(&current.location)?;
         Some((index + 1, self.entries.len()))
     }
 
@@ -146,19 +234,40 @@ impl ImageCore {
         !self.entries.is_empty()
     }
 
+    /// (file size, modified) of the current item; member values from the listing.
+    pub fn current_item_metadata(&self) -> Option<(u64, Option<SystemTime>)> {
+        let current = self.current.as_ref()?;
+        match &current.location {
+            ItemLocation::File(path) => {
+                let metadata = std::fs::metadata(path).ok();
+                Some((
+                    metadata.as_ref().map_or(0, std::fs::Metadata::len),
+                    metadata.and_then(|metadata| metadata.modified().ok()),
+                ))
+            }
+            ItemLocation::ArchiveMember { .. } => {
+                let entry = self
+                    .position_of(&current.location)
+                    .map(|index| &self.entries[index]);
+                Some((
+                    entry.map_or(0, |entry| entry.file_size),
+                    entry.map(|entry| entry.modified),
+                ))
+            }
+        }
+    }
+
     pub fn reload_current(&mut self) -> bool {
-        let Some(path) = self
-            .pending_display
-            .clone()
-            .or_else(|| self.current.as_ref().map(|current| current.path.clone()))
-        else {
+        let Some(location) = self.pending_display.clone().or_else(|| {
+            self.current
+                .as_ref()
+                .map(|current| current.location.clone())
+        }) else {
             return false;
         };
-        self.cache.remove(&path);
-        if let Some(directory) = self.folder_directory.clone() {
-            self.rescan_folder(&directory);
-        }
-        self.load_file(&path)
+        self.cache.remove(&location);
+        self.rescan_listing();
+        self.load_item(&location)
     }
 
     pub fn load_path(&mut self, path: &Path) -> bool {
@@ -170,37 +279,108 @@ impl ImageCore {
             let Some(first) = self.first_existing_entry() else {
                 return false;
             };
-            return self.load_file(&first);
+            return self.load_item(&first);
+        }
+        let extension = path
+            .extension()
+            .map(|extension| extension.to_string_lossy().to_lowercase());
+        if extension
+            .as_deref()
+            .is_some_and(archive_reader::is_archive_extension)
+        {
+            return self.load_archive(&path);
         }
         let directory = path.parent().map(Path::to_path_buf);
+        let already_scanned = match (&self.listing_scope, &directory) {
+            (Some(ListingScope::Directory(scanned)), Some(directory)) => scanned == directory,
+            _ => false,
+        };
         if let Some(directory) = directory
-            && self.folder_directory.as_deref() != Some(&directory)
+            && !already_scanned
         {
             self.rescan_folder(&directory);
         }
-        self.load_file(&path)
+        self.load_item(&ItemLocation::File(path))
     }
 
-    fn load_file(&mut self, path: &Path) -> bool {
-        let file_size = match std::fs::metadata(path) {
-            Ok(metadata) => metadata.len(),
+    /// Opens an archive as a virtual folder of its image members.
+    fn load_archive(&mut self, archive: &Path) -> bool {
+        self.entries = Vec::new();
+        self.listing_scope = Some(ListingScope::Archive(archive.to_path_buf()));
+        let members = match archive_reader::enumerate(archive) {
+            Ok(members) => members,
             Err(error) => {
                 self.load_error = Some((
-                    path.to_path_buf(),
+                    ItemLocation::File(archive.to_path_buf()),
                     DecodeError {
-                        code: error.raw_os_error().unwrap_or(0),
-                        message: error.to_string(),
+                        code: error.code,
+                        message: error.message,
                         store_extension: None,
                     },
                 ));
                 return false;
             }
         };
-        if let Some(entry) = self.cache.get(path)
+        let mut entries: Vec<FolderEntry> = members
+            .into_iter()
+            .filter_map(|member| member_entry(archive, member))
+            .collect();
+        if entries.is_empty() {
+            self.load_error = Some((
+                ItemLocation::File(archive.to_path_buf()),
+                DecodeError {
+                    code: 0,
+                    message: "archive contains no supported images".to_string(),
+                    store_extension: None,
+                },
+            ));
+            return false;
+        }
+        sort_entries(&mut entries, &self.options);
+        self.entries = entries;
+        let Some(first) = self.first_existing_entry() else {
+            return false;
+        };
+        self.load_item(&first)
+    }
+
+    fn load_item(&mut self, location: &ItemLocation) -> bool {
+        let file_size = match location {
+            ItemLocation::File(path) => match std::fs::metadata(path) {
+                Ok(metadata) => metadata.len(),
+                Err(error) => {
+                    self.load_error = Some((
+                        location.clone(),
+                        DecodeError {
+                            code: error.raw_os_error().unwrap_or(0),
+                            message: error.to_string(),
+                            store_extension: None,
+                        },
+                    ));
+                    return false;
+                }
+            },
+            // Member sizes are fixed by the listing; a vanished member fails here.
+            ItemLocation::ArchiveMember { .. } => match self.position_of(location) {
+                Some(index) => self.entries[index].file_size,
+                None => {
+                    self.load_error = Some((
+                        location.clone(),
+                        DecodeError {
+                            code: 0,
+                            message: "member no longer exists in the archive".to_string(),
+                            store_extension: None,
+                        },
+                    ));
+                    return false;
+                }
+            },
+        };
+        if let Some(entry) = self.cache.get(location)
             && entry.file_size == file_size
         {
             self.current = Some(CurrentImage {
-                path: path.to_path_buf(),
+                location: location.clone(),
                 image: entry.image.clone(),
             });
             self.pending_display = None;
@@ -208,58 +388,64 @@ impl ImageCore {
             self.preload_neighbors();
             return true;
         }
-        self.pending_display = Some(path.to_path_buf());
-        if let Some(cancellation) = self.in_flight.get(path) {
+        self.pending_display = Some(location.clone());
+        if let Some(cancellation) = self.in_flight.get(location) {
             // Already queued as a preload: revoke any cancellation and promote.
             cancellation.store(false, Ordering::Relaxed);
-            self.pool.promote(path);
+            self.pool.promote(location);
         } else {
             let cancellation = Arc::new(AtomicBool::new(false));
             self.in_flight
-                .insert(path.to_path_buf(), cancellation.clone());
+                .insert(location.clone(), cancellation.clone());
             self.pool
-                .submit(path.to_path_buf(), file_size, cancellation, true);
+                .submit(location.clone(), file_size, cancellation, true);
         }
         self.cancel_irrelevant_decodes();
         false
     }
 
     pub fn navigate(&mut self, command: NavigationCommand) -> Option<bool> {
-        self.refresh_folder_if_current_missing();
-        let current_path = self.navigation_anchor();
+        self.refresh_listing_if_current_missing();
+        let current_location = self.navigation_anchor();
         let target = self.navigation_target(command)?;
-        if current_path.is_some_and(|current| paths_equal(&current, &target)) {
-            return None; // same file, nothing to do
+        if current_location.is_some_and(|current| locations_equal(&current, &target)) {
+            return None; // same item, nothing to do
         }
-        Some(self.load_file(&target))
+        Some(self.load_item(&target))
     }
 
-    pub fn peek_navigation_target(&mut self, command: NavigationCommand) -> Option<PathBuf> {
-        self.refresh_folder_if_current_missing();
+    pub fn peek_navigation_target(&mut self, command: NavigationCommand) -> Option<ItemLocation> {
+        self.refresh_listing_if_current_missing();
         self.navigation_target(command)
     }
 
     pub fn refresh_folder(&mut self) {
-        if let Some(directory) = self.folder_directory.clone() {
-            self.rescan_folder(&directory);
-        }
+        self.rescan_listing();
     }
 
-    fn navigation_anchor(&self) -> Option<PathBuf> {
+    fn navigation_anchor(&self) -> Option<ItemLocation> {
         self.pending_display
             .clone()
-            .or_else(|| self.load_error.as_ref().map(|(path, _)| path.clone()))
-            .or_else(|| self.current.as_ref().map(|current| current.path.clone()))
+            .or_else(|| {
+                self.load_error
+                    .as_ref()
+                    .map(|(location, _)| location.clone())
+            })
+            .or_else(|| {
+                self.current
+                    .as_ref()
+                    .map(|current| current.location.clone())
+            })
     }
 
-    fn navigation_target(&self, command: NavigationCommand) -> Option<PathBuf> {
+    fn navigation_target(&self, command: NavigationCommand) -> Option<ItemLocation> {
         if self.entries.is_empty() {
             return None;
         }
         let current_index = self
             .navigation_anchor()
-            .as_deref()
-            .and_then(|path| self.position_of(path));
+            .as_ref()
+            .and_then(|location| self.position_of(location));
         match command {
             NavigationCommand::First => self.first_existing_entry(),
             NavigationCommand::Last => self.last_existing_entry(),
@@ -272,11 +458,11 @@ impl ImageCore {
         if matches!(completion.stage, DecodeStage::Preview) {
             let is_pending = self
                 .pending_display
-                .as_deref()
-                .is_some_and(|pending| paths_equal(pending, &completion.path));
+                .as_ref()
+                .is_some_and(|pending| locations_equal(pending, &completion.location));
             if is_pending && let Ok(image) = completion.result {
                 self.current = Some(CurrentImage {
-                    path: completion.path,
+                    location: completion.location,
                     image,
                 });
                 self.load_error = None;
@@ -284,28 +470,32 @@ impl ImageCore {
             }
             return false;
         }
-        self.in_flight.remove(&completion.path);
+        self.in_flight.remove(&completion.location);
         let is_pending = self
             .pending_display
-            .as_deref()
-            .is_some_and(|pending| paths_equal(pending, &completion.path));
+            .as_ref()
+            .is_some_and(|pending| locations_equal(pending, &completion.location));
         if let Err(error) = &completion.result
             && error.is_cancelled()
         {
-            // Navigation can return to a path while its decode is cancelling.
+            // Navigation can return to an item while its decode is cancelling.
             if is_pending {
                 let cancellation = Arc::new(AtomicBool::new(false));
                 self.in_flight
-                    .insert(completion.path.clone(), cancellation.clone());
-                self.pool
-                    .submit(completion.path, completion.file_size, cancellation, true);
+                    .insert(completion.location.clone(), cancellation.clone());
+                self.pool.submit(
+                    completion.location,
+                    completion.file_size,
+                    cancellation,
+                    true,
+                );
             }
             return false;
         }
         match completion.result {
             Ok(image) => {
                 self.cache.insert(
-                    completion.path.clone(),
+                    completion.location.clone(),
                     CacheEntry {
                         file_size: completion.file_size,
                         image: image.clone(),
@@ -313,7 +503,7 @@ impl ImageCore {
                 );
                 if is_pending {
                     self.current = Some(CurrentImage {
-                        path: completion.path,
+                        location: completion.location,
                         image,
                     });
                     self.pending_display = None;
@@ -328,7 +518,7 @@ impl ImageCore {
             Err(error) => {
                 if is_pending {
                     self.pending_display = None;
-                    self.load_error = Some((completion.path, error));
+                    self.load_error = Some((completion.location, error));
                 }
                 is_pending
             }
@@ -339,46 +529,67 @@ impl ImageCore {
         let mut entries = scan_folder(directory, &self.options);
         sort_entries(&mut entries, &self.options);
         self.entries = entries;
-        self.folder_directory = Some(directory.to_path_buf());
+        self.listing_scope = Some(ListingScope::Directory(directory.to_path_buf()));
     }
 
-    /// The listing is fixed at load time; only a vanished current file forces
-    /// a rescan (files added later belong to a new instance).
-    fn refresh_folder_if_current_missing(&mut self) {
-        let Some(directory) = self.folder_directory.clone() else {
-            return;
-        };
-        let current_missing = self
-            .current
-            .as_ref()
-            .is_some_and(|current| !current.path.is_file());
-        if current_missing {
-            self.rescan_folder(&directory);
+    /// Re-scans whatever the current listing came from (folder or archive).
+    fn rescan_listing(&mut self) {
+        match &self.listing_scope {
+            Some(ListingScope::Directory(directory)) => self.rescan_folder(&directory.clone()),
+            Some(ListingScope::Archive(archive)) => {
+                let archive = archive.clone();
+                let mut entries: Vec<FolderEntry> = archive_reader::enumerate(&archive)
+                    .map(|members| {
+                        members
+                            .into_iter()
+                            .filter_map(|member| member_entry(&archive, member))
+                            .collect()
+                    })
+                    .unwrap_or_default();
+                sort_entries(&mut entries, &self.options);
+                self.entries = entries;
+            }
+            None => {}
         }
     }
 
-    fn position_of(&self, path: &Path) -> Option<usize> {
-        self.entries
-            .iter()
-            .position(|entry| paths_equal(&entry.path, path))
+    /// The listing is fixed at load time; only a vanished current item rescans.
+    fn refresh_listing_if_current_missing(&mut self) {
+        let current_missing = self
+            .current
+            .as_ref()
+            .is_some_and(|current| !current.location.exists());
+        if current_missing {
+            self.rescan_listing();
+        }
     }
 
-    fn first_existing_entry(&self) -> Option<PathBuf> {
+    fn position_of(&self, location: &ItemLocation) -> Option<usize> {
         self.entries
             .iter()
-            .find(|entry| entry.path.is_file())
-            .map(|entry| entry.path.clone())
+            .position(|entry| locations_equal(&entry.location, location))
     }
 
-    fn last_existing_entry(&self) -> Option<PathBuf> {
+    fn first_existing_entry(&self) -> Option<ItemLocation> {
+        self.entries
+            .iter()
+            .find(|entry| entry.location.exists())
+            .map(|entry| entry.location.clone())
+    }
+
+    fn last_existing_entry(&self) -> Option<ItemLocation> {
         self.entries
             .iter()
             .rev()
-            .find(|entry| entry.path.is_file())
-            .map(|entry| entry.path.clone())
+            .find(|entry| entry.location.exists())
+            .map(|entry| entry.location.clone())
     }
 
-    fn step_existing_entry(&self, current: Option<usize>, direction: isize) -> Option<PathBuf> {
+    fn step_existing_entry(
+        &self,
+        current: Option<usize>,
+        direction: isize,
+    ) -> Option<ItemLocation> {
         let length = self.entries.len() as isize;
         let start = current.map_or(0, |index| index as isize);
         let mut index = start;
@@ -390,8 +601,8 @@ impl ImageCore {
                 return None; // stop at folder ends when not looping
             }
             let entry = &self.entries[index as usize];
-            if entry.path.is_file() {
-                return Some(entry.path.clone());
+            if entry.location.exists() {
+                return Some(entry.location.clone());
             }
         }
         None
@@ -406,8 +617,8 @@ impl ImageCore {
         if let Some(current_index) = self
             .current
             .as_ref()
-            .map(|current| current.path.clone())
-            .and_then(|path| self.position_of(&path))
+            .map(|current| current.location.clone())
+            .and_then(|location| self.position_of(&location))
         {
             let length = self.entries.len();
             for step in 1..=distance {
@@ -423,23 +634,23 @@ impl ImageCore {
                     };
                     let entry = &self.entries[index];
                     if entry.file_size > budget / 2
-                        || self.in_flight.contains_key(&entry.path)
+                        || self.in_flight.contains_key(&entry.location)
                         || self
                             .cache
-                            .get(&entry.path)
+                            .get(&entry.location)
                             .is_some_and(|cached| cached.file_size == entry.file_size)
                         || self
                             .pending_display
-                            .as_deref()
-                            .is_some_and(|pending| paths_equal(pending, &entry.path))
+                            .as_ref()
+                            .is_some_and(|pending| locations_equal(pending, &entry.location))
                     {
                         continue;
                     }
                     let cancellation = Arc::new(AtomicBool::new(false));
                     self.in_flight
-                        .insert(entry.path.clone(), cancellation.clone());
+                        .insert(entry.location.clone(), cancellation.clone());
                     self.pool
-                        .submit(entry.path.clone(), entry.file_size, cancellation, false);
+                        .submit(entry.location.clone(), entry.file_size, cancellation, false);
                 }
             }
         }
@@ -447,21 +658,20 @@ impl ImageCore {
         self.evict_cache();
     }
 
-    /// Decodes for paths outside the pending/current preload neighborhood are
-    /// dropped from the queue (no completion follows) or flagged if running.
+    /// Cancels queued or running decodes outside the preload neighborhood.
     fn cancel_irrelevant_decodes(&mut self) {
-        let mut relevant: HashSet<PathBuf> = HashSet::new();
+        let mut relevant: HashSet<ItemLocation> = HashSet::new();
         if let Some(pending) = &self.pending_display {
             relevant.insert(pending.clone());
         }
         if let Some(current) = &self.current {
-            relevant.insert(current.path.clone());
+            relevant.insert(current.location.clone());
         }
         let (distance, _) = PRELOAD_SPECIFICATIONS[self.options.preloading_mode.min(2)];
         let anchor_index = self
             .navigation_anchor()
-            .as_deref()
-            .and_then(|path| self.position_of(path));
+            .as_ref()
+            .and_then(|location| self.position_of(location));
         if let Some(anchor_index) = anchor_index {
             let length = self.entries.len();
             for step in 1..=distance {
@@ -472,16 +682,16 @@ impl ImageCore {
                         length,
                         self.options.loop_folders_enabled,
                     ) {
-                        relevant.insert(self.entries[index].path.clone());
+                        relevant.insert(self.entries[index].location.clone());
                     }
                 }
             }
         }
-        for path in self.pool.remove_queued_except(&relevant) {
-            self.in_flight.remove(&path);
+        for location in self.pool.remove_queued_except(&relevant) {
+            self.in_flight.remove(&location);
         }
-        for (path, cancellation) in &self.in_flight {
-            if !relevant.contains(path) {
+        for (location, cancellation) in &self.in_flight {
+            if !relevant.contains(location) {
                 cancellation.store(true, Ordering::Relaxed);
             }
         }
@@ -501,28 +711,28 @@ impl ImageCore {
         let current_index = self
             .current
             .as_ref()
-            .and_then(|current| self.position_of(&current.path));
+            .and_then(|current| self.position_of(&current.location));
         let length = self.entries.len();
         let loop_enabled = self.options.loop_folders_enabled;
-        let mut ranked: Vec<(PathBuf, u64, usize)> = self
+        let mut ranked: Vec<(ItemLocation, u64, usize)> = self
             .cache
             .iter()
-            .map(|(path, entry)| {
+            .map(|(location, entry)| {
                 let distance = self
-                    .position_of(path)
+                    .position_of(location)
                     .zip(current_index)
                     .map_or(usize::MAX, |(index, current)| {
                         ring_distance(index, current, length, loop_enabled)
                     });
-                (path.clone(), entry.image.pixel_bytes() as u64, distance)
+                (location.clone(), entry.image.pixel_bytes() as u64, distance)
             })
             .collect();
         ranked.sort_by_key(|(_, _, distance)| std::cmp::Reverse(*distance));
-        for (path, cost, _) in ranked {
+        for (location, cost, _) in ranked {
             if total <= budget {
                 break;
             }
-            self.cache.remove(&path);
+            self.cache.remove(&location);
             total -= cost;
         }
     }
@@ -597,7 +807,7 @@ fn scan_folder(directory: &Path, options: &CoreOptions) -> Vec<FolderEntry> {
         }
         let wide_name: Vec<u16> = file_name.encode_wide().chain(std::iter::once(0)).collect();
         entries.push(FolderEntry {
-            path: entry.path(),
+            location: ItemLocation::File(entry.path()),
             wide_name,
             file_size: metadata.len(),
             modified: metadata.modified().unwrap_or(UNIX_EPOCH),
@@ -605,6 +815,29 @@ fn scan_folder(directory: &Path, options: &CoreOptions) -> Vec<FolderEntry> {
         });
     }
     entries
+}
+
+/// Entry for an image member; other member types drop out of the listing.
+fn member_entry(archive: &Path, member: archive_reader::MemberInfo) -> Option<FolderEntry> {
+    Path::new(&member.name)
+        .extension()
+        .map(|extension| extension.to_string_lossy().to_lowercase())
+        .filter(|extension| decode::is_supported_extension(extension))?;
+    let wide_name: Vec<u16> = member
+        .name
+        .encode_utf16()
+        .chain(std::iter::once(0))
+        .collect();
+    Some(FolderEntry {
+        location: ItemLocation::ArchiveMember {
+            archive: archive.to_path_buf(),
+            member: member.name,
+        },
+        wide_name,
+        file_size: member.size,
+        modified: member.modified,
+        created: member.modified, // archives do not record creation times
+    })
 }
 
 fn sort_entries(entries: &mut [FolderEntry], options: &CoreOptions) {
@@ -628,8 +861,8 @@ fn sort_entries(entries: &mut [FolderEntry], options: &CoreOptions) {
             });
         }
         SortMode::Type => entries.sort_by(|a, b| {
-            format_name_of(&a.path)
-                .cmp(format_name_of(&b.path))
+            format_name_of(&a.location)
+                .cmp(format_name_of(&b.location))
                 .then(compare_natural_names(a, b))
         }),
     }
@@ -644,15 +877,15 @@ fn compare_natural_names(a: &FolderEntry, b: &FolderEntry) -> std::cmp::Ordering
     result.cmp(&0)
 }
 
-fn format_name_of(path: &Path) -> &'static str {
-    path.extension()
-        .map(|extension| extension.to_string_lossy().to_lowercase())
+fn format_name_of(location: &ItemLocation) -> &'static str {
+    location
+        .extension_lowercase()
         .and_then(|extension| decode::format_name_for_extension(&extension))
         .unwrap_or("")
 }
 
 struct DecodeJob {
-    path: PathBuf,
+    location: ItemLocation,
     file_size: u64,
     cancellation: Arc<AtomicBool>,
 }
@@ -683,14 +916,14 @@ impl DecodePool {
 
     fn submit(
         &self,
-        path: PathBuf,
+        location: ItemLocation,
         file_size: u64,
         cancellation: Arc<AtomicBool>,
         immediate: bool,
     ) {
         let mut queue = self.shared.queue.lock().expect("decode queue poisoned");
         let job = DecodeJob {
-            path,
+            location,
             file_size,
             cancellation,
         };
@@ -703,9 +936,11 @@ impl DecodePool {
         self.shared.available.notify_one();
     }
 
-    fn promote(&self, path: &Path) {
+    fn promote(&self, location: &ItemLocation) {
         let mut queue = self.shared.queue.lock().expect("decode queue poisoned");
-        if let Some(position) = queue.iter().position(|job| paths_equal(&job.path, path))
+        if let Some(position) = queue
+            .iter()
+            .position(|job| locations_equal(&job.location, location))
             && let Some(job) = queue.remove(position)
         {
             queue.push_front(job);
@@ -713,14 +948,14 @@ impl DecodePool {
     }
 
     /// Removes queued jobs outside the relevant set; running jobs are unaffected.
-    fn remove_queued_except(&self, relevant: &HashSet<PathBuf>) -> Vec<PathBuf> {
+    fn remove_queued_except(&self, relevant: &HashSet<ItemLocation>) -> Vec<ItemLocation> {
         let mut queue = self.shared.queue.lock().expect("decode queue poisoned");
         let mut removed = Vec::new();
         queue.retain(|job| {
-            if relevant.contains(&job.path) {
+            if relevant.contains(&job.location) {
                 true
             } else {
-                removed.push(job.path.clone());
+                removed.push(job.location.clone());
                 false
             }
         });
@@ -742,24 +977,45 @@ fn worker_loop(shared: &PoolShared, window: isize) {
                 queue = shared.available.wait(queue).expect("decode queue poisoned");
             }
         };
-        if decode::is_raw_two_stage(&job.path)
-            && let Some(preview) = decode::decode_raw_preview(&job.path, &job.cancellation)
-        {
-            post_completion(
-                window,
-                Box::new(DecodeCompletion {
-                    path: job.path.clone(),
-                    file_size: job.file_size,
-                    stage: DecodeStage::Preview,
-                    result: Ok(Arc::new(preview)),
-                }),
-            );
+        let result = match &job.location {
+            ItemLocation::File(path) => {
+                if decode::is_raw_two_stage(path)
+                    && let Some(preview) = decode::decode_raw_preview(path, &job.cancellation)
+                {
+                    post_completion(
+                        window,
+                        Box::new(DecodeCompletion {
+                            location: job.location.clone(),
+                            file_size: job.file_size,
+                            stage: DecodeStage::Preview,
+                            result: Ok(Arc::new(preview)),
+                        }),
+                    );
+                }
+                decode::decode_file(path, &job.cancellation)
+            }
+            ItemLocation::ArchiveMember { archive, member } => {
+                match archive_reader::read_member(archive, member, &job.cancellation) {
+                    Ok(data) => {
+                        let extension = Path::new(member)
+                            .extension()
+                            .map(|extension| extension.to_string_lossy().to_lowercase());
+                        decode::decode_bytes(&data, extension.as_deref(), &job.cancellation)
+                    }
+                    Err(error) if error.cancelled => Err(DecodeError::cancelled()),
+                    Err(error) => Err(DecodeError {
+                        code: error.code,
+                        message: error.message,
+                        store_extension: None,
+                    }),
+                }
+            }
         }
-        let result = decode::decode_file(&job.path, &job.cancellation).map(Arc::new);
+        .map(Arc::new);
         post_completion(
             window,
             Box::new(DecodeCompletion {
-                path: job.path,
+                location: job.location,
                 file_size: job.file_size,
                 stage: DecodeStage::Final,
                 result,
@@ -780,5 +1036,73 @@ fn post_completion(window: isize, completion: Box<DecodeCompletion>) {
     };
     if posted.is_err() {
         drop(unsafe { Box::from_raw(pointer) });
+    }
+}
+
+#[cfg(test)]
+mod item_location_tests {
+    use super::*;
+
+    fn member(archive: &str, member: &str) -> ItemLocation {
+        ItemLocation::ArchiveMember {
+            archive: PathBuf::from(archive),
+            member: member.to_string(),
+        }
+    }
+
+    #[test]
+    fn member_display_name_takes_the_basename() {
+        assert_eq!(member("C:\\a.cbz", "art/01.png").display_name(), "01.png");
+        assert_eq!(member("C:\\a.cbz", "art\\02.png").display_name(), "02.png");
+        assert_eq!(member("C:\\a.cbz", "03.png").display_name(), "03.png");
+    }
+
+    #[test]
+    fn member_display_text_joins_archive_and_member() {
+        assert_eq!(
+            member("C:\\a.cbz", "art/01.png").display_text(),
+            "C:\\a.cbz \u{203a} art/01.png"
+        );
+    }
+
+    #[test]
+    fn locations_compare_with_windows_path_semantics() {
+        let file = |path: &str| ItemLocation::File(PathBuf::from(path));
+        assert!(locations_equal(&file("C:\\A.PNG"), &file("c:\\a.png")));
+        assert!(locations_equal(
+            &member("C:\\A.CBZ", "01.png"),
+            &member("c:\\a.cbz", "01.png"),
+        ));
+        // Member names stay exact: archives distinguish case.
+        assert!(!locations_equal(
+            &member("C:\\a.cbz", "01.PNG"),
+            &member("C:\\a.cbz", "01.png"),
+        ));
+        assert!(!locations_equal(
+            &file("C:\\a.cbz"),
+            &member("C:\\a.cbz", "01.png"),
+        ));
+    }
+
+    #[test]
+    fn member_extension_resolves_format_names() {
+        assert_eq!(format_name_of(&member("C:\\a.cbz", "art/01.png")), "PNG");
+        assert_eq!(format_name_of(&member("C:\\a.cbz", "readme.txt")), "");
+    }
+
+    #[test]
+    fn member_entries_keep_images_only() {
+        let info = |name: &str| archive_reader::MemberInfo {
+            name: name.to_string(),
+            size: 10,
+            modified: UNIX_EPOCH,
+        };
+        let archive = Path::new("C:\\a.cbz");
+        assert!(member_entry(archive, info("art/01.png")).is_some());
+        assert!(member_entry(archive, info("info.txt")).is_none());
+        assert!(member_entry(archive, info("no_extension")).is_none());
+        let entry = member_entry(archive, info("art/01.png")).expect("image member");
+        assert_eq!(entry.created, entry.modified); // archives have no creation time
+        assert_eq!(entry.file_size, 10);
     }
 }

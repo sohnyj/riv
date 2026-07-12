@@ -68,10 +68,9 @@ unsafe extern "C" {
 }
 
 pub fn decode_webp_animation(
-    path: &Path,
+    data: &[u8],
     format_name: &'static str,
 ) -> Result<DecodedImage, DecodeError> {
-    let data = std::fs::read(path).map_err(fallback_error)?;
     let webp_data = WebPData {
         bytes: data.as_ptr(),
         size: data.len(),
@@ -204,25 +203,63 @@ unsafe extern "C" {
         error_message: *mut c_char,
         error_capacity: usize,
     ) -> c_int;
+    fn riv_exr_decode_memory(
+        data: *const u8,
+        size: usize,
+        out_width: *mut c_int,
+        out_height: *mut c_int,
+        out_pixels: *mut *mut u16,
+        error_message: *mut c_char,
+        error_capacity: usize,
+    ) -> c_int;
     fn riv_exr_free(pixels: *mut u16);
 }
 
 pub fn decode_exr(path: &Path, format_name: &'static str) -> Result<DecodedImage, DecodeError> {
     let wide_path: Vec<u16> = path.as_os_str().encode_wide().chain(Some(0)).collect();
+    decode_exr_with(
+        format_name,
+        |width, height, pixels, message, capacity| unsafe {
+            riv_exr_decode(wide_path.as_ptr(), width, height, pixels, message, capacity)
+        },
+    )
+}
+
+pub fn decode_exr_bytes(
+    data: &[u8],
+    format_name: &'static str,
+) -> Result<DecodedImage, DecodeError> {
+    decode_exr_with(
+        format_name,
+        |width, height, pixels, message, capacity| unsafe {
+            riv_exr_decode_memory(
+                data.as_ptr(),
+                data.len(),
+                width,
+                height,
+                pixels,
+                message,
+                capacity,
+            )
+        },
+    )
+}
+
+fn decode_exr_with(
+    format_name: &'static str,
+    decode: impl FnOnce(*mut c_int, *mut c_int, *mut *mut u16, *mut c_char, usize) -> c_int,
+) -> Result<DecodedImage, DecodeError> {
     let mut width: c_int = 0;
     let mut height: c_int = 0;
     let mut half_pixels: *mut u16 = std::ptr::null_mut();
     let mut error_message = [0u8; 256];
-    let status = unsafe {
-        riv_exr_decode(
-            wide_path.as_ptr(),
-            &raw mut width,
-            &raw mut height,
-            &raw mut half_pixels,
-            error_message.as_mut_ptr().cast(),
-            error_message.len(),
-        )
-    };
+    let status = decode(
+        &raw mut width,
+        &raw mut height,
+        &raw mut half_pixels,
+        error_message.as_mut_ptr().cast(),
+        error_message.len(),
+    );
     if status != 0 {
         let text = CStr::from_bytes_until_nul(&error_message)
             .map_or("EXR decode failed", |message| {
@@ -365,13 +402,12 @@ unsafe extern "C" {
     ) -> HeifError;
 }
 
-pub fn decode_heif(path: &Path, format_name: &'static str) -> Result<DecodedImage, DecodeError> {
-    let data = std::fs::read(path).map_err(fallback_error)?;
+pub fn decode_heif(data: &[u8], format_name: &'static str) -> Result<DecodedImage, DecodeError> {
     let context = unsafe { heif_context_alloc() };
     if context.is_null() {
         return Err(fallback_error("HEIF context allocation failed"));
     }
-    let result = decode_heif_primary_image(context, &data, format_name);
+    let result = decode_heif_primary_image(context, data, format_name);
     unsafe { heif_context_free(context) };
     result
 }

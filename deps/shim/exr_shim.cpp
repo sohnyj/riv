@@ -8,6 +8,7 @@
 
 #include <cstdio>
 #include <cstdlib>
+#include <cstring>
 #include <exception>
 #include <stdexcept>
 #include <thread>
@@ -46,19 +47,39 @@ private:
     std::FILE* file_;
 };
 
+// Borrowed in-memory stream for archive members extracted by the Rust side.
+class MemoryStream : public Imf::IStream {
+public:
+    MemoryStream(const unsigned char* data, size_t size)
+        : Imf::IStream("riv-exr-memory"), data_(data), size_(size), position_(0) {}
+
+    bool read(char buffer[], int count) override {
+        if (count < 0 || position_ + static_cast<size_t>(count) > size_) {
+            throw std::runtime_error("unexpected end of data");
+        }
+        std::memcpy(buffer, data_ + position_, static_cast<size_t>(count));
+        position_ += static_cast<size_t>(count);
+        return position_ < size_;
+    }
+
+    uint64_t tellg() override { return position_; }
+
+    void seekg(uint64_t position) override { position_ = static_cast<size_t>(position); }
+
+private:
+    const unsigned char* data_;
+    size_t size_;
+    size_t position_;
+};
+
 void write_error(char* error_message, size_t error_capacity, const char* text) {
     if (error_message != nullptr && error_capacity > 0) {
         std::snprintf(error_message, error_capacity, "%s", text);
     }
 }
 
-} // namespace
-
-extern "C" {
-
-// Returns 0 on success; out_pixels is a malloc'd RGBA half buffer freed by riv_exr_free.
-int riv_exr_decode(const wchar_t* path, int* out_width, int* out_height,
-                   unsigned short** out_pixels, char* error_message, size_t error_capacity) {
+int decode_stream(Imf::IStream& stream, int* out_width, int* out_height,
+                  unsigned short** out_pixels, char* error_message, size_t error_capacity) {
     try {
         static const int thread_count = [] {
             const unsigned int hardware = std::thread::hardware_concurrency();
@@ -66,11 +87,6 @@ int riv_exr_decode(const wchar_t* path, int* out_width, int* out_height,
         }();
         Imf::setGlobalThreadCount(thread_count);
 
-        WideFileStream stream(path);
-        if (!stream.valid()) {
-            write_error(error_message, error_capacity, "cannot open file");
-            return 1;
-        }
         Imf::RgbaInputFile file(stream);
         const Imath::Box2i data_window = file.dataWindow();
         const long long width = static_cast<long long>(data_window.max.x) - data_window.min.x + 1;
@@ -105,6 +121,31 @@ int riv_exr_decode(const wchar_t* path, int* out_width, int* out_height,
         write_error(error_message, error_capacity, "unknown OpenEXR error");
         return 1;
     }
+}
+
+} // namespace
+
+extern "C" {
+
+// Returns 0 on success; out_pixels is a malloc'd RGBA half buffer freed by riv_exr_free.
+int riv_exr_decode(const wchar_t* path, int* out_width, int* out_height,
+                   unsigned short** out_pixels, char* error_message, size_t error_capacity) {
+    WideFileStream stream(path);
+    if (!stream.valid()) {
+        write_error(error_message, error_capacity, "cannot open file");
+        return 1;
+    }
+    return decode_stream(stream, out_width, out_height, out_pixels, error_message,
+                         error_capacity);
+}
+
+// In-memory variant; the buffer is only borrowed for the duration of the call.
+int riv_exr_decode_memory(const unsigned char* data, size_t size, int* out_width,
+                          int* out_height, unsigned short** out_pixels, char* error_message,
+                          size_t error_capacity) {
+    MemoryStream stream(data, size);
+    return decode_stream(stream, out_width, out_height, out_pixels, error_message,
+                         error_capacity);
 }
 
 void riv_exr_free(unsigned short* pixels) {

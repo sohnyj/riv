@@ -19,6 +19,7 @@ pub enum MenuSelection {
 
 pub struct MenuState {
     pub has_image: bool,
+    pub has_file_on_disk: bool,
     pub has_folder: bool,
     pub has_animation: bool,
     pub animation_paused: bool,
@@ -44,6 +45,7 @@ impl MenuBuilder {
         match gate {
             ActivationGate::Window => true,
             ActivationGate::Image => self.state_snapshot.has_image,
+            ActivationGate::FileOnDisk => self.state_snapshot.has_file_on_disk,
             ActivationGate::Animation => self.state_snapshot.has_animation,
             ActivationGate::Folder => self.state_snapshot.has_folder,
         }

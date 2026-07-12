@@ -5,6 +5,8 @@
 pub enum ActivationGate {
     Window,
     Image,
+    /// Image whose backing file can take file operations (not an archive member).
+    FileOnDisk,
     Animation,
     Folder,
 }
@@ -57,13 +59,13 @@ const ACTION_TABLE: &[(Action, &str, &str, ActivationGate)] = &[
         Action::OpenWith,
         "openwith",
         "Open With",
-        ActivationGate::Image,
+        ActivationGate::FileOnDisk,
     ),
     (
         Action::OpenWithOther,
         "openwithother",
         "Other Application...",
-        ActivationGate::Image,
+        ActivationGate::FileOnDisk,
     ),
     (
         Action::OpenContainingFolder,
@@ -83,13 +85,23 @@ const ACTION_TABLE: &[(Action, &str, &str, ActivationGate)] = &[
         "Show File Info",
         ActivationGate::Image,
     ),
-    (Action::Rename, "rename", "Rename...", ActivationGate::Image),
-    (Action::Delete, "delete", "Delete", ActivationGate::Image),
+    (
+        Action::Rename,
+        "rename",
+        "Rename...",
+        ActivationGate::FileOnDisk,
+    ),
+    (
+        Action::Delete,
+        "delete",
+        "Delete",
+        ActivationGate::FileOnDisk,
+    ),
     (
         Action::DeletePermanent,
         "deletepermanent",
         "Delete Permanently",
-        ActivationGate::Image,
+        ActivationGate::FileOnDisk,
     ),
     (
         Action::ClearRecents,

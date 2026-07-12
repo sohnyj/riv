@@ -1,6 +1,5 @@
 //! DirectWrite overlays: info panel, zoom text, error text.
 
-use std::path::Path;
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use windows::Win32::Foundation::{FILETIME, SYSTEMTIME};
@@ -254,17 +253,15 @@ fn create_text_formats(
 }
 
 pub fn build_info_text(
-    path: &Path,
+    file_name: &str,
+    location_text: &str,
     image: &DecodedImage,
     file_size: u64,
     modified: Option<SystemTime>,
 ) -> String {
-    let file_name = path
-        .file_name()
-        .map_or_else(String::new, |name| name.to_string_lossy().into_owned());
     let megapixels = f64::from(image.width) * f64::from(image.height) / 1_000_000.0;
     let mut lines = vec![
-        file_name,
+        file_name.to_string(),
         format!("Format: {}", image.format_name),
         format!("Size: {}", format_file_size(file_size)),
         format!(
@@ -278,7 +275,7 @@ pub fn build_info_text(
             None => lines.push("Bit depth: high (FP16)".to_string()),
         }
     }
-    lines.push(format!("Path: {}", path.display()));
+    lines.push(format!("Path: {location_text}"));
     if let Some(modified) = modified {
         lines.push(format!("Modified: {}", format_locale_datetime(modified)));
     }
@@ -373,14 +370,11 @@ fn trim_number(value: f64, decimals: usize) -> String {
 }
 
 pub fn build_error_text(
-    path: &Path,
+    file_name: &str,
     message: &str,
     code: i32,
     store_extension: Option<&str>,
 ) -> String {
-    let file_name = path
-        .file_name()
-        .map_or_else(String::new, |name| name.to_string_lossy().into_owned());
     let reason = if message.is_empty() {
         "Decode failed".to_string()
     } else {

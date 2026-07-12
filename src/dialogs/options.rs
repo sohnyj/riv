@@ -30,6 +30,7 @@ use windows::Win32::UI::WindowsAndMessaging::{
 use windows::core::PCWSTR;
 
 use crate::actions::Action;
+use crate::archive::reader as archive_reader;
 use crate::bindings;
 use crate::dialogs::resource::*;
 use crate::dialogs::shortcut_capture;
@@ -931,6 +932,10 @@ fn initialize_association_page(state: &mut OptionsState) {
 
     let mut formats: Vec<(&'static str, &'static [&'static str])> =
         decode::format_groups().collect();
+    // Archive extensions appear only when archiveint.dll provides the support.
+    if archive_reader::available() {
+        formats.extend(archive_reader::format_groups());
+    }
     formats.sort_by_key(|(name, _)| *name);
     for (name, extension_list) in formats {
         if extension_list.len() == 1 {
