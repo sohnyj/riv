@@ -519,7 +519,7 @@ fn field_paint(field: HWND, text: &str, hint: bool) {
         SetBkMode(device, TRANSPARENT);
         SetTextColor(
             device,
-            windows::Win32::Foundation::COLORREF(GetSysColor(if hint {
+            COLORREF(GetSysColor(if hint {
                 COLOR_GRAYTEXT
             } else {
                 COLOR_WINDOWTEXT

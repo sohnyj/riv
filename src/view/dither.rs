@@ -164,8 +164,8 @@ struct DitherEffect {
 impl ID2D1EffectImpl_Impl for DitherEffect_Impl {
     fn Initialize(
         &self,
-        effectcontext: Ref<ID2D1EffectContext>,
-        transformgraph: Ref<ID2D1TransformGraph>,
+        effectcontext: Ref<'_, ID2D1EffectContext>,
+        transformgraph: Ref<'_, ID2D1TransformGraph>,
     ) -> Result<()> {
         let context = effectcontext.ok()?;
         let graph = transformgraph.ok()?;
@@ -209,7 +209,7 @@ impl ID2D1EffectImpl_Impl for DitherEffect_Impl {
         Ok(())
     }
 
-    fn SetGraph(&self, _transformgraph: Ref<ID2D1TransformGraph>) -> Result<()> {
+    fn SetGraph(&self, _transformgraph: Ref<'_, ID2D1TransformGraph>) -> Result<()> {
         // Only reached by variable-input effects.
         Err(E_NOTIMPL.into())
     }
@@ -259,7 +259,7 @@ impl ID2D1Transform_Impl for DitherEffect_Impl {
 }
 
 impl ID2D1DrawTransform_Impl for DitherEffect_Impl {
-    fn SetDrawInfo(&self, drawinfo: Ref<ID2D1DrawInfo>) -> Result<()> {
+    fn SetDrawInfo(&self, drawinfo: Ref<'_, ID2D1DrawInfo>) -> Result<()> {
         let info = drawinfo.ok()?;
         match self.pattern {
             DitherPattern::Ordered => unsafe {
@@ -276,7 +276,7 @@ impl ID2D1DrawTransform_Impl for DitherEffect_Impl {
     }
 }
 
-fn create_effect(effect: OutRef<IUnknown>, pattern: DitherPattern) -> HRESULT {
+fn create_effect(effect: OutRef<'_, IUnknown>, pattern: DitherPattern) -> HRESULT {
     let object: ID2D1EffectImpl = DitherEffect {
         pattern,
         blue_noise_texture: RefCell::new(None),
@@ -291,11 +291,11 @@ fn create_effect(effect: OutRef<IUnknown>, pattern: DitherPattern) -> HRESULT {
     }
 }
 
-unsafe extern "system" fn create_ordered_effect(effect: OutRef<IUnknown>) -> HRESULT {
+unsafe extern "system" fn create_ordered_effect(effect: OutRef<'_, IUnknown>) -> HRESULT {
     create_effect(effect, DitherPattern::Ordered)
 }
 
-unsafe extern "system" fn create_fruit_effect(effect: OutRef<IUnknown>) -> HRESULT {
+unsafe extern "system" fn create_fruit_effect(effect: OutRef<'_, IUnknown>) -> HRESULT {
     create_effect(effect, DitherPattern::Fruit)
 }
 

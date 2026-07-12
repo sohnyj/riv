@@ -449,7 +449,7 @@ impl DecodeInput<'_> {
 }
 
 fn decode_input(
-    input: &DecodeInput,
+    input: &DecodeInput<'_>,
     cancellation: &AtomicBool,
 ) -> Result<DecodedImage, DecodeError> {
     if cancellation.load(Ordering::Relaxed) {
@@ -591,7 +591,7 @@ struct DecodedFrames {
 }
 
 fn decode_with_wic(
-    input: &DecodeInput,
+    input: &DecodeInput<'_>,
     format_name: &'static str,
     semantics: &FrameSemantics,
     cancellation: &AtomicBool,
@@ -625,7 +625,7 @@ fn decode_with_wic(
 
 fn create_wic_decoder(
     factory: &IWICImagingFactory,
-    input: &DecodeInput,
+    input: &DecodeInput<'_>,
 ) -> windows::core::Result<IWICBitmapDecoder> {
     match input {
         DecodeInput::File(path) => unsafe {
