@@ -1,0 +1,77 @@
+name: Release
+
+on:
+  push:
+    tags: ["v*"]
+
+permissions:
+  contents: write
+
+env:
+  CARGO_TERM_COLOR: always
+  XWIN_VERSION: "0.9.0"
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: Install the LLVM cross toolchain
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends clang lld llvm cmake ninja-build wine p7zip-full
+          echo "$(dirname "$(readlink -f "$(command -v clang)")")" >> "$GITHUB_PATH"
+
+      - name: Install the Rust toolchain
+        run: |
+          rustup toolchain install stable --profile minimal
+          rustup target add x86_64-pc-windows-msvc
+
+      - name: Cache the xwin splat
+        id: xwin-cache
+        uses: actions/cache@v6
+        with:
+          path: ~/.xwin
+          key: xwin-${{ env.XWIN_VERSION }}
+
+      - name: Splat the Windows CRT and SDK
+        if: steps.xwin-cache.outputs.cache-hit != 'true'
+        run: |
+          curl -fsSL "https://github.com/Jake-Shadle/xwin/releases/download/${XWIN_VERSION}/xwin-${XWIN_VERSION}-x86_64-unknown-linux-musl.tar.gz" \
+            | tar -xz -C "$RUNNER_TEMP"
+          "$RUNNER_TEMP/xwin-${XWIN_VERSION}-x86_64-unknown-linux-musl/xwin" --accept-license splat --output ~/.xwin
+
+      - name: Cache the codec libraries
+        id: deps-cache
+        uses: actions/cache@v6
+        with:
+          path: deps/prefix
+          key: deps-${{ hashFiles('deps/build_deps.sh', 'deps/toolchain-clang-cl.cmake', 'deps/shim/**') }}
+
+      - name: Build the codec libraries
+        if: steps.deps-cache.outputs.cache-hit != 'true'
+        run: ./deps/build_deps.sh
+
+      - uses: Swatinem/rust-cache@v2.9.1
+
+      - name: Build
+        run: cargo build --release
+
+      - name: Test under wine
+        env:
+          CARGO_TARGET_X86_64_PC_WINDOWS_MSVC_RUNNER: wine
+          WINEDEBUG: "-all"
+        run: cargo test
+
+      - name: Package the release archive
+        run: |
+          cp target/x86_64-pc-windows-msvc/release/riv.exe .
+          7z a -mx=9 "riv-${GITHUB_REF_NAME}.7z" riv.exe LICENSE THIRD-PARTY-NOTICES.md
+
+      - name: Create the draft release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release create "$GITHUB_REF_NAME" --draft --generate-notes --verify-tag \
+            "riv-${GITHUB_REF_NAME}.7z"
