@@ -401,6 +401,16 @@ impl Renderer {
         self.dither_mode = mode;
     }
 
+    /// Animation frames reuse the existing bitmap and effect wiring; callers
+    /// fall back to set_image when this fails (no bitmap yet).
+    pub fn update_frame_pixels(&mut self, pixels: &[u8]) -> Result<()> {
+        let Some(bitmap) = &self.image else {
+            return Err(windows::core::Error::empty());
+        };
+        let pitch = self.image_pixel_size.0 as u32 * self.image_storage.bytes_per_pixel();
+        unsafe { bitmap.CopyFromMemory(None, pixels.as_ptr().cast(), pitch) }
+    }
+
     fn rewire_effect_chain(
         &mut self,
         bitmap: &ID2D1Bitmap1,

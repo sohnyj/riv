@@ -409,15 +409,17 @@ impl Application {
             return;
         };
         let frame = &image.frames[frame_index];
-        let _ = self.renderer.set_image(
-            &frame.pixels,
-            image.pixel_width,
-            image.pixel_height,
-            (image.width, image.height),
-            image.icc_profile.as_deref(),
-            image.storage,
-            image.peak_luminance_nits,
-        );
+        if self.renderer.update_frame_pixels(&frame.pixels).is_err() {
+            let _ = self.renderer.set_image(
+                &frame.pixels,
+                image.pixel_width,
+                image.pixel_height,
+                (image.width, image.height),
+                image.icc_profile.as_deref(),
+                image.storage,
+                image.peak_luminance_nits,
+            );
+        }
         if !paused {
             unsafe { SetTimer(Some(window), ANIMATION_TIMER, delay, None) };
         }
