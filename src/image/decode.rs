@@ -744,21 +744,37 @@ fn icc_hdr_encoding(icc: &[u8]) -> Option<HdrEncoding> {
 /// Rec. 2100 nominal peak for the HLG OOTF (display-referred mapping).
 const HLG_PEAK_NITS: f32 = 1000.0;
 
+/// Exact 16-bit code lookup; the transfer functions cost two powf per call.
+fn hdr_transfer_lookup_table(transfer: HdrTransfer) -> &'static [f32; 65536] {
+    static PERCEPTUAL_QUANTIZER_TABLE: OnceLock<Box<[f32; 65536]>> = OnceLock::new();
+    static HYBRID_LOG_GAMMA_TABLE: OnceLock<Box<[f32; 65536]>> = OnceLock::new();
+    let (slot, function): (_, fn(f32) -> f32) = match transfer {
+        HdrTransfer::PerceptualQuantizer => {
+            (&PERCEPTUAL_QUANTIZER_TABLE, perceptual_quantizer_nits as _)
+        }
+        HdrTransfer::HybridLogGamma => {
+            (&HYBRID_LOG_GAMMA_TABLE, hybrid_log_gamma_scene_linear as _)
+        }
+    };
+    slot.get_or_init(|| {
+        let mut table = Box::new([0.0f32; 65536]);
+        for (code, value) in table.iter_mut().enumerate() {
+            *value = function(code as f32 / f32::from(u16::MAX));
+        }
+        table
+    })
+}
+
 /// Converts 16-bit integer PQ/HLG pixels (straight alpha) in place to
 /// premultiplied linear scRGB halves.
 fn linearize_hdr_pixels(pixels: &mut [u8], encoding: HdrEncoding) {
     let matrix = encoding.primaries.bt709_conversion();
+    let transfer_table = hdr_transfer_lookup_table(encoding.transfer);
     for pixel in pixels.chunks_exact_mut(8) {
         let mut channel_nits = [0.0f32; 3];
         for (channel, nits) in channel_nits.iter_mut().enumerate() {
-            let code = f32::from(u16::from_le_bytes([
-                pixel[channel * 2],
-                pixel[channel * 2 + 1],
-            ])) / f32::from(u16::MAX);
-            *nits = match encoding.transfer {
-                HdrTransfer::PerceptualQuantizer => perceptual_quantizer_nits(code),
-                HdrTransfer::HybridLogGamma => hybrid_log_gamma_scene_linear(code),
-            };
+            let code = u16::from_le_bytes([pixel[channel * 2], pixel[channel * 2 + 1]]);
+            *nits = transfer_table[usize::from(code)];
         }
         if matches!(encoding.transfer, HdrTransfer::HybridLogGamma) {
             // BT.2100 OOTF: display = peak * scene_luminance^0.2 * scene.
@@ -1526,6 +1542,28 @@ fn copy_pixels(
     let mut pixels = vec![0u8; stride as usize * height as usize];
     unsafe { source.CopyPixels(std::ptr::null(), stride, &mut pixels)? };
     Ok(pixels)
+}
+
+#[cfg(test)]
+mod hdr_linearization_tests {
+    use super::*;
+
+    type TransferFunction = fn(f32) -> f32;
+
+    #[test]
+    fn transfer_lookup_tables_match_direct_evaluation() {
+        let cases: [(HdrTransfer, TransferFunction); 2] = [
+            (HdrTransfer::PerceptualQuantizer, perceptual_quantizer_nits),
+            (HdrTransfer::HybridLogGamma, hybrid_log_gamma_scene_linear),
+        ];
+        for (transfer, function) in cases {
+            let table = hdr_transfer_lookup_table(transfer);
+            for code in [0u16, 1, 255, 12345, 32767, 32768, 65534, 65535] {
+                let direct = function(f32::from(code) / f32::from(u16::MAX));
+                assert_eq!(table[usize::from(code)], direct, "code={code}");
+            }
+        }
+    }
 }
 
 #[cfg(test)]
