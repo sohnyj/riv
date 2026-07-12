@@ -22,11 +22,13 @@ extension is named in the error message when a file can't be decoded:
 
 | Format | Required extension |
 |---|---|
-| HEIC / HEIF | HEVC Video Extensions (optional; falls back to the built-in decoder below) |
-| AVIF | AV1 Video Extension |
-| JPEG XL | JPEG XL Image Extension |
-| WebP (still) | WebP Image Extensions |
-| Camera RAW | Raw Image Extension |
+| HEIC / HEIF | HEVC Video Extensions (Microsoft Corporation) |
+| AVIF | AV1 Video Extension (Microsoft Corporation) |
+| JPEG XL | JPEG XL Image Extension (Microsoft Corporation) |
+| WebP (still) | WebP Image Extensions (Microsoft Corporation) |
+| Camera RAW | Raw Image Extension (Microsoft Corporation) |
+
+The HEVC extension is optional; without it the built-in decoder below is used.
 
 Decoded by built-in codecs (no dependency to install):
 
