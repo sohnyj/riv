@@ -3,7 +3,7 @@ name = "riv"
 version = "0.1.4"
 edition = "2024"
 license = "GPL-3.0-only"
-description = "rust image viewer for Windows"
+description = "riv for Windows"
 
 [dependencies]
 windows = { version = "0.62.2", features = [

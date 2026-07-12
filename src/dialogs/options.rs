@@ -556,9 +556,9 @@ fn handle_page_command(
         (IDC_WINDOW_BGCOLOR_BUTTON, BN_CLICKED) => {
             choose_background_color(state, page);
         }
-        (IDC_WINDOW_TITLEBAR_BASIC, BN_CLICKED) => options.title_bar_mode = 0,
-        (IDC_WINDOW_TITLEBAR_MINIMAL, BN_CLICKED) => options.title_bar_mode = 1,
-        (IDC_WINDOW_TITLEBAR_PRACTICAL, BN_CLICKED) => options.title_bar_mode = 2,
+        (IDC_WINDOW_TITLEBAR_MODE, CBN_SELCHANGE) => {
+            options.title_bar_mode = combo_selection(page, control);
+        }
         (IDC_WINDOW_FITMODE, CBN_SELCHANGE) => {
             options.fit_mode = combo_selection(page, control);
         }
@@ -594,7 +594,7 @@ fn handle_page_command(
             options.loop_folders_enabled = is_checked(page, control);
         }
         (IDC_MISC_SLIDESHOW_DIRECTION, CBN_SELCHANGE) => {
-            options.slideshow_reversed = combo_selection(page, control) == 1;
+            options.slideshow_reversed = combo_selection(page, control) == 0;
         }
         (IDC_MISC_SLIDESHOW_TIMER_EDIT, EN_CHANGE) => {
             let value = unsafe { GetDlgItemInt(page, control, None, false) };
@@ -634,6 +634,11 @@ fn handle_page_command(
 
 fn initialize_window_page(state: &OptionsState) {
     let page = state.pages[0];
+    combo_fill(
+        page,
+        IDC_WINDOW_TITLEBAR_MODE,
+        &["App Name", "File Name", "[N/N] File Name"],
+    );
     combo_fill(page, IDC_WINDOW_FITMODE, &["Width", "Height"]);
 }
 
@@ -662,7 +667,7 @@ fn initialize_misc_page(state: &OptionsState) {
         IDC_MISC_PRELOADING,
         &["Disabled", "Adjacent", "Extended"],
     );
-    combo_fill(page, IDC_MISC_SLIDESHOW_DIRECTION, &["Forward", "Backward"]);
+    combo_fill(page, IDC_MISC_SLIDESHOW_DIRECTION, &["Backward", "Forward"]);
     combo_fill(page, IDC_MISC_AFTER_DELETE, &["Move Back", "Move Forward"]);
     if let Ok(spin) = unsafe { GetDlgItem(Some(page), IDC_MISC_SLIDESHOW_TIMER_SPIN) } {
         unsafe { SendMessageW(spin, UDM_SETRANGE32, Some(WPARAM(1)), Some(LPARAM(3600))) };
@@ -678,14 +683,11 @@ fn sync_all_pages(state: &mut OptionsState) {
         IDC_WINDOW_BGCOLOR_ENABLED,
         options.background_color_enabled,
     );
-    let _ = unsafe {
-        CheckRadioButton(
-            window_page,
-            IDC_WINDOW_TITLEBAR_BASIC,
-            IDC_WINDOW_TITLEBAR_PRACTICAL,
-            IDC_WINDOW_TITLEBAR_BASIC + options.title_bar_mode.min(2) as i32,
-        )
-    };
+    combo_select(
+        window_page,
+        IDC_WINDOW_TITLEBAR_MODE,
+        options.title_bar_mode.min(2),
+    );
     combo_select(window_page, IDC_WINDOW_FITMODE, options.fit_mode);
     set_check(
         window_page,
@@ -737,7 +739,7 @@ fn sync_all_pages(state: &mut OptionsState) {
     combo_select(
         misc_page,
         IDC_MISC_SLIDESHOW_DIRECTION,
-        u32::from(options.slideshow_reversed),
+        u32::from(!options.slideshow_reversed),
     );
     set_dialog_item_text(
         misc_page,
