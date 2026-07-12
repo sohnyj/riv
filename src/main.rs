@@ -1219,7 +1219,6 @@ fn create_main_window(initial_path: Option<&Path>) -> Result<HWND> {
     };
 
     let application = Box::new(Application::new(window, initial_path)?);
-    let load_pending = application.image_core.is_load_pending();
     unsafe {
         SetWindowLongPtrW(window, GWLP_USERDATA, Box::into_raw(application) as isize);
     }
@@ -1254,9 +1253,9 @@ fn create_main_window(initial_path: Option<&Path>) -> Result<HWND> {
         dwm::apply_title_bar_theme(window);
         application.drop_target = drag_drop::register(window).ok();
         application.render(window);
-        if !load_pending {
-            let _ = unsafe { PostMessageW(Some(window), WM_APP_SHOW_WINDOW, WPARAM(0), LPARAM(0)) };
-        }
+        // The background frame is presented before the first show, so the class
+        // background brush never flashes; a pending image lands when it decodes.
+        let _ = unsafe { PostMessageW(Some(window), WM_APP_SHOW_WINDOW, WPARAM(0), LPARAM(0)) };
     }
     Ok(window)
 }
@@ -1354,7 +1353,6 @@ extern "system" fn window_procedure(
                 } else {
                     application.apply_current_image(window);
                 }
-                application.ensure_window_shown(window);
             }
             LRESULT(0)
         }

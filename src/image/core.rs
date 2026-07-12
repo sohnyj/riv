@@ -150,10 +150,6 @@ impl ImageCore {
         !self.entries.is_empty()
     }
 
-    pub fn is_load_pending(&self) -> bool {
-        self.pending_display.is_some()
-    }
-
     pub fn reload_current(&mut self) -> bool {
         let Some(path) = self
             .pending_display
