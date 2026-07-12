@@ -10,6 +10,7 @@ permissions:
 env:
   CARGO_TERM_COLOR: always
   XWIN_VERSION: "0.9.0"
+  LLVM_VERSION: "21"
 
 jobs:
   release:
@@ -17,11 +18,15 @@ jobs:
     steps:
       - uses: actions/checkout@v7
 
+      # The MSVC STL in the xwin splat requires a recent clang (STL1000),
+      # newer than the runner default, so install from apt.llvm.org.
       - name: Install the LLVM cross toolchain
         run: |
-          sudo apt-get update
-          sudo apt-get install -y --no-install-recommends clang lld llvm cmake ninja-build wine p7zip-full
-          echo "$(dirname "$(readlink -f "$(command -v clang)")")" >> "$GITHUB_PATH"
+          wget -qO "$RUNNER_TEMP/llvm.sh" https://apt.llvm.org/llvm.sh
+          sudo bash "$RUNNER_TEMP/llvm.sh" "$LLVM_VERSION"
+          sudo apt-get install -y --no-install-recommends \
+            "clang-$LLVM_VERSION" "llvm-$LLVM_VERSION" "lld-$LLVM_VERSION" cmake ninja-build wine p7zip-full
+          echo "/usr/lib/llvm-$LLVM_VERSION/bin" >> "$GITHUB_PATH"
 
       - name: Install the Rust toolchain
         run: |
