@@ -576,9 +576,7 @@ fn decode_single_frame(
     let icc_profile = icc_profile_bytes(factory, &frame);
     let exif = read_exif(&frame);
     let (high_depth, float_native) = frame_pixel_format_traits(factory, &frame);
-    // WIC linearizes integer-to-half conversion with an sRGB assumption, which would
-    // corrupt PQ/HLG code values: route those through a transfer-neutral 16-bit
-    // integer conversion and linearize on the CPU after copy-out.
+    // PQ/HLG integers bypass WIC's sRGB-assuming float conversion (SPEC section 7).
     let hdr_encoding = if float_native {
         None
     } else {
@@ -622,9 +620,7 @@ fn decode_single_frame(
     if let Some(encoding) = hdr_encoding {
         linearize_hdr_pixels(&mut pixels, encoding);
     }
-    // Half-stored pixels are linear scRGB: float natives by WIC convention, converted
-    // integers via the converter's sRGB linearization, and PQ/HLG integers via the
-    // CPU linearization above.
+    // Half-stored pixels are linear scRGB regardless of the conversion route.
     let peak_luminance_nits = (storage == PixelStorage::RgbaHalf)
         .then(|| peak_luminance_from_half_pixels(&pixels))
         .flatten();
@@ -765,8 +761,7 @@ fn linearize_hdr_pixels(pixels: &mut [u8], encoding: HdrEncoding) {
             };
         }
         if matches!(encoding.transfer, HdrTransfer::HybridLogGamma) {
-            // BT.2100 OOTF: display = peak * scene_luminance^(gamma - 1) * scene,
-            // gamma 1.2, luminance with BT.2020 coefficients.
+            // BT.2100 OOTF: display = peak * scene_luminance^0.2 * scene.
             let scene_luminance =
                 0.2627 * channel_nits[0] + 0.6780 * channel_nits[1] + 0.0593 * channel_nits[2];
             let display_scale = HLG_PEAK_NITS * scene_luminance.max(0.0).powf(0.2);
@@ -802,10 +797,34 @@ fn hybrid_log_gamma_scene_linear(code: f32) -> f32 {
 /// Content peak: 99.9th-percentile per-pixel max channel, binned in the PQ code
 /// domain for perceptually even buckets. Input pixels are linear scRGB halves.
 fn peak_luminance_from_half_pixels(pixels: &[u8]) -> Option<f32> {
-    const BINS: usize = 4096;
-    let mut histogram = [0u32; BINS];
-    let mut pixel_count = 0u32;
+    if pixels.len() < 8 {
+        return None;
+    }
+    // Within SDR white the tone map is skipped, so the histogram never needs to run.
+    let mut maximum_linear = 0.0f32;
     for pixel in pixels.chunks_exact(8) {
+        for channel in 0..3 {
+            let bits = u16::from_le_bytes([pixel[channel * 2], pixel[channel * 2 + 1]]);
+            let linear = half_to_f32(bits);
+            if linear > maximum_linear {
+                maximum_linear = linear;
+            }
+        }
+    }
+    if maximum_linear <= 1.0 {
+        return Some(maximum_linear * SDR_REFERENCE_WHITE_NITS);
+    }
+    // Jittered subsampling: a fixed stride aliases with periodic image structure.
+    const BINS: usize = 4096;
+    const SUBSAMPLE_MINIMUM_PIXELS: usize = 4_000_000;
+    let pixel_count = pixels.len() / 8;
+    let subsample = pixel_count >= SUBSAMPLE_MINIMUM_PIXELS;
+    let mut histogram = [0u32; BINS];
+    let mut sample_count = 0u32;
+    let mut jitter_state = 0x9E37_79B9u32;
+    let mut index = 0usize;
+    while index < pixel_count {
+        let pixel = &pixels[index * 8..index * 8 + 8];
         let mut maximum_code = 0.0f32;
         for channel in 0..3 {
             let bits = u16::from_le_bytes([pixel[channel * 2], pixel[channel * 2 + 1]]);
@@ -816,12 +835,17 @@ fn peak_luminance_from_half_pixels(pixels: &[u8]) -> Option<f32> {
         }
         let bin = ((maximum_code.clamp(0.0, 1.0) * (BINS - 1) as f32) as usize).min(BINS - 1);
         histogram[bin] += 1;
-        pixel_count += 1;
+        sample_count += 1;
+        if subsample {
+            jitter_state = jitter_state
+                .wrapping_mul(1_664_525)
+                .wrapping_add(1_013_904_223);
+            index += 1 + (jitter_state >> 29) as usize;
+        } else {
+            index += 1;
+        }
     }
-    if pixel_count == 0 {
-        return None;
-    }
-    let threshold = (u64::from(pixel_count) * 999 / 1000) as u32;
+    let threshold = (u64::from(sample_count) * 999 / 1000) as u32;
     let mut accumulated = 0u32;
     let mut percentile_bin = BINS - 1;
     for (bin, count) in histogram.iter().enumerate() {
@@ -1502,4 +1526,59 @@ fn copy_pixels(
     let mut pixels = vec![0u8; stride as usize * height as usize];
     unsafe { source.CopyPixels(std::ptr::null(), stride, &mut pixels)? };
     Ok(pixels)
+}
+
+#[cfg(test)]
+mod peak_scan_tests {
+    use super::*;
+
+    fn half_pixels(values: &[(f32, f32, f32)]) -> Vec<u8> {
+        let mut pixels = Vec::new();
+        for (red, green, blue) in values {
+            for value in [*red, *green, *blue, 1.0] {
+                pixels.extend_from_slice(&f32_to_half(value).to_le_bytes());
+            }
+        }
+        pixels
+    }
+
+    #[test]
+    fn sdr_content_short_circuits_to_maximum() {
+        let pixels = half_pixels(&[(0.25, 0.5, 0.125); 64]);
+        let peak = peak_luminance_from_half_pixels(&pixels).unwrap();
+        assert!(
+            (peak - 0.5 * SDR_REFERENCE_WHITE_NITS).abs() < 0.1,
+            "peak={peak}"
+        );
+    }
+
+    #[test]
+    fn hdr_percentile_rejects_outliers_full_scan() {
+        // Below the subsample floor the scan is exhaustive: aligned outliers
+        // (multiples of 4) must still be rejected by the 99.9th percentile.
+        let mut values = vec![(2.5f32, 2.5f32, 2.5f32); 4000];
+        values[100] = (60.0, 60.0, 60.0);
+        values[2000] = (60.0, 60.0, 60.0);
+        let pixels = half_pixels(&values);
+        let peak = peak_luminance_from_half_pixels(&pixels).unwrap();
+        assert!((peak - 200.0).abs() < 5.0, "peak={peak}");
+    }
+
+    #[test]
+    fn hdr_percentile_rejects_aligned_outliers_when_subsampled() {
+        // 4M pixels with bright pixels on a fixed period (every 8000th): the
+        // jittered subsampling must not alias them above the 0.1% threshold.
+        let mut values = vec![(2.5f32, 2.5f32, 2.5f32); 4_000_000];
+        for index in (0..values.len()).step_by(8000) {
+            values[index] = (60.0, 60.0, 60.0);
+        }
+        let pixels = half_pixels(&values);
+        let peak = peak_luminance_from_half_pixels(&pixels).unwrap();
+        assert!((peak - 200.0).abs() < 5.0, "peak={peak}");
+    }
+
+    #[test]
+    fn empty_input_yields_none() {
+        assert!(peak_luminance_from_half_pixels(&[]).is_none());
+    }
 }
