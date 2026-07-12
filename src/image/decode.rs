@@ -9,12 +9,13 @@ use std::sync::OnceLock;
 use windows::Win32::Foundation::{GENERIC_READ, WINCODEC_ERR_COMPONENTNOTFOUND};
 use windows::Win32::Graphics::Imaging::{
     CLSID_WICImagingFactory, GUID_WICPixelFormat32bppPBGRA, GUID_WICPixelFormat64bppPRGBAHalf,
-    IWICBitmapDecoder, IWICBitmapFrameDecode, IWICBitmapSource, IWICColorContext,
-    IWICImagingFactory, IWICMetadataQueryReader, IWICPixelFormatInfo2, WICBitmapDitherTypeNone,
-    WICBitmapInterpolationModeFant, WICBitmapPaletteTypeCustom, WICBitmapTransformFlipHorizontal,
-    WICBitmapTransformFlipVertical, WICBitmapTransformOptions, WICBitmapTransformRotate90,
-    WICBitmapTransformRotate180, WICBitmapTransformRotate270, WICColorContextProfile,
-    WICDecodeMetadataCacheOnDemand, WICPixelFormatNumericRepresentationFloat,
+    GUID_WICPixelFormat64bppRGBA, IWICBitmapDecoder, IWICBitmapFrameDecode, IWICBitmapSource,
+    IWICColorContext, IWICImagingFactory, IWICMetadataQueryReader, IWICPixelFormatInfo2,
+    WICBitmapDitherTypeNone, WICBitmapInterpolationModeFant, WICBitmapPaletteTypeCustom,
+    WICBitmapTransformFlipHorizontal, WICBitmapTransformFlipVertical, WICBitmapTransformOptions,
+    WICBitmapTransformRotate90, WICBitmapTransformRotate180, WICBitmapTransformRotate270,
+    WICColorContextProfile, WICDecodeMetadataCacheOnDemand,
+    WICPixelFormatNumericRepresentationFloat,
 };
 use windows::Win32::System::Com::StructuredStorage::{
     PROPVARIANT, PropVariantClear, PropVariantToDouble, PropVariantToFileTime,
@@ -575,38 +576,55 @@ fn decode_single_frame(
     let icc_profile = icc_profile_bytes(factory, &frame);
     let exif = read_exif(&frame);
     let (high_depth, float_native) = frame_pixel_format_traits(factory, &frame);
-    // Integer-to-half conversion linearizes (WIC treats integers as sRGB, floats as
-    // scRGB), which would corrupt PQ/HLG code values: keep those at 8bpc for now.
-    let integer_hdr_encoded = !float_native
-        && icc_profile
-            .as_deref()
-            .is_some_and(icc_declares_hdr_transfer);
-    let (source, storage) = if high_depth && !integer_hdr_encoded {
-        match convert_pixel_format(factory, &frame.cast()?, &GUID_WICPixelFormat64bppPRGBAHalf) {
-            Ok(source) => (source, PixelStorage::RgbaHalf),
+    // WIC linearizes integer-to-half conversion with an sRGB assumption, which would
+    // corrupt PQ/HLG code values: route those through a transfer-neutral 16-bit
+    // integer conversion and linearize on the CPU after copy-out.
+    let hdr_encoding = if float_native {
+        None
+    } else {
+        icc_profile.as_deref().and_then(icc_hdr_encoding)
+    };
+    let (source, storage, hdr_encoding) = if high_depth && let Some(encoding) = hdr_encoding {
+        match convert_pixel_format(factory, &frame.cast()?, &GUID_WICPixelFormat64bppRGBA) {
+            Ok(source) => (source, PixelStorage::RgbaHalf, Some(encoding)),
             Err(_) => (
                 convert_to_pbgra(factory, &frame.cast()?)?,
                 PixelStorage::Bgra8,
+                None,
+            ),
+        }
+    } else if high_depth {
+        match convert_pixel_format(factory, &frame.cast()?, &GUID_WICPixelFormat64bppPRGBAHalf) {
+            Ok(source) => (source, PixelStorage::RgbaHalf, None),
+            Err(_) => (
+                convert_to_pbgra(factory, &frame.cast()?)?,
+                PixelStorage::Bgra8,
+                None,
             ),
         }
     } else {
         (
             convert_to_pbgra(factory, &frame.cast()?)?,
             PixelStorage::Bgra8,
+            None,
         )
     };
     let source = apply_orientation(factory, source, orientation)?;
     let (width, height) = source_size(&source)?;
     let (source, pixel_width, pixel_height) =
         downscale_to_device_limit(factory, source, width, height)?;
-    let pixels = copy_pixels(
+    let mut pixels = copy_pixels(
         &source,
         pixel_width,
         pixel_height,
         storage.bytes_per_pixel(),
     )?;
-    // Half-stored pixels are linear scRGB: float natives by WIC convention, and
-    // converted integers because the converter linearizes on the way to float.
+    if let Some(encoding) = hdr_encoding {
+        linearize_hdr_pixels(&mut pixels, encoding);
+    }
+    // Half-stored pixels are linear scRGB: float natives by WIC convention, converted
+    // integers via the converter's sRGB linearization, and PQ/HLG integers via the
+    // CPU linearization above.
     let peak_luminance_nits = (storage == PixelStorage::RgbaHalf)
         .then(|| peak_luminance_from_half_pixels(&pixels))
         .flatten();
@@ -647,31 +665,138 @@ fn frame_pixel_format_traits(
     .unwrap_or((false, false))
 }
 
-/// True when the ICC v4.4 'cicp' tag declares an HDR transfer (16 = PQ, 18 = HLG).
-fn icc_declares_hdr_transfer(icc: &[u8]) -> bool {
-    fn probe(icc: &[u8]) -> Option<bool> {
-        const TRANSFER_PQ: u8 = 16;
-        const TRANSFER_HLG: u8 = 18;
-        let read_u32 = |offset: usize| -> Option<u32> {
-            Some(u32::from_be_bytes(
-                icc.get(offset..offset + 4)?.try_into().ok()?,
-            ))
-        };
-        let tag_count = read_u32(128)? as usize;
-        for index in 0..tag_count {
-            let entry = 132 + index * 12;
-            if icc.get(entry..entry + 4)? != b"cicp" {
-                continue;
-            }
-            let offset = read_u32(entry + 4)? as usize;
-            if icc.get(offset..offset + 4)? != b"cicp" {
-                return Some(false);
-            }
-            return Some(matches!(*icc.get(offset + 9)?, TRANSFER_PQ | TRANSFER_HLG));
+#[derive(Clone, Copy)]
+enum HdrTransfer {
+    PerceptualQuantizer,
+    HybridLogGamma,
+}
+
+#[derive(Clone, Copy)]
+enum HdrPrimaries {
+    Bt709,
+    Bt2020,
+    DisplayP3,
+}
+
+impl HdrPrimaries {
+    /// Linear RGB conversion into BT.709 primaries (rows are output channels).
+    fn bt709_conversion(self) -> [[f32; 3]; 3] {
+        match self {
+            Self::Bt709 => [[1.0, 0.0, 0.0], [0.0, 1.0, 0.0], [0.0, 0.0, 1.0]],
+            Self::Bt2020 => [
+                [1.66049, -0.58764, -0.07285],
+                [-0.12455, 1.13290, -0.00835],
+                [-0.01815, -0.10058, 1.11873],
+            ],
+            Self::DisplayP3 => [
+                [1.22494, -0.22494, 0.0],
+                [-0.04206, 1.04206, 0.0],
+                [-0.01964, -0.07863, 1.09827],
+            ],
         }
-        Some(false)
     }
-    probe(icc).unwrap_or(false)
+}
+
+#[derive(Clone, Copy)]
+struct HdrEncoding {
+    transfer: HdrTransfer,
+    primaries: HdrPrimaries,
+}
+
+/// Reads the ICC v4.4 'cicp' tag; Some when it declares an HDR transfer (16 = PQ,
+/// 18 = HLG) with primaries the CPU linearization can convert.
+fn icc_hdr_encoding(icc: &[u8]) -> Option<HdrEncoding> {
+    const TRANSFER_PQ: u8 = 16;
+    const TRANSFER_HLG: u8 = 18;
+    const PRIMARIES_BT709: u8 = 1;
+    const PRIMARIES_BT2020: u8 = 9;
+    const PRIMARIES_P3_D65: u8 = 12;
+    let read_u32 = |offset: usize| -> Option<u32> {
+        Some(u32::from_be_bytes(
+            icc.get(offset..offset + 4)?.try_into().ok()?,
+        ))
+    };
+    let tag_count = read_u32(128)? as usize;
+    for index in 0..tag_count {
+        let entry = 132 + index * 12;
+        if icc.get(entry..entry + 4)? != b"cicp" {
+            continue;
+        }
+        let offset = read_u32(entry + 4)? as usize;
+        if icc.get(offset..offset + 4)? != b"cicp" {
+            return None;
+        }
+        let transfer = match *icc.get(offset + 9)? {
+            TRANSFER_PQ => HdrTransfer::PerceptualQuantizer,
+            TRANSFER_HLG => HdrTransfer::HybridLogGamma,
+            _ => return None,
+        };
+        let primaries = match *icc.get(offset + 8)? {
+            PRIMARIES_BT709 => HdrPrimaries::Bt709,
+            PRIMARIES_BT2020 => HdrPrimaries::Bt2020,
+            PRIMARIES_P3_D65 => HdrPrimaries::DisplayP3,
+            _ => return None,
+        };
+        return Some(HdrEncoding {
+            transfer,
+            primaries,
+        });
+    }
+    None
+}
+
+/// Rec. 2100 nominal peak for the HLG OOTF (display-referred mapping).
+const HLG_PEAK_NITS: f32 = 1000.0;
+
+/// Converts 16-bit integer PQ/HLG pixels (straight alpha) in place to
+/// premultiplied linear scRGB halves.
+fn linearize_hdr_pixels(pixels: &mut [u8], encoding: HdrEncoding) {
+    let matrix = encoding.primaries.bt709_conversion();
+    for pixel in pixels.chunks_exact_mut(8) {
+        let mut channel_nits = [0.0f32; 3];
+        for (channel, nits) in channel_nits.iter_mut().enumerate() {
+            let code = f32::from(u16::from_le_bytes([
+                pixel[channel * 2],
+                pixel[channel * 2 + 1],
+            ])) / f32::from(u16::MAX);
+            *nits = match encoding.transfer {
+                HdrTransfer::PerceptualQuantizer => perceptual_quantizer_nits(code),
+                HdrTransfer::HybridLogGamma => hybrid_log_gamma_scene_linear(code),
+            };
+        }
+        if matches!(encoding.transfer, HdrTransfer::HybridLogGamma) {
+            // BT.2100 OOTF: display = peak * scene_luminance^(gamma - 1) * scene,
+            // gamma 1.2, luminance with BT.2020 coefficients.
+            let scene_luminance =
+                0.2627 * channel_nits[0] + 0.6780 * channel_nits[1] + 0.0593 * channel_nits[2];
+            let display_scale = HLG_PEAK_NITS * scene_luminance.max(0.0).powf(0.2);
+            for nits in &mut channel_nits {
+                *nits *= display_scale;
+            }
+        }
+        let alpha = f32::from(u16::from_le_bytes([pixel[6], pixel[7]])) / f32::from(u16::MAX);
+        for (row, coefficients) in matrix.iter().enumerate() {
+            let bt709_nits = coefficients[0] * channel_nits[0]
+                + coefficients[1] * channel_nits[1]
+                + coefficients[2] * channel_nits[2];
+            let premultiplied = bt709_nits / SDR_REFERENCE_WHITE_NITS * alpha;
+            pixel[row * 2..row * 2 + 2].copy_from_slice(&f32_to_half(premultiplied).to_le_bytes());
+        }
+        pixel[6..8].copy_from_slice(&f32_to_half(alpha).to_le_bytes());
+    }
+}
+
+/// BT.2100 HLG inverse OETF (code -> scene linear, 1.0 at nominal peak).
+fn hybrid_log_gamma_scene_linear(code: f32) -> f32 {
+    const A: f32 = 0.178_832_77;
+    const B: f32 = 0.284_668_92;
+    const C: f32 = 0.559_910_7;
+    let code = code.max(0.0);
+    if code <= 0.5 {
+        (code * code) / 3.0
+    } else {
+        (((code - C) / A).exp() + B) / 12.0
+    }
 }
 
 /// Content peak: 99.9th-percentile per-pixel max channel, binned in the PQ code
@@ -718,6 +843,34 @@ fn half_to_f32(bits: u16) -> f32 {
     }
     let mantissa = u32::from(bits & 0x03FF);
     f32::from_bits(((u32::from(exponent) + 112) << 23) | (mantissa << 13))
+}
+
+/// Round-to-nearest-even; overflow clamps to the half maximum, NaN maps to 0.
+fn f32_to_half(value: f32) -> u16 {
+    const HALF_MAXIMUM: f32 = 65504.0;
+    const MINIMUM_NORMAL: f32 = 6.103_515_6e-5; // 2^-14
+    const SUBNORMAL_UNIT: f32 = 5.960_464_5e-8; // 2^-24
+    if value.is_nan() {
+        return 0;
+    }
+    let sign = if value.is_sign_negative() { 0x8000 } else { 0 };
+    let magnitude = value.abs();
+    if magnitude < MINIMUM_NORMAL {
+        let units = (magnitude / SUBNORMAL_UNIT).round() as u16;
+        return sign | units.min(0x03FF);
+    }
+    if magnitude > HALF_MAXIMUM {
+        return sign | 0x7BFF;
+    }
+    let bits = magnitude.to_bits();
+    let exponent = ((bits >> 23) & 0xFF) - 112;
+    let mantissa = bits & 0x007F_FFFF;
+    let mut half = (exponent << 10) | (mantissa >> 13);
+    let remainder = mantissa & 0x1FFF;
+    if remainder > 0x1000 || (remainder == 0x1000 && half & 1 == 1) {
+        half += 1;
+    }
+    sign | half as u16
 }
 
 /// scRGB 1.0 (D2D scene-referred SDR white).
