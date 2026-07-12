@@ -186,7 +186,7 @@ static REGISTRY: &[FormatDescriptor] = &[
     },
     FormatDescriptor {
         name: "JPEG",
-        extensions: &["jpg", "jpeg", "jpe", "jfif"],
+        extensions: &["jpg", "jpeg", "jpe"],
         magic: &[&[(0, b"\xFF\xD8\xFF")]],
         semantics: FrameSemantics::Single,
         adapter: Adapter::Wic,
@@ -228,6 +228,14 @@ static REGISTRY: &[FormatDescriptor] = &[
         name: "TIFF",
         extensions: &["tif", "tiff"],
         magic: &[&[(0, b"II*\x00")], &[(0, b"MM\x00*")]],
+        semantics: FrameSemantics::Single,
+        adapter: Adapter::Wic,
+        store_extension: None,
+    },
+    FormatDescriptor {
+        name: "DDS",
+        extensions: &["dds"],
+        magic: &[&[(0, b"DDS ")]],
         semantics: FrameSemantics::Single,
         adapter: Adapter::Wic,
         store_extension: None,
