@@ -70,6 +70,23 @@ pub struct Renderer {
     image_pixel_size: (f32, f32),
 }
 
+impl Drop for Renderer {
+    fn drop(&mut self) {
+        unsafe { self.d2d_context.SetTarget(None) };
+        self.effect_output = None;
+        self.image = None;
+        self.target = None;
+        self.color_management_effect = None;
+        self.white_level_effect = None;
+        self.hdr_tone_map_effect = None;
+        self.tone_map_normalize_effect = None;
+        self.output_color_management_effect = None;
+        self.affine_transform_effect = None;
+        self.dither_ordered_effect = None;
+        self.dither_fruit_effect = None;
+    }
+}
+
 fn create_d3d_device(driver_type: D3D_DRIVER_TYPE) -> Result<ID3D11Device> {
     let mut device = None;
     unsafe {
