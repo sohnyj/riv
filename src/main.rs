@@ -1015,7 +1015,6 @@ fn toggle_fullscreen(application: &mut Application, window: HWND) {
                 0,
                 SWP_FRAMECHANGED | SWP_NOMOVE | SWP_NOSIZE | SWP_NOZORDER | SWP_NOACTIVATE,
             );
-            dwm::set_fullscreen_polish(window, false);
         } else {
             let mut placement = WINDOWPLACEMENT {
                 length: size_of::<WINDOWPLACEMENT>() as u32,
@@ -1024,7 +1023,6 @@ fn toggle_fullscreen(application: &mut Application, window: HWND) {
             let _ = GetWindowPlacement(window, &raw mut placement);
             let style = WINDOW_STYLE(GetWindowLongPtrW(window, GWL_STYLE) as u32);
             application.fullscreen_restore = Some((placement, style));
-            dwm::set_fullscreen_polish(window, true);
 
             let monitor = MonitorFromWindow(window, MONITOR_DEFAULTTONEAREST);
             let mut monitor_info = MONITORINFO {

@@ -1,10 +1,7 @@
 //! DWM window attributes; failures (e.g. wine) are ignored.
 
 use windows::Win32::Foundation::HWND;
-use windows::Win32::Graphics::Dwm::{
-    DWMWA_TRANSITIONS_FORCEDISABLED, DWMWA_USE_IMMERSIVE_DARK_MODE, DWMWA_WINDOW_CORNER_PREFERENCE,
-    DWMWCP_DEFAULT, DWMWCP_DONOTROUND, DwmSetWindowAttribute,
-};
+use windows::Win32::Graphics::Dwm::{DWMWA_USE_IMMERSIVE_DARK_MODE, DwmSetWindowAttribute};
 
 fn set_attribute<T>(
     window: HWND,
@@ -25,22 +22,6 @@ fn set_attribute<T>(
 pub fn apply_title_bar_theme(window: HWND) {
     let dark: i32 = i32::from(system_apps_use_dark_theme());
     set_attribute(window, DWMWA_USE_IMMERSIVE_DARK_MODE, &dark);
-}
-
-/// Disables transitions and rounded corners while fullscreen; restores after.
-pub fn set_fullscreen_polish(window: HWND, fullscreen: bool) {
-    let transitions_disabled: i32 = i32::from(fullscreen);
-    set_attribute(
-        window,
-        DWMWA_TRANSITIONS_FORCEDISABLED,
-        &transitions_disabled,
-    );
-    let corner_preference = if fullscreen {
-        DWMWCP_DONOTROUND
-    } else {
-        DWMWCP_DEFAULT
-    };
-    set_attribute(window, DWMWA_WINDOW_CORNER_PREFERENCE, &corner_preference);
 }
 
 fn system_apps_use_dark_theme() -> bool {
