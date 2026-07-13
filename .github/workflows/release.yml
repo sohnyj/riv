@@ -3,6 +3,11 @@ name: Release
 on:
   push:
     tags: ["v*"]
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: "Release tag to create on the chosen branch (e.g. v0.x.x)"
+        required: true
 
 permissions:
   contents: write
@@ -11,6 +16,7 @@ env:
   CARGO_TERM_COLOR: always
   XWIN_VERSION: "0.9.0"
   LLVM_VERSION: "21"
+  RELEASE_TAG: ${{ inputs.tag || github.ref_name }}
 
 jobs:
   release:
@@ -20,6 +26,23 @@ jobs:
       - uses: actions/checkout@v7
         with:
           fetch-depth: 0
+
+      # The tag must name the package version, whichever path triggered the run.
+      - name: Check the tag against the package version
+        run: |
+          version=$(sed -n 's/^version = "\(.*\)"$/\1/p' Cargo.toml | head -1)
+          if [ "v$version" != "$RELEASE_TAG" ]; then
+            echo "Cargo.toml is at v$version but the release tag is $RELEASE_TAG" >&2
+            exit 1
+          fi
+
+      # Tags pushed with GITHUB_TOKEN do not retrigger workflows; this run
+      # carries the release through itself.
+      - name: Create the release tag
+        if: github.event_name == 'workflow_dispatch'
+        run: |
+          git tag "$RELEASE_TAG"
+          git push origin "$RELEASE_TAG"
 
       # The MSVC STL in the xwin splat requires a recent clang (STL1000),
       # newer than the runner default, so install from apt.llvm.org.
@@ -75,7 +98,7 @@ jobs:
       - name: Package the release archive
         run: |
           cp target/x86_64-pc-windows-msvc/release/riv.exe .
-          7z a -mx=9 "riv-${GITHUB_REF_NAME}.7z" riv.exe LICENSE THIRD-PARTY-NOTICES.md
+          7z a -mx=9 "riv-${RELEASE_TAG}.7z" riv.exe LICENSE THIRD-PARTY-NOTICES.md
 
       - name: Compose the release notes
         run: |
@@ -86,8 +109,8 @@ jobs:
             echo
             echo "## Changes"
             echo
-            previous=$(git describe --tags --abbrev=0 "${GITHUB_REF_NAME}^" 2>/dev/null || true)
-            git log --format='- %s' "${previous:+$previous..}$GITHUB_REF_NAME"
+            previous=$(git describe --tags --abbrev=0 "${RELEASE_TAG}^" 2>/dev/null || true)
+            git log --format='- %s' "${previous:+$previous..}$RELEASE_TAG"
           } > "$RUNNER_TEMP/notes.md"
           cat "$RUNNER_TEMP/notes.md"
 
@@ -95,6 +118,6 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
-          gh release create "$GITHUB_REF_NAME" --draft --verify-tag \
+          gh release create "$RELEASE_TAG" --draft --verify-tag \
             --notes-file "$RUNNER_TEMP/notes.md" \
-            "riv-${GITHUB_REF_NAME}.7z"
+            "riv-${RELEASE_TAG}.7z"
