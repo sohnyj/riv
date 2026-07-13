@@ -16,7 +16,10 @@ jobs:
   release:
     runs-on: ubuntu-latest
     steps:
+      # Full history and tags: the release notes list commits since the previous tag.
       - uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
 
       # The MSVC STL in the xwin splat requires a recent clang (STL1000),
       # newer than the runner default, so install from apt.llvm.org.
@@ -74,9 +77,24 @@ jobs:
           cp target/x86_64-pc-windows-msvc/release/riv.exe .
           7z a -mx=9 "riv-${GITHUB_REF_NAME}.7z" riv.exe LICENSE THIRD-PARTY-NOTICES.md
 
+      - name: Compose the release notes
+        run: |
+          {
+            echo "See the [README](https://github.com/sohnyj/riv#readme) for features and supported formats."
+            echo
+            awk '/^## Requirements$/{f=1} f && /^## / && !/^## Requirements$/{exit} f' README.md
+            echo
+            echo "## Changes"
+            echo
+            previous=$(git describe --tags --abbrev=0 "${GITHUB_REF_NAME}^" 2>/dev/null || true)
+            git log --format='- %s' "${previous:+$previous..}$GITHUB_REF_NAME"
+          } > "$RUNNER_TEMP/notes.md"
+          cat "$RUNNER_TEMP/notes.md"
+
       - name: Create the draft release
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
-          gh release create "$GITHUB_REF_NAME" --draft --generate-notes --verify-tag \
+          gh release create "$GITHUB_REF_NAME" --draft --verify-tag \
+            --notes-file "$RUNNER_TEMP/notes.md" \
             "riv-${GITHUB_REF_NAME}.7z"
