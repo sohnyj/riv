@@ -23,7 +23,7 @@ use windows::Win32::System::Com::StructuredStorage::{
     PropVariantToStringAlloc, PropVariantToUInt32,
 };
 use windows::Win32::System::Com::{CLSCTX_INPROC_SERVER, CoCreateInstance};
-use windows::core::{HSTRING, Interface, PCWSTR, w};
+use windows::core::{HSTRING, Interface, PCWSTR, Result as WindowsResult, w};
 
 pub struct Frame {
     pub pixels: Vec<u8>,
@@ -573,8 +573,8 @@ thread_local! {
 }
 
 fn with_wic_factory<T>(
-    operation: impl FnOnce(&IWICImagingFactory) -> windows::core::Result<T>,
-) -> windows::core::Result<T> {
+    operation: impl FnOnce(&IWICImagingFactory) -> WindowsResult<T>,
+) -> WindowsResult<T> {
     WIC_FACTORY.with(|slot| {
         let mut slot = slot.borrow_mut();
         if slot.is_none() {
@@ -634,7 +634,7 @@ fn decode_with_wic(
 fn create_wic_decoder(
     factory: &IWICImagingFactory,
     input: &DecodeInput<'_>,
-) -> windows::core::Result<IWICBitmapDecoder> {
+) -> WindowsResult<IWICBitmapDecoder> {
     match input {
         DecodeInput::File(path) => unsafe {
             factory.CreateDecoderFromFilename(
@@ -662,7 +662,7 @@ fn downscale_to_device_limit(
     source: IWICBitmapSource,
     width: u32,
     height: u32,
-) -> windows::core::Result<(IWICBitmapSource, u32, u32)> {
+) -> WindowsResult<(IWICBitmapSource, u32, u32)> {
     let longest = width.max(height);
     if longest <= MAXIMUM_TEXTURE_DIMENSION {
         return Ok((source, width, height));
@@ -687,7 +687,7 @@ fn decode_single_frame(
     decoder: &IWICBitmapDecoder,
     index: u32,
     cancellation: &AtomicBool,
-) -> windows::core::Result<DecodedFrames> {
+) -> WindowsResult<DecodedFrames> {
     let frame = unsafe { decoder.GetFrame(index)? };
     let orientation = exif_orientation(&frame);
     let icc_profile = icc_profile_bytes(factory, &frame);
@@ -763,7 +763,7 @@ fn frame_pixel_format_traits(
     factory: &IWICImagingFactory,
     frame: &IWICBitmapFrameDecode,
 ) -> (bool, bool) {
-    (|| -> windows::core::Result<(bool, bool)> {
+    (|| -> WindowsResult<(bool, bool)> {
         let format = unsafe { frame.GetPixelFormat()? };
         let information: IWICPixelFormatInfo2 =
             unsafe { factory.CreateComponentInfo(&raw const format)? }.cast()?;
@@ -1098,7 +1098,7 @@ fn decode_largest_frame(
     decoder: &IWICBitmapDecoder,
     frame_count: u32,
     cancellation: &AtomicBool,
-) -> windows::core::Result<DecodedFrames> {
+) -> WindowsResult<DecodedFrames> {
     let mut largest_index = 0;
     let mut largest_pixels = 0u64;
     for index in 0..frame_count {
@@ -1141,7 +1141,7 @@ fn decode_animation(
     decoder: &IWICBitmapDecoder,
     frame_count: u32,
     cancellation: &AtomicBool,
-) -> windows::core::Result<DecodedFrames> {
+) -> WindowsResult<DecodedFrames> {
     let container_reader = unsafe { decoder.GetMetadataQueryReader() }.ok();
     let container_query = |name: PCWSTR| {
         container_reader
@@ -1274,7 +1274,7 @@ pub(crate) fn clear_rectangle(
 fn convert_to_pbgra(
     factory: &IWICImagingFactory,
     source: &IWICBitmapSource,
-) -> windows::core::Result<IWICBitmapSource> {
+) -> WindowsResult<IWICBitmapSource> {
     convert_pixel_format(factory, source, &GUID_WICPixelFormat32bppPBGRA)
 }
 
@@ -1282,7 +1282,7 @@ fn convert_pixel_format(
     factory: &IWICImagingFactory,
     source: &IWICBitmapSource,
     target: &windows::core::GUID,
-) -> windows::core::Result<IWICBitmapSource> {
+) -> WindowsResult<IWICBitmapSource> {
     let converter = unsafe { factory.CreateFormatConverter()? };
     unsafe {
         converter.Initialize(
@@ -1302,7 +1302,7 @@ fn apply_orientation(
     factory: &IWICImagingFactory,
     source: IWICBitmapSource,
     orientation: u32,
-) -> windows::core::Result<IWICBitmapSource> {
+) -> WindowsResult<IWICBitmapSource> {
     let options = match orientation {
         2 => WICBitmapTransformFlipHorizontal,
         3 => WICBitmapTransformRotate180,
@@ -1392,7 +1392,7 @@ fn query_u32(reader: &IWICMetadataQueryReader, name: PCWSTR) -> Option<u32> {
     result
 }
 
-fn source_size(source: &IWICBitmapSource) -> windows::core::Result<(u32, u32)> {
+fn source_size(source: &IWICBitmapSource) -> WindowsResult<(u32, u32)> {
     let (mut width, mut height) = (0u32, 0u32);
     unsafe { source.GetSize(&raw mut width, &raw mut height)? };
     Ok((width, height))
@@ -1667,7 +1667,7 @@ fn copy_pixels(
     height: u32,
     bytes_per_pixel: u32,
     cancellation: &AtomicBool,
-) -> windows::core::Result<Vec<u8>> {
+) -> WindowsResult<Vec<u8>> {
     const STRIP_ROWS: u32 = 256;
     let stride = width * bytes_per_pixel;
     let mut pixels = vec![0u8; stride as usize * height as usize];
