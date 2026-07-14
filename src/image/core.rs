@@ -128,9 +128,12 @@ enum ListingScope {
     Archive(PathBuf),
 }
 
-/// Preload mode 0/1/2 -> (radius, cache budget in bytes).
-const PRELOAD_SPECIFICATIONS: [(usize, u64); 3] =
-    [(0, 0), (1, 250 * 1024 * 1024), (4, 2 * 1024 * 1024 * 1024)];
+/// Preload mode 0/1/2 -> (backward distance, forward distance, cache budget in bytes).
+const PRELOAD_SPECIFICATIONS: [(usize, usize, u64); 3] = [
+    (0, 0, 0),
+    (1, 3, 1024 * 1024 * 1024),
+    (2, 6, 2 * 1024 * 1024 * 1024),
+];
 
 #[derive(Clone, PartialEq)]
 pub struct CoreOptions {
@@ -428,9 +431,9 @@ impl ImageCore {
 
     pub fn navigate(&mut self, command: NavigationCommand) -> Option<bool> {
         self.refresh_listing_if_current_missing();
-        let current_location = self.navigation_anchor();
+        let anchor = self.navigation_anchor();
         let target = self.navigation_target(command)?;
-        if current_location.is_some_and(|current| current == target) {
+        if anchor.is_some_and(|anchor| anchor == target) {
             return None; // same item, nothing to do
         }
         Some(self.load_item(&target))
@@ -464,15 +467,15 @@ impl ImageCore {
         if self.entries.is_empty() {
             return None;
         }
-        let current_index = self
+        let anchor_index = self
             .navigation_anchor()
             .as_ref()
             .and_then(|location| self.position_of(location));
         match command {
             NavigationCommand::First => self.first_existing_entry(),
             NavigationCommand::Last => self.last_existing_entry(),
-            NavigationCommand::Next => self.step_existing_entry(current_index, 1),
-            NavigationCommand::Previous => self.step_existing_entry(current_index, -1),
+            NavigationCommand::Next => self.step_existing_entry(anchor_index, 1),
+            NavigationCommand::Previous => self.step_existing_entry(anchor_index, -1),
         }
     }
 
@@ -541,6 +544,7 @@ impl ImageCore {
                 if is_pending {
                     self.pending_display = None;
                     self.load_error = Some((completion.location, error));
+                    self.preload_neighbors();
                 }
                 is_pending
             }
@@ -607,13 +611,9 @@ impl ImageCore {
             .map(|entry| entry.location.clone())
     }
 
-    fn step_existing_entry(
-        &self,
-        current: Option<usize>,
-        direction: isize,
-    ) -> Option<ItemLocation> {
+    fn step_existing_entry(&self, anchor: Option<usize>, direction: isize) -> Option<ItemLocation> {
         let length = self.entries.len() as isize;
-        let start = current.map_or(0, |index| index as isize);
+        let start = anchor.map_or(0, |index| index as isize);
         let mut index = start;
         for _ in 0..length {
             index += direction;
@@ -631,49 +631,44 @@ impl ImageCore {
     }
 
     fn preload_neighbors(&mut self) {
-        let (distance, budget) = PRELOAD_SPECIFICATIONS[self.options.preloading_mode.min(2)];
-        if distance == 0 {
+        let (backward, forward, budget) =
+            PRELOAD_SPECIFICATIONS[self.options.preloading_mode.min(2)];
+        if backward == 0 && forward == 0 {
             self.cache.clear(); // preloading off: drop the cache
-            return;
-        }
-        if let Some(current_index) = self
-            .current
+        } else if let Some(anchor_index) = self
+            .navigation_anchor()
             .as_ref()
-            .map(|current| current.location.clone())
-            .and_then(|location| self.position_of(&location))
+            .and_then(|location| self.position_of(location))
         {
             let length = self.entries.len();
-            for step in 1..=distance {
-                for direction in [1isize, -1] {
-                    let offset = step as isize * direction;
-                    let Some(index) = neighbor_index(
-                        current_index,
-                        offset,
-                        length,
-                        self.options.loop_folders_enabled,
-                    ) else {
-                        continue;
-                    };
-                    let entry = &self.entries[index];
-                    if entry.file_size > budget / 2
-                        || self.in_flight.contains_key(&entry.location)
-                        || self
-                            .cache
-                            .get(&entry.location)
-                            .is_some_and(|cached| cached.file_size == entry.file_size)
-                        || self
-                            .pending_display
-                            .as_ref()
-                            .is_some_and(|pending| *pending == entry.location)
-                    {
-                        continue;
-                    }
-                    let cancellation = Arc::new(AtomicBool::new(false));
-                    self.in_flight
-                        .insert(entry.location.clone(), cancellation.clone());
-                    self.pool
-                        .submit(entry.location.clone(), entry.file_size, cancellation, false);
+            for offset in preload_offsets(backward, forward) {
+                let Some(index) = neighbor_index(
+                    anchor_index,
+                    offset,
+                    length,
+                    self.options.loop_folders_enabled,
+                ) else {
+                    continue;
+                };
+                let entry = &self.entries[index];
+                if entry.file_size > budget / 2
+                    || self.in_flight.contains_key(&entry.location)
+                    || self
+                        .cache
+                        .get(&entry.location)
+                        .is_some_and(|cached| cached.file_size == entry.file_size)
+                    || self
+                        .pending_display
+                        .as_ref()
+                        .is_some_and(|pending| *pending == entry.location)
+                {
+                    continue;
                 }
+                let cancellation = Arc::new(AtomicBool::new(false));
+                self.in_flight
+                    .insert(entry.location.clone(), cancellation.clone());
+                self.pool
+                    .submit(entry.location.clone(), entry.file_size, cancellation, false);
             }
         }
         self.cancel_irrelevant_decodes();
@@ -689,23 +684,21 @@ impl ImageCore {
         if let Some(current) = &self.current {
             relevant.insert(current.location.clone());
         }
-        let (distance, _) = PRELOAD_SPECIFICATIONS[self.options.preloading_mode.min(2)];
+        let (backward, forward, _) = PRELOAD_SPECIFICATIONS[self.options.preloading_mode.min(2)];
         let anchor_index = self
             .navigation_anchor()
             .as_ref()
             .and_then(|location| self.position_of(location));
         if let Some(anchor_index) = anchor_index {
             let length = self.entries.len();
-            for step in 1..=distance {
-                for direction in [1isize, -1] {
-                    if let Some(index) = neighbor_index(
-                        anchor_index,
-                        step as isize * direction,
-                        length,
-                        self.options.loop_folders_enabled,
-                    ) {
-                        relevant.insert(self.entries[index].location.clone());
-                    }
+            for offset in preload_offsets(backward, forward) {
+                if let Some(index) = neighbor_index(
+                    anchor_index,
+                    offset,
+                    length,
+                    self.options.loop_folders_enabled,
+                ) {
+                    relevant.insert(self.entries[index].location.clone());
                 }
             }
         }
@@ -719,9 +712,10 @@ impl ImageCore {
         }
     }
 
-    /// Evicts entries farthest from the current position until within budget.
+    /// Evicts entries in reverse preload priority until within budget.
     fn evict_cache(&mut self) {
-        let (_, budget) = PRELOAD_SPECIFICATIONS[self.options.preloading_mode.min(2)];
+        let (backward, forward, budget) =
+            PRELOAD_SPECIFICATIONS[self.options.preloading_mode.min(2)];
         let mut total: u64 = self
             .cache
             .values()
@@ -730,26 +724,33 @@ impl ImageCore {
         if total <= budget {
             return;
         }
-        let current_index = self
-            .current
+        let anchor_index = self
+            .navigation_anchor()
             .as_ref()
-            .and_then(|current| self.position_of(&current.location));
+            .and_then(|location| self.position_of(location));
         let length = self.entries.len();
         let loop_enabled = self.options.loop_folders_enabled;
-        let mut ranked: Vec<(ItemLocation, u64, usize)> = self
+        let priorities = anchor_index.map_or_else(HashMap::new, |anchor| {
+            preload_priorities(anchor, backward, forward, length, loop_enabled)
+        });
+        let mut ranked: Vec<(ItemLocation, u64, (u8, usize))> = self
             .cache
             .iter()
             .map(|(location, entry)| {
-                let distance = self
-                    .position_of(location)
-                    .zip(current_index)
-                    .map_or(usize::MAX, |(index, current)| {
-                        ring_distance(index, current, length, loop_enabled)
-                    });
-                (location.clone(), entry.image.pixel_bytes() as u64, distance)
+                let key = self.position_of(location).zip(anchor_index).map_or(
+                    UNLISTED_EVICTION_KEY,
+                    |(index, anchor)| match priorities.get(&index) {
+                        Some(priority) => (0, *priority),
+                        None => (
+                            1,
+                            ring_offset(index, anchor, length, loop_enabled).unsigned_abs(),
+                        ),
+                    },
+                );
+                (location.clone(), entry.image.pixel_bytes() as u64, key)
             })
             .collect();
-        ranked.sort_by_key(|(_, _, distance)| std::cmp::Reverse(*distance));
+        ranked.sort_by_key(|(_, _, key)| std::cmp::Reverse(*key));
         for (location, cost, _) in ranked {
             if total <= budget {
                 break;
@@ -761,7 +762,7 @@ impl ImageCore {
 }
 
 fn neighbor_index(
-    current: usize,
+    anchor: usize,
     offset: isize,
     length: usize,
     loop_enabled: bool,
@@ -769,10 +770,10 @@ fn neighbor_index(
     if length == 0 {
         return None;
     }
-    let index = current as isize + offset;
+    let index = anchor as isize + offset;
     if loop_enabled {
         let wrapped = index.rem_euclid(length as isize) as usize;
-        (wrapped != current).then_some(wrapped)
+        (wrapped != anchor).then_some(wrapped)
     } else {
         (0..length as isize)
             .contains(&index)
@@ -780,13 +781,48 @@ fn neighbor_index(
     }
 }
 
-fn ring_distance(a: usize, b: usize, length: usize, loop_enabled: bool) -> usize {
-    let direct = a.abs_diff(b);
-    if loop_enabled && length > 0 {
-        direct.min(length - direct)
+/// Preload targets in priority order: forward first, nearest first.
+fn preload_offsets(backward: usize, forward: usize) -> impl Iterator<Item = isize> {
+    (1..=forward as isize).chain((1..=backward as isize).map(|step| -step))
+}
+
+/// Signed offset from anchor to index; the nearest way round when looping.
+fn ring_offset(index: usize, anchor: usize, length: usize, loop_enabled: bool) -> isize {
+    let direct = index as isize - anchor as isize;
+    if !loop_enabled || length == 0 {
+        return direct;
+    }
+    let alternate = if direct > 0 {
+        direct - length as isize
+    } else {
+        direct + length as isize
+    };
+    if alternate.abs() < direct.abs() {
+        alternate
     } else {
         direct
     }
+}
+
+/// Cached items outside the listing; evicted before anything ranked by preload priority.
+const UNLISTED_EVICTION_KEY: (u8, usize) = (2, 0);
+
+/// Entry index -> preload priority (anchor 0, then submission order), from the
+/// same enumeration submission walks so eviction cannot reclassify wrapped offsets.
+fn preload_priorities(
+    anchor: usize,
+    backward: usize,
+    forward: usize,
+    length: usize,
+    loop_enabled: bool,
+) -> HashMap<usize, usize> {
+    let mut priorities = HashMap::from([(anchor, 0)]);
+    for (rank, offset) in preload_offsets(backward, forward).enumerate() {
+        if let Some(index) = neighbor_index(anchor, offset, length, loop_enabled) {
+            priorities.entry(index).or_insert(rank + 1);
+        }
+    }
+    priorities
 }
 
 /// ASCII case-insensitive path equality; approximates Windows filesystem behavior.
@@ -1060,6 +1096,78 @@ fn post_completion(window: isize, completion: Box<DecodeCompletion>) {
     };
     if posted.is_err() {
         drop(unsafe { Box::from_raw(pointer) });
+    }
+}
+
+#[cfg(test)]
+mod preload_geometry_tests {
+    use super::*;
+
+    fn offsets(mode: usize) -> Vec<isize> {
+        let (backward, forward, _) = PRELOAD_SPECIFICATIONS[mode];
+        preload_offsets(backward, forward).collect()
+    }
+
+    #[test]
+    fn offsets_run_forward_before_backward() {
+        assert!(offsets(0).is_empty());
+        assert_eq!(offsets(1), [1, 2, 3, -1]);
+        assert_eq!(offsets(2), [1, 2, 3, 4, 5, 6, -1, -2]);
+    }
+
+    #[test]
+    fn ring_offset_takes_the_nearest_way_round() {
+        assert_eq!(ring_offset(7, 2, 10, false), 5);
+        assert_eq!(ring_offset(0, 8, 10, false), -8);
+        // Looping: crossing the seam is nearer than walking back.
+        assert_eq!(ring_offset(0, 8, 10, true), 2);
+        assert_eq!(ring_offset(8, 0, 10, true), -2);
+        assert_eq!(ring_offset(2, 2, 10, true), 0);
+        // Exactly half way round: the direct reading wins the tie.
+        assert_eq!(ring_offset(5, 0, 10, true), 5);
+        assert_eq!(ring_offset(0, 5, 10, true), -5);
+        // Degenerate listings must not wrap into nonsense.
+        assert_eq!(ring_offset(0, 0, 1, true), 0);
+        assert_eq!(ring_offset(1, 0, 2, true), 1);
+    }
+
+    #[test]
+    fn eviction_prefers_forward_over_backward_within_the_neighborhood() {
+        let (backward, forward, _) = PRELOAD_SPECIFICATIONS[1];
+        let priorities = preload_priorities(10, backward, forward, 100, false);
+        // The anchor survives longest, then +1..+3, then -1.
+        assert_eq!(priorities[&10], 0);
+        assert_eq!(priorities[&11], 1);
+        assert_eq!(priorities[&12], 2);
+        assert_eq!(priorities[&13], 3);
+        assert_eq!(priorities[&9], 4);
+        assert_eq!(priorities.len(), 5);
+    }
+
+    #[test]
+    fn eviction_drops_outsiders_before_preload_targets() {
+        let (backward, forward, _) = PRELOAD_SPECIFICATIONS[1];
+        let priorities = preload_priorities(10, backward, forward, 100, false);
+        // Walking forward strands the old -1 at -2; outside the map, every
+        // (1, distance) key outranks every (0, priority) key at eviction time.
+        assert!(!priorities.contains_key(&8));
+        assert!(!priorities.contains_key(&14));
+        // Anything unlisted goes before even the farthest outsider.
+        assert!(UNLISTED_EVICTION_KEY > (1, usize::MAX));
+    }
+
+    #[test]
+    fn eviction_keeps_wrapped_preload_targets() {
+        let (backward, forward, _) = PRELOAD_SPECIFICATIONS[1];
+        // Five looping entries: +3 lands at ring offset -2 yet stays a target.
+        let priorities = preload_priorities(0, backward, forward, 5, true);
+        assert_eq!(priorities[&3], 3);
+        assert_eq!(priorities[&4], 4);
+        assert_eq!(priorities.len(), 5);
+        // Three looping entries: +2 claims the slot before -1 revisits it.
+        let priorities = preload_priorities(0, backward, forward, 3, true);
+        assert_eq!(priorities[&2], 2);
+        assert_eq!(priorities.len(), 3);
     }
 }
 
