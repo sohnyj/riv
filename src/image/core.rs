@@ -968,7 +968,7 @@ impl DecodePool {
             available: Condvar::new(),
         });
         let worker_count =
-            std::thread::available_parallelism().map_or(2, |count| count.get().min(4));
+            std::thread::available_parallelism().map_or(2, |count| count.get().min(8));
         for _ in 0..worker_count {
             let shared = shared.clone();
             std::thread::spawn(move || worker_loop(&shared, window));
