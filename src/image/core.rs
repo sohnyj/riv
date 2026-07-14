@@ -183,7 +183,10 @@ pub struct FolderEntry {
 }
 
 pub enum DecodeStage {
+    /// Preview standing in while the same job goes on to the full decode.
     Preview,
+    /// Preview and the job stops there; the full decode is owed on arrival.
+    PreviewFinal,
     Final,
 }
 
@@ -201,6 +204,8 @@ pub struct CurrentImage {
 
 struct CacheEntry {
     file_size: u64,
+    /// Embedded RAW preview standing in until someone pays for the full decode.
+    preview: bool,
     image: Arc<DecodedImage>,
 }
 
@@ -401,18 +406,26 @@ impl ImageCore {
                 }
             },
         };
-        if let Some(entry) = self.cache.get(location)
-            && entry.file_size == file_size
-        {
+        let cached = self
+            .cache
+            .get(location)
+            .filter(|entry| entry.file_size == file_size)
+            .map(|entry| (entry.image.clone(), entry.preview));
+        let mut kind = JobKind::PreviewThenFull;
+        if let Some((image, preview)) = cached {
             self.current = Some(CurrentImage {
                 location: location.clone(),
-                image: entry.image.clone(),
+                image,
             });
-            self.pending_display = None;
             self.load_error = None;
-            self.preload_neighbors();
-            return true;
+            if !preview {
+                self.pending_display = None;
+                self.preload_neighbors();
+                return true;
+            }
+            kind = JobKind::Full; // the preview is already on screen
         }
+        let displayed = kind == JobKind::Full;
         self.pending_display = Some(location.clone());
         if let Some(cancellation) = self.in_flight.get(location) {
             // Already queued as a preload: revoke any cancellation and promote.
@@ -423,10 +436,10 @@ impl ImageCore {
             self.in_flight
                 .insert(location.clone(), cancellation.clone());
             self.pool
-                .submit(location.clone(), file_size, cancellation, true);
+                .submit(location.clone(), file_size, cancellation, kind, true);
         }
         self.cancel_irrelevant_decodes();
-        false
+        displayed
     }
 
     pub fn navigate(&mut self, command: NavigationCommand) -> Option<bool> {
@@ -500,11 +513,38 @@ impl ImageCore {
             .pending_display
             .as_ref()
             .is_some_and(|pending| *pending == completion.location);
+        // A failed PreviewFinal falls through to share Final's failure paths.
+        if matches!(completion.stage, DecodeStage::PreviewFinal)
+            && let Ok(image) = &completion.result
+        {
+            self.cache.insert(
+                completion.location.clone(),
+                CacheEntry {
+                    file_size: completion.file_size,
+                    preview: true,
+                    image: image.clone(),
+                },
+            );
+            if is_pending {
+                // Waited on: show it and go buy the full decode it stands in for.
+                return self.load_item(&completion.location);
+            }
+            self.evict_cache();
+            return false;
+        }
         if let Err(error) = &completion.result
             && error.is_cancelled()
         {
             // Navigation can return to an item while its decode is cancelling.
             if is_pending {
+                let kind =
+                    if self.cache.get(&completion.location).is_some_and(|entry| {
+                        entry.preview && entry.file_size == completion.file_size
+                    }) {
+                        JobKind::Full // the cached preview already stands in
+                    } else {
+                        JobKind::PreviewThenFull
+                    };
                 let cancellation = Arc::new(AtomicBool::new(false));
                 self.in_flight
                     .insert(completion.location.clone(), cancellation.clone());
@@ -512,6 +552,7 @@ impl ImageCore {
                     completion.location,
                     completion.file_size,
                     cancellation,
+                    kind,
                     true,
                 );
             }
@@ -523,6 +564,7 @@ impl ImageCore {
                     completion.location.clone(),
                     CacheEntry {
                         file_size: completion.file_size,
+                        preview: false,
                         image: image.clone(),
                     },
                 );
@@ -651,7 +693,15 @@ impl ImageCore {
                     continue;
                 };
                 let entry = &self.entries[index];
-                if entry.file_size > budget / 2
+                // Speculative work stays cheap: a RAW neighbor gets its preview only.
+                let kind = match &entry.location {
+                    ItemLocation::File(path) if decode::is_raw_two_stage(path) => {
+                        JobKind::PreviewOnly
+                    }
+                    _ => JobKind::Full,
+                };
+                // The oversize gate is about decoded weight; previews stay cheap.
+                if (kind == JobKind::Full && entry.file_size > budget / 2)
                     || self.in_flight.contains_key(&entry.location)
                     || self
                         .cache
@@ -667,8 +717,13 @@ impl ImageCore {
                 let cancellation = Arc::new(AtomicBool::new(false));
                 self.in_flight
                     .insert(entry.location.clone(), cancellation.clone());
-                self.pool
-                    .submit(entry.location.clone(), entry.file_size, cancellation, false);
+                self.pool.submit(
+                    entry.location.clone(),
+                    entry.file_size,
+                    cancellation,
+                    kind,
+                    false,
+                );
             }
         }
         self.cancel_irrelevant_decodes();
@@ -946,10 +1001,19 @@ fn format_name_of(location: &ItemLocation) -> &'static str {
         .unwrap_or("")
 }
 
+/// Fixed once a worker takes the job; PreviewOnly is what keeps preload cheap.
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum JobKind {
+    Full,
+    PreviewOnly,
+    PreviewThenFull,
+}
+
 struct DecodeJob {
     location: ItemLocation,
     file_size: u64,
     cancellation: Arc<AtomicBool>,
+    kind: JobKind,
 }
 
 struct PoolShared {
@@ -981,15 +1045,17 @@ impl DecodePool {
         location: ItemLocation,
         file_size: u64,
         cancellation: Arc<AtomicBool>,
-        immediate: bool,
+        kind: JobKind,
+        front: bool,
     ) {
         let mut queue = self.shared.queue.lock().expect("decode queue poisoned");
         let job = DecodeJob {
             location,
             file_size,
             cancellation,
+            kind,
         };
-        if immediate {
+        if front {
             queue.push_front(job);
         } else {
             queue.push_back(job);
@@ -998,11 +1064,15 @@ impl DecodePool {
         self.shared.available.notify_one();
     }
 
+    /// A job a worker already took keeps its kind; PreviewFinal covers that arrival.
     fn promote(&self, location: &ItemLocation) {
         let mut queue = self.shared.queue.lock().expect("decode queue poisoned");
         if let Some(position) = queue.iter().position(|job| job.location == *location)
-            && let Some(job) = queue.remove(position)
+            && let Some(mut job) = queue.remove(position)
         {
+            if job.kind == JobKind::PreviewOnly {
+                job.kind = JobKind::PreviewThenFull;
+            }
             queue.push_front(job);
         }
     }
@@ -1039,18 +1109,27 @@ fn worker_loop(shared: &PoolShared, window: isize) {
         };
         let result = match &job.location {
             ItemLocation::File(path) => {
-                if decode::is_raw_two_stage(path)
+                if job.kind != JobKind::Full
+                    && decode::is_raw_two_stage(path)
                     && let Some(preview) = decode::decode_raw_preview(path, &job.cancellation)
                 {
+                    let last = job.kind == JobKind::PreviewOnly;
                     post_completion(
                         window,
                         Box::new(DecodeCompletion {
                             location: job.location.clone(),
                             file_size: job.file_size,
-                            stage: DecodeStage::Preview,
+                            stage: if last {
+                                DecodeStage::PreviewFinal
+                            } else {
+                                DecodeStage::Preview
+                            },
                             result: Ok(Arc::new(preview)),
                         }),
                     );
+                    if last {
+                        continue; // the full decode waits until someone asks for it
+                    }
                 }
                 decode::decode_file(path, &job.cancellation)
             }
