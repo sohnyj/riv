@@ -1275,7 +1275,7 @@ fn create_main_window(initial_path: Option<&Path>) -> Result<HWND> {
             )
         };
     }
-    if let Some(application) = unsafe { application_from_window(window) } {
+    if let Some(application) = application_from_window(window) {
         application.restore_window_geometry(window);
         dwm::apply_title_bar_theme(window);
         application.drop_target = drag_drop::register(window).ok();
@@ -1341,7 +1341,7 @@ fn fail_fast_dialog(instruction: &str, content: &str) {
     let _ = unsafe { TaskDialogIndirect(&raw const configuration, None, None, None) };
 }
 
-unsafe fn application_from_window(window: HWND) -> Option<&'static mut Application> {
+fn application_from_window(window: HWND) -> Option<&'static mut Application> {
     let pointer = unsafe { GetWindowLongPtrW(window, GWLP_USERDATA) } as *mut Application;
     unsafe { pointer.as_mut() }
 }
@@ -1354,7 +1354,7 @@ extern "system" fn window_procedure(
 ) -> LRESULT {
     match message {
         WM_SIZE => {
-            if let Some(application) = unsafe { application_from_window(window) } {
+            if let Some(application) = application_from_window(window) {
                 let width = (lparam.0 & 0xFFFF) as u32;
                 let height = ((lparam.0 >> 16) & 0xFFFF) as u32;
                 if width > 0 && height > 0 {
@@ -1372,7 +1372,7 @@ extern "system" fn window_procedure(
         }
         WM_APP_DECODE_COMPLETE => {
             let completion = unsafe { Box::from_raw(lparam.0 as *mut DecodeCompletion) };
-            if let Some(application) = unsafe { application_from_window(window) }
+            if let Some(application) = application_from_window(window)
                 && application.image_core.on_decode_complete(*completion)
             {
                 if application.image_core.load_error.is_some() {
@@ -1388,7 +1388,7 @@ extern "system" fn window_procedure(
             for rest in paths.iter().skip(1) {
                 open_in_new_window(rest);
             }
-            if let Some(application) = unsafe { application_from_window(window) }
+            if let Some(application) = application_from_window(window)
                 && let Some(first) = paths.first()
             {
                 open_external_path(application, window, first);
@@ -1397,7 +1397,7 @@ extern "system" fn window_procedure(
         }
         WM_APP_OPTIONS_APPLIED => {
             let payload = unsafe { &*(lparam.0 as *const dialogs::options::AppliedOptions) };
-            if let Some(application) = unsafe { application_from_window(window) } {
+            if let Some(application) = application_from_window(window) {
                 application.settings.set_options(&payload.options);
                 application
                     .settings
@@ -1409,7 +1409,7 @@ extern "system" fn window_procedure(
             LRESULT(0)
         }
         WM_APP_OPTIONS_GEOMETRY => {
-            if let Some(application) = unsafe { application_from_window(window) } {
+            if let Some(application) = application_from_window(window) {
                 let x = (lparam.0 & 0xFFFF_FFFF) as u32 as i32;
                 let y = (lparam.0 >> 32) as i32;
                 application.settings.set_options_geometry(x, y);
@@ -1418,20 +1418,20 @@ extern "system" fn window_procedure(
             LRESULT(0)
         }
         WM_APP_SHOW_WINDOW => {
-            if let Some(application) = unsafe { application_from_window(window) } {
+            if let Some(application) = application_from_window(window) {
                 application.ensure_window_shown(window);
             }
             LRESULT(0)
         }
         WM_TIMER if wparam.0 == ANIMATION_TIMER => {
-            if let Some(application) = unsafe { application_from_window(window) } {
+            if let Some(application) = application_from_window(window) {
                 application.advance_animation_frame(window);
             }
             LRESULT(0)
         }
         WM_TIMER if wparam.0 == ZOOM_TEXT_TIMER => {
             let _ = unsafe { KillTimer(Some(window), ZOOM_TEXT_TIMER) };
-            if let Some(application) = unsafe { application_from_window(window) }
+            if let Some(application) = application_from_window(window)
                 && application.zoom_text.take().is_some()
             {
                 application.render(window);
@@ -1439,7 +1439,7 @@ extern "system" fn window_procedure(
             LRESULT(0)
         }
         WM_TIMER if wparam.0 == SLIDESHOW_TIMER => {
-            if let Some(application) = unsafe { application_from_window(window) } {
+            if let Some(application) = application_from_window(window) {
                 let command = if application.settings.options.slideshow_reversed {
                     NavigationCommand::Previous
                 } else {
@@ -1453,14 +1453,14 @@ extern "system" fn window_procedure(
         }
         WM_TIMER if wparam.0 == RECENTS_SAVE_TIMER => {
             let _ = unsafe { KillTimer(Some(window), RECENTS_SAVE_TIMER) };
-            if let Some(application) = unsafe { application_from_window(window) } {
+            if let Some(application) = application_from_window(window) {
                 let _ = application.settings.save();
             }
             LRESULT(0)
         }
         WM_TIMER if wparam.0 == OPEN_WITH_TIMER => {
             let _ = unsafe { KillTimer(Some(window), OPEN_WITH_TIMER) };
-            if let Some(application) = unsafe { application_from_window(window) }
+            if let Some(application) = application_from_window(window)
                 && let Some(path) = application
                     .image_core
                     .current
@@ -1473,7 +1473,7 @@ extern "system" fn window_procedure(
         }
         WM_APP_OPEN_WITH_LIST => {
             let list = unsafe { Box::from_raw(lparam.0 as *mut OpenWithList) };
-            if let Some(application) = unsafe { application_from_window(window) } {
+            if let Some(application) = application_from_window(window) {
                 let is_current = application
                     .image_core
                     .current
@@ -1490,7 +1490,7 @@ extern "system" fn window_procedure(
             LRESULT(0)
         }
         WM_KEYDOWN | WM_SYSKEYDOWN => {
-            let handled = unsafe { application_from_window(window) }
+            let handled = application_from_window(window)
                 .is_some_and(|application| handle_key(application, window, wparam.0 as u16));
             if !handled && message == WM_SYSKEYDOWN {
                 unsafe { DefWindowProcW(window, message, wparam, lparam) }
@@ -1502,7 +1502,7 @@ extern "system" fn window_procedure(
         WM_SYSCHAR => {
             let character = char::from_u32(wparam.0 as u32).unwrap_or('\0');
             let bound = character.is_ascii_alphanumeric()
-                && unsafe { application_from_window(window) }.is_some_and(|application| {
+                && application_from_window(window).is_some_and(|application| {
                     application
                         .bindings
                         .lookup_key(current_modifiers(), character.to_ascii_uppercase() as u16)
@@ -1515,7 +1515,7 @@ extern "system" fn window_procedure(
             }
         }
         WM_GESTURE => {
-            if let Some(application) = unsafe { application_from_window(window) }
+            if let Some(application) = application_from_window(window)
                 && handle_gesture(application, window, lparam)
             {
                 return LRESULT(0);
@@ -1523,21 +1523,21 @@ extern "system" fn window_procedure(
             unsafe { DefWindowProcW(window, message, wparam, lparam) }
         }
         WM_MOUSEHWHEEL => {
-            if let Some(application) = unsafe { application_from_window(window) } {
+            if let Some(application) = application_from_window(window) {
                 let delta = ((wparam.0 >> 16) & 0xFFFF) as u16 as i16;
                 application.pan_by(window, f32::from(delta) / -2.0, 0.0);
             }
             LRESULT(0)
         }
         WM_MOUSEWHEEL => {
-            if let Some(application) = unsafe { application_from_window(window) } {
+            if let Some(application) = application_from_window(window) {
                 let wheel_delta = ((wparam.0 >> 16) & 0xFFFF) as u16 as i16;
                 handle_wheel(application, window, wheel_delta);
             }
             LRESULT(0)
         }
         WM_LBUTTONDOWN => {
-            if let Some(application) = unsafe { application_from_window(window) } {
+            if let Some(application) = application_from_window(window) {
                 let move_window = current_modifiers() == MODIFIER_CONTROL
                     && application.settings.options.control_drag_window
                     && application.fullscreen_restore.is_none()
@@ -1564,7 +1564,7 @@ extern "system" fn window_procedure(
             LRESULT(0)
         }
         WM_MOUSEMOVE => {
-            if let Some(application) = unsafe { application_from_window(window) }
+            if let Some(application) = application_from_window(window)
                 && let Some((last_x, last_y)) = application.pan_drag_position
             {
                 let x = (lparam.0 & 0xFFFF) as u16 as i16 as i32;
@@ -1575,7 +1575,7 @@ extern "system" fn window_procedure(
             LRESULT(0)
         }
         WM_LBUTTONUP => {
-            if let Some(application) = unsafe { application_from_window(window) }
+            if let Some(application) = application_from_window(window)
                 && application.pan_drag_position.take().is_some()
             {
                 let _ = unsafe { ReleaseCapture() };
@@ -1583,7 +1583,7 @@ extern "system" fn window_procedure(
             LRESULT(0)
         }
         WM_SETCURSOR => {
-            if let Some(application) = unsafe { application_from_window(window) }
+            if let Some(application) = application_from_window(window)
                 && application.pan_drag_position.is_some()
             {
                 unsafe { SetCursor(Some(application.pan_cursor)) };
@@ -1593,7 +1593,7 @@ extern "system" fn window_procedure(
             }
         }
         WM_LBUTTONDBLCLK => {
-            if let Some(application) = unsafe { application_from_window(window) }
+            if let Some(application) = application_from_window(window)
                 && let Some(action) =
                     application
                         .bindings
@@ -1604,7 +1604,7 @@ extern "system" fn window_procedure(
             LRESULT(0)
         }
         WM_MBUTTONDOWN => {
-            if let Some(application) = unsafe { application_from_window(window) }
+            if let Some(application) = application_from_window(window)
                 && let Some(action) =
                     application
                         .bindings
@@ -1615,7 +1615,7 @@ extern "system" fn window_procedure(
             LRESULT(0)
         }
         WM_XBUTTONDOWN => {
-            if let Some(application) = unsafe { application_from_window(window) } {
+            if let Some(application) = application_from_window(window) {
                 let base = if (wparam.0 >> 16) & 0xFFFF == 1 {
                     MouseBase::Back
                 } else {
@@ -1632,7 +1632,7 @@ extern "system" fn window_procedure(
             LRESULT(1) // handled: prevent default app-command translation
         }
         WM_CONTEXTMENU => {
-            if let Some(application) = unsafe { application_from_window(window) } {
+            if let Some(application) = application_from_window(window) {
                 let mut x = (lparam.0 & 0xFFFF) as u16 as i16 as i32;
                 let mut y = ((lparam.0 >> 16) & 0xFFFF) as u16 as i16 as i32;
                 if x == -1 && y == -1 {
@@ -1720,7 +1720,7 @@ extern "system" fn window_procedure(
         }
         WM_ACTIVATEAPP => {
             if wparam.0 != 0
-                && let Some(application) = unsafe { application_from_window(window) }
+                && let Some(application) = application_from_window(window)
                 && application.settings.reload()
             {
                 application.apply_options(window);
@@ -1728,13 +1728,13 @@ extern "system" fn window_procedure(
             LRESULT(0)
         }
         WM_MOVE | WM_DISPLAYCHANGE => {
-            if let Some(application) = unsafe { application_from_window(window) } {
+            if let Some(application) = application_from_window(window) {
                 application.refresh_display_color_state(window);
             }
             LRESULT(0)
         }
         WM_DPICHANGED => {
-            if let Some(application) = unsafe { application_from_window(window) } {
+            if let Some(application) = application_from_window(window) {
                 let ratio = (wparam.0 & 0xFFFF) as f32 / 96.0;
                 application.view_transform.device_pixel_ratio = ratio;
                 application.overlay.set_scale(ratio);
@@ -1754,7 +1754,7 @@ extern "system" fn window_procedure(
             LRESULT(0)
         }
         WM_CLOSE => {
-            if let Some(application) = unsafe { application_from_window(window) } {
+            if let Some(application) = application_from_window(window) {
                 application.save_window_geometry(window);
             }
             unsafe { DefWindowProcW(window, message, wparam, lparam) }
