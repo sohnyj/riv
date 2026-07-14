@@ -22,7 +22,7 @@ use image::animation::Animation;
 use image::color;
 use image::core::{
     CoreOptions, DecodeCompletion, ImageCore, ItemLocation, NavigationCommand, SortMode,
-    WM_APP_DECODE_COMPLETE, locations_equal,
+    WM_APP_DECODE_COMPLETE,
 };
 use image::decode::DecodedImage;
 use settings::{Options, SettingsFile};
@@ -328,7 +328,7 @@ impl Application {
         let same_view = self
             .displayed_location
             .as_ref()
-            .is_some_and(|displayed| locations_equal(displayed, &location))
+            .is_some_and(|displayed| *displayed == location)
             && self.display.as_ref().is_some_and(|previous| {
                 previous.width == image.width && previous.height == image.height
             });
@@ -962,7 +962,7 @@ fn delete_current_file(application: &mut Application, window: HWND, permanent: b
     let target = application
         .image_core
         .peek_navigation_target(command)
-        .filter(|candidate| !locations_equal(candidate, &deleted))
+        .filter(|candidate| *candidate != deleted)
         .and_then(|candidate| candidate.as_file().map(Path::to_path_buf));
     match file_ops::delete_file(&path, permanent) {
         Ok(()) => {

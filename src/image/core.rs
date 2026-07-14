@@ -2,6 +2,7 @@
 
 use std::collections::{HashMap, HashSet, VecDeque};
 use std::ffi::c_void;
+use std::hash::{Hash, Hasher};
 use std::os::windows::ffi::OsStrExt;
 use std::os::windows::fs::MetadataExt;
 use std::path::{Path, PathBuf};
@@ -21,11 +22,48 @@ use crate::archive::reader as archive_reader;
 
 pub const WM_APP_DECODE_COMPLETE: u32 = WM_APP + 1;
 
-/// Viewable item identity; hashing is exact, locations_equal compares paths.
-#[derive(Clone, PartialEq, Eq, Hash)]
+/// Viewable item identity; paths compare ASCII case-insensitively, member names exactly.
+#[derive(Clone)]
 pub enum ItemLocation {
     File(PathBuf),
     ArchiveMember { archive: PathBuf, member: String },
+}
+
+impl PartialEq for ItemLocation {
+    fn eq(&self, other: &Self) -> bool {
+        match (self, other) {
+            (Self::File(first), Self::File(second)) => paths_equal(first, second),
+            (
+                Self::ArchiveMember {
+                    archive: first_archive,
+                    member: first_member,
+                },
+                Self::ArchiveMember {
+                    archive: second_archive,
+                    member: second_member,
+                },
+            ) => paths_equal(first_archive, second_archive) && first_member == second_member,
+            _ => false,
+        }
+    }
+}
+
+impl Eq for ItemLocation {}
+
+impl Hash for ItemLocation {
+    fn hash<H: Hasher>(&self, state: &mut H) {
+        match self {
+            Self::File(path) => {
+                0u8.hash(state);
+                path_identity(path).hash(state);
+            }
+            Self::ArchiveMember { archive, member } => {
+                1u8.hash(state);
+                path_identity(archive).hash(state);
+                member.hash(state);
+            }
+        }
+    }
 }
 
 impl ItemLocation {
@@ -81,24 +119,6 @@ impl ItemLocation {
         name_path
             .extension()
             .map(|extension| extension.to_string_lossy().to_lowercase())
-    }
-}
-
-/// Case-insensitive equality on the path parts (Windows semantics).
-pub fn locations_equal(a: &ItemLocation, b: &ItemLocation) -> bool {
-    match (a, b) {
-        (ItemLocation::File(a), ItemLocation::File(b)) => paths_equal(a, b),
-        (
-            ItemLocation::ArchiveMember {
-                archive: first_archive,
-                member: first_member,
-            },
-            ItemLocation::ArchiveMember {
-                archive: second_archive,
-                member: second_member,
-            },
-        ) => paths_equal(first_archive, second_archive) && first_member == second_member,
-        _ => false,
     }
 }
 
@@ -292,7 +312,9 @@ impl ImageCore {
         }
         let directory = path.parent().map(Path::to_path_buf);
         let already_scanned = match (&self.listing_scope, &directory) {
-            (Some(ListingScope::Directory(scanned)), Some(directory)) => scanned == directory,
+            (Some(ListingScope::Directory(scanned)), Some(directory)) => {
+                paths_equal(scanned, directory)
+            }
             _ => false,
         };
         if let Some(directory) = directory
@@ -408,7 +430,7 @@ impl ImageCore {
         self.refresh_listing_if_current_missing();
         let current_location = self.navigation_anchor();
         let target = self.navigation_target(command)?;
-        if current_location.is_some_and(|current| locations_equal(&current, &target)) {
+        if current_location.is_some_and(|current| current == target) {
             return None; // same item, nothing to do
         }
         Some(self.load_item(&target))
@@ -459,7 +481,7 @@ impl ImageCore {
             let is_pending = self
                 .pending_display
                 .as_ref()
-                .is_some_and(|pending| locations_equal(pending, &completion.location));
+                .is_some_and(|pending| *pending == completion.location);
             if is_pending && let Ok(image) = completion.result {
                 self.current = Some(CurrentImage {
                     location: completion.location,
@@ -474,7 +496,7 @@ impl ImageCore {
         let is_pending = self
             .pending_display
             .as_ref()
-            .is_some_and(|pending| locations_equal(pending, &completion.location));
+            .is_some_and(|pending| *pending == completion.location);
         if let Err(error) = &completion.result
             && error.is_cancelled()
         {
@@ -567,7 +589,7 @@ impl ImageCore {
     fn position_of(&self, location: &ItemLocation) -> Option<usize> {
         self.entries
             .iter()
-            .position(|entry| locations_equal(&entry.location, location))
+            .position(|entry| entry.location == *location)
     }
 
     fn first_existing_entry(&self) -> Option<ItemLocation> {
@@ -642,7 +664,7 @@ impl ImageCore {
                         || self
                             .pending_display
                             .as_ref()
-                            .is_some_and(|pending| locations_equal(pending, &entry.location))
+                            .is_some_and(|pending| *pending == entry.location)
                     {
                         continue;
                     }
@@ -767,12 +789,16 @@ fn ring_distance(a: usize, b: usize, length: usize, loop_enabled: bool) -> usize
     }
 }
 
-/// Case-insensitive path equality (Windows semantics).
+/// ASCII case-insensitive path equality; approximates Windows filesystem behavior.
 fn paths_equal(a: &Path, b: &Path) -> bool {
-    a == b
-        || a.as_os_str()
-            .to_string_lossy()
-            .eq_ignore_ascii_case(&b.as_os_str().to_string_lossy())
+    a.as_os_str()
+        .to_string_lossy()
+        .eq_ignore_ascii_case(&b.as_os_str().to_string_lossy())
+}
+
+/// Hash key for paths_equal; component-wise equality would not match this folding.
+fn path_identity(path: &Path) -> String {
+    path.as_os_str().to_string_lossy().to_ascii_lowercase()
 }
 
 fn scan_folder(directory: &Path, options: &CoreOptions) -> Vec<FolderEntry> {
@@ -938,9 +964,7 @@ impl DecodePool {
 
     fn promote(&self, location: &ItemLocation) {
         let mut queue = self.shared.queue.lock().expect("decode queue poisoned");
-        if let Some(position) = queue
-            .iter()
-            .position(|job| locations_equal(&job.location, location))
+        if let Some(position) = queue.iter().position(|job| job.location == *location)
             && let Some(job) = queue.remove(position)
         {
             queue.push_front(job);
@@ -1068,20 +1092,30 @@ mod item_location_tests {
     #[test]
     fn locations_compare_with_windows_path_semantics() {
         let file = |path: &str| ItemLocation::File(PathBuf::from(path));
-        assert!(locations_equal(&file("C:\\A.PNG"), &file("c:\\a.png")));
-        assert!(locations_equal(
-            &member("C:\\A.CBZ", "01.png"),
-            &member("c:\\a.cbz", "01.png"),
-        ));
+        assert!(file("C:\\A.PNG") == file("c:\\a.png"));
+        assert!(member("C:\\A.CBZ", "01.png") == member("c:\\a.cbz", "01.png"));
         // Member names stay exact: archives distinguish case.
-        assert!(!locations_equal(
-            &member("C:\\a.cbz", "01.PNG"),
-            &member("C:\\a.cbz", "01.png"),
-        ));
-        assert!(!locations_equal(
-            &file("C:\\a.cbz"),
-            &member("C:\\a.cbz", "01.png"),
-        ));
+        assert!(member("C:\\a.cbz", "01.PNG") != member("C:\\a.cbz", "01.png"));
+        assert!(file("C:\\a.cbz") != member("C:\\a.cbz", "01.png"));
+    }
+
+    #[test]
+    fn locations_hash_consistently_with_equality() {
+        let file = |path: &str| ItemLocation::File(PathBuf::from(path));
+        let mut cache = HashMap::new();
+        cache.insert(file("c:\\photos\\A.PNG"), "decoded");
+        // A listing entry carries the on-disk casing; the cache must still hit.
+        assert_eq!(cache.get(&file("C:\\Photos\\a.png")), Some(&"decoded"));
+        cache.insert(file("C:\\Photos\\a.png"), "again");
+        assert_eq!(cache.len(), 1); // one file, one key
+
+        let mut members = HashMap::new();
+        members.insert(member("C:\\A.CBZ", "art/01.png"), "decoded");
+        assert_eq!(
+            members.get(&member("c:\\a.cbz", "art/01.png")),
+            Some(&"decoded")
+        );
+        assert_eq!(members.get(&member("C:\\A.CBZ", "art/01.PNG")), None);
     }
 
     #[test]
