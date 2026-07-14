@@ -97,12 +97,16 @@ struct OptionsState {
 }
 
 impl OptionsState {
+    // Sorted so comparisons with saved_associations ignore presentation order.
     fn desired_associations(&self) -> Vec<String> {
-        self.extensions
+        let mut result: Vec<String> = self
+            .extensions
             .iter()
             .filter(|entry| entry.checked)
             .map(|entry| entry.extension.clone())
-            .collect()
+            .collect();
+        result.sort();
+        result
     }
 
     /// Apply enables when the transient state differs from the saved state.
