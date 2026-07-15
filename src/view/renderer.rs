@@ -439,6 +439,18 @@ impl Renderer {
         let Some(color_management) = &self.color_management_effect else {
             return;
         };
+        // Content within SDR white skips the tone map but keeps the white boost.
+        let tone_map = self
+            .hdr_tone_map_effect
+            .as_ref()
+            .zip(peak_luminance_nits.filter(|peak| *peak > SDR_REFERENCE_WHITE_NITS));
+        let scrgb_destination = self.hdr_mode || tone_map.is_some();
+        // Untagged SDR already matches the undeclared sRGB swapchain.
+        if storage == PixelStorage::Bgra8 && icc_profile.is_none() && !scrgb_destination {
+            // Unwire the previous bitmap so the effect does not keep it alive.
+            unsafe { color_management.SetInput(0, None, true) };
+            return;
+        }
         // FP16 pixels are linear scRGB; the embedded ICC does not describe them.
         let dedicated_context = match storage {
             PixelStorage::RgbaHalf => self.scrgb_color_context.as_ref(),
@@ -473,12 +485,7 @@ impl Renderer {
                 source_context
             }
         };
-        // Content within SDR white skips the tone map but keeps the white boost.
-        let tone_map = self
-            .hdr_tone_map_effect
-            .as_ref()
-            .zip(peak_luminance_nits.filter(|peak| *peak > SDR_REFERENCE_WHITE_NITS));
-        let destination_context = if self.hdr_mode || tone_map.is_some() {
+        let destination_context = if scrgb_destination {
             &self.scrgb_color_context
         } else {
             &self.srgb_color_context
@@ -603,7 +610,7 @@ impl Renderer {
                             self.d2d_context.SetTransform(&Matrix3x2::identity());
                         }
                     }
-                    // No effect support (e.g. wine): draw the bitmap directly.
+                    // Untouched pixels, or no effect support.
                     (None, Some(image)) => {
                         let destination = D2D_RECT_F {
                             left: 0.0,
