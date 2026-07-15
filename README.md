@@ -1,6 +1,6 @@
 # riv
 
-A fast, minimal image viewer for Windows. One portable executable, no installation.
+A fast, precise, minimal image viewer for Windows.
 
 ## Features
 
@@ -11,9 +11,11 @@ A fast, minimal image viewer for Windows. One portable executable, no installati
 - Animation playback (GIF, APNG, animated WebP) with pause, frame stepping, and speed control
 - Browse images inside archives (Windows 11 23H2+, using the in-box libarchive)
 - Per-extension file associations, fully reversible with no registry leftovers
+- One portable executable, no installation
 - Small: a single statically linked executable of about 7 MB
 - Portable: settings are stored in `riv.json` next to the executable
-- Exception: running elevated (as administrator) is not supported and is blocked at startup
+
+Running elevated (as administrator) is not supported and is blocked at startup.
 
 ## Supported formats
 
@@ -28,16 +30,16 @@ extension is named in the error message when a file can't be decoded:
 | WebP (still) | WebP Image Extensions (Microsoft Corporation) |
 | Camera RAW | Raw Image Extension (Microsoft Corporation) |
 
-The HEVC extension is optional; without it the built-in decoder below is used.
+The HEVC extension is optional; without it the built-in decoder is used.
 
 Decoded by built-in codecs (no dependency to install):
 
 | Format | Decoder |
 |---|---|
-| HEIC / HEIF | libheif + libde265, used when the Windows extension above is absent |
+| HEIC / HEIF | libheif + libde265, used when the Windows extension is absent |
 | SVG / SVGZ | resvg |
 | EXR | OpenEXR |
-| APNG | png crate |
+| APNG | png |
 | Animated WebP | libwebp |
 
 Decoded by the in-box Windows Imaging Component codecs:
@@ -62,7 +64,7 @@ The build cross-compiles from Linux (including WSL) to `x86_64-pc-windows-msvc`.
 Prerequisites:
 
 - Rust with the `x86_64-pc-windows-msvc` target
-- LLVM: clang-cl, lld-link, llvm-lib, llvm-rc, llvm-mt
+- LLVM 21+: clang-cl, lld-link, llvm-lib, llvm-rc, llvm-mt
 - A Windows CRT + SDK splat from [xwin](https://github.com/Jake-Shadle/xwin)
   in `~/.xwin` (override the location with `XWIN_ROOT`)
 - CMake and Ninja, for the static codec dependencies
