@@ -4,13 +4,13 @@ A fast, precise, minimal image viewer for Windows.
 
 ## Features
 
-- Instant startup and folder navigation with a configurable preload cache
 - HDR support: scRGB FP16 pipeline, content peak detection, tone mapping
   to the display's capability, and dithered SDR output
 - Color management: embedded ICC profiles, PQ/HLG sources, Windows Advanced Color
 - Animation playback (GIF, APNG, animated WebP) with pause, frame stepping, and speed control
 - Browse images inside archives (Windows 11 23H2+, using the in-box libarchive)
 - Per-extension file associations, fully reversible with no registry leftovers
+- Configurable preload range
 - One portable executable, no installation
 - Small: a single statically linked executable of about 7 MB
 - Portable: settings are stored in `riv.json` next to the executable
@@ -19,8 +19,9 @@ Running elevated (as administrator) is not supported and is blocked at startup.
 
 ## Supported formats
 
-Some formats need a codec extension from the Microsoft Store. The missing
-extension is named in the error message when a file can't be decoded:
+Some formats need a codec extension from the Microsoft Store. A missing
+extension only means those files fail to decode; the error message names
+the one to install:
 
 | Format | Required extension |
 |---|---|
@@ -32,11 +33,11 @@ extension is named in the error message when a file can't be decoded:
 
 The HEVC extension is optional; without it the built-in decoder is used.
 
-Decoded by built-in codecs (no dependency to install):
+Decoded by built-in codecs:
 
 | Format | Decoder |
 |---|---|
-| HEIC / HEIF | libheif + libde265, used when the Windows extension is absent |
+| HEIC / HEIF | libheif + libde265 |
 | SVG / SVGZ | resvg |
 | EXR | OpenEXR |
 | APNG | png |
@@ -54,7 +55,7 @@ zip, 7z, rar, tar, and the comic book variants cbz / cbr / cb7 / cbt.
 
 ## Requirements
 
-- Windows 10/11, x86-64 (AVX2-capable CPU)
+- Windows 10+, x86-64 (AVX2-capable CPU)
 - Direct3D 11 capable GPU
 
 ## Building
