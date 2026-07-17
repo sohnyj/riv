@@ -52,6 +52,11 @@ struct MenuBuilder {
     state_snapshot: MenuState,
 }
 
+/// Win32 menus read "&" as a mnemonic prefix; double it to render literally.
+fn escape_mnemonics(label: &str) -> String {
+    label.replace('&', "&&")
+}
+
 impl MenuBuilder {
     fn gate_satisfied(&self, gate: ActivationGate) -> bool {
         match gate {
@@ -90,9 +95,10 @@ impl MenuBuilder {
             flags |= MF_CHECKED;
         }
         // Text after a tab renders as the right-aligned shortcut column.
+        let label = escape_mnemonics(label);
         let text = match self.state_snapshot.shortcuts.get(action.name()) {
             Some(shortcut) => format!("{label}\t{shortcut}"),
-            None => label.to_string(),
+            None => label,
         };
         unsafe { AppendMenuW(menu, flags, identifier, &HSTRING::from(text.as_str())) }
     }
@@ -100,7 +106,14 @@ impl MenuBuilder {
     fn append_open_with_entry(&mut self, menu: HMENU, index: usize, label: &str) -> Result<()> {
         self.entries.push(MenuSelection::OpenWithEntry(index));
         let identifier = self.entries.len();
-        unsafe { AppendMenuW(menu, MF_STRING, identifier, &HSTRING::from(label)) }
+        unsafe {
+            AppendMenuW(
+                menu,
+                MF_STRING,
+                identifier,
+                &HSTRING::from(escape_mnemonics(label).as_str()),
+            )
+        }
     }
 
     fn append_playlist_entry(&mut self, menu: HMENU, slot: usize, label: &str) -> Result<()> {
@@ -112,7 +125,14 @@ impl MenuBuilder {
         if self.state_snapshot.playlist_current_slot == Some(slot) {
             flags |= MF_CHECKED;
         }
-        unsafe { AppendMenuW(menu, flags, identifier, &HSTRING::from(label)) }
+        unsafe {
+            AppendMenuW(
+                menu,
+                flags,
+                identifier,
+                &HSTRING::from(escape_mnemonics(label).as_str()),
+            )
+        }
     }
 
     fn append_separator(&self, menu: HMENU) -> Result<()> {
@@ -349,6 +369,50 @@ mod menu_structure_tests {
         let mut still = state();
         still.has_animation = false;
         assert!(submenu_is_grayed(still, "Playback"));
+    }
+
+    fn submenu_by_label(menu: HMENU, label: &str) -> HMENU {
+        let count = unsafe { GetMenuItemCount(Some(menu)) };
+        for position in 0..count {
+            let mut text = [0u16; 64];
+            let length =
+                unsafe { GetMenuStringW(menu, position as u32, Some(&mut text), MF_BYPOSITION) };
+            if String::from_utf16_lossy(&text[..length as usize]) == label {
+                return unsafe { GetSubMenu(menu, position) };
+            }
+        }
+        panic!("{label} submenu present");
+    }
+
+    fn item_label(menu: HMENU, position: u32) -> String {
+        let mut text = [0u16; 64];
+        let length = unsafe { GetMenuStringW(menu, position, Some(&mut text), MF_BYPOSITION) };
+        String::from_utf16_lossy(&text[..length as usize])
+    }
+
+    #[test]
+    fn ampersands_in_names_render_literally() {
+        let mut with_names = state();
+        with_names.has_folder = true;
+        with_names.playlist_names = vec!["a&b.png".to_string()];
+        with_names.recent_names = vec!["c&d.png".to_string()];
+        with_names.open_with_items = vec!["E & F".to_string()];
+        let mut builder = MenuBuilder {
+            entries: Vec::new(),
+            state_snapshot: with_names,
+        };
+        let menu = builder.build().expect("menu builds");
+        // GetMenuString returns the stored text; "&&" draws as a literal "&".
+        assert_eq!(
+            item_label(submenu_by_label(menu, "Open Recent"), 0),
+            "c&&d.png"
+        );
+        assert_eq!(item_label(submenu_by_label(menu, "Open With"), 0), "E && F");
+        assert_eq!(
+            item_label(submenu_by_label(menu, "Playlist"), 0),
+            "a&&b.png"
+        );
+        let _ = unsafe { DestroyMenu(menu) };
     }
 
     #[test]
