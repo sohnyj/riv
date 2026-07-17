@@ -8,7 +8,7 @@ use std::os::windows::fs::MetadataExt;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Condvar, Mutex};
-use std::time::{SystemTime, UNIX_EPOCH};
+use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 use windows::Win32::Foundation::{HWND, LPARAM, WPARAM};
 use windows::Win32::Storage::FileSystem::FILE_ATTRIBUTE_HIDDEN;
@@ -22,6 +22,10 @@ use crate::archive::reader as archive_reader;
 use crate::network::curl;
 
 pub const WM_APP_DECODE_COMPLETE: u32 = WM_APP + 1;
+pub const WM_APP_DOWNLOAD_PROGRESS: u32 = WM_APP + 7;
+
+/// UI updates at most this often while a URL downloads.
+const DOWNLOAD_PROGRESS_INTERVAL: Duration = Duration::from_millis(100);
 
 /// Viewable item identity; paths compare ASCII case-insensitively, member names
 /// and URLs exactly.
@@ -210,6 +214,12 @@ pub struct DecodeCompletion {
     pub result: Result<Arc<DecodedImage>, DecodeError>,
 }
 
+/// Bytes received so far for a downloading URL item; 0 means connecting.
+pub struct DownloadProgress {
+    pub location: ItemLocation,
+    pub received_bytes: u64,
+}
+
 pub struct CurrentImage {
     pub location: ItemLocation,
     pub image: Arc<DecodedImage>,
@@ -302,6 +312,11 @@ impl ImageCore {
                 None,
             )),
         }
+    }
+
+    /// True while this item is the one the view waits on.
+    pub fn is_pending(&self, location: &ItemLocation) -> bool {
+        self.pending_display.as_ref() == Some(location)
     }
 
     pub fn reload_current(&mut self) -> bool {
@@ -1209,20 +1224,36 @@ fn worker_loop(shared: &PoolShared, window: isize) {
                     }),
                 }
             }
-            ItemLocation::Url(url) => match curl::download(url, &job.cancellation) {
-                Ok(data) => {
-                    file_size = data.len() as u64; // the remote size becomes known here
-                    let extension = curl::extension_lowercase(url);
-                    decode::decode_bytes(&data, extension.as_deref(), &job.cancellation)
-                        .map_err(url_decode_error)
+            ItemLocation::Url(url) => {
+                let mut last_report: Option<Instant> = None;
+                let mut report = |received_bytes: u64| {
+                    if last_report.is_some_and(|last| last.elapsed() < DOWNLOAD_PROGRESS_INTERVAL) {
+                        return;
+                    }
+                    last_report = Some(Instant::now());
+                    post_download_progress(
+                        window,
+                        Box::new(DownloadProgress {
+                            location: job.location.clone(),
+                            received_bytes,
+                        }),
+                    );
+                };
+                match curl::download(url, &job.cancellation, &mut report) {
+                    Ok(data) => {
+                        file_size = data.len() as u64; // the remote size becomes known here
+                        let extension = curl::extension_lowercase(url);
+                        decode::decode_bytes(&data, extension.as_deref(), &job.cancellation)
+                            .map_err(url_decode_error)
+                    }
+                    Err(error) if error.cancelled => Err(DecodeError::cancelled()),
+                    Err(error) => Err(DecodeError {
+                        code: error.code,
+                        message: error.message,
+                        store_extension: None,
+                    }),
                 }
-                Err(error) if error.cancelled => Err(DecodeError::cancelled()),
-                Err(error) => Err(DecodeError {
-                    code: error.code,
-                    message: error.message,
-                    store_extension: None,
-                }),
-            },
+            }
         }
         .map(Arc::new);
         post_completion(
@@ -1254,6 +1285,21 @@ fn post_completion(window: isize, completion: Box<DecodeCompletion>) {
         PostMessageW(
             Some(HWND(window as *mut c_void)),
             WM_APP_DECODE_COMPLETE,
+            WPARAM(0),
+            LPARAM(pointer as isize),
+        )
+    };
+    if posted.is_err() {
+        drop(unsafe { Box::from_raw(pointer) });
+    }
+}
+
+fn post_download_progress(window: isize, progress: Box<DownloadProgress>) {
+    let pointer = Box::into_raw(progress);
+    let posted = unsafe {
+        PostMessageW(
+            Some(HWND(window as *mut c_void)),
+            WM_APP_DOWNLOAD_PROGRESS,
             WPARAM(0),
             LPARAM(pointer as isize),
         )

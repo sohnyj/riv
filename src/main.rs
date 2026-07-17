@@ -22,8 +22,8 @@ use dialogs::options::{WM_APP_OPTIONS_APPLIED, WM_APP_OPTIONS_GEOMETRY};
 use image::animation::Animation;
 use image::color;
 use image::core::{
-    CoreOptions, DecodeCompletion, ImageCore, ItemLocation, NavigationCommand, SortMode,
-    WM_APP_DECODE_COMPLETE,
+    CoreOptions, DecodeCompletion, DownloadProgress, ImageCore, ItemLocation, NavigationCommand,
+    SortMode, WM_APP_DECODE_COMPLETE, WM_APP_DOWNLOAD_PROGRESS,
 };
 use image::decode::DecodedImage;
 use network::curl;
@@ -106,6 +106,8 @@ struct Application {
     overlay: Overlay,
     show_file_info: bool,
     zoom_text: Option<String>,
+    /// Received bytes of the pending URL download the view reports on.
+    download_progress: Option<(ItemLocation, u64)>,
     slideshow_active: bool,
     animation: Option<Animation>,
     drop_target: Option<IDropTarget>,
@@ -151,6 +153,7 @@ impl Application {
             overlay: Overlay::new()?,
             show_file_info: false,
             zoom_text: None,
+            download_progress: None,
             slideshow_active: false,
             animation: None,
             drop_target: None,
@@ -336,6 +339,7 @@ impl Application {
     }
 
     fn apply_current_image(&mut self, window: HWND) {
+        self.download_progress = None;
         let Some(current) = &self.image_core.current else {
             return;
         };
@@ -406,6 +410,12 @@ impl Application {
     }
 
     fn apply_load_error(&mut self, window: HWND) {
+        self.download_progress = None;
+        self.clear_displayed_image(window);
+    }
+
+    /// Drop the image so only centered overlay text (error, download) shows.
+    fn clear_displayed_image(&mut self, window: HWND) {
         let _ = unsafe { KillTimer(Some(window), ANIMATION_TIMER) };
         self.animation = None;
         self.display = None;
@@ -413,6 +423,20 @@ impl Application {
         self.renderer.clear_image();
         self.update_window_title(window);
         self.render(window);
+    }
+
+    fn apply_download_progress(&mut self, window: HWND, progress: DownloadProgress) {
+        if !self.image_core.is_pending(&progress.location) {
+            return; // a stale download the view moved away from
+        }
+        let first_report = self.download_progress.is_none();
+        self.download_progress = Some((progress.location, progress.received_bytes));
+        if first_report {
+            // The download screen stands alone; the previous image goes away.
+            self.clear_displayed_image(window);
+        } else {
+            self.render(window);
+        }
     }
 
     /// Freeze a playing animation while a new load is in flight.
@@ -540,9 +564,17 @@ impl Application {
         } else {
             None
         };
+        let download_text = self
+            .download_progress
+            .as_ref()
+            .filter(|(location, _)| self.image_core.is_pending(location))
+            .map(|(location, received_bytes)| {
+                overlay::build_download_text(&location.display_name(), *received_bytes)
+            });
         let brightness = 0.299 * background.r + 0.587 * background.g + 0.114 * background.b;
         OverlayContent {
             error_text,
+            download_text,
             info_text,
             zoom_text: self.zoom_text.clone(),
             background_is_bright: brightness > 0.5,
@@ -1452,6 +1484,13 @@ extern "system" fn window_procedure(
                 } else {
                     application.apply_current_image(window);
                 }
+            }
+            LRESULT(0)
+        }
+        WM_APP_DOWNLOAD_PROGRESS => {
+            let progress = unsafe { Box::from_raw(lparam.0 as *mut DownloadProgress) };
+            if let Some(application) = application_from_window(window) {
+                application.apply_download_progress(window, *progress);
             }
             LRESULT(0)
         }

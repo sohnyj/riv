@@ -45,6 +45,8 @@ const BLACK: D2D1_COLOR_F = D2D1_COLOR_F {
 
 pub struct OverlayContent {
     pub error_text: Option<String>,
+    /// Centered like an error while a URL downloads (no image is up then).
+    pub download_text: Option<String>,
     pub info_text: Option<String>,
     pub zoom_text: Option<String>,
     pub background_is_bright: bool,
@@ -121,10 +123,14 @@ impl Overlay {
                 output_color_target,
             )?;
         }
-        if let Some(error_text) = &content.error_text {
+        if let Some(centered_text) = content
+            .error_text
+            .as_ref()
+            .or(content.download_text.as_ref())
+        {
             self.draw_error_text(
                 context,
-                error_text,
+                centered_text,
                 viewport_width,
                 viewport_height,
                 content,
@@ -400,13 +406,24 @@ pub fn build_error_text(
     text
 }
 
-fn format_file_size(bytes: u64) -> String {
+/// Centered status while a URL downloads; received bytes only, no total is known.
+pub fn build_download_text(file_name: &str, received_bytes: u64) -> String {
+    if received_bytes == 0 {
+        return format!("Connecting\n{file_name}");
+    }
+    format!("Downloading\n{file_name}\n{}", scaled_size(received_bytes))
+}
+
+fn scaled_size(bytes: u64) -> String {
     let units: [(&str, u64); 3] = [("GiB", 1 << 30), ("MiB", 1 << 20), ("KiB", 1 << 10)];
-    let scaled = units.iter().find(|(_, unit)| bytes >= *unit).map_or_else(
+    units.iter().find(|(_, unit)| bytes >= *unit).map_or_else(
         || format!("{bytes} B"),
         |(name, unit)| format!("{:.1} {name}", bytes as f64 / *unit as f64),
-    );
-    format!("{scaled} ({} bytes)", group_thousands(bytes))
+    )
+}
+
+fn format_file_size(bytes: u64) -> String {
+    format!("{} ({} bytes)", scaled_size(bytes), group_thousands(bytes))
 }
 
 fn group_thousands(value: u64) -> String {

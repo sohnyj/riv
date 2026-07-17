@@ -106,7 +106,12 @@ fn path_segment(url: &str) -> Option<&str> {
 }
 
 /// Fetches a URL to memory; the protocol gate doubles as argument-injection defense.
-pub fn download(url: &str, cancellation: &AtomicBool) -> Result<Vec<u8>, NetworkError> {
+/// Progress reports received bytes: once with 0 at spawn, then per chunk.
+pub fn download(
+    url: &str,
+    cancellation: &AtomicBool,
+    progress: &mut dyn FnMut(u64),
+) -> Result<Vec<u8>, NetworkError> {
     if !is_supported_protocol(url) {
         return Err(NetworkError::new(
             "unsupported URL protocol (http/https only)",
@@ -143,6 +148,7 @@ pub fn download(url: &str, cancellation: &AtomicBool) -> Result<Vec<u8>, Network
         .spawn()
         .map_err(|error| NetworkError::new(format!("curl could not be started: {error}")))?;
     let mut stdout = child.stdout.take().expect("stdout piped above");
+    progress(0);
     let mut data = Vec::new();
     let mut block = vec![0u8; READ_BLOCK_BYTES];
     loop {
@@ -166,6 +172,7 @@ pub fn download(url: &str, cancellation: &AtomicBool) -> Result<Vec<u8>, Network
             ));
         }
         data.extend_from_slice(&block[..read_bytes]);
+        progress(data.len() as u64);
     }
     drop(stdout);
     let mut stderr_text = String::new();
@@ -206,7 +213,7 @@ mod download_tests {
     #[test]
     fn download_rejects_unsupported_protocols_before_spawning() {
         let cancellation = AtomicBool::new(false);
-        let result = download("ftp://127.0.0.1/a.png", &cancellation);
+        let result = download("ftp://127.0.0.1/a.png", &cancellation, &mut |_| {});
         assert!(matches!(result, Err(error) if error.message.contains("protocol")));
     }
 
@@ -240,12 +247,20 @@ mod download_tests {
             }
         });
         let cancellation = AtomicBool::new(false);
-        let data = download(&format!("http://127.0.0.1:{port}/test.png"), &cancellation)
-            .unwrap_or_else(|error| panic!("{}", error.message));
+        let mut reports = Vec::new();
+        let data = download(
+            &format!("http://127.0.0.1:{port}/test.png"),
+            &cancellation,
+            &mut |received_bytes| reports.push(received_bytes),
+        )
+        .unwrap_or_else(|error| panic!("{}", error.message));
         assert_eq!(data, body);
+        assert_eq!(reports.first(), Some(&0)); // spawn reads as connecting
+        assert_eq!(reports.last(), Some(&(body.len() as u64)));
         let missing = download(
             &format!("http://127.0.0.1:{port}/missing.png"),
             &cancellation,
+            &mut |_| {},
         );
         // --fail turns the 404 into curl exit code 22 with a stderr message.
         assert!(matches!(missing, Err(error) if error.code == 22 && !error.message.is_empty()));
