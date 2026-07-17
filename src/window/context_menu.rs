@@ -152,6 +152,19 @@ impl MenuBuilder {
 
         self.append_action(menu, Action::PreviousFile)?;
         self.append_action(menu, Action::NextFile)?;
+        let playback = unsafe { CreatePopupMenu()? };
+        let pause_label = if self.state_snapshot.animation_paused {
+            "Resume"
+        } else {
+            "Pause"
+        };
+        self.append_action_labeled(playback, Action::Pause, pause_label)?;
+        self.append_action(playback, Action::NextFrame)?;
+        self.append_separator(playback)?;
+        self.append_action(playback, Action::DecreaseSpeed)?;
+        self.append_action(playback, Action::IncreaseSpeed)?;
+        self.append_action(playback, Action::ResetSpeed)?;
+        self.append_submenu(menu, playback, "Playback", true)?;
         self.append_separator(menu)?;
 
         self.append_action(menu, Action::ReloadFile)?;
@@ -171,20 +184,6 @@ impl MenuBuilder {
         self.append_action(view, Action::Mirror)?;
         self.append_action(view, Action::Flip)?;
         self.append_submenu(menu, view, "View", true)?;
-
-        let playback = unsafe { CreatePopupMenu()? };
-        let pause_label = if self.state_snapshot.animation_paused {
-            "Resume"
-        } else {
-            "Pause"
-        };
-        self.append_action_labeled(playback, Action::Pause, pause_label)?;
-        self.append_action(playback, Action::NextFrame)?;
-        self.append_separator(playback)?;
-        self.append_action(playback, Action::DecreaseSpeed)?;
-        self.append_action(playback, Action::IncreaseSpeed)?;
-        self.append_action(playback, Action::ResetSpeed)?;
-        self.append_submenu(menu, playback, "Playback", true)?;
 
         let tools = unsafe { CreatePopupMenu()? };
         let slideshow_label = if self.state_snapshot.slideshow_active {
@@ -234,7 +233,7 @@ pub fn show(window: HWND, state: MenuState, x: i32, y: i32) -> Option<MenuSelect
 }
 
 #[cfg(test)]
-mod open_with_gating_tests {
+mod menu_structure_tests {
     use super::*;
     use windows::Win32::UI::WindowsAndMessaging::{
         GetMenuItemCount, GetMenuState, GetMenuStringW, MENU_ITEM_FLAGS, MF_BYPOSITION,
@@ -287,5 +286,47 @@ mod open_with_gating_tests {
     fn open_with_follows_the_on_disk_file() {
         assert!(!open_with_is_grayed(true)); // a plain file can hand off
         assert!(open_with_is_grayed(false)); // URL or archive member cannot
+    }
+
+    #[test]
+    fn top_level_items_follow_the_menu_order() {
+        let mut builder = MenuBuilder {
+            entries: Vec::new(),
+            state_snapshot: state(true),
+        };
+        let menu = builder.build().expect("menu builds");
+        let count = unsafe { GetMenuItemCount(Some(menu)) };
+        let mut labels = Vec::new();
+        for position in 0..count {
+            let mut label = [0u16; 64];
+            let length =
+                unsafe { GetMenuStringW(menu, position as u32, Some(&mut label), MF_BYPOSITION) };
+            labels.push(String::from_utf16_lossy(&label[..length as usize]));
+        }
+        let _ = unsafe { DestroyMenu(menu) };
+        let expected: Vec<&str> = vec![
+            "Open...",
+            "Open URL...",
+            "Open Recent",
+            "Open With",
+            "", // separator
+            "Show File Info",
+            "Show in Explorer",
+            "", // separator
+            "Previous",
+            "Next",
+            "Playback",
+            "", // separator
+            "Reload",
+            "Rename...",
+            "Delete",
+            "", // separator
+            "View",
+            "Tools",
+            "Enter Fullscreen",
+            "", // separator
+            "Exit",
+        ];
+        assert_eq!(labels, expected);
     }
 }
