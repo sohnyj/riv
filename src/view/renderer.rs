@@ -230,8 +230,7 @@ impl Renderer {
             rendering_controls.bufferPrecision = D2D1_BUFFER_PRECISION_16BPC_FLOAT;
             d2d_context.SetRenderingControls(&raw const rendering_controls);
         }
-        // D2D cannot target 10-bit UNORM, so the scene renders on a UNORM16
-        // intermediate and a fullscreen pass writes the quantizing backbuffer.
+        // D2D cannot target 10-bit UNORM: draw on UNORM16, then a fullscreen pass quantizes.
         let mut quantize_pass = (deep_color
             && unsafe { d2d_context.IsDxgiFormatSupported(DXGI_FORMAT_R16G16B16A16_UNORM) }
                 .as_bool())
@@ -448,8 +447,7 @@ impl Renderer {
                 .ok()?;
                 Some(effect)
             });
-        // Dither only the UNORM backbuffers the app quantizes; the FP16 fallback
-        // leaves quantization to DWM. Failure leaves rendering undithered.
+        // Dither only the UNORM backbuffers the app quantizes; FP16 leaves quantization to DWM.
         let quantization_steps = if swap_chain_format == DXGI_FORMAT_B8G8R8A8_UNORM {
             Some(255u32)
         } else if swap_chain_format == DXGI_FORMAT_R10G10B10A2_UNORM {
@@ -677,8 +675,7 @@ impl Renderer {
         self.dither_mode = mode;
     }
 
-    /// Animation frames reuse the existing bitmap and effect wiring; callers
-    /// fall back to set_image when this fails (no bitmap yet).
+    /// Reuses the current bitmap wiring; callers fall back to set_image when there is none.
     pub fn update_frame_pixels(&mut self, pixels: &[u8]) -> Result<()> {
         let Some(bitmap) = &self.image else {
             return Err(windows::core::Error::empty());
@@ -864,8 +861,7 @@ impl Renderer {
                 };
                 match (&self.effect_output, &self.image) {
                     (Some(output), _) => {
-                        // Dither runs in destination pixel space: the transform moves
-                        // into the graph and the context transform stays identity.
+                        // Dither must run in destination pixel space (identity context transform).
                         if !self.draw_image_dithered(output, &transform, interpolation) {
                             self.d2d_context.SetTransform(&raw const transform);
                             self.d2d_context.DrawImage(
@@ -921,8 +917,7 @@ impl Renderer {
         }
     }
 
-    /// High-depth output path: scene -> 2DAffineTransform -> dither -> target.
-    /// Returns false when unavailable so the caller draws the undithered path.
+    /// Scene -> affine -> dither -> target; false when unavailable, the caller draws undithered.
     fn draw_image_dithered(
         &self,
         output: &ID2D1Image,

@@ -1,9 +1,4 @@
 //! Custom D2D output-dither effects: Ordered (Bayer 8x8) and Fruit (blue noise).
-//!
-//! Both effects add a +-0.5 LSB screen-anchored threshold right before the
-//! swapchain write quantizes the 16bpc float scene, so they must run in
-//! destination pixel space (identity context transform). The LSB amplitude is
-//! fixed at registration from the backbuffer depth (255 for 8-bit, 1023 for 10-bit).
 
 use std::cell::RefCell;
 use std::collections::HashMap;
@@ -322,8 +317,7 @@ unsafe extern "system" fn create_fruit_effect(effect: OutRef<'_, IUnknown>) -> H
     create_effect(effect, DitherPattern::Fruit)
 }
 
-/// Registers both dither effect classes; fails when shader compilation or the
-/// blue-noise texture is unavailable, in which case rendering stays undithered.
+/// On failure rendering stays undithered.
 pub fn register_dither_effects(factory: &ID2D1Factory1, quantization_steps: u32) -> Result<()> {
     compiled_bytecode(DitherPattern::Ordered, quantization_steps)?;
     compiled_bytecode(DitherPattern::Fruit, quantization_steps)?;
