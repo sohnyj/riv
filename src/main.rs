@@ -5,6 +5,7 @@ mod archive;
 mod bindings;
 mod dialogs;
 mod image;
+mod network;
 mod settings;
 mod shell;
 mod view;
@@ -25,10 +26,11 @@ use image::core::{
     WM_APP_DECODE_COMPLETE,
 };
 use image::decode::DecodedImage;
+use network::curl;
 use settings::{Options, SettingsFile};
 use shell::drag_drop::{self, WM_APP_DROP_PATH};
 use shell::open_with::{self, OpenWithList, WM_APP_OPEN_WITH_LIST};
-use shell::{file_ops, open_dialog};
+use shell::{clipboard, file_ops, open_dialog};
 use view::dither::DitherMode;
 use view::renderer::Renderer;
 use view::transform::{FitMode, Size, ViewTransform};
@@ -388,8 +390,10 @@ impl Application {
             };
         }
         if !same_view {
-            // Members list the archive itself; add_recent_file deduplicates.
-            if self.settings.add_recent_file(location.containing_file()) {
+            // Members list the archive itself; URL items stay out of recents.
+            if let Some(file) = location.containing_file()
+                && self.settings.add_recent_file(file)
+            {
                 unsafe { SetTimer(Some(window), RECENTS_SAVE_TIMER, 500, None) };
             }
             self.open_with_list = None;
@@ -601,6 +605,11 @@ impl Application {
                 .current
                 .as_ref()
                 .is_some_and(|current| current.location.as_file().is_some()),
+            ActivationGate::ContainingFile => self
+                .image_core
+                .current
+                .as_ref()
+                .is_some_and(|current| current.location.containing_file().is_some()),
             ActivationGate::Animation => self
                 .image_core
                 .current
@@ -754,6 +763,34 @@ fn open_external_path(application: &mut Application, window: HWND, path: &Path) 
     }
 }
 
+fn open_external_url(application: &mut Application, window: HWND, url: &str) {
+    application.cancel_slideshow(window);
+    application.freeze_animation_for_load(window);
+    if application.image_core.load_url(url) {
+        application.apply_current_image(window);
+    } else if application.image_core.load_error.is_some() {
+        application.apply_load_error(window);
+    }
+}
+
+/// Opens a pasted URL when it names an image over a supported protocol.
+fn paste_open_url(application: &mut Application, window: HWND) -> bool {
+    if !curl::available() {
+        return false;
+    }
+    let Some(text) = clipboard::read_text(window) else {
+        return false;
+    };
+    let is_image_url = curl::is_supported_protocol(&text)
+        && curl::extension_lowercase(&text)
+            .is_some_and(|extension| image::decode::is_supported_extension(&extension));
+    if !is_image_url {
+        return false; // anything else on the clipboard is ignored
+    }
+    open_external_url(application, window, &text);
+    true
+}
+
 /// The single dispatch point; every input path converges here.
 fn dispatch_action(application: &mut Application, window: HWND, action: Action) {
     if !application.gate_satisfied(action.gate()) {
@@ -891,9 +928,20 @@ fn dispatch_action(application: &mut Application, window: HWND, action: Action) 
                 open_external_path(application, window, &first);
             }
         }
+        Action::OpenUrl => {
+            if let Some(url) = dialogs::open_url::show(window) {
+                open_external_url(application, window, &url);
+            }
+        }
         Action::OpenContainingFolder => {
-            if let Some(current) = &application.image_core.current {
-                file_ops::show_in_explorer(current.location.containing_file());
+            // The ContainingFile gate keeps URL items out of here.
+            if let Some(file) = application
+                .image_core
+                .current
+                .as_ref()
+                .and_then(|current| current.location.containing_file())
+            {
+                file_ops::show_in_explorer(file);
             }
         }
         Action::Delete | Action::DeletePermanent => {
@@ -1085,6 +1133,10 @@ fn handle_key(application: &mut Application, window: HWND, virtual_key: u16) -> 
         toggle_fullscreen(application, window);
         application.render(window);
         return true;
+    }
+    // Fixed paste-to-open key; user bindings on Ctrl+V take precedence above.
+    if modifiers == MODIFIER_CONTROL && virtual_key == u16::from(b'V') {
+        return paste_open_url(application, window);
     }
     false
 }
@@ -1671,7 +1723,13 @@ extern "system" fn window_procedure(
                         .current
                         .as_ref()
                         .is_some_and(|current| current.location.as_file().is_some()),
+                    has_containing_file: application
+                        .image_core
+                        .current
+                        .as_ref()
+                        .is_some_and(|current| current.location.containing_file().is_some()),
                     has_folder: application.image_core.has_folder_entries(),
+                    open_url_available: curl::available(),
                     has_animation: application
                         .image_core
                         .current
@@ -1797,5 +1855,125 @@ extern "system" fn window_procedure(
             LRESULT(0)
         }
         _ => unsafe { DefWindowProcW(window, message, wparam, lparam) },
+    }
+}
+
+/// Needs a built riv.exe and System32 curl.exe; procedure in docs/plan/CURL.md.
+/// Driven entirely by posted messages — wine focus assignment is nondeterministic.
+#[cfg(test)]
+mod open_url_smoke_tests {
+    use std::io::{Read, Write};
+    use std::net::{TcpListener, TcpStream};
+    use std::time::{Duration, Instant};
+
+    use windows::Win32::Foundation::{HWND, LPARAM, WPARAM};
+    use windows::Win32::UI::WindowsAndMessaging::{
+        FindWindowW, GetWindowTextW, PostMessageW, SetDlgItemTextW, WM_CLOSE, WM_COMMAND,
+        WM_KEYDOWN,
+    };
+    use windows::core::{HSTRING, PCWSTR, w};
+
+    use crate::dialogs;
+    use crate::network::curl;
+
+    const EXECUTABLE: &str = "target/x86_64-pc-windows-msvc/debug/riv.exe";
+    const SETTINGS: &str = "target/x86_64-pc-windows-msvc/debug/riv.json";
+
+    fn png_bytes() -> Vec<u8> {
+        let mut data = Vec::new();
+        let mut encoder = png::Encoder::new(&mut data, 4, 4);
+        encoder.set_color(png::ColorType::Rgba);
+        encoder.set_depth(png::BitDepth::Eight);
+        let mut writer = encoder.write_header().expect("png header");
+        writer
+            .write_image_data(&[0, 255, 0, 255].repeat(16))
+            .expect("png data");
+        writer.finish().expect("png finish");
+        data
+    }
+
+    fn serve(mut stream: TcpStream, body: &[u8]) {
+        let mut request = [0u8; 2048];
+        let length = stream.read(&mut request).unwrap_or(0);
+        let target_found = request[..length]
+            .windows("GET /test.png".len())
+            .any(|window| window == b"GET /test.png");
+        let response = if target_found {
+            let header = format!(
+                "HTTP/1.1 200 OK\r\nContent-Length: {}\r\nConnection: close\r\n\r\n",
+                body.len()
+            );
+            [header.as_bytes(), body].concat()
+        } else {
+            b"HTTP/1.1 404 Not Found\r\nContent-Length: 0\r\nConnection: close\r\n\r\n".to_vec()
+        };
+        stream.write_all(&response).expect("respond");
+    }
+
+    fn wait_for<T>(mut probe: impl FnMut() -> Option<T>, seconds: u64) -> Option<T> {
+        let deadline = Instant::now() + Duration::from_secs(seconds);
+        loop {
+            if let Some(value) = probe() {
+                return Some(value);
+            }
+            if Instant::now() > deadline {
+                return None;
+            }
+            std::thread::sleep(Duration::from_millis(200));
+        }
+    }
+
+    fn window_title(window: HWND) -> String {
+        let mut buffer = [0u16; 256];
+        let length = unsafe { GetWindowTextW(window, &mut buffer) } as usize;
+        String::from_utf16_lossy(&buffer[..length])
+    }
+
+    #[test]
+    #[ignore = "needs built riv.exe and System32 curl.exe"]
+    fn an_entered_url_downloads_and_displays() {
+        assert!(curl::available(), "curl.exe unavailable");
+        let listener = TcpListener::bind("127.0.0.1:0").expect("bind");
+        let port = listener.local_addr().expect("local address").port();
+        let body = png_bytes();
+        // Detached on purpose: retried entries may fetch more than once.
+        std::thread::spawn(move || {
+            for stream in listener.incoming().flatten() {
+                serve(stream, &body);
+            }
+        });
+        // Bind the dialog to a plain key so a posted WM_KEYDOWN can open it.
+        std::fs::write(SETTINGS, r#"{"keyboardbindings":{"openurl":["U"]}}"#)
+            .expect("write riv.json");
+        let mut app = std::process::Command::new(EXECUTABLE)
+            .spawn()
+            .expect("riv.exe spawn (build first, run from the repo root)");
+        let window =
+            wait_for(|| unsafe { FindWindowW(None, w!("riv")) }.ok(), 15).expect("riv window");
+        // One keypress only: each opens a modal dialog, and stacking them deadlocks.
+        let key = WPARAM(usize::from(u16::from(b'U')));
+        let _ = unsafe { PostMessageW(Some(window), WM_KEYDOWN, key, LPARAM(0)) };
+        let dialog = wait_for(|| unsafe { FindWindowW(None, w!("Open URL")) }.ok(), 15)
+            .expect("Open URL dialog");
+        let url = HSTRING::from(format!("http://127.0.0.1:{port}/test.png"));
+        unsafe {
+            SetDlgItemTextW(
+                dialog,
+                dialogs::open_url::EDIT_IDENTIFIER,
+                PCWSTR(url.as_ptr()),
+            )
+            .expect("set dialog text");
+            PostMessageW(Some(dialog), WM_COMMAND, WPARAM(1), LPARAM(0)).expect("post IDOK");
+        }
+        let title_became_file =
+            wait_for(|| (window_title(window) == "test.png").then_some(()), 20).is_some();
+        let final_title = window_title(window);
+        let _ = unsafe { PostMessageW(Some(window), WM_CLOSE, WPARAM(0), LPARAM(0)) };
+        let _ = app.wait();
+        let _ = std::fs::remove_file(SETTINGS);
+        assert!(
+            title_became_file,
+            "title never became test.png (was {final_title:?})"
+        );
     }
 }

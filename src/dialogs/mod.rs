@@ -1,4 +1,5 @@
 pub mod about;
+pub mod open_url;
 pub mod options;
 pub mod rename;
 pub mod resource;

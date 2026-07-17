@@ -7,6 +7,8 @@ pub enum ActivationGate {
     Image,
     /// Image whose backing file can take file operations (not an archive member).
     FileOnDisk,
+    /// Image carried by some file on disk (the archive for members, never a URL).
+    ContainingFile,
     Animation,
     Folder,
 }
@@ -14,6 +16,7 @@ pub enum ActivationGate {
 #[derive(Clone, Copy, PartialEq, Eq)]
 pub enum Action {
     Open,
+    OpenUrl,
     OpenWith,
     OpenWithOther,
     OpenContainingFolder,
@@ -56,6 +59,12 @@ pub enum Action {
 const ACTION_TABLE: &[(Action, &str, &str, ActivationGate)] = &[
     (Action::Open, "open", "Open...", ActivationGate::Window),
     (
+        Action::OpenUrl,
+        "openurl",
+        "Open URL...",
+        ActivationGate::Window,
+    ),
+    (
         Action::OpenWith,
         "openwith",
         "Open With",
@@ -71,7 +80,7 @@ const ACTION_TABLE: &[(Action, &str, &str, ActivationGate)] = &[
         Action::OpenContainingFolder,
         "opencontainingfolder",
         "Show in Explorer",
-        ActivationGate::Image,
+        ActivationGate::ContainingFile,
     ),
     (
         Action::ReloadFile,

@@ -19,14 +19,17 @@ use windows::core::PCWSTR;
 
 use super::decode::{self, DecodeError, DecodedImage};
 use crate::archive::reader as archive_reader;
+use crate::network::curl;
 
 pub const WM_APP_DECODE_COMPLETE: u32 = WM_APP + 1;
 
-/// Viewable item identity; paths compare ASCII case-insensitively, member names exactly.
+/// Viewable item identity; paths compare ASCII case-insensitively, member names
+/// and URLs exactly.
 #[derive(Clone)]
 pub enum ItemLocation {
     File(PathBuf),
     ArchiveMember { archive: PathBuf, member: String },
+    Url(String),
 }
 
 impl PartialEq for ItemLocation {
@@ -43,6 +46,7 @@ impl PartialEq for ItemLocation {
                     member: second_member,
                 },
             ) => paths_equal(first_archive, second_archive) && first_member == second_member,
+            (Self::Url(first), Self::Url(second)) => first == second,
             _ => false,
         }
     }
@@ -62,6 +66,10 @@ impl Hash for ItemLocation {
                 path_identity(archive).hash(state);
                 member.hash(state);
             }
+            Self::Url(url) => {
+                2u8.hash(state);
+                url.hash(state);
+            }
         }
     }
 }
@@ -78,6 +86,7 @@ impl ItemLocation {
                 .next()
                 .unwrap_or(member)
                 .to_string(),
+            Self::Url(url) => curl::file_name(url).to_string(),
         }
     }
 
@@ -88,14 +97,16 @@ impl ItemLocation {
             Self::ArchiveMember { archive, member } => {
                 format!("{} \u{203a} {member}", archive.display())
             }
+            Self::Url(url) => url.clone(),
         }
     }
 
     /// The file that carries this item on disk (the archive for members).
-    pub fn containing_file(&self) -> &Path {
+    pub fn containing_file(&self) -> Option<&Path> {
         match self {
-            Self::File(path) => path,
-            Self::ArchiveMember { archive, .. } => archive,
+            Self::File(path) => Some(path),
+            Self::ArchiveMember { archive, .. } => Some(archive),
+            Self::Url(_) => None,
         }
     }
 
@@ -103,18 +114,20 @@ impl ItemLocation {
     pub fn as_file(&self) -> Option<&Path> {
         match self {
             Self::File(path) => Some(path),
-            Self::ArchiveMember { .. } => None,
+            Self::ArchiveMember { .. } | Self::Url(_) => None,
         }
     }
 
     fn exists(&self) -> bool {
-        self.containing_file().is_file()
+        // Remote items have no cheap existence signal; the download is the probe.
+        self.containing_file().is_none_or(Path::is_file)
     }
 
     fn extension_lowercase(&self) -> Option<String> {
         let name_path = match self {
             Self::File(path) => path.as_path(),
             Self::ArchiveMember { member, .. } => Path::new(member),
+            Self::Url(url) => return curl::extension_lowercase(url),
         };
         name_path
             .extension()
@@ -282,18 +295,25 @@ impl ImageCore {
                     entry.map(|entry| entry.modified),
                 ))
             }
+            ItemLocation::Url(_) => Some((
+                self.cache
+                    .get(&current.location)
+                    .map_or(0, |entry| entry.file_size),
+                None,
+            )),
         }
     }
 
     pub fn reload_current(&mut self) -> bool {
-        let Some(location) = self.pending_display.clone().or_else(|| {
-            self.current
-                .as_ref()
-                .map(|current| current.location.clone())
-        }) else {
+        // Reload retries the position baseline, so an errored item reloads itself.
+        let Some(location) = self.navigation_anchor() else {
             return false;
         };
         self.cache.remove(&location);
+        if let ItemLocation::Url(url) = &location {
+            // Back through load_url so validation errors reproduce on retry.
+            return self.load_url(url);
+        }
         self.rescan_listing();
         self.load_item(&location)
     }
@@ -331,6 +351,38 @@ impl ImageCore {
             self.rescan_folder(&directory);
         }
         self.load_item(&ItemLocation::File(path))
+    }
+
+    /// Opens a remote image as a standalone item (no listing, no navigation).
+    pub fn load_url(&mut self, url: &str) -> bool {
+        // Even a failed attempt leaves the single-item state; no listing survives.
+        self.entries = Vec::new();
+        self.listing_scope = None;
+        let failure = if !curl::is_supported_protocol(url) {
+            Some("unsupported URL protocol (http/https only)")
+        } else if !curl::available() {
+            Some("URL support is unavailable on this Windows")
+        } else if curl::extension_lowercase(url)
+            .is_some_and(|extension| archive_reader::is_archive_extension(&extension))
+        {
+            Some("archives are not supported from a URL")
+        } else {
+            None
+        };
+        let location = ItemLocation::Url(url.to_string());
+        if let Some(message) = failure {
+            self.pending_display = None;
+            self.load_error = Some((
+                location,
+                DecodeError {
+                    code: 0,
+                    message: message.to_string(),
+                    store_extension: None,
+                },
+            ));
+            return false;
+        }
+        self.load_item(&location)
     }
 
     /// Opens an archive as a virtual folder of its image members.
@@ -405,6 +457,8 @@ impl ImageCore {
                     return false;
                 }
             },
+            // A cached remote item stays valid until an explicit reload (see CURL.md).
+            ItemLocation::Url(_) => self.cache.get(location).map_or(0, |entry| entry.file_size),
         };
         let cached = self
             .cache
@@ -779,8 +833,8 @@ impl ImageCore {
         if total <= budget {
             return;
         }
-        let anchor_index = self
-            .navigation_anchor()
+        let anchor = self.navigation_anchor();
+        let anchor_index = anchor
             .as_ref()
             .and_then(|location| self.position_of(location));
         let length = self.entries.len();
@@ -792,16 +846,21 @@ impl ImageCore {
             .cache
             .iter()
             .map(|(location, entry)| {
-                let key = self.position_of(location).zip(anchor_index).map_or(
-                    UNLISTED_EVICTION_KEY,
-                    |(index, anchor)| match priorities.get(&index) {
-                        Some(priority) => (0, *priority),
-                        None => (
-                            1,
-                            ring_offset(index, anchor, length, loop_enabled).unsigned_abs(),
-                        ),
-                    },
-                );
+                // The baseline item goes last even when unlisted (URL items).
+                let key = if anchor.as_ref() == Some(location) {
+                    (0, 0)
+                } else {
+                    self.position_of(location).zip(anchor_index).map_or(
+                        UNLISTED_EVICTION_KEY,
+                        |(index, anchor)| match priorities.get(&index) {
+                            Some(priority) => (0, *priority),
+                            None => (
+                                1,
+                                ring_offset(index, anchor, length, loop_enabled).unsigned_abs(),
+                            ),
+                        },
+                    )
+                };
                 (location.clone(), entry.image.pixel_bytes() as u64, key)
             })
             .collect();
@@ -1107,6 +1166,7 @@ fn worker_loop(shared: &PoolShared, window: isize) {
                 queue = shared.available.wait(queue).expect("decode queue poisoned");
             }
         };
+        let mut file_size = job.file_size;
         let result = match &job.location {
             ItemLocation::File(path) => {
                 if job.kind != JobKind::Full
@@ -1149,13 +1209,26 @@ fn worker_loop(shared: &PoolShared, window: isize) {
                     }),
                 }
             }
+            ItemLocation::Url(url) => match curl::download(url, &job.cancellation) {
+                Ok(data) => {
+                    file_size = data.len() as u64; // the remote size becomes known here
+                    let extension = curl::extension_lowercase(url);
+                    decode::decode_bytes(&data, extension.as_deref(), &job.cancellation)
+                }
+                Err(error) if error.cancelled => Err(DecodeError::cancelled()),
+                Err(error) => Err(DecodeError {
+                    code: error.code,
+                    message: error.message,
+                    store_extension: None,
+                }),
+            },
         }
         .map(Arc::new);
         post_completion(
             window,
             Box::new(DecodeCompletion {
                 location: job.location,
-                file_size: job.file_size,
+                file_size,
                 stage: DecodeStage::Final,
                 result,
             }),
@@ -1312,6 +1385,28 @@ mod item_location_tests {
     }
 
     #[test]
+    fn url_locations_stand_alone() {
+        let url = |text: &str| ItemLocation::Url(text.to_string());
+        let location = url("https://a.com/b/c.png?width=1");
+        assert_eq!(location.display_name(), "c.png");
+        assert_eq!(location.display_text(), "https://a.com/b/c.png?width=1");
+        assert_eq!(location.containing_file(), None);
+        assert_eq!(location.as_file(), None);
+        assert!(location.exists());
+        assert_eq!(format_name_of(&location), "PNG");
+        // URLs compare exactly; remote paths are case-sensitive.
+        assert!(location == url("https://a.com/b/c.png?width=1"));
+        assert!(location != url("https://a.com/b/C.png?width=1"));
+        assert!(location != ItemLocation::File(PathBuf::from("https://a.com/b/c.png?width=1")));
+        let mut cache = HashMap::new();
+        cache.insert(location.clone(), "decoded");
+        assert_eq!(
+            cache.get(&url("https://a.com/b/c.png?width=1")),
+            Some(&"decoded")
+        );
+    }
+
+    #[test]
     fn member_entries_keep_images_only() {
         let info = |name: &str| archive_reader::MemberInfo {
             name: name.to_string(),
@@ -1325,5 +1420,88 @@ mod item_location_tests {
         let entry = member_entry(archive, info("art/01.png")).expect("image member");
         assert_eq!(entry.created, entry.modified); // archives have no creation time
         assert_eq!(entry.file_size, 10);
+    }
+}
+
+/// A URL attempt owns the session alone; local opens rebuild their listing.
+#[cfg(test)]
+mod url_session_state_tests {
+    use super::*;
+
+    fn core() -> ImageCore {
+        ImageCore::new(
+            HWND::default(),
+            CoreOptions {
+                sort_mode: SortMode::Name,
+                sort_descending: false,
+                preloading_mode: 1,
+                loop_folders_enabled: true,
+                skip_hidden: true,
+                allow_mime_content_detection: false,
+            },
+        )
+    }
+
+    fn folder_state(core: &mut ImageCore, path: &str) {
+        let path = PathBuf::from(path);
+        core.listing_scope = Some(ListingScope::Directory(
+            path.parent().expect("parent").to_path_buf(),
+        ));
+        core.entries = vec![FolderEntry {
+            location: ItemLocation::File(path),
+            wide_name: Vec::new(),
+            file_size: 0,
+            modified: UNIX_EPOCH,
+            created: UNIX_EPOCH,
+        }];
+    }
+
+    #[test]
+    fn a_rejected_url_still_clears_the_listing() {
+        let mut core = core();
+        folder_state(&mut core, "C:\\pictures\\a.png");
+        assert!(!core.load_url("ftp://a.com/b.png"));
+        assert!(core.entries.is_empty());
+        assert!(core.listing_scope.is_none());
+        let (location, error) = core.load_error.as_ref().expect("error recorded");
+        assert!(matches!(location, ItemLocation::Url(_)));
+        assert!(error.message.contains("protocol"));
+    }
+
+    #[test]
+    fn reload_retries_the_errored_url_not_the_previous_file() {
+        let mut core = core();
+        folder_state(&mut core, "C:\\pictures\\a.png");
+        core.load_error = Some((
+            ItemLocation::Url("ftp://a.com/b.png".to_string()),
+            DecodeError {
+                code: 0,
+                message: "download failed".to_string(),
+                store_extension: None,
+            },
+        ));
+        assert!(!core.reload_current());
+        // Routed back through load_url: single-item state, validation re-ran.
+        assert!(core.entries.is_empty());
+        assert!(core.listing_scope.is_none());
+        let (_, error) = core.load_error.as_ref().expect("error recorded");
+        assert!(error.message.contains("protocol"));
+    }
+
+    #[test]
+    fn a_local_open_after_a_url_restores_the_listing() {
+        let directory = std::env::temp_dir().join("riv-url-session-state");
+        std::fs::create_dir_all(&directory).expect("fixture directory");
+        let file = directory.join("a.png");
+        std::fs::write(&file, b"listing only; never decoded").expect("fixture file");
+        let mut core = core();
+        assert!(!core.load_url("ftp://a.com/b.png"));
+        core.load_path(&file);
+        assert!(matches!(
+            core.listing_scope,
+            Some(ListingScope::Directory(_))
+        ));
+        assert_eq!(core.entries.len(), 1);
+        let _ = std::fs::remove_dir_all(&directory);
     }
 }

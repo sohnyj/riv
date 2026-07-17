@@ -20,8 +20,10 @@ pub enum MenuSelection {
 pub struct MenuState {
     pub has_image: bool,
     pub has_file_on_disk: bool,
+    pub has_containing_file: bool,
     pub has_folder: bool,
     pub has_animation: bool,
+    pub open_url_available: bool,
     pub animation_paused: bool,
     pub preserve_zoom: bool,
     pub mirrored: bool,
@@ -46,6 +48,7 @@ impl MenuBuilder {
             ActivationGate::Window => true,
             ActivationGate::Image => self.state_snapshot.has_image,
             ActivationGate::FileOnDisk => self.state_snapshot.has_file_on_disk,
+            ActivationGate::ContainingFile => self.state_snapshot.has_containing_file,
             ActivationGate::Animation => self.state_snapshot.has_animation,
             ActivationGate::Folder => self.state_snapshot.has_folder,
         }
@@ -61,7 +64,9 @@ impl MenuBuilder {
         let mut flags = MF_STRING;
         let clear_without_recents =
             action == Action::ClearRecents && self.state_snapshot.recent_names.is_empty();
-        if !self.gate_satisfied(action.gate()) || clear_without_recents {
+        let open_url_without_curl =
+            action == Action::OpenUrl && !self.state_snapshot.open_url_available;
+        if !self.gate_satisfied(action.gate()) || clear_without_recents || open_url_without_curl {
             flags |= MF_GRAYED | MF_DISABLED;
         }
         let checked = match action {
@@ -91,13 +96,24 @@ impl MenuBuilder {
         unsafe { AppendMenuW(menu, MF_SEPARATOR, 0, None) }
     }
 
-    fn append_submenu(&self, menu: HMENU, submenu: HMENU, label: &str) -> Result<()> {
-        unsafe { AppendMenuW(menu, MF_POPUP, submenu.0 as usize, &HSTRING::from(label)) }
+    fn append_submenu(
+        &self,
+        menu: HMENU,
+        submenu: HMENU,
+        label: &str,
+        enabled: bool,
+    ) -> Result<()> {
+        let mut flags = MF_POPUP;
+        if !enabled {
+            flags |= MF_GRAYED | MF_DISABLED;
+        }
+        unsafe { AppendMenuW(menu, flags, submenu.0 as usize, &HSTRING::from(label)) }
     }
 
     fn build(&mut self) -> Result<HMENU> {
         let menu = unsafe { CreatePopupMenu()? };
         self.append_action(menu, Action::Open)?;
+        self.append_action(menu, Action::OpenUrl)?;
 
         let recent = unsafe { CreatePopupMenu()? };
         for index in 0..self.state_snapshot.recent_names.len().min(10) {
@@ -108,7 +124,7 @@ impl MenuBuilder {
             self.append_separator(recent)?;
         }
         self.append_action_labeled(recent, Action::ClearRecents, "Clear Recents")?;
-        self.append_submenu(menu, recent, "Open Recent")?;
+        self.append_submenu(menu, recent, "Open Recent", true)?;
         let open_with = unsafe { CreatePopupMenu()? };
         let open_with_items = self.state_snapshot.open_with_items.clone();
         for (index, label) in open_with_items.iter().enumerate() {
@@ -121,7 +137,13 @@ impl MenuBuilder {
             self.append_separator(open_with)?;
         }
         self.append_action_labeled(open_with, Action::OpenWithOther, "Other Application...")?;
-        self.append_submenu(menu, open_with, "Open With")?;
+        // No on-disk file (archive member or URL) means nothing to hand off.
+        self.append_submenu(
+            menu,
+            open_with,
+            "Open With",
+            self.state_snapshot.has_file_on_disk,
+        )?;
         self.append_separator(menu)?;
 
         self.append_action(menu, Action::ShowFileInfo)?;
@@ -148,7 +170,7 @@ impl MenuBuilder {
         self.append_separator(view)?;
         self.append_action(view, Action::Mirror)?;
         self.append_action(view, Action::Flip)?;
-        self.append_submenu(menu, view, "View")?;
+        self.append_submenu(menu, view, "View", true)?;
 
         let playback = unsafe { CreatePopupMenu()? };
         let pause_label = if self.state_snapshot.animation_paused {
@@ -162,7 +184,7 @@ impl MenuBuilder {
         self.append_action(playback, Action::DecreaseSpeed)?;
         self.append_action(playback, Action::IncreaseSpeed)?;
         self.append_action(playback, Action::ResetSpeed)?;
-        self.append_submenu(menu, playback, "Playback")?;
+        self.append_submenu(menu, playback, "Playback", true)?;
 
         let tools = unsafe { CreatePopupMenu()? };
         let slideshow_label = if self.state_snapshot.slideshow_active {
@@ -174,7 +196,7 @@ impl MenuBuilder {
         self.append_separator(tools)?;
         self.append_action(tools, Action::Options)?;
         self.append_action(tools, Action::About)?;
-        self.append_submenu(menu, tools, "Tools")?;
+        self.append_submenu(menu, tools, "Tools", true)?;
 
         let fullscreen_label = if self.state_snapshot.fullscreen {
             "Exit Fullscreen"
@@ -209,4 +231,61 @@ pub fn show(window: HWND, state: MenuState, x: i32, y: i32) -> Option<MenuSelect
     (identifier > 0)
         .then(|| builder.entries.get(identifier - 1).copied())
         .flatten()
+}
+
+#[cfg(test)]
+mod open_with_gating_tests {
+    use super::*;
+    use windows::Win32::UI::WindowsAndMessaging::{
+        GetMenuItemCount, GetMenuState, GetMenuStringW, MENU_ITEM_FLAGS, MF_BYPOSITION,
+    };
+
+    fn state(has_file_on_disk: bool) -> MenuState {
+        MenuState {
+            has_image: true,
+            has_file_on_disk,
+            has_containing_file: true,
+            has_folder: false,
+            has_animation: false,
+            open_url_available: true,
+            animation_paused: false,
+            preserve_zoom: false,
+            mirrored: false,
+            flipped: false,
+            fullscreen: false,
+            slideshow_active: false,
+            recent_names: Vec::new(),
+            open_with_items: Vec::new(),
+            open_with_has_default: false,
+            shortcuts: HashMap::new(),
+        }
+    }
+
+    fn open_with_is_grayed(has_file_on_disk: bool) -> bool {
+        let mut builder = MenuBuilder {
+            entries: Vec::new(),
+            state_snapshot: state(has_file_on_disk),
+        };
+        let menu = builder.build().expect("menu builds");
+        let count = unsafe { GetMenuItemCount(Some(menu)) };
+        let mut grayed = None;
+        for position in 0..count {
+            let mut label = [0u16; 64];
+            let length =
+                unsafe { GetMenuStringW(menu, position as u32, Some(&mut label), MF_BYPOSITION) };
+            if String::from_utf16_lossy(&label[..length as usize]) == "Open With" {
+                let flags = unsafe { GetMenuState(menu, position as u32, MF_BYPOSITION) };
+                grayed = Some(MENU_ITEM_FLAGS(flags) & MF_GRAYED == MF_GRAYED);
+                break;
+            }
+        }
+        let _ = unsafe { DestroyMenu(menu) };
+        grayed.expect("Open With item present")
+    }
+
+    #[test]
+    fn open_with_follows_the_on_disk_file() {
+        assert!(!open_with_is_grayed(true)); // a plain file can hand off
+        assert!(open_with_is_grayed(false)); // URL or archive member cannot
+    }
 }
