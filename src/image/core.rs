@@ -231,6 +231,13 @@ struct CacheEntry {
     image: Arc<DecodedImage>,
 }
 
+pub struct PlaylistWindow {
+    pub names: Vec<String>,
+    pub first_index: usize,
+    pub current_slot: Option<usize>,
+    pub hidden_count: usize,
+}
+
 pub struct ImageCore {
     pool: DecodePool,
     options: CoreOptions,
@@ -282,6 +289,28 @@ impl ImageCore {
 
     pub fn has_folder_entries(&self) -> bool {
         !self.entries.is_empty()
+    }
+
+    /// Listing window for the menu: `capacity` names centered on the anchor, the rest a count.
+    pub fn playlist_window(&self, capacity: usize) -> PlaylistWindow {
+        let anchor_index = self
+            .navigation_anchor()
+            .as_ref()
+            .and_then(|location| self.position_of(location));
+        let total = self.entries.len();
+        let first_index = playlist_window_start(total, anchor_index, capacity);
+        let end = (first_index + capacity).min(total);
+        PlaylistWindow {
+            names: self.entries[first_index..end]
+                .iter()
+                .map(|entry| entry.location.display_name())
+                .collect(),
+            first_index,
+            current_slot: anchor_index
+                .filter(|index| (first_index..end).contains(index))
+                .map(|index| index - first_index),
+            hidden_count: total - (end - first_index),
+        }
     }
 
     /// (file size, modified) of the current item; member values from the listing.
@@ -517,6 +546,18 @@ impl ImageCore {
         let anchor = self.navigation_anchor();
         let target = self.navigation_target(command)?;
         if anchor.is_some_and(|anchor| anchor == target) {
+            return None; // same item, nothing to do
+        }
+        Some(self.load_item(&target))
+    }
+
+    /// Jumps to a listing entry; the index maps the open menu's snapshot, so no rescan first.
+    pub fn navigate_to_entry(&mut self, index: usize) -> Option<bool> {
+        let target = self.entries.get(index)?.location.clone();
+        if self
+            .navigation_anchor()
+            .is_some_and(|anchor| anchor == target)
+        {
             return None; // same item, nothing to do
         }
         Some(self.load_item(&target))
@@ -889,6 +930,17 @@ impl ImageCore {
             total -= cost;
         }
     }
+}
+
+/// First index of a `capacity` window centered on the anchor, clamped to the list.
+fn playlist_window_start(total: usize, anchor: Option<usize>, capacity: usize) -> usize {
+    if total <= capacity {
+        return 0;
+    }
+    anchor
+        .unwrap_or(0)
+        .saturating_sub(capacity / 2)
+        .min(total - capacity)
 }
 
 fn neighbor_index(
@@ -1602,5 +1654,75 @@ mod url_session_state_tests {
         ));
         assert_eq!(core.entries.len(), 1);
         let _ = std::fs::remove_dir_all(&directory);
+    }
+}
+
+/// The menu playlist shows a fixed window with the current item centered.
+#[cfg(test)]
+mod playlist_window_tests {
+    use super::*;
+
+    fn core_with_files(count: usize, anchor: Option<usize>) -> ImageCore {
+        let mut core = ImageCore::new(
+            HWND::default(),
+            CoreOptions {
+                sort_mode: SortMode::Name,
+                sort_descending: false,
+                preloading_mode: 1,
+                loop_folders_enabled: true,
+                skip_hidden: true,
+                allow_mime_content_detection: false,
+            },
+        );
+        core.entries = (0..count)
+            .map(|index| FolderEntry {
+                location: ItemLocation::File(PathBuf::from(format!(
+                    "C:\\pictures\\{index:03}.png"
+                ))),
+                wide_name: Vec::new(),
+                file_size: 0,
+                modified: UNIX_EPOCH,
+                created: UNIX_EPOCH,
+            })
+            .collect();
+        core.pending_display = anchor.map(|index| core.entries[index].location.clone());
+        core
+    }
+
+    #[test]
+    fn a_short_listing_shows_whole() {
+        let window = core_with_files(5, Some(2)).playlist_window(25);
+        assert_eq!(window.names.len(), 5);
+        assert_eq!(window.first_index, 0);
+        assert_eq!(window.current_slot, Some(2));
+        assert_eq!(window.hidden_count, 0);
+        assert_eq!(window.names[0], "000.png");
+    }
+
+    #[test]
+    fn the_current_item_sits_at_the_window_center() {
+        let window = core_with_files(100, Some(50)).playlist_window(25);
+        assert_eq!(window.first_index, 38);
+        assert_eq!(window.current_slot, Some(12));
+        assert_eq!(window.names.len(), 25);
+        assert_eq!(window.hidden_count, 75);
+    }
+
+    #[test]
+    fn the_window_clamps_at_both_ends() {
+        let near_start = core_with_files(100, Some(3)).playlist_window(25);
+        assert_eq!(near_start.first_index, 0);
+        assert_eq!(near_start.current_slot, Some(3));
+        let near_end = core_with_files(100, Some(97)).playlist_window(25);
+        assert_eq!(near_end.first_index, 75);
+        assert_eq!(near_end.current_slot, Some(22));
+    }
+
+    #[test]
+    fn no_anchor_starts_at_the_top() {
+        let window = core_with_files(100, None).playlist_window(25);
+        assert_eq!(window.first_index, 0);
+        assert_eq!(window.current_slot, None);
+        assert_eq!(window.hidden_count, 75);
     }
 }

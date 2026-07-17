@@ -11,10 +11,15 @@ use windows::core::{HSTRING, Result};
 
 use crate::actions::{Action, ActivationGate};
 
+/// Playlist submenu size; names beyond the window collapse into a "... nnn more" line.
+pub const PLAYLIST_CAPACITY: usize = 25;
+
 #[derive(Clone, Copy)]
 pub enum MenuSelection {
     Action(Action),
     OpenWithEntry(usize),
+    /// Index into the folder listing snapshot the menu was built from.
+    PlaylistEntry(usize),
 }
 
 pub struct MenuState {
@@ -25,6 +30,10 @@ pub struct MenuState {
     pub has_animation: bool,
     pub loop_enabled: bool,
     pub open_url_available: bool,
+    pub playlist_names: Vec<String>,
+    pub playlist_first_index: usize,
+    pub playlist_current_slot: Option<usize>,
+    pub playlist_hidden_count: usize,
     pub animation_paused: bool,
     pub preserve_zoom: bool,
     pub mirrored: bool,
@@ -94,6 +103,18 @@ impl MenuBuilder {
         unsafe { AppendMenuW(menu, MF_STRING, identifier, &HSTRING::from(label)) }
     }
 
+    fn append_playlist_entry(&mut self, menu: HMENU, slot: usize, label: &str) -> Result<()> {
+        self.entries.push(MenuSelection::PlaylistEntry(
+            self.state_snapshot.playlist_first_index + slot,
+        ));
+        let identifier = self.entries.len();
+        let mut flags = MF_STRING;
+        if self.state_snapshot.playlist_current_slot == Some(slot) {
+            flags |= MF_CHECKED;
+        }
+        unsafe { AppendMenuW(menu, flags, identifier, &HSTRING::from(label)) }
+    }
+
     fn append_separator(&self, menu: HMENU) -> Result<()> {
         unsafe { AppendMenuW(menu, MF_SEPARATOR, 0, None) }
     }
@@ -155,6 +176,24 @@ impl MenuBuilder {
         self.append_action(menu, Action::PreviousFile)?;
         self.append_action(menu, Action::NextFile)?;
         self.append_action(menu, Action::Loop)?;
+        let playlist = unsafe { CreatePopupMenu()? };
+        let playlist_names = self.state_snapshot.playlist_names.clone();
+        for (slot, name) in playlist_names.iter().enumerate() {
+            self.append_playlist_entry(playlist, slot, name)?;
+        }
+        if self.state_snapshot.playlist_hidden_count > 0 {
+            let more = format!("... {} more", self.state_snapshot.playlist_hidden_count);
+            unsafe {
+                AppendMenuW(
+                    playlist,
+                    MF_STRING | MF_GRAYED | MF_DISABLED,
+                    0,
+                    &HSTRING::from(more.as_str()),
+                )?;
+            }
+        }
+        // No folder listing means nothing to jump to.
+        self.append_submenu(menu, playlist, "Playlist", self.state_snapshot.has_folder)?;
         let playback = unsafe { CreatePopupMenu()? };
         let pause_label = if self.state_snapshot.animation_paused {
             "Resume"
@@ -245,7 +284,7 @@ pub fn show(window: HWND, state: MenuState, x: i32, y: i32) -> Option<MenuSelect
 mod menu_structure_tests {
     use super::*;
     use windows::Win32::UI::WindowsAndMessaging::{
-        GetMenuItemCount, GetMenuState, GetMenuStringW, MENU_ITEM_FLAGS, MF_BYPOSITION,
+        GetMenuItemCount, GetMenuState, GetMenuStringW, GetSubMenu, MENU_ITEM_FLAGS, MF_BYPOSITION,
     };
 
     fn state() -> MenuState {
@@ -257,6 +296,10 @@ mod menu_structure_tests {
             has_animation: true,
             loop_enabled: true,
             open_url_available: true,
+            playlist_names: Vec::new(),
+            playlist_first_index: 0,
+            playlist_current_slot: None,
+            playlist_hidden_count: 0,
             animation_paused: false,
             preserve_zoom: false,
             mirrored: false,
@@ -309,6 +352,63 @@ mod menu_structure_tests {
     }
 
     #[test]
+    fn playlist_follows_the_folder_listing() {
+        assert!(submenu_is_grayed(state(), "Playlist")); // no listing to jump to
+        let mut with_folder = state();
+        with_folder.has_folder = true;
+        with_folder.playlist_names = vec!["a.png".to_string()];
+        assert!(!submenu_is_grayed(with_folder, "Playlist"));
+    }
+
+    #[test]
+    fn playlist_lists_the_window_and_collapses_the_rest() {
+        let mut with_folder = state();
+        with_folder.has_folder = true;
+        with_folder.playlist_names = (0..25).map(|index| format!("{index:03}.png")).collect();
+        with_folder.playlist_first_index = 38;
+        with_folder.playlist_current_slot = Some(12);
+        with_folder.playlist_hidden_count = 75;
+        let mut builder = MenuBuilder {
+            entries: Vec::new(),
+            state_snapshot: with_folder,
+        };
+        let menu = builder.build().expect("menu builds");
+        let count = unsafe { GetMenuItemCount(Some(menu)) };
+        let mut submenu = None;
+        for position in 0..count {
+            let mut text = [0u16; 64];
+            let length =
+                unsafe { GetMenuStringW(menu, position as u32, Some(&mut text), MF_BYPOSITION) };
+            if String::from_utf16_lossy(&text[..length as usize]) == "Playlist" {
+                submenu = Some(unsafe { GetSubMenu(menu, position) });
+                break;
+            }
+        }
+        let submenu = submenu.expect("Playlist submenu present");
+        assert_eq!(unsafe { GetMenuItemCount(Some(submenu)) }, 26);
+        // The overflow line shows the count and takes no selection.
+        let mut text = [0u16; 64];
+        let length = unsafe { GetMenuStringW(submenu, 25, Some(&mut text), MF_BYPOSITION) };
+        assert_eq!(
+            String::from_utf16_lossy(&text[..length as usize]),
+            "... 75 more"
+        );
+        let more_flags = unsafe { GetMenuState(submenu, 25, MF_BYPOSITION) };
+        assert!(MENU_ITEM_FLAGS(more_flags) & MF_GRAYED == MF_GRAYED);
+        // The current file carries the check marker.
+        let current_flags = unsafe { GetMenuState(submenu, 12, MF_BYPOSITION) };
+        assert!(MENU_ITEM_FLAGS(current_flags) & MF_CHECKED == MF_CHECKED);
+        // Selections map back to absolute listing indices.
+        assert!(
+            builder
+                .entries
+                .iter()
+                .any(|entry| matches!(entry, MenuSelection::PlaylistEntry(50)))
+        );
+        let _ = unsafe { DestroyMenu(menu) };
+    }
+
+    #[test]
     fn top_level_items_follow_the_menu_order() {
         let mut builder = MenuBuilder {
             entries: Vec::new(),
@@ -336,6 +436,7 @@ mod menu_structure_tests {
             "Previous",
             "Next",
             "Loop",
+            "Playlist",
             "Playback",
             "", // separator
             "Reload",

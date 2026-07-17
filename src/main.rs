@@ -770,7 +770,16 @@ fn execute_navigation(
     window: HWND,
     command: NavigationCommand,
 ) -> bool {
-    match application.image_core.navigate(command) {
+    let result = application.image_core.navigate(command);
+    apply_navigation_result(application, window, result)
+}
+
+fn apply_navigation_result(
+    application: &mut Application,
+    window: HWND,
+    result: Option<bool>,
+) -> bool {
+    match result {
         Some(true) => application.apply_current_image(window),
         Some(false) => {
             if application.image_core.load_error.is_some() {
@@ -1758,6 +1767,9 @@ extern "system" fn window_procedure(
                 if application.settings.prune_recent_files() {
                     unsafe { SetTimer(Some(window), RECENTS_SAVE_TIMER, 500, None) };
                 }
+                let playlist = application
+                    .image_core
+                    .playlist_window(context_menu::PLAYLIST_CAPACITY);
                 let state = MenuState {
                     has_image: application.image_core.current.is_some(),
                     has_file_on_disk: application
@@ -1773,6 +1785,10 @@ extern "system" fn window_procedure(
                     has_folder: application.image_core.has_folder_entries(),
                     loop_enabled: application.settings.options.loop_folders_enabled,
                     open_url_available: curl::available(),
+                    playlist_names: playlist.names,
+                    playlist_first_index: playlist.first_index,
+                    playlist_current_slot: playlist.current_slot,
+                    playlist_hidden_count: playlist.hidden_count,
                     has_animation: application
                         .image_core
                         .current
@@ -1833,6 +1849,10 @@ extern "system" fn window_procedure(
                         {
                             let _ = open_with::invoke(path, &item.executable_path);
                         }
+                    }
+                    Some(MenuSelection::PlaylistEntry(index)) => {
+                        let result = application.image_core.navigate_to_entry(index);
+                        apply_navigation_result(application, window, result);
                     }
                     None => {}
                 }
