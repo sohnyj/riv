@@ -118,6 +118,11 @@ impl DecodeError {
     pub fn is_cancelled(&self) -> bool {
         self.code == E_ABORT.0
     }
+
+    /// True when no decoder recognized the data and no Store codec is named.
+    pub fn is_unrecognized_format(&self) -> bool {
+        self.code == WINCODEC_ERR_COMPONENTNOTFOUND.0 && self.store_extension.is_none()
+    }
 }
 
 impl From<windows::core::Error> for DecodeError {

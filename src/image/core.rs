@@ -1214,6 +1214,7 @@ fn worker_loop(shared: &PoolShared, window: isize) {
                     file_size = data.len() as u64; // the remote size becomes known here
                     let extension = curl::extension_lowercase(url);
                     decode::decode_bytes(&data, extension.as_deref(), &job.cancellation)
+                        .map_err(url_decode_error)
                 }
                 Err(error) if error.cancelled => Err(DecodeError::cancelled()),
                 Err(error) => Err(DecodeError {
@@ -1234,6 +1235,17 @@ fn worker_loop(shared: &PoolShared, window: isize) {
             }),
         );
     }
+}
+
+/// Unrecognized downloaded bytes (an HTML page, most often) get a plain message.
+fn url_decode_error(error: DecodeError) -> DecodeError {
+    if error.is_unrecognized_format() {
+        return DecodeError {
+            message: "no image at this URL".to_string(),
+            ..error
+        };
+    }
+    error
 }
 
 fn post_completion(window: isize, completion: Box<DecodeCompletion>) {
@@ -1486,6 +1498,24 @@ mod url_session_state_tests {
         assert!(core.listing_scope.is_none());
         let (_, error) = core.load_error.as_ref().expect("error recorded");
         assert!(error.message.contains("protocol"));
+    }
+
+    #[test]
+    fn unrecognized_url_bytes_read_as_no_image() {
+        use windows::Win32::Foundation::WINCODEC_ERR_COMPONENTNOTFOUND;
+        let error = |store_extension| DecodeError {
+            code: WINCODEC_ERR_COMPONENTNOTFOUND.0,
+            message: "component not found".to_string(),
+            store_extension,
+        };
+        assert_eq!(
+            url_decode_error(error(None)).message,
+            "no image at this URL"
+        );
+        // A failure that names a Store codec keeps its install hint.
+        let store_hinted = url_decode_error(error(Some("avif")));
+        assert_eq!(store_hinted.message, "component not found");
+        assert_eq!(store_hinted.store_extension, Some("avif"));
     }
 
     #[test]
