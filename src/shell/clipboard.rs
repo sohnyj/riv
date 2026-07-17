@@ -2,7 +2,7 @@
 
 use windows::Win32::Foundation::{HANDLE, HGLOBAL, HWND};
 use windows::Win32::System::DataExchange::{CloseClipboard, GetClipboardData, OpenClipboard};
-use windows::Win32::System::Memory::{GlobalLock, GlobalUnlock};
+use windows::Win32::System::Memory::{GlobalLock, GlobalSize, GlobalUnlock};
 use windows::Win32::System::Ole::CF_UNICODETEXT;
 
 /// Trimmed clipboard text; None when the clipboard holds none.
@@ -24,8 +24,10 @@ fn read_wide(handle: HANDLE) -> Option<String> {
     if pointer.is_null() {
         return None;
     }
+    // The allocation size bounds the scan against a missing terminator.
+    let capacity = unsafe { GlobalSize(global) } / size_of::<u16>();
     let mut length = 0usize;
-    while unsafe { *pointer.add(length) } != 0 {
+    while length < capacity && unsafe { *pointer.add(length) } != 0 {
         length += 1;
     }
     let text = String::from_utf16_lossy(unsafe { std::slice::from_raw_parts(pointer, length) });
