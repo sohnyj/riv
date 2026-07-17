@@ -112,6 +112,7 @@ pub fn download(
             "--show-error",
             "--fail",
             "--location",
+            "--globoff",
             "--proto",
             "=http,https",
             "--proto-redir",
