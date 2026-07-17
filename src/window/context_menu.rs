@@ -167,7 +167,13 @@ impl MenuBuilder {
         self.append_action(playback, Action::DecreaseSpeed)?;
         self.append_action(playback, Action::IncreaseSpeed)?;
         self.append_action(playback, Action::ResetSpeed)?;
-        self.append_submenu(menu, playback, "Playback", true)?;
+        // A still image has nothing to play.
+        self.append_submenu(
+            menu,
+            playback,
+            "Playback",
+            self.state_snapshot.has_animation,
+        )?;
         self.append_separator(menu)?;
 
         self.append_action(menu, Action::Reload)?;
@@ -242,13 +248,13 @@ mod menu_structure_tests {
         GetMenuItemCount, GetMenuState, GetMenuStringW, MENU_ITEM_FLAGS, MF_BYPOSITION,
     };
 
-    fn state(has_file_on_disk: bool) -> MenuState {
+    fn state() -> MenuState {
         MenuState {
             has_image: true,
-            has_file_on_disk,
+            has_file_on_disk: true,
             has_containing_file: true,
             has_folder: false,
-            has_animation: false,
+            has_animation: true,
             loop_enabled: true,
             open_url_available: true,
             animation_paused: false,
@@ -264,39 +270,49 @@ mod menu_structure_tests {
         }
     }
 
-    fn open_with_is_grayed(has_file_on_disk: bool) -> bool {
+    fn submenu_is_grayed(state: MenuState, label: &str) -> bool {
         let mut builder = MenuBuilder {
             entries: Vec::new(),
-            state_snapshot: state(has_file_on_disk),
+            state_snapshot: state,
         };
         let menu = builder.build().expect("menu builds");
         let count = unsafe { GetMenuItemCount(Some(menu)) };
         let mut grayed = None;
         for position in 0..count {
-            let mut label = [0u16; 64];
+            let mut text = [0u16; 64];
             let length =
-                unsafe { GetMenuStringW(menu, position as u32, Some(&mut label), MF_BYPOSITION) };
-            if String::from_utf16_lossy(&label[..length as usize]) == "Open With" {
+                unsafe { GetMenuStringW(menu, position as u32, Some(&mut text), MF_BYPOSITION) };
+            if String::from_utf16_lossy(&text[..length as usize]) == label {
                 let flags = unsafe { GetMenuState(menu, position as u32, MF_BYPOSITION) };
                 grayed = Some(MENU_ITEM_FLAGS(flags) & MF_GRAYED == MF_GRAYED);
                 break;
             }
         }
         let _ = unsafe { DestroyMenu(menu) };
-        grayed.expect("Open With item present")
+        grayed.expect("submenu present")
     }
 
     #[test]
     fn open_with_follows_the_on_disk_file() {
-        assert!(!open_with_is_grayed(true)); // a plain file can hand off
-        assert!(open_with_is_grayed(false)); // URL or archive member cannot
+        assert!(!submenu_is_grayed(state(), "Open With")); // a plain file can hand off
+        let mut without_file = state();
+        without_file.has_file_on_disk = false;
+        assert!(submenu_is_grayed(without_file, "Open With")); // URL or archive member cannot
+    }
+
+    #[test]
+    fn playback_follows_the_animation() {
+        assert!(!submenu_is_grayed(state(), "Playback"));
+        let mut still = state();
+        still.has_animation = false;
+        assert!(submenu_is_grayed(still, "Playback"));
     }
 
     #[test]
     fn top_level_items_follow_the_menu_order() {
         let mut builder = MenuBuilder {
             entries: Vec::new(),
-            state_snapshot: state(true),
+            state_snapshot: state(),
         };
         let menu = builder.build().expect("menu builds");
         let count = unsafe { GetMenuItemCount(Some(menu)) };
