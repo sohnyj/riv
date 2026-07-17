@@ -884,6 +884,20 @@ fn dispatch_action(application: &mut Application, window: HWND, action: Action) 
             application.show_file_info = !application.show_file_info;
             application.render(window);
         }
+        Action::Loop => {
+            application.settings.options.loop_folders_enabled ^= true;
+            let state = if application.settings.options.loop_folders_enabled {
+                "On"
+            } else {
+                "Off"
+            };
+            // The pill spells out the full option name the short menu label elides.
+            application.show_zoom_text(window, format!("Loop Within Folder: {state}"));
+            let options = application.settings.options.clone();
+            application.settings.set_options(&options);
+            let _ = application.settings.save();
+            application.apply_options(window);
+        }
         Action::Slideshow => application.toggle_slideshow(window),
         Action::Recent(index) => {
             let path = application
@@ -1766,6 +1780,7 @@ extern "system" fn window_procedure(
                         .as_ref()
                         .is_some_and(|current| current.location.containing_file().is_some()),
                     has_folder: application.image_core.has_folder_entries(),
+                    loop_enabled: application.settings.options.loop_folders_enabled,
                     open_url_available: curl::available(),
                     has_animation: application
                         .image_core

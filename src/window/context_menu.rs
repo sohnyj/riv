@@ -23,6 +23,7 @@ pub struct MenuState {
     pub has_containing_file: bool,
     pub has_folder: bool,
     pub has_animation: bool,
+    pub loop_enabled: bool,
     pub open_url_available: bool,
     pub animation_paused: bool,
     pub preserve_zoom: bool,
@@ -70,6 +71,7 @@ impl MenuBuilder {
             flags |= MF_GRAYED | MF_DISABLED;
         }
         let checked = match action {
+            Action::Loop => self.state_snapshot.loop_enabled,
             Action::PreserveZoom => self.state_snapshot.preserve_zoom,
             Action::Mirror => self.state_snapshot.mirrored,
             Action::Flip => self.state_snapshot.flipped,
@@ -152,6 +154,7 @@ impl MenuBuilder {
 
         self.append_action(menu, Action::PreviousFile)?;
         self.append_action(menu, Action::NextFile)?;
+        self.append_action(menu, Action::Loop)?;
         let playback = unsafe { CreatePopupMenu()? };
         let pause_label = if self.state_snapshot.animation_paused {
             "Resume"
@@ -246,6 +249,7 @@ mod menu_structure_tests {
             has_containing_file: true,
             has_folder: false,
             has_animation: false,
+            loop_enabled: true,
             open_url_available: true,
             animation_paused: false,
             preserve_zoom: false,
@@ -315,6 +319,7 @@ mod menu_structure_tests {
             "", // separator
             "Previous",
             "Next",
+            "Loop",
             "Playback",
             "", // separator
             "Reload",
