@@ -265,7 +265,7 @@ mod extension_tests {
     }
 }
 
-/// Needs archiveint.dll and test/ fixtures; procedure in docs/plan/ARCHIVE.md.
+/// Needs archiveint.dll and test/ fixtures.
 #[cfg(test)]
 mod fixture_tests {
     use super::*;

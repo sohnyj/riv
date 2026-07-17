@@ -27,8 +27,7 @@ pub const WM_APP_DOWNLOAD_PROGRESS: u32 = WM_APP + 7;
 /// UI updates at most this often while a URL downloads.
 const DOWNLOAD_PROGRESS_INTERVAL: Duration = Duration::from_millis(100);
 
-/// Viewable item identity; paths compare ASCII case-insensitively, member names
-/// and URLs exactly.
+/// Viewable item identity; paths compare case-insensitively, member names and URLs exactly.
 #[derive(Clone)]
 pub enum ItemLocation {
     File(PathBuf),
@@ -472,7 +471,7 @@ impl ImageCore {
                     return false;
                 }
             },
-            // A cached remote item stays valid until an explicit reload (see CURL.md).
+            // A cached remote item stays valid until an explicit reload.
             ItemLocation::Url(_) => self.cache.get(location).map_or(0, |entry| entry.file_size),
         };
         let cached = self
@@ -936,8 +935,7 @@ fn ring_offset(index: usize, anchor: usize, length: usize, loop_enabled: bool) -
 /// Cached items outside the listing; evicted before anything ranked by preload priority.
 const UNLISTED_EVICTION_KEY: (u8, usize) = (2, 0);
 
-/// Entry index -> preload priority (anchor 0, then submission order), from the
-/// same enumeration submission walks so eviction cannot reclassify wrapped offsets.
+/// Entry index -> preload priority (anchor 0, then submission order); shared with eviction.
 fn preload_priorities(
     anchor: usize,
     backward: usize,
@@ -1358,8 +1356,7 @@ mod preload_geometry_tests {
     fn eviction_drops_outsiders_before_preload_targets() {
         let (backward, forward, _) = PRELOAD_SPECIFICATIONS[1];
         let priorities = preload_priorities(10, backward, forward, 100, false);
-        // Walking forward strands the old -1 at -2; outside the map, every
-        // (1, distance) key outranks every (0, priority) key at eviction time.
+        // The old -1 strands at -2, outside the map: (1, distance) keys evict first.
         assert!(!priorities.contains_key(&8));
         assert!(!priorities.contains_key(&14));
         // Anything unlisted goes before even the farthest outsider.

@@ -836,8 +836,7 @@ struct HdrEncoding {
     primaries: HdrPrimaries,
 }
 
-/// Reads the ICC v4.4 'cicp' tag; Some when it declares an HDR transfer (16 = PQ,
-/// 18 = HLG) with primaries the CPU linearization can convert.
+/// ICC 'cicp' tag; Some for an HDR transfer (16 = PQ, 18 = HLG) with convertible primaries.
 fn icc_hdr_encoding(icc: &[u8]) -> Option<HdrEncoding> {
     const TRANSFER_PQ: u8 = 16;
     const TRANSFER_HLG: u8 = 18;
@@ -902,8 +901,7 @@ fn hdr_transfer_lookup_table(transfer: HdrTransfer) -> &'static [f32; 65536] {
     })
 }
 
-/// Converts 16-bit integer PQ/HLG pixels (straight alpha) in place to
-/// premultiplied linear scRGB halves.
+/// Converts 16-bit PQ/HLG pixels (straight alpha) in place to premultiplied scRGB halves.
 fn linearize_hdr_pixels(pixels: &mut [u8], encoding: HdrEncoding) {
     let matrix = encoding.primaries.bt709_conversion();
     let transfer_table = hdr_transfer_lookup_table(encoding.transfer);
@@ -947,8 +945,7 @@ fn hybrid_log_gamma_scene_linear(code: f32) -> f32 {
     }
 }
 
-/// Content peak: 99.9th-percentile per-pixel max channel, binned in the PQ code
-/// domain for perceptually even buckets. Input pixels are linear scRGB halves.
+/// Content peak of linear scRGB halves: 99.9th-percentile max channel, binned in PQ codes.
 fn peak_luminance_from_half_pixels(pixels: &[u8]) -> Option<f32> {
     if pixels.len() < 8 {
         return None;
@@ -1803,8 +1800,7 @@ mod peak_scan_tests {
 
     #[test]
     fn hdr_percentile_rejects_outliers_full_scan() {
-        // Below the subsample floor the scan is exhaustive: aligned outliers
-        // (multiples of 4) must still be rejected by the 99.9th percentile.
+        // Below the subsample floor the scan is exhaustive: aligned outliers still get rejected.
         let mut values = vec![(2.5f32, 2.5f32, 2.5f32); 4000];
         values[100] = (60.0, 60.0, 60.0);
         values[2000] = (60.0, 60.0, 60.0);
@@ -1815,8 +1811,7 @@ mod peak_scan_tests {
 
     #[test]
     fn hdr_percentile_rejects_aligned_outliers_when_subsampled() {
-        // 4M pixels with bright pixels on a fixed period (every 8000th): the
-        // jittered subsampling must not alias them above the 0.1% threshold.
+        // Bright pixels on a fixed 8000 period: jittered subsampling must not alias past 0.1%.
         let mut values = vec![(2.5f32, 2.5f32, 2.5f32); 4_000_000];
         for index in (0..values.len()).step_by(8000) {
             values[index] = (60.0, 60.0, 60.0);

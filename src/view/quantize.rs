@@ -1,6 +1,4 @@
-//! Fullscreen D3D pass copying the encoded UNORM16 scene to the 10-bit
-//! backbuffer, whose UNORM write performs the quantization D2D cannot
-//! target directly.
+//! Fullscreen copy of the UNORM16 scene to the 10-bit backbuffer; the UNORM write quantizes.
 
 use windows::Win32::Graphics::Direct3D::D3D11_PRIMITIVE_TOPOLOGY_TRIANGLELIST;
 use windows::Win32::Graphics::Direct3D11::{

@@ -61,8 +61,7 @@ fn executable_path() -> Option<&'static Path> {
     .as_deref()
 }
 
-/// The URI scheme, lowercased; None when the text does not start with one.
-/// Single letters read as drive letters, not schemes.
+/// The URI scheme, lowercased; single letters read as drive letters, not schemes.
 pub fn protocol_lowercase(url: &str) -> Option<String> {
     let (scheme, _) = url.split_once(':')?;
     let mut characters = scheme.chars();
@@ -106,7 +105,6 @@ fn path_segment(url: &str) -> Option<&str> {
 }
 
 /// Fetches a URL to memory; the protocol gate doubles as argument-injection defense.
-/// Progress reports received bytes: once with 0 at spawn, then per chunk.
 pub fn download(
     url: &str,
     cancellation: &AtomicBool,
@@ -217,7 +215,6 @@ mod download_tests {
         assert!(matches!(result, Err(error) if error.message.contains("protocol")));
     }
 
-    /// Needs System32 curl.exe; procedure in docs/plan/CURL.md.
     #[test]
     #[ignore = "needs System32 curl.exe"]
     fn downloads_from_a_local_server() {

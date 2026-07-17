@@ -174,8 +174,7 @@ impl Application {
         Ok(application)
     }
 
-    /// Rebuild the renderer when the monitor's HDR mode or bit depth changes;
-    /// else refresh the boost.
+    /// Rebuild the renderer on HDR mode or bit depth change; else refresh the boost.
     fn refresh_display_color_state(&mut self, window: HWND) {
         if color::monitor_is_hdr(window) != self.renderer.hdr_mode()
             || color::display_bits_per_color(window) != self.renderer.bits_per_color()
@@ -1384,8 +1383,7 @@ fn create_main_window(initial_path: Option<&Path>) -> Result<HWND> {
         dwm::apply_title_bar_theme(window);
         application.drop_target = drag_drop::register(window).ok();
         application.render(window);
-        // The background frame is presented before the first show, so the class
-        // background brush never flashes; a pending image lands when it decodes.
+        // Presented before the first show, so the class brush never flashes.
         let _ = unsafe { PostMessageW(Some(window), WM_APP_SHOW_WINDOW, WPARAM(0), LPARAM(0)) };
     }
     Ok(window)
@@ -1897,8 +1895,7 @@ extern "system" fn window_procedure(
     }
 }
 
-/// Needs a built riv.exe and System32 curl.exe; procedure in docs/plan/CURL.md.
-/// Driven entirely by posted messages — wine focus assignment is nondeterministic.
+/// Needs riv.exe and System32 curl.exe; posted messages only — wine focus is nondeterministic.
 #[cfg(test)]
 mod open_url_smoke_tests {
     use std::io::{Read, Write};
