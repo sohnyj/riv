@@ -33,7 +33,7 @@ pub enum Action {
     DecreaseSpeed,
     IncreaseSpeed,
     ResetSpeed,
-    ReloadFile,
+    Reload,
     Rename,
     Delete,
     DeletePermanent,
@@ -139,12 +139,7 @@ const ACTION_TABLE: &[(Action, &str, &str, ActivationGate)] = &[
         "Reset Speed",
         ActivationGate::Animation,
     ),
-    (
-        Action::ReloadFile,
-        "reloadfile",
-        "Reload",
-        ActivationGate::Image,
-    ),
+    (Action::Reload, "reload", "Reload", ActivationGate::Image),
     (
         Action::Rename,
         "rename",

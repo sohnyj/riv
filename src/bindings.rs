@@ -50,7 +50,7 @@ const DEFAULT_KEYBOARD: &[(&str, &[&str])] = &[
     ("decreasespeed", &["["]),
     ("increasespeed", &["]"]),
     ("resetspeed", &["\\"]),
-    ("reloadfile", &["Ctrl+R", "F5"]),
+    ("reload", &["Ctrl+R", "F5"]),
     ("rename", &["R", "F2"]),
     ("delete", &["Delete"]),
     ("deletepermanent", &["Shift+Delete"]),

@@ -167,7 +167,7 @@ impl MenuBuilder {
         self.append_submenu(menu, playback, "Playback", true)?;
         self.append_separator(menu)?;
 
-        self.append_action(menu, Action::ReloadFile)?;
+        self.append_action(menu, Action::Reload)?;
         self.append_action(menu, Action::Rename)?;
         self.append_action(menu, Action::Delete)?;
         self.append_separator(menu)?;

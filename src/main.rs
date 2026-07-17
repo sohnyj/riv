@@ -844,7 +844,7 @@ fn dispatch_action(application: &mut Application, window: HWND, action: Action) 
         Action::LastFile => {
             execute_navigation(application, window, NavigationCommand::Last);
         }
-        Action::ReloadFile => {
+        Action::Reload => {
             if application.image_core.reload_current() {
                 application.apply_current_image(window);
             }
