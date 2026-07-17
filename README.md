@@ -4,9 +4,8 @@ A fast, precise, minimal image viewer for Windows.
 
 ## Features
 
-- HDR support: scRGB FP16 pipeline, content peak detection, tone mapping
-  to the display's capability, and dithered SDR output
-- 10-bit output; images deeper than 10 bits are dithered
+- HDR and native 10-bit output: scRGB FP16 render pipeline, content peak
+  detection, and tone mapping to the display's capability
 - Color management: embedded ICC profiles, PQ/HLG sources, Windows Advanced Color
 - Animation playback (GIF, APNG, animated WebP) with pause, frame stepping, and speed control
 - Browse images inside archives (Windows 11 23H2+, using the in-box libarchive)
