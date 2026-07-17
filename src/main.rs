@@ -1959,7 +1959,7 @@ mod open_url_smoke_tests {
         unsafe {
             SetDlgItemTextW(
                 dialog,
-                dialogs::open_url::EDIT_IDENTIFIER,
+                dialogs::text_input::EDIT_IDENTIFIER,
                 PCWSTR(url.as_ptr()),
             )
             .expect("set dialog text");

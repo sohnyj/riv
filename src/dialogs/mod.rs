@@ -4,6 +4,7 @@ pub mod options;
 pub mod rename;
 pub mod resource;
 pub mod shortcut_capture;
+pub mod text_input;
 
 use windows::Win32::Foundation::HWND;
 
