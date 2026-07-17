@@ -28,6 +28,7 @@ pub struct MenuState {
     pub has_containing_file: bool,
     pub has_folder: bool,
     pub has_animation: bool,
+    pub file_info_shown: bool,
     pub loop_enabled: bool,
     pub open_url_available: bool,
     pub playlist_names: Vec<String>,
@@ -85,6 +86,7 @@ impl MenuBuilder {
             flags |= MF_GRAYED | MF_DISABLED;
         }
         let checked = match action {
+            Action::ShowFileInfo => self.state_snapshot.file_info_shown,
             Action::Loop => self.state_snapshot.loop_enabled,
             Action::PreserveZoom => self.state_snapshot.preserve_zoom,
             Action::Mirror => self.state_snapshot.mirrored,
@@ -314,6 +316,7 @@ mod menu_structure_tests {
             has_containing_file: true,
             has_folder: false,
             has_animation: true,
+            file_info_shown: false,
             loop_enabled: true,
             open_url_available: true,
             playlist_names: Vec::new(),

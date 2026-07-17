@@ -1783,6 +1783,7 @@ extern "system" fn window_procedure(
                         .as_ref()
                         .is_some_and(|current| current.location.containing_file().is_some()),
                     has_folder: application.image_core.has_folder_entries(),
+                    file_info_shown: application.show_file_info,
                     loop_enabled: application.settings.options.loop_folders_enabled,
                     open_url_available: curl::available(),
                     playlist_names: playlist.names,
