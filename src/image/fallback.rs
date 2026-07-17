@@ -176,6 +176,7 @@ fn compose_webp_frames(
         icc_profile: None,
         exif: None,
         storage: PixelStorage::Bgra8,
+        source_bits_per_channel: 8,
         peak_luminance_nits: None,
         frames,
     })
@@ -295,6 +296,7 @@ fn decode_exr_with(
         icc_profile: None,
         exif: None,
         storage: PixelStorage::Bgra8,
+        source_bits_per_channel: 8,
         peak_luminance_nits: None,
         frames: vec![Frame {
             pixels,
@@ -486,6 +488,7 @@ fn decode_heif_primary_image(
         icc_profile,
         exif: None,
         storage: PixelStorage::Bgra8,
+        source_bits_per_channel: 8,
         peak_luminance_nits: None,
         frames: vec![Frame {
             pixels,

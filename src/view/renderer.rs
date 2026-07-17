@@ -21,34 +21,50 @@ use windows::Win32::Graphics::Direct2D::{
     D2D1_PROPERTY_TYPE_ENUM, D2D1_PROPERTY_TYPE_FLOAT, D2D1_PROPERTY_TYPE_MATRIX_3X2,
     D2D1_WHITELEVELADJUSTMENT_PROP_INPUT_WHITE_LEVEL,
     D2D1_WHITELEVELADJUSTMENT_PROP_OUTPUT_WHITE_LEVEL, D2D1CreateFactory, ID2D1Bitmap1,
-    ID2D1ColorContext, ID2D1DeviceContext, ID2D1Effect, ID2D1Factory1, ID2D1Image,
+    ID2D1ColorContext, ID2D1DeviceContext, ID2D1DeviceContext5, ID2D1Effect, ID2D1Factory1,
+    ID2D1Image,
 };
 use windows::Win32::Graphics::Direct3D::{
     D3D_DRIVER_TYPE, D3D_DRIVER_TYPE_HARDWARE, D3D_DRIVER_TYPE_WARP, D3D_FEATURE_LEVEL_11_0,
 };
 use windows::Win32::Graphics::Direct3D11::{
-    D3D11_CREATE_DEVICE_BGRA_SUPPORT, D3D11_SDK_VERSION, D3D11CreateDevice, ID3D11Device,
+    D3D11_BIND_RENDER_TARGET, D3D11_BIND_SHADER_RESOURCE, D3D11_CREATE_DEVICE_BGRA_SUPPORT,
+    D3D11_SDK_VERSION, D3D11_TEXTURE2D_DESC, D3D11_USAGE_DEFAULT, D3D11CreateDevice, ID3D11Device,
+    ID3D11DeviceContext, ID3D11RenderTargetView, ID3D11ShaderResourceView, ID3D11Texture2D,
 };
 use windows::Win32::Graphics::Dxgi::Common::{
-    DXGI_ALPHA_MODE_IGNORE, DXGI_COLOR_SPACE_RGB_FULL_G10_NONE_P709, DXGI_FORMAT_B8G8R8A8_UNORM,
-    DXGI_FORMAT_R16G16B16A16_FLOAT, DXGI_FORMAT_UNKNOWN, DXGI_SAMPLE_DESC,
+    DXGI_ALPHA_MODE_IGNORE, DXGI_COLOR_SPACE_RGB_FULL_G10_NONE_P709,
+    DXGI_COLOR_SPACE_RGB_FULL_G2084_NONE_P2020, DXGI_COLOR_SPACE_TYPE, DXGI_FORMAT,
+    DXGI_FORMAT_B8G8R8A8_UNORM, DXGI_FORMAT_R10G10B10A2_UNORM, DXGI_FORMAT_R16G16B16A16_FLOAT,
+    DXGI_FORMAT_R16G16B16A16_UNORM, DXGI_FORMAT_UNKNOWN, DXGI_SAMPLE_DESC,
 };
 use windows::Win32::Graphics::Dxgi::{
-    DXGI_PRESENT, DXGI_SCALING_NONE, DXGI_SWAP_CHAIN_DESC1, DXGI_SWAP_CHAIN_FLAG,
-    DXGI_SWAP_EFFECT_FLIP_DISCARD, DXGI_USAGE_RENDER_TARGET_OUTPUT, IDXGIDevice, IDXGIFactory2,
-    IDXGISurface, IDXGISwapChain1, IDXGISwapChain3,
+    DXGI_PRESENT, DXGI_SCALING_NONE, DXGI_SWAP_CHAIN_COLOR_SPACE_SUPPORT_FLAG_PRESENT,
+    DXGI_SWAP_CHAIN_DESC1, DXGI_SWAP_CHAIN_FLAG, DXGI_SWAP_EFFECT_FLIP_DISCARD,
+    DXGI_USAGE_RENDER_TARGET_OUTPUT, IDXGIDevice, IDXGIFactory2, IDXGISurface, IDXGISwapChain1,
+    IDXGISwapChain3,
 };
 use windows::core::{Interface, Result};
 use windows_numerics::Matrix3x2;
 
 use crate::image::decode::PixelStorage;
 use crate::view::dither::{self, DitherMode};
+use crate::view::quantize::QuantizePass;
 
 pub struct Renderer {
     hdr_mode: bool,
+    bits_per_color: u32,
+    swap_chain_format: DXGI_FORMAT,
     tone_map_target_nits: f32,
     swap_chain: IDXGISwapChain1,
+    d3d_device: ID3D11Device,
+    d3d_context: ID3D11DeviceContext,
     d2d_context: ID2D1DeviceContext,
+    /// Fullscreen quantizing copy for the 10-bit backbuffers D2D cannot target.
+    quantize_pass: Option<QuantizePass>,
+    scene_shader_resource_view: Option<ID3D11ShaderResourceView>,
+    backbuffer_render_target_view: Option<ID3D11RenderTargetView>,
+    backbuffer_size: (u32, u32),
     target: Option<ID2D1Bitmap1>,
     image: Option<ID2D1Bitmap1>,
     effect_output: Option<ID2D1Image>,
@@ -57,11 +73,14 @@ pub struct Renderer {
     hdr_tone_map_effect: Option<ID2D1Effect>,
     tone_map_normalize_effect: Option<ID2D1Effect>,
     output_color_management_effect: Option<ID2D1Effect>,
+    /// scRGB -> PQ BT.2020 for the HDR10 backbuffer; None on the FP16 fallback.
+    hdr_output_color_management_effect: Option<ID2D1Effect>,
     affine_transform_effect: Option<ID2D1Effect>,
     dither_ordered_effect: Option<ID2D1Effect>,
     dither_fruit_effect: Option<ID2D1Effect>,
     dither_mode: DitherMode,
     image_storage: PixelStorage,
+    image_source_bits_per_channel: u32,
     scrgb_color_context: Option<ID2D1ColorContext>,
     srgb_color_context: Option<ID2D1ColorContext>,
     source_icc_profile: Option<Vec<u8>>,
@@ -76,19 +95,23 @@ impl Drop for Renderer {
         self.effect_output = None;
         self.image = None;
         self.target = None;
+        self.scene_shader_resource_view = None;
+        self.backbuffer_render_target_view = None;
         self.color_management_effect = None;
         self.white_level_effect = None;
         self.hdr_tone_map_effect = None;
         self.tone_map_normalize_effect = None;
         self.output_color_management_effect = None;
+        self.hdr_output_color_management_effect = None;
         self.affine_transform_effect = None;
         self.dither_ordered_effect = None;
         self.dither_fruit_effect = None;
     }
 }
 
-fn create_d3d_device(driver_type: D3D_DRIVER_TYPE) -> Result<ID3D11Device> {
+fn create_d3d_device(driver_type: D3D_DRIVER_TYPE) -> Result<(ID3D11Device, ID3D11DeviceContext)> {
     let mut device = None;
+    let mut context = None;
     unsafe {
         D3D11CreateDevice(
             None,
@@ -99,10 +122,25 @@ fn create_d3d_device(driver_type: D3D_DRIVER_TYPE) -> Result<ID3D11Device> {
             D3D11_SDK_VERSION,
             Some(&raw mut device),
             None,
-            None,
+            Some(&raw mut context),
         )?;
     }
-    Ok(device.expect("D3D11CreateDevice succeeded without device"))
+    Ok((
+        device.expect("D3D11CreateDevice succeeded without device"),
+        context.expect("D3D11CreateDevice succeeded without context"),
+    ))
+}
+
+/// Declares only with reported PRESENT support; an undeclared surface stays sRGB.
+fn declare_color_space(
+    swap_chain: &IDXGISwapChain3,
+    color_space: DXGI_COLOR_SPACE_TYPE,
+) -> Result<()> {
+    let support = unsafe { swap_chain.CheckColorSpaceSupport(color_space) }?;
+    if support & DXGI_SWAP_CHAIN_COLOR_SPACE_SUPPORT_FLAG_PRESENT.0 as u32 == 0 {
+        return Err(windows::core::Error::empty());
+    }
+    unsafe { swap_chain.SetColorSpace1(color_space) }
 }
 
 fn source_pixel_format(storage: PixelStorage) -> D2D1_PIXEL_FORMAT {
@@ -140,47 +178,46 @@ impl Renderer {
         width: u32,
         height: u32,
         hdr_mode: bool,
+        bits_per_color: u32,
         tone_map_target_nits: f32,
     ) -> Result<Self> {
-        let d3d_device = create_d3d_device(D3D_DRIVER_TYPE_HARDWARE)
+        // A deep-color failure downgrades to the proven formats, never blocks launch.
+        Self::build(
+            window,
+            width,
+            height,
+            hdr_mode,
+            bits_per_color,
+            tone_map_target_nits,
+            true,
+        )
+        .or_else(|_| {
+            Self::build(
+                window,
+                width,
+                height,
+                hdr_mode,
+                bits_per_color,
+                tone_map_target_nits,
+                false,
+            )
+        })
+    }
+
+    fn build(
+        window: HWND,
+        width: u32,
+        height: u32,
+        hdr_mode: bool,
+        bits_per_color: u32,
+        tone_map_target_nits: f32,
+        deep_color: bool,
+    ) -> Result<Self> {
+        let (d3d_device, d3d_context) = create_d3d_device(D3D_DRIVER_TYPE_HARDWARE)
             .or_else(|_| create_d3d_device(D3D_DRIVER_TYPE_WARP))?;
         let dxgi_device: IDXGIDevice = d3d_device.cast()?;
 
-        let swap_chain = unsafe {
-            let adapter = dxgi_device.GetAdapter()?;
-            let factory: IDXGIFactory2 = adapter.GetParent()?;
-            let description = DXGI_SWAP_CHAIN_DESC1 {
-                Width: width,
-                Height: height,
-                Format: if hdr_mode {
-                    DXGI_FORMAT_R16G16B16A16_FLOAT
-                } else {
-                    DXGI_FORMAT_B8G8R8A8_UNORM
-                },
-                SampleDesc: DXGI_SAMPLE_DESC {
-                    Count: 1,
-                    Quality: 0,
-                },
-                BufferUsage: DXGI_USAGE_RENDER_TARGET_OUTPUT,
-                BufferCount: 2,
-                Scaling: DXGI_SCALING_NONE,
-                SwapEffect: DXGI_SWAP_EFFECT_FLIP_DISCARD,
-                AlphaMode: DXGI_ALPHA_MODE_IGNORE,
-                ..Default::default()
-            };
-            factory.CreateSwapChainForHwnd(
-                &d3d_device,
-                window,
-                &raw const description,
-                None,
-                None,
-            )?
-        };
-        // Declare scRGB only in HDR mode; declaring it on SDR flashes DWM composition.
-        if hdr_mode && let Ok(swap_chain3) = swap_chain.cast::<IDXGISwapChain3>() {
-            let _ = unsafe { swap_chain3.SetColorSpace1(DXGI_COLOR_SPACE_RGB_FULL_G10_NONE_P709) };
-        }
-
+        // D2D precedes the swapchain: the PQ pipeline decides the backbuffer format.
         let d2d_factory: ID2D1Factory1 =
             unsafe { D2D1CreateFactory(D2D1_FACTORY_TYPE_SINGLE_THREADED, None)? };
         let d2d_context = unsafe {
@@ -193,6 +230,14 @@ impl Renderer {
             rendering_controls.bufferPrecision = D2D1_BUFFER_PRECISION_16BPC_FLOAT;
             d2d_context.SetRenderingControls(&raw const rendering_controls);
         }
+        // D2D cannot target 10-bit UNORM, so the scene renders on a UNORM16
+        // intermediate and a fullscreen pass writes the quantizing backbuffer.
+        let mut quantize_pass = (deep_color
+            && unsafe { d2d_context.IsDxgiFormatSupported(DXGI_FORMAT_R16G16B16A16_UNORM) }
+                .as_bool())
+        .then(|| QuantizePass::new(&d3d_device).ok())
+        .flatten();
+        let ten_bit_target = quantize_pass.is_some();
 
         let scrgb_color_context =
             unsafe { d2d_context.CreateColorContext(D2D1_COLOR_SPACE_SCRGB, None) }.ok();
@@ -211,6 +256,127 @@ impl Renderer {
             .ok()?;
             Some(effect)
         };
+
+        // HDR encodes to PQ in the app so its 10-bit write is the only quantizer.
+        let mut hdr_output_color_management_effect = (hdr_mode && ten_bit_target)
+            .then(|| {
+                let pq_color_context = unsafe {
+                    d2d_context
+                        .cast::<ID2D1DeviceContext5>()
+                        .ok()?
+                        .CreateColorContextFromDxgiColorSpace(
+                            DXGI_COLOR_SPACE_RGB_FULL_G2084_NONE_P2020,
+                        )
+                        .ok()?
+                };
+                let effect = create_color_management()?;
+                unsafe {
+                    effect.SetValue(
+                        D2D1_COLORMANAGEMENT_PROP_SOURCE_COLOR_CONTEXT.0 as u32,
+                        D2D1_PROPERTY_TYPE_COLOR_CONTEXT,
+                        &interface_property_bytes(scrgb_color_context.as_ref()?),
+                    )
+                }
+                .ok()?;
+                unsafe {
+                    effect.SetValue(
+                        D2D1_COLORMANAGEMENT_PROP_DESTINATION_COLOR_CONTEXT.0 as u32,
+                        D2D1_PROPERTY_TYPE_COLOR_CONTEXT,
+                        &interface_property_bytes(&pq_color_context),
+                    )
+                }
+                .ok()?;
+                Some(effect)
+            })
+            .flatten();
+
+        let mut swap_chain_format = if hdr_mode {
+            if hdr_output_color_management_effect.is_some() {
+                DXGI_FORMAT_R10G10B10A2_UNORM
+            } else {
+                DXGI_FORMAT_R16G16B16A16_FLOAT
+            }
+        } else if ten_bit_target && bits_per_color >= 10 {
+            // Only the format widens; no declaration, so DWM keeps the sRGB reading.
+            DXGI_FORMAT_R10G10B10A2_UNORM
+        } else {
+            DXGI_FORMAT_B8G8R8A8_UNORM
+        };
+        let create_swap_chain = |format: DXGI_FORMAT| -> Result<IDXGISwapChain1> {
+            unsafe {
+                let adapter = dxgi_device.GetAdapter()?;
+                let factory: IDXGIFactory2 = adapter.GetParent()?;
+                let description = DXGI_SWAP_CHAIN_DESC1 {
+                    Width: width,
+                    Height: height,
+                    Format: format,
+                    SampleDesc: DXGI_SAMPLE_DESC {
+                        Count: 1,
+                        Quality: 0,
+                    },
+                    BufferUsage: DXGI_USAGE_RENDER_TARGET_OUTPUT,
+                    BufferCount: 2,
+                    Scaling: DXGI_SCALING_NONE,
+                    SwapEffect: DXGI_SWAP_EFFECT_FLIP_DISCARD,
+                    AlphaMode: DXGI_ALPHA_MODE_IGNORE,
+                    ..Default::default()
+                };
+                factory.CreateSwapChainForHwnd(
+                    &d3d_device,
+                    window,
+                    &raw const description,
+                    None,
+                    None,
+                )
+            }
+        };
+        let swap_chain = match create_swap_chain(swap_chain_format) {
+            Ok(swap_chain) => swap_chain,
+            // A 10-bit refusal falls back to the mode's proven format.
+            Err(_) if swap_chain_format == DXGI_FORMAT_R10G10B10A2_UNORM => {
+                hdr_output_color_management_effect = None;
+                swap_chain_format = if hdr_mode {
+                    DXGI_FORMAT_R16G16B16A16_FLOAT
+                } else {
+                    DXGI_FORMAT_B8G8R8A8_UNORM
+                };
+                create_swap_chain(swap_chain_format)?
+            }
+            Err(error) => return Err(error),
+        };
+        // Declare a color space only in HDR mode; declaring on SDR flashes DWM composition.
+        if hdr_mode {
+            let swap_chain3 = swap_chain.cast::<IDXGISwapChain3>().ok();
+            let pq_declared = hdr_output_color_management_effect.is_some()
+                && swap_chain3.as_ref().is_some_and(|swap_chain3| {
+                    declare_color_space(swap_chain3, DXGI_COLOR_SPACE_RGB_FULL_G2084_NONE_P2020)
+                        .is_ok()
+                });
+            if !pq_declared {
+                hdr_output_color_management_effect = None;
+                if swap_chain_format == DXGI_FORMAT_R10G10B10A2_UNORM {
+                    swap_chain_format = DXGI_FORMAT_R16G16B16A16_FLOAT;
+                    unsafe {
+                        swap_chain.ResizeBuffers(
+                            0,
+                            width,
+                            height,
+                            swap_chain_format,
+                            DXGI_SWAP_CHAIN_FLAG(0),
+                        )?;
+                    }
+                }
+                if let Some(swap_chain3) = &swap_chain3 {
+                    let _ =
+                        declare_color_space(swap_chain3, DXGI_COLOR_SPACE_RGB_FULL_G10_NONE_P709);
+                }
+            }
+        }
+        // The pass exists only for the 10-bit backbuffer it feeds.
+        if swap_chain_format != DXGI_FORMAT_R10G10B10A2_UNORM {
+            quantize_pass = None;
+        }
+
         let color_management_effect = create_color_management();
         let hdr_tone_map_effect = color_management_effect.as_ref().and_then(|_| {
             let effect = unsafe { d2d_context.CreateEffect(&CLSID_D2D1HdrToneMap) }.ok()?;
@@ -282,9 +448,19 @@ impl Renderer {
                 .ok()?;
                 Some(effect)
             });
-        // Output dither is SDR-only; failure here leaves rendering undithered.
+        // Dither only the UNORM backbuffers the app quantizes; the FP16 fallback
+        // leaves quantization to DWM. Failure leaves rendering undithered.
+        let quantization_steps = if swap_chain_format == DXGI_FORMAT_B8G8R8A8_UNORM {
+            Some(255u32)
+        } else if swap_chain_format == DXGI_FORMAT_R10G10B10A2_UNORM {
+            Some(1023u32)
+        } else {
+            None
+        };
         let (affine_transform_effect, dither_ordered_effect, dither_fruit_effect) =
-            if !hdr_mode && dither::register_dither_effects(&d2d_factory).is_ok() {
+            if let Some(quantization_steps) = quantization_steps
+                && dither::register_dither_effects(&d2d_factory, quantization_steps).is_ok()
+            {
                 unsafe {
                     (
                         d2d_context.CreateEffect(&CLSID_D2D12DAffineTransform).ok(),
@@ -302,9 +478,17 @@ impl Renderer {
 
         let mut renderer = Self {
             hdr_mode,
+            bits_per_color,
+            swap_chain_format,
             tone_map_target_nits,
             swap_chain,
+            d3d_device,
+            d3d_context,
             d2d_context,
+            quantize_pass,
+            scene_shader_resource_view: None,
+            backbuffer_render_target_view: None,
+            backbuffer_size: (0, 0),
             target: None,
             image: None,
             effect_output: None,
@@ -313,11 +497,13 @@ impl Renderer {
             hdr_tone_map_effect,
             tone_map_normalize_effect,
             output_color_management_effect,
+            hdr_output_color_management_effect,
             affine_transform_effect,
             dither_ordered_effect,
             dither_fruit_effect,
             dither_mode: DitherMode::None,
             image_storage: PixelStorage::Bgra8,
+            image_source_bits_per_channel: 8,
             scrgb_color_context,
             srgb_color_context,
             source_icc_profile: None,
@@ -333,14 +519,40 @@ impl Renderer {
         self.hdr_mode
     }
 
+    pub fn bits_per_color(&self) -> u32 {
+        self.bits_per_color
+    }
+
+    /// True when the backbuffer is HDR10 (PQ) rather than the scRGB FP16 fallback.
+    pub fn pq_output(&self) -> bool {
+        self.hdr_output_color_management_effect.is_some()
+    }
+
+    /// Active backbuffer, for the info overlay.
+    pub fn output_description(&self) -> &'static str {
+        if self.swap_chain_format == DXGI_FORMAT_R10G10B10A2_UNORM {
+            if self.hdr_mode {
+                "10-bit HDR10 (PQ)"
+            } else {
+                "10-bit sRGB"
+            }
+        } else if self.hdr_mode {
+            "FP16 scRGB"
+        } else {
+            "8-bit sRGB"
+        }
+    }
+
     fn create_target(&mut self) -> Result<()> {
+        let scene_format = if self.quantize_pass.is_some() {
+            // D2D cannot target the 10-bit backbuffer; it draws the UNORM16 scene.
+            DXGI_FORMAT_R16G16B16A16_UNORM
+        } else {
+            self.swap_chain_format
+        };
         let properties = D2D1_BITMAP_PROPERTIES1 {
             pixelFormat: D2D1_PIXEL_FORMAT {
-                format: if self.hdr_mode {
-                    DXGI_FORMAT_R16G16B16A16_FLOAT
-                } else {
-                    DXGI_FORMAT_B8G8R8A8_UNORM
-                },
+                format: scene_format,
                 alphaMode: D2D1_ALPHA_MODE_PREMULTIPLIED,
             },
             dpiX: 96.0,
@@ -349,7 +561,50 @@ impl Renderer {
             ..Default::default()
         };
         unsafe {
-            let surface: IDXGISurface = self.swap_chain.GetBuffer(0)?;
+            let buffer: ID3D11Texture2D = self.swap_chain.GetBuffer(0)?;
+            let surface: IDXGISurface = if self.quantize_pass.is_some() {
+                let mut buffer_description = D3D11_TEXTURE2D_DESC::default();
+                buffer.GetDesc(&raw mut buffer_description);
+                self.backbuffer_size = (buffer_description.Width, buffer_description.Height);
+                let scene_description = D3D11_TEXTURE2D_DESC {
+                    Width: buffer_description.Width,
+                    Height: buffer_description.Height,
+                    MipLevels: 1,
+                    ArraySize: 1,
+                    Format: scene_format,
+                    SampleDesc: DXGI_SAMPLE_DESC {
+                        Count: 1,
+                        Quality: 0,
+                    },
+                    Usage: D3D11_USAGE_DEFAULT,
+                    BindFlags: (D3D11_BIND_RENDER_TARGET.0 | D3D11_BIND_SHADER_RESOURCE.0) as u32,
+                    ..Default::default()
+                };
+                let mut scene_texture = None;
+                self.d3d_device.CreateTexture2D(
+                    &raw const scene_description,
+                    None,
+                    Some(&raw mut scene_texture),
+                )?;
+                let scene_texture = scene_texture.ok_or_else(windows::core::Error::empty)?;
+                let mut scene_view = None;
+                self.d3d_device.CreateShaderResourceView(
+                    &scene_texture,
+                    None,
+                    Some(&raw mut scene_view),
+                )?;
+                self.scene_shader_resource_view = scene_view;
+                let mut backbuffer_view = None;
+                self.d3d_device.CreateRenderTargetView(
+                    &buffer,
+                    None,
+                    Some(&raw mut backbuffer_view),
+                )?;
+                self.backbuffer_render_target_view = backbuffer_view;
+                scene_texture.cast()?
+            } else {
+                buffer.cast()?
+            };
             let target = self
                 .d2d_context
                 .CreateBitmapFromDxgiSurface(&surface, Some(&raw const properties))?;
@@ -363,6 +618,8 @@ impl Renderer {
         unsafe {
             self.d2d_context.SetTarget(None);
             self.target = None;
+            self.scene_shader_resource_view = None;
+            self.backbuffer_render_target_view = None;
             self.swap_chain.ResizeBuffers(
                 0,
                 width,
@@ -389,6 +646,7 @@ impl Renderer {
         display_size: (u32, u32),
         icc_profile: Option<&[u8]>,
         storage: PixelStorage,
+        source_bits_per_channel: u32,
         peak_luminance_nits: Option<f32>,
     ) -> Result<()> {
         let properties = D2D1_BITMAP_PROPERTIES1 {
@@ -409,6 +667,7 @@ impl Renderer {
         self.image_display_size = (display_size.0 as f32, display_size.1 as f32);
         self.image_pixel_size = (width as f32, height as f32);
         self.image_storage = storage;
+        self.image_source_bits_per_channel = source_bits_per_channel;
         self.rewire_effect_chain(&bitmap, icc_profile, storage, peak_luminance_nits);
         self.image = Some(bitmap);
         Ok(())
@@ -516,7 +775,7 @@ impl Renderer {
         let Ok(converted) = (unsafe { color_management.GetOutput() }) else {
             return;
         };
-        self.effect_output = match tone_map {
+        let scene = match tone_map {
             Some((tone_map_effect, peak)) => {
                 // Very low input maxima misbehave; floor at the SDR reference white.
                 let input_maximum = peak.max(SDR_REFERENCE_WHITE_NITS);
@@ -564,6 +823,15 @@ impl Renderer {
                 }
                 None => Some(converted),
             },
+        };
+        // The HDR10 backbuffer quantizes PQ; encode after every linear stage.
+        self.effect_output = match (&self.hdr_output_color_management_effect, scene) {
+            (Some(output_encoding), Some(scene)) => {
+                unsafe { output_encoding.SetInput(0, &scene, true) };
+                unsafe { output_encoding.GetOutput() }.ok()
+            }
+            (None, scene) => scene,
+            (Some(_), None) => None,
         };
     }
 
@@ -635,12 +903,25 @@ impl Renderer {
             // Overlay failure must not block presenting the frame.
             let overlay_result = draw_overlay(&self.d2d_context);
             self.d2d_context.EndDraw(None, None)?;
+            if let (Some(quantize_pass), Some(scene), Some(backbuffer)) = (
+                &self.quantize_pass,
+                &self.scene_shader_resource_view,
+                &self.backbuffer_render_target_view,
+            ) {
+                quantize_pass.draw(
+                    &self.d3d_context,
+                    scene,
+                    backbuffer,
+                    self.backbuffer_size.0,
+                    self.backbuffer_size.1,
+                );
+            }
             self.swap_chain.Present(1, DXGI_PRESENT(0)).ok()?;
             overlay_result
         }
     }
 
-    /// SDR high-depth output path: scene -> 2DAffineTransform -> dither -> target.
+    /// High-depth output path: scene -> 2DAffineTransform -> dither -> target.
     /// Returns false when unavailable so the caller draws the undithered path.
     fn draw_image_dithered(
         &self,
@@ -648,7 +929,13 @@ impl Renderer {
         transform: &Matrix3x2,
         interpolation: D2D1_INTERPOLATION_MODE,
     ) -> bool {
-        if self.hdr_mode || self.image_storage != PixelStorage::RgbaHalf {
+        // A source no deeper than the backbuffer brings nothing for it to lose.
+        let backbuffer_bits = if self.swap_chain_format == DXGI_FORMAT_R10G10B10A2_UNORM {
+            10
+        } else {
+            8
+        };
+        if self.image_source_bits_per_channel <= backbuffer_bits {
             return false;
         }
         let dither_effect = match self.dither_mode {

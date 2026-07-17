@@ -48,7 +48,7 @@ pub struct OverlayContent {
     pub info_text: Option<String>,
     pub zoom_text: Option<String>,
     pub background_is_bright: bool,
-    pub scrgb_boost: Option<f32>,
+    pub output_color_target: color::OutputColorTarget,
 }
 
 pub struct Overlay {
@@ -90,11 +90,18 @@ impl Overlay {
         viewport_height: f32,
         content: &OverlayContent,
     ) -> Result<()> {
-        let boost = content.scrgb_boost;
+        let output_color_target = content.output_color_target;
         let margin = PANEL_MARGIN * self.scale;
         let panel_gap = 8.0 * self.scale;
         let info_rect = if let Some(info_text) = &content.info_text {
-            Some(self.draw_panel(context, info_text, margin, margin, viewport_width, boost)?)
+            Some(self.draw_panel(
+                context,
+                info_text,
+                margin,
+                margin,
+                viewport_width,
+                output_color_target,
+            )?)
         } else {
             None
         };
@@ -111,7 +118,7 @@ impl Overlay {
                 centered_left,
                 top,
                 viewport_width,
-                boost,
+                output_color_target,
             )?;
         }
         if let Some(error_text) = &content.error_text {
@@ -148,7 +155,7 @@ impl Overlay {
         left: f32,
         top: f32,
         viewport_width: f32,
-        scrgb_boost: Option<f32>,
+        output_color_target: color::OutputColorTarget,
     ) -> Result<D2D_RECT_F> {
         let layout = self.panel_layout(text, viewport_width)?;
         let mut metrics = DWRITE_TEXT_METRICS::default();
@@ -166,11 +173,13 @@ impl Overlay {
             radiusY: PANEL_CORNER_RADIUS * self.scale,
         };
         unsafe {
-            let background = context
-                .CreateSolidColorBrush(&color::output_color(PANEL_BACKGROUND, scrgb_boost), None)?;
+            let background = context.CreateSolidColorBrush(
+                &color::output_color(PANEL_BACKGROUND, output_color_target),
+                None,
+            )?;
             context.FillRoundedRectangle(&raw const panel, &background);
-            let foreground =
-                context.CreateSolidColorBrush(&color::output_color(WHITE, scrgb_boost), None)?;
+            let foreground = context
+                .CreateSolidColorBrush(&color::output_color(WHITE, output_color_target), None)?;
             context.DrawTextLayout(
                 Vector2 {
                     X: left + padding_x,
@@ -201,7 +210,7 @@ impl Overlay {
                 WHITE
             };
             let brush = context.CreateSolidColorBrush(
-                &color::output_color(text_color, content.scrgb_boost),
+                &color::output_color(text_color, content.output_color_target),
                 None,
             )?;
             context.DrawTextLayout(
@@ -258,6 +267,7 @@ pub fn build_info_text(
     image: &DecodedImage,
     file_size: u64,
     modified: Option<SystemTime>,
+    output_description: &str,
 ) -> String {
     let megapixels = f64::from(image.width) * f64::from(image.height) / 1_000_000.0;
     let mut lines = vec![
@@ -275,6 +285,7 @@ pub fn build_info_text(
             None => lines.push("Bit depth: high (FP16)".to_string()),
         }
     }
+    lines.push(format!("Output: {output_description}"));
     lines.push(format!("Path: {location_text}"));
     if let Some(modified) = modified {
         lines.push(format!("Modified: {}", format_locale_datetime(modified)));

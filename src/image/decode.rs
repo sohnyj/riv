@@ -54,6 +54,8 @@ pub struct DecodedImage {
     pub icc_profile: Option<Vec<u8>>,
     pub exif: Option<ExifInfo>,
     pub storage: PixelStorage,
+    /// Meaningful bits per channel of the decoded pixels (8 for Bgra8 storage).
+    pub source_bits_per_channel: u32,
     /// Content peak (nits) of FP16 sources; pixels are linear scRGB (1.0 = 80 nits).
     pub peak_luminance_nits: Option<f32>,
     pub frames: Vec<Frame>,
@@ -546,6 +548,7 @@ pub fn decode_raw_preview(path: &Path, cancellation: &AtomicBool) -> Option<Deco
             icc_profile,
             exif,
             storage: PixelStorage::Bgra8,
+            source_bits_per_channel: 8,
             peak_luminance_nits: None,
             frames: vec![Frame {
                 pixels,
@@ -563,6 +566,7 @@ pub fn decode_raw_preview(path: &Path, cancellation: &AtomicBool) -> Option<Deco
         icc_profile: decoded.icc_profile,
         exif: decoded.exif,
         storage: decoded.storage,
+        source_bits_per_channel: decoded.source_bits_per_channel,
         peak_luminance_nits: decoded.peak_luminance_nits,
         frames: decoded.frames,
     })
@@ -594,6 +598,7 @@ struct DecodedFrames {
     icc_profile: Option<Vec<u8>>,
     exif: Option<ExifInfo>,
     storage: PixelStorage,
+    source_bits_per_channel: u32,
     peak_luminance_nits: Option<f32>,
     frames: Vec<Frame>,
 }
@@ -626,6 +631,7 @@ fn decode_with_wic(
         icc_profile: decoded.icc_profile,
         exif: decoded.exif,
         storage: decoded.storage,
+        source_bits_per_channel: decoded.source_bits_per_channel,
         peak_luminance_nits: decoded.peak_luminance_nits,
         frames: decoded.frames,
     })
@@ -692,7 +698,8 @@ fn decode_single_frame(
     let orientation = exif_orientation(&frame);
     let icc_profile = icc_profile_bytes(factory, &frame);
     let exif = read_exif(&frame);
-    let (high_depth, float_native) = frame_pixel_format_traits(factory, &frame);
+    let (native_bits_per_channel, float_native) = frame_pixel_format_traits(factory, &frame);
+    let high_depth = native_bits_per_channel > 8;
     // PQ/HLG integers bypass WIC's sRGB-assuming float conversion (SPEC section 7).
     let hdr_encoding = if float_native {
         None
@@ -742,6 +749,12 @@ fn decode_single_frame(
     let peak_luminance_nits = (storage == PixelStorage::RgbaHalf)
         .then(|| peak_luminance_from_half_pixels(&pixels))
         .flatten();
+    // The 8bpc fallback conversion truncates whatever the native format held.
+    let source_bits_per_channel = if storage == PixelStorage::RgbaHalf {
+        native_bits_per_channel
+    } else {
+        8
+    };
     Ok(DecodedFrames {
         width,
         height,
@@ -750,6 +763,7 @@ fn decode_single_frame(
         icc_profile,
         exif,
         storage,
+        source_bits_per_channel,
         peak_luminance_nits,
         frames: vec![Frame {
             pixels,
@@ -758,12 +772,12 @@ fn decode_single_frame(
     })
 }
 
-/// Native format traits: (more than 8 bits per channel, float representation).
+/// Native format traits: (bits per channel, float representation).
 fn frame_pixel_format_traits(
     factory: &IWICImagingFactory,
     frame: &IWICBitmapFrameDecode,
-) -> (bool, bool) {
-    (|| -> WindowsResult<(bool, bool)> {
+) -> (u32, bool) {
+    (|| -> WindowsResult<(u32, bool)> {
         let format = unsafe { frame.GetPixelFormat()? };
         let information: IWICPixelFormatInfo2 =
             unsafe { factory.CreateComponentInfo(&raw const format)? }.cast()?;
@@ -771,12 +785,12 @@ fn frame_pixel_format_traits(
         let channel_count = unsafe { information.GetChannelCount()? };
         let float_native = unsafe { information.GetNumericRepresentation()? }
             == WICPixelFormatNumericRepresentationFloat;
-        Ok((
-            channel_count > 0 && bits_per_pixel > channel_count * 8,
-            float_native,
-        ))
+        if channel_count == 0 {
+            return Ok((8, float_native));
+        }
+        Ok((bits_per_pixel / channel_count, float_native))
     })()
-    .unwrap_or((false, false))
+    .unwrap_or((8, false))
 }
 
 #[derive(Clone, Copy)]
@@ -1211,6 +1225,7 @@ fn decode_animation(
         icc_profile,
         exif: None,
         storage: PixelStorage::Bgra8,
+        source_bits_per_channel: 8,
         peak_luminance_nits: None,
         frames,
     })
@@ -1520,6 +1535,7 @@ fn decode_apng<Input: BufRead + Seek>(
         icc_profile,
         exif: None,
         storage: PixelStorage::Bgra8,
+        source_bits_per_channel: 8,
         peak_luminance_nits: None,
         frames,
     })
@@ -1612,6 +1628,7 @@ fn decode_svg(data: &[u8], format_name: &'static str) -> Result<DecodedImage, De
         icc_profile: None,
         exif: None,
         storage: PixelStorage::Bgra8,
+        source_bits_per_channel: 8,
         peak_luminance_nits: None,
         frames: vec![Frame {
             pixels,

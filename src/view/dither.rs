@@ -1,11 +1,14 @@
 //! Custom D2D output-dither effects: Ordered (Bayer 8x8) and Fruit (blue noise).
 //!
-//! Both effects add a +-0.5 LSB screen-anchored threshold (8-bit amplitude) right
-//! before the swapchain write quantizes the 16bpc float scene, so they must run
-//! in destination pixel space (identity context transform).
+//! Both effects add a +-0.5 LSB screen-anchored threshold right before the
+//! swapchain write quantizes the 16bpc float scene, so they must run in
+//! destination pixel space (identity context transform). The LSB amplitude is
+//! fixed at registration from the backbuffer depth (255 for 8-bit, 1023 for 10-bit).
 
 use std::cell::RefCell;
-use std::sync::OnceLock;
+use std::collections::HashMap;
+use std::sync::atomic::{AtomicU32, Ordering};
+use std::sync::{Mutex, OnceLock};
 
 use windows::Win32::Foundation::{E_INVALIDARG, E_NOTIMPL, RECT, S_OK};
 use windows::Win32::Graphics::Direct2D::{
@@ -17,7 +20,7 @@ use windows::Win32::Graphics::Direct2D::{
 };
 use windows::Win32::Graphics::Direct3D::Fxc::{D3DCOMPILE_OPTIMIZATION_LEVEL3, D3DCompile};
 use windows::core::{
-    GUID, HRESULT, IUnknown, IUnknownImpl, Interface, OutRef, Ref, Result, implement, s, w,
+    GUID, HRESULT, IUnknown, IUnknownImpl, Interface, OutRef, PCSTR, Ref, Result, implement, s, w,
 };
 
 pub const CLSID_RIV_DITHER_ORDERED: GUID = GUID::from_u128(0x8f6c9c1e_3a54_4d21_9b0e_5a4a1c2d7e91);
@@ -50,7 +53,7 @@ float4 main(float4 clip_position : SV_POSITION,
     float4 color = input_texture.Sample(input_sampler, texture_coordinate.xy);
     uint2 cell = uint2(scene_position.xy) & 7u;
     float threshold = (bayer_8x8[cell.y * 8u + cell.x] + 0.5) / 64.0 - 0.5;
-    color.rgb += threshold / 255.0;
+    color.rgb += threshold / QUANTIZATION_STEPS;
     return color;
 }
 ";
@@ -67,22 +70,22 @@ float4 main(float4 clip_position : SV_POSITION,
 {
     float4 color = input_texture.Sample(input_sampler, texture_coordinate.xy);
     float noise = blue_noise_texture.Sample(blue_noise_sampler, scene_position.xy / 64.0).r;
-    color.rgb += (noise - 0.5) / 255.0;
+    color.rgb += (noise - 0.5) / QUANTIZATION_STEPS;
     return color;
 }
 ";
 
-fn compile_pixel_shader(source: &str) -> Result<Vec<u8>> {
+pub(crate) fn compile_shader(source: &str, profile: PCSTR) -> Result<Vec<u8>> {
     let mut code = None;
     unsafe {
         D3DCompile(
             source.as_ptr().cast(),
             source.len(),
-            s!("dither"),
+            s!("riv_shader"),
             None,
             None,
             s!("main"),
-            s!("ps_4_0"),
+            profile,
             D3DCOMPILE_OPTIMIZATION_LEVEL3,
             0,
             &raw mut code,
@@ -96,20 +99,30 @@ fn compile_pixel_shader(source: &str) -> Result<Vec<u8>> {
     Ok(bytes.to_vec())
 }
 
-fn ordered_bytecode() -> Result<&'static [u8]> {
-    static BYTECODE: OnceLock<Result<Vec<u8>>> = OnceLock::new();
-    BYTECODE
-        .get_or_init(|| compile_pixel_shader(ORDERED_SHADER_SOURCE))
-        .as_deref()
-        .map_err(Clone::clone)
-}
+/// Effects bake the steps of the registration they were created under.
+static REGISTERED_QUANTIZATION_STEPS: AtomicU32 = AtomicU32::new(255);
 
-fn fruit_bytecode() -> Result<&'static [u8]> {
-    static BYTECODE: OnceLock<Result<Vec<u8>>> = OnceLock::new();
-    BYTECODE
-        .get_or_init(|| compile_pixel_shader(FRUIT_SHADER_SOURCE))
-        .as_deref()
-        .map_err(Clone::clone)
+type BytecodeCache = Mutex<HashMap<(u8, u32), &'static [u8]>>;
+
+fn compiled_bytecode(pattern: DitherPattern, quantization_steps: u32) -> Result<&'static [u8]> {
+    static CACHE: OnceLock<BytecodeCache> = OnceLock::new();
+    let mut cache = CACHE
+        .get_or_init(|| Mutex::new(HashMap::new()))
+        .lock()
+        .expect("dither bytecode cache poisoned");
+    let key = (pattern as u8, quantization_steps);
+    if let Some(bytecode) = cache.get(&key) {
+        return Ok(bytecode);
+    }
+    let source = match pattern {
+        DitherPattern::Ordered => ORDERED_SHADER_SOURCE,
+        DitherPattern::Fruit => FRUIT_SHADER_SOURCE,
+    }
+    .replace("QUANTIZATION_STEPS", &format!("{quantization_steps}.0"));
+    let bytecode: &'static [u8] =
+        Box::leak(compile_shader(&source, s!("ps_4_0"))?.into_boxed_slice());
+    cache.insert(key, bytecode);
+    Ok(bytecode)
 }
 
 /// Single-channel 8-bit texels decoded from the embedded CC0 texture.
@@ -158,6 +171,7 @@ enum DitherPattern {
 #[implement(ID2D1EffectImpl, ID2D1DrawTransform)]
 struct DitherEffect {
     pattern: DitherPattern,
+    quantization_steps: u32,
     blue_noise_texture: RefCell<Option<ID2D1ResourceTexture>>,
 }
 
@@ -171,10 +185,18 @@ impl ID2D1EffectImpl_Impl for DitherEffect_Impl {
         let graph = transformgraph.ok()?;
         match self.pattern {
             DitherPattern::Ordered => unsafe {
-                context.LoadPixelShader(&SHADER_ORDERED, ordered_bytecode()?)?;
+                context.LoadPixelShader(
+                    &SHADER_ORDERED,
+                    compiled_bytecode(DitherPattern::Ordered, self.quantization_steps)?,
+                )?;
             },
             DitherPattern::Fruit => {
-                unsafe { context.LoadPixelShader(&SHADER_FRUIT, fruit_bytecode()?) }?;
+                unsafe {
+                    context.LoadPixelShader(
+                        &SHADER_FRUIT,
+                        compiled_bytecode(DitherPattern::Fruit, self.quantization_steps)?,
+                    )
+                }?;
                 // The texture is keyed by GUID and shared across effect instances.
                 let texture =
                     unsafe { context.FindResourceTexture(&BLUE_NOISE_TEXTURE) }.or_else(|_| {
@@ -279,6 +301,7 @@ impl ID2D1DrawTransform_Impl for DitherEffect_Impl {
 fn create_effect(effect: OutRef<'_, IUnknown>, pattern: DitherPattern) -> HRESULT {
     let object: ID2D1EffectImpl = DitherEffect {
         pattern,
+        quantization_steps: REGISTERED_QUANTIZATION_STEPS.load(Ordering::Relaxed),
         blue_noise_texture: RefCell::new(None),
     }
     .into();
@@ -301,10 +324,11 @@ unsafe extern "system" fn create_fruit_effect(effect: OutRef<'_, IUnknown>) -> H
 
 /// Registers both dither effect classes; fails when shader compilation or the
 /// blue-noise texture is unavailable, in which case rendering stays undithered.
-pub fn register_dither_effects(factory: &ID2D1Factory1) -> Result<()> {
-    ordered_bytecode()?;
-    fruit_bytecode()?;
+pub fn register_dither_effects(factory: &ID2D1Factory1, quantization_steps: u32) -> Result<()> {
+    compiled_bytecode(DitherPattern::Ordered, quantization_steps)?;
+    compiled_bytecode(DitherPattern::Fruit, quantization_steps)?;
     blue_noise_texels()?;
+    REGISTERED_QUANTIZATION_STEPS.store(quantization_steps, Ordering::Relaxed);
     let property_xml = w!("<?xml version='1.0'?>\
 <Effect>\
 <Property name='DisplayName' type='string' value='Dither'/>\

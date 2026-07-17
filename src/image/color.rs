@@ -14,10 +14,23 @@ use windows::Win32::Graphics::Gdi::{
     GetMonitorInfoW, MONITOR_DEFAULTTONEAREST, MONITORINFOEXW, MonitorFromWindow,
 };
 
-pub fn output_color(color: D2D1_COLOR_F, scrgb_boost: Option<f32>) -> D2D1_COLOR_F {
-    match scrgb_boost {
-        Some(boost) => srgb_color_to_scrgb(color, boost),
-        None => color,
+/// Encoding of app-drawn colors (overlay, clear) for the current backbuffer.
+#[derive(Clone, Copy)]
+pub enum OutputColorTarget {
+    Srgb,
+    ScrgbLinear { sdr_white_boost: f32 },
+    Pq { sdr_white_boost: f32 },
+}
+
+pub fn output_color(color: D2D1_COLOR_F, target: OutputColorTarget) -> D2D1_COLOR_F {
+    match target {
+        OutputColorTarget::Srgb => color,
+        OutputColorTarget::ScrgbLinear { sdr_white_boost } => {
+            srgb_color_to_scrgb(color, sdr_white_boost)
+        }
+        OutputColorTarget::Pq { sdr_white_boost } => {
+            scrgb_color_to_pq(srgb_color_to_scrgb(color, sdr_white_boost))
+        }
     }
 }
 
@@ -38,6 +51,45 @@ fn srgb_color_to_scrgb(color: D2D1_COLOR_F, sdr_white_boost: f32) -> D2D1_COLOR_
     }
 }
 
+/// scRGB 1.0, the luminance DWM assigns to sRGB white.
+const SCRGB_UNIT_NITS: f32 = 80.0;
+/// PQ code 1.0.
+const PQ_PEAK_NITS: f32 = 10000.0;
+
+/// BT.709 -> BT.2020 primaries (rows sum to 1).
+const BT709_TO_BT2020: [[f32; 3]; 3] = [
+    [0.627_404, 0.329_283, 0.043_313],
+    [0.069_097, 0.919_540, 0.011_362],
+    [0.016_391, 0.088_013, 0.895_595],
+];
+
+/// Linear scRGB (BT.709, 1.0 = 80 nits) to PQ-encoded BT.2020 (HDR10 backbuffer).
+fn scrgb_color_to_pq(color: D2D1_COLOR_F) -> D2D1_COLOR_F {
+    let source = [color.r, color.g, color.b];
+    let mut encoded = [0.0f32; 3];
+    for (row, channel) in BT709_TO_BT2020.iter().zip(&mut encoded) {
+        let linear = row[0] * source[0] + row[1] * source[1] + row[2] * source[2];
+        *channel = pq_encode((linear * SCRGB_UNIT_NITS / PQ_PEAK_NITS).clamp(0.0, 1.0));
+    }
+    D2D1_COLOR_F {
+        r: encoded[0],
+        g: encoded[1],
+        b: encoded[2],
+        a: color.a,
+    }
+}
+
+/// SMPTE ST 2084 perceptual quantizer; input is luminance normalized to 10000 nits.
+fn pq_encode(value: f32) -> f32 {
+    const M1: f32 = 2610.0 / 16384.0;
+    const M2: f32 = 2523.0 / 4096.0 * 128.0;
+    const C1: f32 = 3424.0 / 4096.0;
+    const C2: f32 = 2413.0 / 4096.0 * 32.0;
+    const C3: f32 = 2392.0 / 4096.0 * 32.0;
+    let eased = value.powf(M1);
+    ((C1 + C2 * eased) / (1.0 + C3 * eased)).powf(M2)
+}
+
 /// SDR white boost for HDR mode; 1.0 elsewhere (ACM output is display-referred).
 pub fn sdr_white_boost(window: HWND) -> f32 {
     if !monitor_is_hdr(window) {
@@ -52,6 +104,11 @@ pub fn monitor_is_hdr(window: HWND) -> bool {
     window_output_description(window).is_some_and(|description| {
         description.ColorSpace == DXGI_COLOR_SPACE_RGB_FULL_G2084_NONE_P2020
     })
+}
+
+/// Bits per color channel of the window's output; 8 when unknown.
+pub fn display_bits_per_color(window: HWND) -> u32 {
+    window_output_description(window).map_or(8, |description| description.BitsPerColor)
 }
 
 /// Maximum luminance (nits) of the window's output, when reported.
@@ -175,4 +232,58 @@ fn query_sdr_white_boost(window: HWND) -> Option<f32> {
         return Some(white_level.SDRWhiteLevel as f32 / 1000.0);
     }
     None
+}
+
+#[cfg(test)]
+mod output_color_tests {
+    use super::*;
+
+    const TOLERANCE: f32 = 1e-3;
+
+    fn gray(value: f32) -> D2D1_COLOR_F {
+        D2D1_COLOR_F {
+            r: value,
+            g: value,
+            b: value,
+            a: 1.0,
+        }
+    }
+
+    #[test]
+    fn pq_encode_matches_reference_points() {
+        assert!(pq_encode(0.0).abs() < TOLERANCE);
+        assert!((pq_encode(1.0) - 1.0).abs() < TOLERANCE);
+        // 100 nits, the HDR reference white anchor of ST 2084.
+        assert!((pq_encode(0.01) - 0.5081).abs() < TOLERANCE);
+    }
+
+    #[test]
+    fn bt2020_matrix_preserves_white() {
+        for row in BT709_TO_BT2020 {
+            assert!((row.iter().sum::<f32>() - 1.0).abs() < TOLERANCE);
+        }
+    }
+
+    #[test]
+    fn output_color_encodes_srgb_white_per_target() {
+        let white = gray(1.0);
+        let srgb = output_color(white, OutputColorTarget::Srgb);
+        assert!((srgb.r - 1.0).abs() < TOLERANCE);
+        let scrgb = output_color(
+            white,
+            OutputColorTarget::ScrgbLinear {
+                sdr_white_boost: 2.5,
+            },
+        );
+        assert!((scrgb.g - 2.5).abs() < TOLERANCE);
+        // 80 nits in PQ; equal channels stay equal through the matrix.
+        let pq = output_color(
+            white,
+            OutputColorTarget::Pq {
+                sdr_white_boost: 1.0,
+            },
+        );
+        assert!((pq.r - 0.4859).abs() < TOLERANCE);
+        assert!((pq.r - pq.b).abs() < TOLERANCE);
+    }
 }

@@ -119,6 +119,7 @@ impl Application {
             width.max(1),
             height.max(1),
             hdr_mode,
+            color::display_bits_per_color(window),
             tone_map_target_luminance(window, hdr_mode),
         )?;
         let device_pixel_ratio = unsafe { GetDpiForWindow(window) } as f32 / 96.0;
@@ -168,9 +169,12 @@ impl Application {
         Ok(application)
     }
 
-    /// Rebuild the renderer when the monitor's HDR mode changes; else refresh the boost.
+    /// Rebuild the renderer when the monitor's HDR mode or bit depth changes;
+    /// else refresh the boost.
     fn refresh_display_color_state(&mut self, window: HWND) {
-        if color::monitor_is_hdr(window) != self.renderer.hdr_mode() {
+        if color::monitor_is_hdr(window) != self.renderer.hdr_mode()
+            || color::display_bits_per_color(window) != self.renderer.bits_per_color()
+        {
             self.sdr_white_boost = color::sdr_white_boost(window);
             if self.rebuild_renderer(window).is_ok() {
                 self.render(window);
@@ -185,8 +189,19 @@ impl Application {
         }
     }
 
-    fn scrgb_boost(&self) -> Option<f32> {
-        self.renderer.hdr_mode().then_some(self.sdr_white_boost)
+    fn output_color_target(&self) -> color::OutputColorTarget {
+        if !self.renderer.hdr_mode() {
+            return color::OutputColorTarget::Srgb;
+        }
+        if self.renderer.pq_output() {
+            color::OutputColorTarget::Pq {
+                sdr_white_boost: self.sdr_white_boost,
+            }
+        } else {
+            color::OutputColorTarget::ScrgbLinear {
+                sdr_white_boost: self.sdr_white_boost,
+            }
+        }
     }
 
     fn image_size(&self) -> Size {
@@ -340,6 +355,7 @@ impl Application {
             (image.width, image.height),
             image.icc_profile.as_deref(),
             image.storage,
+            image.source_bits_per_channel,
             image.peak_luminance_nits,
         );
         self.display = Some(image);
@@ -422,6 +438,7 @@ impl Application {
                 (image.width, image.height),
                 image.icc_profile.as_deref(),
                 image.storage,
+                image.source_bits_per_channel,
                 image.peak_luminance_nits,
             );
         }
@@ -465,6 +482,7 @@ impl Application {
             width.max(1),
             height.max(1),
             hdr_mode,
+            color::display_bits_per_color(window),
             tone_map_target_luminance(window, hdr_mode),
         )?;
         self.renderer.set_sdr_white_boost(self.sdr_white_boost);
@@ -482,6 +500,7 @@ impl Application {
                 (image.width, image.height),
                 image.icc_profile.as_deref(),
                 image.storage,
+                image.source_bits_per_channel,
                 image.peak_luminance_nits,
             )?;
         }
@@ -511,6 +530,7 @@ impl Application {
                     &current.image,
                     file_size,
                     modified,
+                    self.renderer.output_description(),
                 )
             })
         } else {
@@ -522,7 +542,7 @@ impl Application {
             info_text,
             zoom_text: self.zoom_text.clone(),
             background_is_bright: brightness > 0.5,
-            scrgb_boost: self.scrgb_boost(),
+            output_color_target: self.output_color_target(),
         }
     }
 
@@ -538,7 +558,7 @@ impl Application {
         let interpolation = self.interpolation_mode();
         let background = self.background_color();
         let content = self.overlay_content(background);
-        let clear_color = color::output_color(background, self.scrgb_boost());
+        let clear_color = color::output_color(background, self.output_color_target());
         let overlay = &self.overlay;
         let draw = |context: &_| overlay.draw(context, viewport.width, viewport.height, &content);
         if self
