@@ -409,9 +409,12 @@ pub fn build_error_text(
 /// Centered status while a URL downloads; received bytes only, no total is known.
 pub fn build_download_text(file_name: &str, received_bytes: u64) -> String {
     if received_bytes == 0 {
-        return format!("Connecting\n{file_name}");
+        return format!("Connecting...\n{file_name}");
     }
-    format!("Downloading\n{file_name}\n{}", scaled_size(received_bytes))
+    format!(
+        "Downloading...\n{file_name}\n{}",
+        scaled_size(received_bytes)
+    )
 }
 
 fn scaled_size(bytes: u64) -> String {
