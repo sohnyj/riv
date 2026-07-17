@@ -256,7 +256,7 @@ impl Action {
         ACTION_TABLE
             .iter()
             .map(|(action, _, _, _)| *action)
-            .filter(|action| *action != Self::OpenWith)
+            .filter(|action| !matches!(action, Self::OpenWith | Self::About))
     }
 
     pub fn name(self) -> &'static str {
