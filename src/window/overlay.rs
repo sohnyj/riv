@@ -1,4 +1,4 @@
-//! DirectWrite overlays: info panel, zoom text, error text.
+//! DirectWrite overlays: info panel, status pill, centered error text.
 
 use std::time::{SystemTime, UNIX_EPOCH};
 
@@ -48,7 +48,7 @@ pub struct OverlayContent {
     /// Centered like an error while a URL downloads (no image is up then).
     pub download_text: Option<String>,
     pub info_text: Option<String>,
-    pub zoom_text: Option<String>,
+    pub status_text: Option<String>,
     pub background_is_bright: bool,
     pub output_color_target: color::OutputColorTarget,
 }
@@ -107,16 +107,16 @@ impl Overlay {
         } else {
             None
         };
-        if let Some(zoom_text) = &content.zoom_text {
-            let zoom_width = self.measure_panel_width(zoom_text, viewport_width)?;
-            let centered_left = ((viewport_width - zoom_width) / 2.0).max(margin);
+        if let Some(status_text) = &content.status_text {
+            let status_width = self.measure_panel_width(status_text, viewport_width)?;
+            let centered_left = ((viewport_width - status_width) / 2.0).max(margin);
             let top = match &info_rect {
                 Some(info) if centered_left < info.right + panel_gap => info.bottom + panel_gap,
                 _ => margin,
             };
             self.draw_panel(
                 context,
-                zoom_text,
+                status_text,
                 centered_left,
                 top,
                 viewport_width,

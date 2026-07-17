@@ -77,7 +77,7 @@ const APPLICATION_ICON_ID: PCWSTR = PCWSTR(std::ptr::without_provenance(1));
 
 const WM_APP_SHOW_WINDOW: u32 = WM_APP + 2;
 
-const ZOOM_TEXT_TIMER: usize = 2;
+const STATUS_TEXT_TIMER: usize = 2;
 const SLIDESHOW_TIMER: usize = 3;
 const RECENTS_SAVE_TIMER: usize = 4;
 const OPEN_WITH_TIMER: usize = 5;
@@ -105,7 +105,7 @@ struct Application {
     gesture_pan_point: Option<(i32, i32)>,
     overlay: Overlay,
     show_file_info: bool,
-    zoom_text: Option<String>,
+    status_text: Option<String>,
     /// Received bytes of the pending URL download the view reports on.
     download_progress: Option<(ItemLocation, u64)>,
     slideshow_active: bool,
@@ -152,7 +152,7 @@ impl Application {
             gesture_pan_point: None,
             overlay: Overlay::new()?,
             show_file_info: false,
-            zoom_text: None,
+            status_text: None,
             download_progress: None,
             slideshow_active: false,
             animation: None,
@@ -475,9 +475,9 @@ impl Application {
         self.render(window);
     }
 
-    fn show_zoom_text(&mut self, window: HWND, text: String) {
-        self.zoom_text = Some(text);
-        unsafe { SetTimer(Some(window), ZOOM_TEXT_TIMER, 1000, None) };
+    fn show_status_text(&mut self, window: HWND, text: String) {
+        self.status_text = Some(text);
+        unsafe { SetTimer(Some(window), STATUS_TEXT_TIMER, 1000, None) };
     }
 
     fn toggle_slideshow(&mut self, window: HWND) {
@@ -487,7 +487,7 @@ impl Application {
             let interval = self.settings.options.slideshow_timer_seconds * 1000;
             unsafe { SetTimer(Some(window), SLIDESHOW_TIMER, interval, None) };
             self.slideshow_active = true;
-            self.show_zoom_text(window, "Slideshow: Start".to_string());
+            self.show_status_text(window, "Slideshow: Start".to_string());
             self.render(window);
         }
     }
@@ -496,7 +496,7 @@ impl Application {
         if self.slideshow_active {
             let _ = unsafe { KillTimer(Some(window), SLIDESHOW_TIMER) };
             self.slideshow_active = false;
-            self.show_zoom_text(window, "Slideshow: Stop".to_string());
+            self.show_status_text(window, "Slideshow: Stop".to_string());
             self.render(window);
         }
     }
@@ -575,7 +575,7 @@ impl Application {
             error_text,
             download_text,
             info_text,
-            zoom_text: self.zoom_text.clone(),
+            status_text: self.status_text.clone(),
             background_is_bright: brightness > 0.5,
             output_color_target: self.output_color_target(),
         }
@@ -668,7 +668,7 @@ impl Application {
             let percent = (self.view_transform.scale / self.view_transform.device_pixel_ratio
                 * 100.0)
                 .round();
-            self.show_zoom_text(window, format!("Zoom: {percent}%"));
+            self.show_status_text(window, format!("Zoom: {percent}%"));
         }
         self.render(window);
     }
@@ -867,7 +867,7 @@ fn dispatch_action(application: &mut Application, window: HWND, action: Action) 
             } else {
                 "1:1"
             };
-            application.show_zoom_text(window, text.to_string());
+            application.show_status_text(window, text.to_string());
             application.render(window);
         }
         Action::PreserveZoom => {
@@ -877,7 +877,7 @@ fn dispatch_action(application: &mut Application, window: HWND, action: Action) 
             } else {
                 "Off"
             };
-            application.show_zoom_text(window, format!("Preserve Zoom: {state}"));
+            application.show_status_text(window, format!("Preserve Zoom: {state}"));
             application.render(window);
         }
         Action::ShowFileInfo => {
@@ -892,7 +892,7 @@ fn dispatch_action(application: &mut Application, window: HWND, action: Action) 
                 "Off"
             };
             // The pill spells out the full option name the short menu label elides.
-            application.show_zoom_text(window, format!("Loop Within Folder: {state}"));
+            application.show_status_text(window, format!("Loop Within Folder: {state}"));
             let options = application.settings.options.clone();
             application.settings.set_options(&options);
             let _ = application.settings.save();
@@ -929,7 +929,7 @@ fn dispatch_action(application: &mut Application, window: HWND, action: Action) 
                 3 => "Rotate: L90\u{b0}",
                 _ => "Rotate: 0\u{b0}",
             };
-            application.show_zoom_text(window, text.to_string());
+            application.show_status_text(window, text.to_string());
             application.render(window);
         }
         Action::Mirror => {
@@ -939,7 +939,7 @@ fn dispatch_action(application: &mut Application, window: HWND, action: Action) 
             } else {
                 "Mirror: Off"
             };
-            application.show_zoom_text(window, text.to_string());
+            application.show_status_text(window, text.to_string());
             application.render(window);
         }
         Action::Flip => {
@@ -949,7 +949,7 @@ fn dispatch_action(application: &mut Application, window: HWND, action: Action) 
             } else {
                 "Flip: Off"
             };
-            application.show_zoom_text(window, text.to_string());
+            application.show_status_text(window, text.to_string());
             application.render(window);
         }
         Action::Fullscreen => {
@@ -1023,7 +1023,7 @@ fn dispatch_action(application: &mut Application, window: HWND, action: Action) 
             if let Some(animation) = application.animation.as_mut() {
                 animation.adjust_speed(action == Action::IncreaseSpeed);
                 let text = format!("Speed: {}%", animation.speed_percent());
-                application.show_zoom_text(window, text);
+                application.show_status_text(window, text);
                 application.render(window);
             }
         }
@@ -1031,7 +1031,7 @@ fn dispatch_action(application: &mut Application, window: HWND, action: Action) 
             if let Some(animation) = application.animation.as_mut() {
                 animation.reset_speed();
                 let text = format!("Speed: {}%", animation.speed_percent());
-                application.show_zoom_text(window, text);
+                application.show_status_text(window, text);
                 application.render(window);
             }
         }
@@ -1552,10 +1552,10 @@ extern "system" fn window_procedure(
             }
             LRESULT(0)
         }
-        WM_TIMER if wparam.0 == ZOOM_TEXT_TIMER => {
-            let _ = unsafe { KillTimer(Some(window), ZOOM_TEXT_TIMER) };
+        WM_TIMER if wparam.0 == STATUS_TEXT_TIMER => {
+            let _ = unsafe { KillTimer(Some(window), STATUS_TEXT_TIMER) };
             if let Some(application) = application_from_window(window)
-                && application.zoom_text.take().is_some()
+                && application.status_text.take().is_some()
             {
                 application.render(window);
             }
