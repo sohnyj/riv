@@ -61,21 +61,12 @@ fn executable_path() -> Option<&'static Path> {
     .as_deref()
 }
 
-/// The URI scheme, lowercased; single letters read as drive letters, not schemes.
-pub fn protocol_lowercase(url: &str) -> Option<String> {
-    let (scheme, _) = url.split_once(':')?;
-    let mut characters = scheme.chars();
-    if scheme.len() < 2
-        || !characters.next()?.is_ascii_alphabetic()
-        || !characters.all(|c| c.is_ascii_alphanumeric() || matches!(c, '+' | '-' | '.'))
-    {
-        return None;
-    }
-    Some(scheme.to_ascii_lowercase())
-}
-
 pub fn is_supported_protocol(url: &str) -> bool {
-    protocol_lowercase(url).is_some_and(|scheme| SUPPORTED_PROTOCOLS.contains(&scheme.as_str()))
+    url.split_once(':').is_some_and(|(scheme, _)| {
+        SUPPORTED_PROTOCOLS
+            .iter()
+            .any(|protocol| scheme.eq_ignore_ascii_case(protocol))
+    })
 }
 
 /// Last URL path segment for titles; the whole URL when there is none.
@@ -111,9 +102,7 @@ pub fn download(
     progress: &mut dyn FnMut(u64),
 ) -> Result<Vec<u8>, NetworkError> {
     if !is_supported_protocol(url) {
-        return Err(NetworkError::new(
-            "unsupported URL protocol (http/https only)",
-        ));
+        return Err(NetworkError::new("unsupported URL protocol"));
     }
     let executable = executable_path()
         .ok_or_else(|| NetworkError::new("URL support is unavailable on this Windows"))?;
@@ -270,25 +259,17 @@ mod url_tests {
     use super::*;
 
     #[test]
-    fn protocols_parse_case_insensitively() {
-        assert_eq!(
-            protocol_lowercase("HTTPS://a/b.png").as_deref(),
-            Some("https")
-        );
-        assert_eq!(protocol_lowercase("ftp://a/b.png").as_deref(), Some("ftp"));
-        assert_eq!(protocol_lowercase("C:\\a\\b.png"), None);
-        assert_eq!(protocol_lowercase("\\\\server\\share\\b.png"), None);
-        assert_eq!(protocol_lowercase("no scheme here"), None);
-        assert_eq!(protocol_lowercase(""), None);
-    }
-
-    #[test]
     fn only_http_and_https_pass_the_gate() {
         assert!(is_supported_protocol("http://a/b.png"));
         assert!(is_supported_protocol("HTTPS://a/b.png"));
         assert!(!is_supported_protocol("ftp://a/b.png"));
         assert!(!is_supported_protocol("file:///c:/b.png"));
         assert!(!is_supported_protocol("C:\\a\\b.png"));
+        assert!(!is_supported_protocol("\\\\server\\share\\b.png"));
+        assert!(!is_supported_protocol("see https://a/b.png look"));
+        assert!(!is_supported_protocol("seehttps://a/b.pnglook"));
+        assert!(!is_supported_protocol("no scheme here"));
+        assert!(!is_supported_protocol(""));
     }
 
     #[test]

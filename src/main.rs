@@ -804,20 +804,11 @@ fn open_external_url(application: &mut Application, window: HWND, url: &str) {
     }
 }
 
-/// Opens a pasted URL when it names an image over a supported protocol.
+/// Opens clipboard text as a URL; non-URL text surfaces the load error.
 fn paste_open_url(application: &mut Application, window: HWND) -> bool {
-    if !curl::available() {
-        return false;
-    }
     let Some(text) = clipboard::read_text(window) else {
         return false;
     };
-    let is_image_url = curl::is_supported_protocol(&text)
-        && curl::extension_lowercase(&text)
-            .is_some_and(|extension| image::decode::is_supported_extension(&extension));
-    if !is_image_url {
-        return false; // anything else on the clipboard is ignored
-    }
     open_external_url(application, window, &text);
     true
 }

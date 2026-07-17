@@ -373,7 +373,7 @@ impl ImageCore {
         self.entries = Vec::new();
         self.listing_scope = None;
         let failure = if !curl::is_supported_protocol(url) {
-            Some("unsupported URL protocol (http/https only)")
+            Some("unsupported URL protocol")
         } else if !curl::available() {
             Some("URL support is unavailable on this Windows")
         } else if curl::extension_lowercase(url)
@@ -1523,6 +1523,16 @@ mod url_session_state_tests {
         let (location, error) = core.load_error.as_ref().expect("error recorded");
         assert!(matches!(location, ItemLocation::Url(_)));
         assert!(error.message.contains("protocol"));
+    }
+
+    #[test]
+    fn prose_around_a_url_is_rejected_not_parsed() {
+        for text in ["see https://a/b.png look", "seehttps://a/b.pnglook"] {
+            let mut core = core();
+            assert!(!core.load_url(text));
+            let (_, error) = core.load_error.as_ref().expect("error recorded");
+            assert!(error.message.contains("protocol"));
+        }
     }
 
     #[test]
