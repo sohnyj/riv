@@ -495,6 +495,8 @@ impl ImageCore {
         }
         let displayed = kind == JobKind::Full;
         self.pending_display = Some(location.clone());
+        // The new load owns the view; a leftover error would mask its progress.
+        self.load_error = None;
         if let Some(cancellation) = self.in_flight.get(location) {
             // Already queued as a preload: revoke any cancellation and promote.
             cancellation.store(false, Ordering::Relaxed);
@@ -1559,6 +1561,20 @@ mod url_session_state_tests {
         let store_hinted = url_decode_error(error(Some("avif")));
         assert_eq!(store_hinted.message, "component not found");
         assert_eq!(store_hinted.store_extension, Some("avif"));
+    }
+
+    #[test]
+    fn a_new_load_clears_the_previous_error() {
+        let directory = std::env::temp_dir().join("riv-error-supersede");
+        std::fs::create_dir_all(&directory).expect("fixture directory");
+        let file = directory.join("a.png");
+        std::fs::write(&file, b"listing only; never decoded").expect("fixture file");
+        let mut core = core();
+        assert!(!core.load_url("ftp://a.com/b.png"));
+        assert!(core.load_error.is_some());
+        core.load_path(&file);
+        assert!(core.load_error.is_none()); // the pending load owns the view now
+        let _ = std::fs::remove_dir_all(&directory);
     }
 
     #[test]
