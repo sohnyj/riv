@@ -892,7 +892,7 @@ fn dispatch_action(application: &mut Application, window: HWND, action: Action) 
                 "Off"
             };
             // The pill spells out the full option name the short menu label elides.
-            application.show_status_text(window, format!("Loop Within Folder: {state}"));
+            application.show_status_text(window, format!("Loop within Folder: {state}"));
             let options = application.settings.options.clone();
             application.settings.set_options(&options);
             let _ = application.settings.save();
