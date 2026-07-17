@@ -945,46 +945,63 @@ fn hybrid_log_gamma_scene_linear(code: f32) -> f32 {
     }
 }
 
+/// Peak-scan histogram resolution in PQ code space.
+const PEAK_HISTOGRAM_BINS: usize = 4096;
+
+/// Histogram bin per half bit pattern; built once, two powf per entry.
+fn peak_histogram_bin_table() -> &'static [u16; 65536] {
+    static TABLE: OnceLock<Box<[u16; 65536]>> = OnceLock::new();
+    TABLE.get_or_init(|| {
+        let mut table = Box::new([0u16; 65536]);
+        for (bits, bin) in table.iter_mut().enumerate() {
+            let code =
+                perceptual_quantizer_code(half_to_f32(bits as u16) * SDR_REFERENCE_WHITE_NITS);
+            *bin = ((code.clamp(0.0, 1.0) * (PEAK_HISTOGRAM_BINS - 1) as f32) as usize)
+                .min(PEAK_HISTOGRAM_BINS - 1) as u16;
+        }
+        table
+    })
+}
+
 /// Content peak of linear scRGB halves: 99.9th-percentile max channel, binned in PQ codes.
 fn peak_luminance_from_half_pixels(pixels: &[u8]) -> Option<f32> {
     if pixels.len() < 8 {
         return None;
     }
     // Within SDR white the tone map is skipped, so the histogram never needs to run.
-    let mut maximum_linear = 0.0f32;
+    // Four uniform lanes; the discarded alpha keeps the stride pattern regular.
+    let mut channel_maxima = [0u16; 4];
     for pixel in pixels.chunks_exact(8) {
-        for channel in 0..3 {
+        for (channel, maximum) in channel_maxima.iter_mut().enumerate() {
             let bits = u16::from_le_bytes([pixel[channel * 2], pixel[channel * 2 + 1]]);
-            let linear = half_to_f32(bits);
-            if linear > maximum_linear {
-                maximum_linear = linear;
-            }
+            *maximum = (*maximum).max(positive_normal_half_bits(bits));
         }
     }
+    let maximum_linear = half_to_f32(
+        channel_maxima[0]
+            .max(channel_maxima[1])
+            .max(channel_maxima[2]),
+    );
     if maximum_linear <= 1.0 {
         return Some(maximum_linear * SDR_REFERENCE_WHITE_NITS);
     }
     // Jittered subsampling: a fixed stride aliases with periodic image structure.
-    const BINS: usize = 4096;
     const SUBSAMPLE_MINIMUM_PIXELS: usize = 4_000_000;
+    let bin_table = peak_histogram_bin_table();
     let pixel_count = pixels.len() / 8;
     let subsample = pixel_count >= SUBSAMPLE_MINIMUM_PIXELS;
-    let mut histogram = [0u32; BINS];
+    let mut histogram = [0u32; PEAK_HISTOGRAM_BINS];
     let mut sample_count = 0u32;
     let mut jitter_state = 0x9E37_79B9u32;
     let mut index = 0usize;
     while index < pixel_count {
         let pixel = &pixels[index * 8..index * 8 + 8];
-        let mut maximum_code = 0.0f32;
+        let mut maximum_bits = 0u16;
         for channel in 0..3 {
             let bits = u16::from_le_bytes([pixel[channel * 2], pixel[channel * 2 + 1]]);
-            let code = perceptual_quantizer_code(half_to_f32(bits) * SDR_REFERENCE_WHITE_NITS);
-            if code > maximum_code {
-                maximum_code = code;
-            }
+            maximum_bits = maximum_bits.max(positive_normal_half_bits(bits));
         }
-        let bin = ((maximum_code.clamp(0.0, 1.0) * (BINS - 1) as f32) as usize).min(BINS - 1);
-        histogram[bin] += 1;
+        histogram[usize::from(bin_table[usize::from(maximum_bits)])] += 1;
         sample_count += 1;
         if subsample {
             jitter_state = jitter_state
@@ -997,7 +1014,7 @@ fn peak_luminance_from_half_pixels(pixels: &[u8]) -> Option<f32> {
     }
     let threshold = (u64::from(sample_count) * 999 / 1000) as u32;
     let mut accumulated = 0u32;
-    let mut percentile_bin = BINS - 1;
+    let mut percentile_bin = PEAK_HISTOGRAM_BINS - 1;
     for (bin, count) in histogram.iter().enumerate() {
         accumulated += count;
         if accumulated >= threshold {
@@ -1005,8 +1022,17 @@ fn peak_luminance_from_half_pixels(pixels: &[u8]) -> Option<f32> {
             break;
         }
     }
-    let code = (percentile_bin as f32 + 1.0) / BINS as f32;
+    let code = (percentile_bin as f32 + 1.0) / PEAK_HISTOGRAM_BINS as f32;
     Some(perceptual_quantizer_nits(code.min(1.0)))
+}
+
+/// Bits of a positive normal half (others map to 0); valid bits order like their values.
+fn positive_normal_half_bits(bits: u16) -> u16 {
+    if bits.wrapping_sub(0x0400) < 0x7800 {
+        bits
+    } else {
+        0
+    }
 }
 
 /// Peak-scan only: negatives, subnormals, and non-finite values map to 0.
@@ -1824,5 +1850,20 @@ mod peak_scan_tests {
     #[test]
     fn empty_input_yields_none() {
         assert!(peak_luminance_from_half_pixels(&[]).is_none());
+    }
+
+    #[test]
+    #[ignore = "manual timing comparison (--nocapture)"]
+    fn peak_scan_timing() {
+        let mut values = vec![(2.5f32, 0.5, 1.5); 16_000_000];
+        for index in (0..values.len()).step_by(97) {
+            values[index] = (30.0, 10.0, 5.0);
+        }
+        let pixels = half_pixels(&values);
+        for _ in 0..3 {
+            let start = std::time::Instant::now();
+            let peak = peak_luminance_from_half_pixels(&pixels).unwrap();
+            println!("peak={peak} elapsed={:?}", start.elapsed());
+        }
     }
 }
