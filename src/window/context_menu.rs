@@ -109,7 +109,6 @@ impl MenuBuilder {
         }
         self.append_action_labeled(recent, Action::ClearRecents, "Clear Recents")?;
         self.append_submenu(menu, recent, "Open Recent")?;
-        self.append_action(menu, Action::ReloadFile)?;
         let open_with = unsafe { CreatePopupMenu()? };
         let open_with_items = self.state_snapshot.open_with_items.clone();
         for (index, label) in open_with_items.iter().enumerate() {
@@ -123,16 +122,19 @@ impl MenuBuilder {
         }
         self.append_action_labeled(open_with, Action::OpenWithOther, "Other Application...")?;
         self.append_submenu(menu, open_with, "Open With")?;
-        self.append_action(menu, Action::OpenContainingFolder)?;
-        self.append_action(menu, Action::ShowFileInfo)?;
         self.append_separator(menu)?;
 
-        self.append_action(menu, Action::Rename)?;
-        self.append_action(menu, Action::Delete)?;
+        self.append_action(menu, Action::ShowFileInfo)?;
+        self.append_action(menu, Action::OpenContainingFolder)?;
         self.append_separator(menu)?;
 
         self.append_action(menu, Action::PreviousFile)?;
         self.append_action(menu, Action::NextFile)?;
+        self.append_separator(menu)?;
+
+        self.append_action(menu, Action::ReloadFile)?;
+        self.append_action(menu, Action::Rename)?;
+        self.append_action(menu, Action::Delete)?;
         self.append_separator(menu)?;
 
         let view = unsafe { CreatePopupMenu()? };
@@ -148,19 +150,21 @@ impl MenuBuilder {
         self.append_action(view, Action::Flip)?;
         self.append_submenu(menu, view, "View")?;
 
-        let tools = unsafe { CreatePopupMenu()? };
+        let playback = unsafe { CreatePopupMenu()? };
         let pause_label = if self.state_snapshot.animation_paused {
             "Resume"
         } else {
             "Pause"
         };
-        self.append_action_labeled(tools, Action::Pause, pause_label)?;
-        self.append_action(tools, Action::NextFrame)?;
-        self.append_separator(tools)?;
-        self.append_action(tools, Action::DecreaseSpeed)?;
-        self.append_action(tools, Action::IncreaseSpeed)?;
-        self.append_action(tools, Action::ResetSpeed)?;
-        self.append_separator(tools)?;
+        self.append_action_labeled(playback, Action::Pause, pause_label)?;
+        self.append_action(playback, Action::NextFrame)?;
+        self.append_separator(playback)?;
+        self.append_action(playback, Action::DecreaseSpeed)?;
+        self.append_action(playback, Action::IncreaseSpeed)?;
+        self.append_action(playback, Action::ResetSpeed)?;
+        self.append_submenu(menu, playback, "Playback")?;
+
+        let tools = unsafe { CreatePopupMenu()? };
         let slideshow_label = if self.state_snapshot.slideshow_active {
             "Stop Slideshow"
         } else {

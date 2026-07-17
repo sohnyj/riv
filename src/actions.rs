@@ -76,7 +76,7 @@ const ACTION_TABLE: &[(Action, &str, &str, ActivationGate)] = &[
     (
         Action::ReloadFile,
         "reloadfile",
-        "Reload File",
+        "Reload",
         ActivationGate::Image,
     ),
     (

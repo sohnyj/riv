@@ -39,10 +39,10 @@ pub struct Bindings {
 
 const DEFAULT_KEYBOARD: &[(&str, &[&str])] = &[
     ("open", &["Ctrl+O"]),
-    ("reloadfile", &["R", "F5"]),
+    ("reloadfile", &["Ctrl+R", "F5"]),
     ("opencontainingfolder", &["Ctrl+E"]),
     ("showfileinfo", &["I"]),
-    ("rename", &["Ctrl+R", "F2"]),
+    ("rename", &["R", "F2"]),
     ("delete", &["Delete"]),
     ("deletepermanent", &["Shift+Delete"]),
     ("firstfile", &["Home"]),
