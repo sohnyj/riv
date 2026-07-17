@@ -964,7 +964,7 @@ fn peak_histogram_bin_table() -> &'static [u16; 65536] {
 }
 
 /// Content peak of linear scRGB halves: 99.9th-percentile max channel, binned in PQ codes.
-fn peak_luminance_from_half_pixels(pixels: &[u8]) -> Option<f32> {
+pub(crate) fn peak_luminance_from_half_pixels(pixels: &[u8]) -> Option<f32> {
     if pixels.len() < 8 {
         return None;
     }

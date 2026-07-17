@@ -6,7 +6,7 @@ use std::path::Path;
 
 use super::decode::{
     DecodeError, DecodedImage, Frame, PixelStorage, blend_over, clear_rectangle, copy_rectangle,
-    fallback_error,
+    fallback_error, peak_luminance_from_half_pixels,
 };
 
 /// Must match the built libwebpdemux ABI or WebPDemuxInternal returns null.
@@ -269,24 +269,11 @@ fn decode_exr_with(
         return Err(fallback_error(text));
     }
     let pixel_count = width as usize * height as usize;
-    let halves = unsafe { std::slice::from_raw_parts(half_pixels, pixel_count * 4) };
-    let mut pixels = Vec::with_capacity(pixel_count * 4);
-    for pixel in halves.chunks_exact(4) {
-        let alpha = half_to_float(pixel[3]).clamp(0.0, 1.0);
-        let encode = |value: u16| {
-            let mut linear = half_to_float(value);
-            if alpha > 0.0 && alpha < 1.0 {
-                linear /= alpha; // associated alpha -> straight
-            }
-            let encoded = linear_to_srgb(linear.clamp(0.0, 1.0));
-            (encoded * alpha * 255.0 + 0.5) as u8 // re-premultiply after encoding
-        };
-        pixels.push(encode(pixel[2]));
-        pixels.push(encode(pixel[1]));
-        pixels.push(encode(pixel[0]));
-        pixels.push((alpha * 255.0 + 0.5) as u8);
-    }
+    // The shim hands over associated-alpha linear RGBA halves - the FP16 storage layout.
+    let pixels =
+        unsafe { std::slice::from_raw_parts(half_pixels.cast::<u8>(), pixel_count * 8) }.to_vec();
     unsafe { riv_exr_free(half_pixels) };
+    let peak_luminance_nits = peak_luminance_from_half_pixels(&pixels);
     Ok(DecodedImage {
         width: width as u32,
         height: height as u32,
@@ -295,46 +282,14 @@ fn decode_exr_with(
         format_name,
         icc_profile: None,
         exif: None,
-        storage: PixelStorage::Bgra8,
-        source_bits_per_channel: 8,
-        peak_luminance_nits: None,
+        storage: PixelStorage::RgbaHalf,
+        source_bits_per_channel: 16,
+        peak_luminance_nits,
         frames: vec![Frame {
             pixels,
             delay_milliseconds: 0,
         }],
     })
-}
-
-fn half_to_float(half: u16) -> f32 {
-    let sign = u32::from(half >> 15);
-    let exponent = u32::from((half >> 10) & 0x1F);
-    let mantissa = u32::from(half & 0x3FF);
-    let bits = if exponent == 0 {
-        if mantissa == 0 {
-            sign << 31
-        } else {
-            let mut exponent = 113u32;
-            let mut mantissa = mantissa;
-            while mantissa & 0x400 == 0 {
-                mantissa <<= 1;
-                exponent -= 1;
-            }
-            (sign << 31) | (exponent << 23) | ((mantissa & 0x3FF) << 13)
-        }
-    } else if exponent == 31 {
-        (sign << 31) | (0xFF << 23) | (mantissa << 13)
-    } else {
-        (sign << 31) | ((exponent + 112) << 23) | (mantissa << 13)
-    };
-    f32::from_bits(bits)
-}
-
-fn linear_to_srgb(linear: f32) -> f32 {
-    if linear <= 0.003_130_8 {
-        linear * 12.92
-    } else {
-        1.055 * linear.powf(1.0 / 2.4) - 0.055
-    }
 }
 
 const HEIF_COLORSPACE_RGB: c_int = 1;
