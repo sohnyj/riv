@@ -397,10 +397,16 @@ pub fn build_error_text(
     } else {
         message.trim().to_string()
     };
-    let mut text = if file_name.is_empty() {
-        format!("Error occurred opening\n{reason} (Error 0x{code:08X})")
+    // Code 0 means "no code" (validation, curl, fallback decoders), not a real HRESULT.
+    let reason = if code == 0 {
+        reason
     } else {
-        format!("Error occurred opening\n{file_name}\n{reason} (Error 0x{code:08X})")
+        format!("{reason} (Error 0x{code:08X})")
+    };
+    let mut text = if file_name.is_empty() {
+        format!("Error occurred opening\n{reason}")
+    } else {
+        format!("Error occurred opening\n{file_name}\n{reason}")
     };
     if let Some(extension_name) = store_extension {
         text.push_str(&format!(
@@ -494,14 +500,20 @@ mod error_text_tests {
     #[test]
     fn an_empty_name_drops_its_line() {
         let text = build_error_text("", "no URL in the clipboard", 0, None);
+        assert_eq!(text, "Error occurred opening\nno URL in the clipboard");
+    }
+
+    #[test]
+    fn code_zero_drops_the_error_suffix() {
+        let uncoded = build_error_text("a.png", "unsupported URL protocol", 0, None);
         assert_eq!(
-            text,
-            "Error occurred opening\nno URL in the clipboard (Error 0x00000000)"
+            uncoded,
+            "Error occurred opening\na.png\nunsupported URL protocol"
         );
-        let named = build_error_text("a.png", "Decode failed", 0, None);
+        let coded = build_error_text("a.png", "no image at this URL", 0x88982F50u32 as i32, None);
         assert_eq!(
-            named,
-            "Error occurred opening\na.png\nDecode failed (Error 0x00000000)"
+            coded,
+            "Error occurred opening\na.png\nno image at this URL (Error 0x88982F50)"
         );
     }
 }
