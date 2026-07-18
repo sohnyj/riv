@@ -15,11 +15,10 @@ use windows::Win32::UI::Input::KeyboardAndMouse::{
 use windows::Win32::UI::WindowsAndMessaging::{
     CS_DBLCLKS, CallWindowProcW, DLGC_WANTALLKEYS, DefWindowProcW, DialogBoxParamW, EndDialog,
     GWLP_USERDATA, GWLP_WNDPROC, GetDlgItem, GetParent, GetWindowLongPtrW, RegisterClassExW,
-    SendMessageW, SetWindowLongPtrW, SetWindowTextW, WINDOW_LONG_PTR_INDEX, WM_APP, WM_COMMAND,
-    WM_DRAWITEM, WM_GETDLGCODE, WM_INITDIALOG, WM_KEYDOWN, WM_KEYUP, WM_KILLFOCUS,
-    WM_LBUTTONDBLCLK, WM_LBUTTONDOWN, WM_MBUTTONDBLCLK, WM_MBUTTONDOWN, WM_MOUSEWHEEL, WM_PAINT,
-    WM_SETFOCUS, WM_SETFONT, WM_SYSKEYDOWN, WM_SYSKEYUP, WM_XBUTTONDBLCLK, WM_XBUTTONDOWN,
-    WNDCLASSEXW, WNDPROC,
+    SendMessageW, SetWindowLongPtrW, SetWindowTextW, WM_APP, WM_COMMAND, WM_DRAWITEM,
+    WM_GETDLGCODE, WM_INITDIALOG, WM_KEYDOWN, WM_KEYUP, WM_KILLFOCUS, WM_LBUTTONDBLCLK,
+    WM_LBUTTONDOWN, WM_MBUTTONDBLCLK, WM_MBUTTONDOWN, WM_MOUSEWHEEL, WM_PAINT, WM_SETFOCUS,
+    WM_SETFONT, WM_SYSKEYDOWN, WM_SYSKEYUP, WM_XBUTTONDBLCLK, WM_XBUTTONDOWN, WNDCLASSEXW, WNDPROC,
 };
 use windows::core::{PCWSTR, w};
 
@@ -473,7 +472,7 @@ pub fn ensure_capture_classes() {
 }
 
 fn field_font(field: HWND) -> HFONT {
-    HFONT(unsafe { GetWindowLongPtrW(field, WINDOW_LONG_PTR_INDEX(-21)) } as *mut _)
+    HFONT(unsafe { GetWindowLongPtrW(field, GWLP_USERDATA) } as *mut _)
 }
 
 fn field_paint(field: HWND, text: &str, hint: bool) {
@@ -540,7 +539,7 @@ unsafe extern "system" fn key_field_procedure(
     match message {
         WM_GETDLGCODE => LRESULT(DLGC_WANTALLKEYS as isize),
         WM_SETFONT => {
-            unsafe { SetWindowLongPtrW(field, WINDOW_LONG_PTR_INDEX(-21), wparam.0 as isize) };
+            unsafe { SetWindowLongPtrW(field, GWLP_USERDATA, wparam.0 as isize) };
             LRESULT(0)
         }
         WM_KEYDOWN | WM_SYSKEYDOWN => {
@@ -604,7 +603,7 @@ unsafe extern "system" fn mouse_field_procedure(
     }
     match message {
         WM_SETFONT => {
-            unsafe { SetWindowLongPtrW(field, WINDOW_LONG_PTR_INDEX(-21), wparam.0 as isize) };
+            unsafe { SetWindowLongPtrW(field, GWLP_USERDATA, wparam.0 as isize) };
             LRESULT(0)
         }
         WM_LBUTTONDOWN => {
