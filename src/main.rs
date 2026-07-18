@@ -176,15 +176,25 @@ impl Application {
         Ok(application)
     }
 
-    /// Rebuild the renderer on HDR mode or bit depth change; else refresh boost and tone map target.
+    /// Reconfigure the output on HDR mode or bit depth change; else refresh boost and tone map target.
     fn refresh_display_color_state(&mut self, window: HWND) {
-        if color::monitor_is_hdr(window) != self.renderer.hdr_mode()
-            || color::display_bits_per_color(window) != self.renderer.bits_per_color()
+        let hdr_mode = color::monitor_is_hdr(window);
+        let bits_per_color = color::display_bits_per_color(window);
+        if hdr_mode != self.renderer.hdr_mode() || bits_per_color != self.renderer.bits_per_color()
         {
             self.sdr_white_boost = color::sdr_white_boost(window);
-            if self.rebuild_renderer(window).is_ok() {
-                self.render(window);
+            if self
+                .renderer
+                .reconfigure_output(
+                    hdr_mode,
+                    bits_per_color,
+                    tone_map_target_luminance(window, hdr_mode),
+                )
+                .is_ok()
+            {
+                let _ = self.apply_renderer_state();
             }
+            self.render(window);
             return;
         }
         let mut stale = false;
@@ -541,6 +551,11 @@ impl Application {
             color::display_bits_per_color(window),
             tone_map_target_luminance(window, hdr_mode),
         )?;
+        self.apply_renderer_state()
+    }
+
+    /// Reapplies the application-held state after a renderer rebuild or reconfigure.
+    fn apply_renderer_state(&mut self) -> Result<()> {
         self.renderer.set_sdr_white_boost(self.sdr_white_boost);
         self.renderer
             .set_dither_mode(DitherMode::from_setting(self.settings.options.dither));

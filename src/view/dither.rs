@@ -26,6 +26,14 @@ pub const CLSID_RIV_DITHER_ORDERED: GUID = GUID::from_u128(0x8f6c9c1e_3a54_4d21_
 pub const CLSID_RIV_DITHER_FRUIT: GUID = GUID::from_u128(0x2b7d4f83_916a_4c05_8b47_d3c9e0f6a512);
 const SHADER_ORDERED: GUID = GUID::from_u128(0x64b8e2a1_7c3f_49d6_a0b5_29f1c8d47e63);
 const SHADER_FRUIT: GUID = GUID::from_u128(0xd94a3c76_58e2_4b1f_9c08_7a61b5f0d284);
+
+/// The D2D device caches loaded shaders by GUID; each step count is its own shader.
+fn shader_identifier(base: GUID, quantization_steps: u32) -> GUID {
+    GUID {
+        data1: base.data1 ^ quantization_steps,
+        ..base
+    }
+}
 const BLUE_NOISE_TEXTURE: GUID = GUID::from_u128(0x417f9d25_c680_4e8a_b1d7_063e94a8c5f2);
 
 const BLUE_NOISE_SIZE: u32 = super::blue_noise::SIZE as u32;
@@ -194,14 +202,14 @@ impl ID2D1EffectImpl_Impl for DitherEffect_Impl {
         match self.pattern {
             DitherPattern::Ordered => unsafe {
                 context.LoadPixelShader(
-                    &SHADER_ORDERED,
+                    &shader_identifier(SHADER_ORDERED, self.quantization_steps),
                     compiled_bytecode(DitherPattern::Ordered, self.quantization_steps)?,
                 )?;
             },
             DitherPattern::Fruit => {
                 unsafe {
                     context.LoadPixelShader(
-                        &SHADER_FRUIT,
+                        &shader_identifier(SHADER_FRUIT, self.quantization_steps),
                         compiled_bytecode(DitherPattern::Fruit, self.quantization_steps)?,
                     )
                 }?;
@@ -293,10 +301,18 @@ impl ID2D1DrawTransform_Impl for DitherEffect_Impl {
         let info = drawinfo.ok()?;
         match self.pattern {
             DitherPattern::Ordered => unsafe {
-                info.SetPixelShader(&SHADER_ORDERED, D2D1_PIXEL_OPTIONS_NONE)
+                info.SetPixelShader(
+                    &shader_identifier(SHADER_ORDERED, self.quantization_steps),
+                    D2D1_PIXEL_OPTIONS_NONE,
+                )
             },
             DitherPattern::Fruit => {
-                unsafe { info.SetPixelShader(&SHADER_FRUIT, D2D1_PIXEL_OPTIONS_NONE) }?;
+                unsafe {
+                    info.SetPixelShader(
+                        &shader_identifier(SHADER_FRUIT, self.quantization_steps),
+                        D2D1_PIXEL_OPTIONS_NONE,
+                    )
+                }?;
                 let texture = self.blue_noise_texture.borrow();
                 let texture = texture.as_ref().ok_or_else(windows::core::Error::empty)?;
                 // Register t1: input 0 occupies t0.
@@ -330,12 +346,17 @@ unsafe extern "system" fn create_fruit_effect(effect: OutRef<'_, IUnknown>) -> H
     create_effect(effect, DitherPattern::Fruit)
 }
 
-/// On failure rendering stays undithered.
-pub fn register_dither_effects(factory: &ID2D1Factory1, quantization_steps: u32) -> Result<()> {
+/// Bakes the step count that subsequently created effect instances read.
+pub fn prepare_dither_effects(quantization_steps: u32) -> Result<()> {
     compiled_bytecode(DitherPattern::Ordered, quantization_steps)?;
     compiled_bytecode(DitherPattern::Fruit, quantization_steps)?;
     blue_noise_texels();
     REGISTERED_QUANTIZATION_STEPS.store(quantization_steps, Ordering::Relaxed);
+    Ok(())
+}
+
+/// On failure rendering stays undithered.
+pub fn register_dither_effects(factory: &ID2D1Factory1) -> Result<()> {
     let property_xml = w!("<?xml version='1.0'?>\
 <Effect>\
 <Property name='DisplayName' type='string' value='Dither'/>\

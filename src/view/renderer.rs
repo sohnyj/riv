@@ -21,8 +21,8 @@ use windows::Win32::Graphics::Direct2D::{
     D2D1_PROPERTY_TYPE_ENUM, D2D1_PROPERTY_TYPE_FLOAT, D2D1_PROPERTY_TYPE_MATRIX_3X2,
     D2D1_WHITELEVELADJUSTMENT_PROP_INPUT_WHITE_LEVEL,
     D2D1_WHITELEVELADJUSTMENT_PROP_OUTPUT_WHITE_LEVEL, D2D1CreateFactory, ID2D1Bitmap1,
-    ID2D1ColorContext, ID2D1DeviceContext, ID2D1DeviceContext5, ID2D1Effect, ID2D1Factory1,
-    ID2D1Image,
+    ID2D1ColorContext, ID2D1DeviceContext, ID2D1DeviceContext5, ID2D1Effect, ID2D1Factory,
+    ID2D1Factory1, ID2D1Image,
 };
 use windows::Win32::Graphics::Direct3D::{
     D3D_DRIVER_TYPE, D3D_DRIVER_TYPE_HARDWARE, D3D_DRIVER_TYPE_WARP, D3D_FEATURE_LEVEL,
@@ -35,9 +35,10 @@ use windows::Win32::Graphics::Direct3D11::{
 };
 use windows::Win32::Graphics::Dxgi::Common::{
     DXGI_ALPHA_MODE_IGNORE, DXGI_COLOR_SPACE_RGB_FULL_G10_NONE_P709,
-    DXGI_COLOR_SPACE_RGB_FULL_G2084_NONE_P2020, DXGI_COLOR_SPACE_TYPE, DXGI_FORMAT,
-    DXGI_FORMAT_B8G8R8A8_UNORM, DXGI_FORMAT_R10G10B10A2_UNORM, DXGI_FORMAT_R16G16B16A16_FLOAT,
-    DXGI_FORMAT_R16G16B16A16_UNORM, DXGI_FORMAT_UNKNOWN, DXGI_SAMPLE_DESC,
+    DXGI_COLOR_SPACE_RGB_FULL_G22_NONE_P709, DXGI_COLOR_SPACE_RGB_FULL_G2084_NONE_P2020,
+    DXGI_COLOR_SPACE_TYPE, DXGI_FORMAT, DXGI_FORMAT_B8G8R8A8_UNORM, DXGI_FORMAT_R10G10B10A2_UNORM,
+    DXGI_FORMAT_R16G16B16A16_FLOAT, DXGI_FORMAT_R16G16B16A16_UNORM, DXGI_FORMAT_UNKNOWN,
+    DXGI_SAMPLE_DESC,
 };
 use windows::Win32::Graphics::Dxgi::{
     DXGI_PRESENT, DXGI_SCALING_NONE, DXGI_SWAP_CHAIN_COLOR_SPACE_SUPPORT_FLAG_PRESENT,
@@ -63,6 +64,14 @@ struct ScaledScene {
     render_target_view: ID3D11RenderTargetView,
     bitmap: ID2D1Bitmap1,
     size: (u32, u32),
+}
+
+struct ModeEffects {
+    color_management_effect: Option<ID2D1Effect>,
+    hdr_tone_map_effect: Option<ID2D1Effect>,
+    tone_map_normalize_effect: Option<ID2D1Effect>,
+    output_color_management_effect: Option<ID2D1Effect>,
+    white_level_effect: Option<ID2D1Effect>,
 }
 
 pub struct Renderer {
@@ -229,6 +238,177 @@ impl Renderer {
         })
     }
 
+    fn create_color_management_effect(d2d_context: &ID2D1DeviceContext) -> Option<ID2D1Effect> {
+        // BEST quality is required for float precision and scRGB conversions.
+        let effect = unsafe { d2d_context.CreateEffect(&CLSID_D2D1ColorManagement) }.ok()?;
+        unsafe {
+            effect.SetValue(
+                D2D1_COLORMANAGEMENT_PROP_QUALITY.0 as u32,
+                D2D1_PROPERTY_TYPE_ENUM,
+                &D2D1_COLORMANAGEMENT_QUALITY_BEST.0.to_ne_bytes(),
+            )
+        }
+        .ok()?;
+        Some(effect)
+    }
+
+    /// scRGB -> PQ BT.2020 for the HDR10 backbuffer.
+    fn create_pq_output_effect(
+        d2d_context: &ID2D1DeviceContext,
+        scrgb_color_context: Option<&ID2D1ColorContext>,
+    ) -> Option<ID2D1Effect> {
+        let pq_color_context = unsafe {
+            d2d_context
+                .cast::<ID2D1DeviceContext5>()
+                .ok()?
+                .CreateColorContextFromDxgiColorSpace(DXGI_COLOR_SPACE_RGB_FULL_G2084_NONE_P2020)
+                .ok()?
+        };
+        let effect = Self::create_color_management_effect(d2d_context)?;
+        unsafe {
+            effect.SetValue(
+                D2D1_COLORMANAGEMENT_PROP_SOURCE_COLOR_CONTEXT.0 as u32,
+                D2D1_PROPERTY_TYPE_COLOR_CONTEXT,
+                &interface_property_bytes(scrgb_color_context?),
+            )
+        }
+        .ok()?;
+        unsafe {
+            effect.SetValue(
+                D2D1_COLORMANAGEMENT_PROP_DESTINATION_COLOR_CONTEXT.0 as u32,
+                D2D1_PROPERTY_TYPE_COLOR_CONTEXT,
+                &interface_property_bytes(&pq_color_context),
+            )
+        }
+        .ok()?;
+        Some(effect)
+    }
+
+    fn create_mode_effects(
+        d2d_context: &ID2D1DeviceContext,
+        hdr_mode: bool,
+        tone_map_target_nits: f32,
+        scrgb_color_context: Option<&ID2D1ColorContext>,
+        srgb_color_context: Option<&ID2D1ColorContext>,
+    ) -> ModeEffects {
+        let color_management_effect = Self::create_color_management_effect(d2d_context);
+        let hdr_tone_map_effect = color_management_effect.as_ref().and_then(|_| {
+            let effect = unsafe { d2d_context.CreateEffect(&CLSID_D2D1HdrToneMap) }.ok()?;
+            unsafe {
+                effect.SetValue(
+                    D2D1_HDRTONEMAP_PROP_OUTPUT_MAX_LUMINANCE.0 as u32,
+                    D2D1_PROPERTY_TYPE_FLOAT,
+                    &tone_map_target_nits.to_ne_bytes(),
+                )
+            }
+            .ok()?;
+            // The SDR curve mode raises midtones; always use the HDR curve.
+            unsafe {
+                effect.SetValue(
+                    D2D1_HDRTONEMAP_PROP_DISPLAY_MODE.0 as u32,
+                    D2D1_PROPERTY_TYPE_ENUM,
+                    &D2D1_HDRTONEMAP_DISPLAY_MODE_HDR.0.to_ne_bytes(),
+                )
+            }
+            .ok()?;
+            Some(effect)
+        });
+        let tone_map_normalize_effect = (!hdr_mode)
+            .then_some(())
+            .and(hdr_tone_map_effect.as_ref())
+            .and_then(|_| {
+                let effect =
+                    unsafe { d2d_context.CreateEffect(&CLSID_D2D1WhiteLevelAdjustment) }.ok()?;
+                set_white_level_input(&effect, SDR_REFERENCE_WHITE_NITS).ok()?;
+                Some(effect)
+            });
+        let output_color_management_effect = (!hdr_mode)
+            .then_some(())
+            .and(hdr_tone_map_effect.as_ref())
+            .and_then(|_| {
+                let effect = Self::create_color_management_effect(d2d_context)?;
+                unsafe {
+                    effect.SetValue(
+                        D2D1_COLORMANAGEMENT_PROP_SOURCE_COLOR_CONTEXT.0 as u32,
+                        D2D1_PROPERTY_TYPE_COLOR_CONTEXT,
+                        &interface_property_bytes(scrgb_color_context?),
+                    )
+                }
+                .ok()?;
+                unsafe {
+                    effect.SetValue(
+                        D2D1_COLORMANAGEMENT_PROP_DESTINATION_COLOR_CONTEXT.0 as u32,
+                        D2D1_PROPERTY_TYPE_COLOR_CONTEXT,
+                        &interface_property_bytes(srgb_color_context?),
+                    )
+                }
+                .ok()?;
+                Some(effect)
+            });
+        let white_level_effect = hdr_mode
+            .then_some(())
+            .and(color_management_effect.as_ref())
+            .and_then(|_| {
+                let effect =
+                    unsafe { d2d_context.CreateEffect(&CLSID_D2D1WhiteLevelAdjustment) }.ok()?;
+                set_white_level_input(&effect, SDR_REFERENCE_WHITE_NITS).ok()?;
+                unsafe {
+                    effect.SetValue(
+                        D2D1_WHITELEVELADJUSTMENT_PROP_OUTPUT_WHITE_LEVEL.0 as u32,
+                        D2D1_PROPERTY_TYPE_FLOAT,
+                        &SDR_REFERENCE_WHITE_NITS.to_ne_bytes(),
+                    )
+                }
+                .ok()?;
+                Some(effect)
+            });
+        ModeEffects {
+            color_management_effect,
+            hdr_tone_map_effect,
+            tone_map_normalize_effect,
+            output_color_management_effect,
+            white_level_effect,
+        }
+    }
+
+    /// Dither only the UNORM backbuffers the app quantizes; FP16 leaves quantization to DWM.
+    fn quantization_steps_for(format: DXGI_FORMAT) -> Option<u32> {
+        if format == DXGI_FORMAT_B8G8R8A8_UNORM {
+            Some(255)
+        } else if format == DXGI_FORMAT_R10G10B10A2_UNORM {
+            Some(1023)
+        } else {
+            None
+        }
+    }
+
+    fn create_dither_effects(
+        d2d_context: &ID2D1DeviceContext,
+        d2d_factory: &ID2D1Factory1,
+        quantization_steps: u32,
+    ) -> (
+        Option<ID2D1Effect>,
+        Option<ID2D1Effect>,
+        Option<ID2D1Effect>,
+    ) {
+        if dither::prepare_dither_effects(quantization_steps).is_err() {
+            return (None, None, None);
+        }
+        // A repeat registration is harmless; creation fails if none ever succeeded.
+        let _ = dither::register_dither_effects(d2d_factory);
+        unsafe {
+            (
+                d2d_context.CreateEffect(&CLSID_D2D12DAffineTransform).ok(),
+                d2d_context
+                    .CreateEffect(&dither::CLSID_RIV_DITHER_ORDERED)
+                    .ok(),
+                d2d_context
+                    .CreateEffect(&dither::CLSID_RIV_DITHER_FRUIT)
+                    .ok(),
+            )
+        }
+    }
+
     fn build(
         window: HWND,
         width: u32,
@@ -269,51 +449,10 @@ impl Renderer {
             unsafe { d2d_context.CreateColorContext(D2D1_COLOR_SPACE_SCRGB, None) }.ok();
         let srgb_color_context =
             unsafe { d2d_context.CreateColorContext(D2D1_COLOR_SPACE_SRGB, None) }.ok();
-        // BEST quality is required for float precision and scRGB conversions.
-        let create_color_management = || {
-            let effect = unsafe { d2d_context.CreateEffect(&CLSID_D2D1ColorManagement) }.ok()?;
-            unsafe {
-                effect.SetValue(
-                    D2D1_COLORMANAGEMENT_PROP_QUALITY.0 as u32,
-                    D2D1_PROPERTY_TYPE_ENUM,
-                    &D2D1_COLORMANAGEMENT_QUALITY_BEST.0.to_ne_bytes(),
-                )
-            }
-            .ok()?;
-            Some(effect)
-        };
 
         // HDR encodes to PQ in the app so its 10-bit write is the only quantizer.
         let mut hdr_output_color_management_effect = (hdr_mode && ten_bit_target)
-            .then(|| {
-                let pq_color_context = unsafe {
-                    d2d_context
-                        .cast::<ID2D1DeviceContext5>()
-                        .ok()?
-                        .CreateColorContextFromDxgiColorSpace(
-                            DXGI_COLOR_SPACE_RGB_FULL_G2084_NONE_P2020,
-                        )
-                        .ok()?
-                };
-                let effect = create_color_management()?;
-                unsafe {
-                    effect.SetValue(
-                        D2D1_COLORMANAGEMENT_PROP_SOURCE_COLOR_CONTEXT.0 as u32,
-                        D2D1_PROPERTY_TYPE_COLOR_CONTEXT,
-                        &interface_property_bytes(scrgb_color_context.as_ref()?),
-                    )
-                }
-                .ok()?;
-                unsafe {
-                    effect.SetValue(
-                        D2D1_COLORMANAGEMENT_PROP_DESTINATION_COLOR_CONTEXT.0 as u32,
-                        D2D1_PROPERTY_TYPE_COLOR_CONTEXT,
-                        &interface_property_bytes(&pq_color_context),
-                    )
-                }
-                .ok()?;
-                Some(effect)
-            })
+            .then(|| Self::create_pq_output_effect(&d2d_context, scrgb_color_context.as_ref()))
             .flatten();
 
         let mut swap_chain_format = if hdr_mode {
@@ -403,102 +542,19 @@ impl Renderer {
             quantize_pass = None;
         }
 
-        let color_management_effect = create_color_management();
-        let hdr_tone_map_effect = color_management_effect.as_ref().and_then(|_| {
-            let effect = unsafe { d2d_context.CreateEffect(&CLSID_D2D1HdrToneMap) }.ok()?;
-            unsafe {
-                effect.SetValue(
-                    D2D1_HDRTONEMAP_PROP_OUTPUT_MAX_LUMINANCE.0 as u32,
-                    D2D1_PROPERTY_TYPE_FLOAT,
-                    &tone_map_target_nits.to_ne_bytes(),
-                )
-            }
-            .ok()?;
-            // The SDR curve mode raises midtones; always use the HDR curve.
-            unsafe {
-                effect.SetValue(
-                    D2D1_HDRTONEMAP_PROP_DISPLAY_MODE.0 as u32,
-                    D2D1_PROPERTY_TYPE_ENUM,
-                    &D2D1_HDRTONEMAP_DISPLAY_MODE_HDR.0.to_ne_bytes(),
-                )
-            }
-            .ok()?;
-            Some(effect)
-        });
-        let tone_map_normalize_effect = (!hdr_mode)
-            .then_some(())
-            .and(hdr_tone_map_effect.as_ref())
-            .and_then(|_| {
-                let effect =
-                    unsafe { d2d_context.CreateEffect(&CLSID_D2D1WhiteLevelAdjustment) }.ok()?;
-                set_white_level_input(&effect, SDR_REFERENCE_WHITE_NITS).ok()?;
-                Some(effect)
-            });
-        let output_color_management_effect = (!hdr_mode)
-            .then_some(())
-            .and(hdr_tone_map_effect.as_ref())
-            .and_then(|_| {
-                let effect = create_color_management()?;
-                unsafe {
-                    effect.SetValue(
-                        D2D1_COLORMANAGEMENT_PROP_SOURCE_COLOR_CONTEXT.0 as u32,
-                        D2D1_PROPERTY_TYPE_COLOR_CONTEXT,
-                        &interface_property_bytes(scrgb_color_context.as_ref()?),
-                    )
-                }
-                .ok()?;
-                unsafe {
-                    effect.SetValue(
-                        D2D1_COLORMANAGEMENT_PROP_DESTINATION_COLOR_CONTEXT.0 as u32,
-                        D2D1_PROPERTY_TYPE_COLOR_CONTEXT,
-                        &interface_property_bytes(srgb_color_context.as_ref()?),
-                    )
-                }
-                .ok()?;
-                Some(effect)
-            });
-        let white_level_effect = hdr_mode
-            .then_some(())
-            .and(color_management_effect.as_ref())
-            .and_then(|_| {
-                let effect =
-                    unsafe { d2d_context.CreateEffect(&CLSID_D2D1WhiteLevelAdjustment) }.ok()?;
-                set_white_level_input(&effect, SDR_REFERENCE_WHITE_NITS).ok()?;
-                unsafe {
-                    effect.SetValue(
-                        D2D1_WHITELEVELADJUSTMENT_PROP_OUTPUT_WHITE_LEVEL.0 as u32,
-                        D2D1_PROPERTY_TYPE_FLOAT,
-                        &SDR_REFERENCE_WHITE_NITS.to_ne_bytes(),
-                    )
-                }
-                .ok()?;
-                Some(effect)
-            });
-        // Dither only the UNORM backbuffers the app quantizes; FP16 leaves quantization to DWM.
-        let quantization_steps = if swap_chain_format == DXGI_FORMAT_B8G8R8A8_UNORM {
-            Some(255u32)
-        } else if swap_chain_format == DXGI_FORMAT_R10G10B10A2_UNORM {
-            Some(1023u32)
-        } else {
-            None
-        };
+        let mode_effects = Self::create_mode_effects(
+            &d2d_context,
+            hdr_mode,
+            tone_map_target_nits,
+            scrgb_color_context.as_ref(),
+            srgb_color_context.as_ref(),
+        );
         let (affine_transform_effect, dither_ordered_effect, dither_fruit_effect) =
-            if let Some(quantization_steps) = quantization_steps
-                && dither::register_dither_effects(&d2d_factory, quantization_steps).is_ok()
-            {
-                unsafe {
-                    (
-                        d2d_context.CreateEffect(&CLSID_D2D12DAffineTransform).ok(),
-                        d2d_context
-                            .CreateEffect(&dither::CLSID_RIV_DITHER_ORDERED)
-                            .ok(),
-                        d2d_context
-                            .CreateEffect(&dither::CLSID_RIV_DITHER_FRUIT)
-                            .ok(),
-                    )
+            match Self::quantization_steps_for(swap_chain_format) {
+                Some(quantization_steps) => {
+                    Self::create_dither_effects(&d2d_context, &d2d_factory, quantization_steps)
                 }
-            } else {
-                (None, None, None)
+                None => (None, None, None),
             };
 
         let sampling_pass = SamplingPass::new(&d3d_device).ok();
@@ -521,11 +577,11 @@ impl Renderer {
             target: None,
             image: None,
             effect_output: None,
-            color_management_effect,
-            white_level_effect,
-            hdr_tone_map_effect,
-            tone_map_normalize_effect,
-            output_color_management_effect,
+            color_management_effect: mode_effects.color_management_effect,
+            white_level_effect: mode_effects.white_level_effect,
+            hdr_tone_map_effect: mode_effects.hdr_tone_map_effect,
+            tone_map_normalize_effect: mode_effects.tone_map_normalize_effect,
+            output_color_management_effect: mode_effects.output_color_management_effect,
             hdr_output_color_management_effect,
             affine_transform_effect,
             dither_ordered_effect,
@@ -662,6 +718,131 @@ impl Renderer {
                 DXGI_SWAP_CHAIN_FLAG(0),
             )?;
         }
+        self.create_target()
+    }
+
+    /// Switches the output mode in place: DXGI allows one flip-model swapchain per window.
+    pub fn reconfigure_output(
+        &mut self,
+        hdr_mode: bool,
+        bits_per_color: u32,
+        tone_map_target_nits: f32,
+    ) -> Result<()> {
+        // Adopt the target state first so a partial failure cannot retry every WM_MOVE.
+        self.hdr_mode = hdr_mode;
+        self.bits_per_color = bits_per_color;
+        self.tone_map_target_nits = tone_map_target_nits;
+
+        // Release every backbuffer reference ahead of ResizeBuffers.
+        unsafe { self.d2d_context.SetTarget(None) };
+        self.target = None;
+        self.effect_output = None;
+        self.flatten_scene = None;
+        self.scaled_scene = None;
+        if let Some(sampling_pass) = &mut self.sampling_pass {
+            sampling_pass.invalidate();
+        }
+        self.scene_shader_resource_view = None;
+        self.backbuffer_render_target_view = None;
+
+        self.quantize_pass = unsafe {
+            self.d2d_context
+                .IsDxgiFormatSupported(DXGI_FORMAT_R16G16B16A16_UNORM)
+        }
+        .as_bool()
+        .then(|| QuantizePass::new(&self.d3d_device).ok())
+        .flatten();
+        let ten_bit_target = self.quantize_pass.is_some();
+
+        let mut hdr_output_color_management_effect = (hdr_mode && ten_bit_target)
+            .then(|| {
+                Self::create_pq_output_effect(&self.d2d_context, self.scrgb_color_context.as_ref())
+            })
+            .flatten();
+        let mut swap_chain_format = if hdr_mode {
+            if hdr_output_color_management_effect.is_some() {
+                DXGI_FORMAT_R10G10B10A2_UNORM
+            } else {
+                DXGI_FORMAT_R16G16B16A16_FLOAT
+            }
+        } else if ten_bit_target && bits_per_color >= 10 {
+            DXGI_FORMAT_R10G10B10A2_UNORM
+        } else {
+            DXGI_FORMAT_B8G8R8A8_UNORM
+        };
+        let resize_to = |swap_chain: &IDXGISwapChain1, format| unsafe {
+            swap_chain.ResizeBuffers(0, 0, 0, format, DXGI_SWAP_CHAIN_FLAG(0))
+        };
+        if let Err(error) = resize_to(&self.swap_chain, swap_chain_format) {
+            if swap_chain_format != DXGI_FORMAT_R10G10B10A2_UNORM {
+                return Err(error);
+            }
+            // A 10-bit refusal falls back to the mode's proven format.
+            hdr_output_color_management_effect = None;
+            swap_chain_format = if hdr_mode {
+                DXGI_FORMAT_R16G16B16A16_FLOAT
+            } else {
+                DXGI_FORMAT_B8G8R8A8_UNORM
+            };
+            resize_to(&self.swap_chain, swap_chain_format)?;
+        }
+        let swap_chain3 = self.swap_chain.cast::<IDXGISwapChain3>().ok();
+        if hdr_mode {
+            let pq_declared = hdr_output_color_management_effect.is_some()
+                && swap_chain3.as_ref().is_some_and(|swap_chain3| {
+                    declare_color_space(swap_chain3, DXGI_COLOR_SPACE_RGB_FULL_G2084_NONE_P2020)
+                        .is_ok()
+                });
+            if !pq_declared {
+                hdr_output_color_management_effect = None;
+                if swap_chain_format == DXGI_FORMAT_R10G10B10A2_UNORM {
+                    swap_chain_format = DXGI_FORMAT_R16G16B16A16_FLOAT;
+                    resize_to(&self.swap_chain, swap_chain_format)?;
+                }
+                if let Some(swap_chain3) = &swap_chain3 {
+                    let _ =
+                        declare_color_space(swap_chain3, DXGI_COLOR_SPACE_RGB_FULL_G10_NONE_P709);
+                }
+            }
+        } else if let Some(swap_chain3) = &swap_chain3 {
+            // Undo any HDR declaration; SDR composition reads sRGB.
+            let _ = declare_color_space(swap_chain3, DXGI_COLOR_SPACE_RGB_FULL_G22_NONE_P709);
+        }
+        if swap_chain_format != DXGI_FORMAT_R10G10B10A2_UNORM {
+            self.quantize_pass = None;
+        }
+
+        let mode_effects = Self::create_mode_effects(
+            &self.d2d_context,
+            hdr_mode,
+            tone_map_target_nits,
+            self.scrgb_color_context.as_ref(),
+            self.srgb_color_context.as_ref(),
+        );
+        self.color_management_effect = mode_effects.color_management_effect;
+        self.white_level_effect = mode_effects.white_level_effect;
+        self.hdr_tone_map_effect = mode_effects.hdr_tone_map_effect;
+        self.tone_map_normalize_effect = mode_effects.tone_map_normalize_effect;
+        self.output_color_management_effect = mode_effects.output_color_management_effect;
+        self.hdr_output_color_management_effect = hdr_output_color_management_effect;
+
+        let d2d_factory: Option<ID2D1Factory1> = unsafe { self.d2d_context.GetFactory() }
+            .ok()
+            .and_then(|factory: ID2D1Factory| factory.cast().ok());
+        (
+            self.affine_transform_effect,
+            self.dither_ordered_effect,
+            self.dither_fruit_effect,
+        ) = match (
+            Self::quantization_steps_for(swap_chain_format),
+            &d2d_factory,
+        ) {
+            (Some(quantization_steps), Some(d2d_factory)) => {
+                Self::create_dither_effects(&self.d2d_context, d2d_factory, quantization_steps)
+            }
+            _ => (None, None, None),
+        };
+        self.swap_chain_format = swap_chain_format;
         self.create_target()
     }
 
