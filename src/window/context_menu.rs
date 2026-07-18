@@ -38,6 +38,7 @@ pub struct MenuState {
     pub animation_paused: bool,
     pub fit_height: bool,
     pub preserve_zoom: bool,
+    pub always_on_top: bool,
     pub mirrored: bool,
     pub flipped: bool,
     pub fullscreen: bool,
@@ -90,6 +91,7 @@ impl MenuBuilder {
             Action::ShowFileInfo => self.state_snapshot.file_info_shown,
             Action::Loop => self.state_snapshot.loop_enabled,
             Action::PreserveZoom => self.state_snapshot.preserve_zoom,
+            Action::AlwaysOnTop => self.state_snapshot.always_on_top,
             Action::Mirror => self.state_snapshot.mirrored,
             Action::Flip => self.state_snapshot.flipped,
             _ => false,
@@ -276,6 +278,7 @@ impl MenuBuilder {
         self.append_action(tools, Action::About)?;
         self.append_submenu(menu, tools, "Tools", true)?;
 
+        self.append_action(menu, Action::AlwaysOnTop)?;
         let fullscreen_label = if self.state_snapshot.fullscreen {
             "Exit Fullscreen"
         } else {
@@ -335,6 +338,7 @@ mod menu_structure_tests {
             animation_paused: false,
             fit_height: false,
             preserve_zoom: false,
+            always_on_top: false,
             mirrored: false,
             flipped: false,
             fullscreen: false,
@@ -554,6 +558,7 @@ mod menu_structure_tests {
             "", // separator
             "View",
             "Tools",
+            "Always on Top",
             "Enter Fullscreen",
             "", // separator
             "Exit",

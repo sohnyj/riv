@@ -70,6 +70,7 @@ const DEFAULT_KEYBOARD: &[(&str, &[&str])] = &[
     ("flip", &["Alt+F"]),
     ("slideshow", &["S"]),
     ("options", &["Ctrl+,"]),
+    ("alwaysontop", &["T"]),
     ("fullscreen", &["F", "F11"]),
     ("quit", &["Ctrl+W", "Escape"]),
 ];

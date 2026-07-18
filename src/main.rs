@@ -58,17 +58,17 @@ use windows::Win32::UI::Input::KeyboardAndMouse::{
 use windows::Win32::UI::WindowsAndMessaging::{
     CS_DBLCLKS, CS_HREDRAW, CS_VREDRAW, CW_USEDEFAULT, CreateWindowExW, DefWindowProcW,
     DispatchMessageW, GWL_STYLE, GWLP_USERDATA, GetClientRect, GetCursorPos, GetMessageW,
-    GetWindowLongPtrW, GetWindowPlacement, GetWindowRect, HCURSOR, HTCAPTION, HWND_TOP, IDC_ARROW,
-    IDC_SIZEALL, IsZoomed, KillTimer, LoadCursorW, LoadIconW, MSG, PostMessageW, PostQuitMessage,
-    RegisterClassExW, SW_HIDE, SW_SHOW, SW_SHOWMAXIMIZED, SWP_FRAMECHANGED, SWP_NOACTIVATE,
-    SWP_NOMOVE, SWP_NOSIZE, SWP_NOZORDER, SendMessageW, SetCursor, SetTimer, SetWindowLongPtrW,
-    SetWindowPlacement, SetWindowPos, SetWindowTextW, ShowWindow, TranslateMessage, WINDOW_STYLE,
-    WINDOWPLACEMENT, WM_ACTIVATEAPP, WM_APP, WM_CLOSE, WM_CONTEXTMENU, WM_DESTROY,
-    WM_DISPLAYCHANGE, WM_DPICHANGED, WM_GESTURE, WM_KEYDOWN, WM_LBUTTONDBLCLK, WM_LBUTTONDOWN,
-    WM_LBUTTONUP, WM_MBUTTONDOWN, WM_MOUSEHWHEEL, WM_MOUSEMOVE, WM_MOUSEWHEEL, WM_MOVE,
-    WM_NCDESTROY, WM_NCLBUTTONDOWN, WM_PAINT, WM_SETCURSOR, WM_SETTINGCHANGE, WM_SIZE, WM_SYSCHAR,
-    WM_SYSKEYDOWN, WM_TIMER, WM_XBUTTONDOWN, WNDCLASSEXW, WS_OVERLAPPEDWINDOW, WS_POPUP,
-    WS_VISIBLE,
+    GetWindowLongPtrW, GetWindowPlacement, GetWindowRect, HCURSOR, HTCAPTION, HWND_NOTOPMOST,
+    HWND_TOP, HWND_TOPMOST, IDC_ARROW, IDC_SIZEALL, IsZoomed, KillTimer, LoadCursorW, LoadIconW,
+    MSG, PostMessageW, PostQuitMessage, RegisterClassExW, SW_HIDE, SW_SHOW, SW_SHOWMAXIMIZED,
+    SWP_FRAMECHANGED, SWP_NOACTIVATE, SWP_NOMOVE, SWP_NOSIZE, SWP_NOZORDER, SendMessageW,
+    SetCursor, SetTimer, SetWindowLongPtrW, SetWindowPlacement, SetWindowPos, SetWindowTextW,
+    ShowWindow, TranslateMessage, WINDOW_STYLE, WINDOWPLACEMENT, WM_ACTIVATEAPP, WM_APP, WM_CLOSE,
+    WM_CONTEXTMENU, WM_DESTROY, WM_DISPLAYCHANGE, WM_DPICHANGED, WM_GESTURE, WM_KEYDOWN,
+    WM_LBUTTONDBLCLK, WM_LBUTTONDOWN, WM_LBUTTONUP, WM_MBUTTONDOWN, WM_MOUSEHWHEEL, WM_MOUSEMOVE,
+    WM_MOUSEWHEEL, WM_MOVE, WM_NCDESTROY, WM_NCLBUTTONDOWN, WM_PAINT, WM_SETCURSOR,
+    WM_SETTINGCHANGE, WM_SIZE, WM_SYSCHAR, WM_SYSKEYDOWN, WM_TIMER, WM_XBUTTONDOWN, WNDCLASSEXW,
+    WS_OVERLAPPEDWINDOW, WS_POPUP, WS_VISIBLE,
 };
 use windows::core::{PCWSTR, Result, w};
 
@@ -94,6 +94,7 @@ struct Application {
     settings: SettingsFile,
     bindings: Bindings,
     preserve_zoom: bool,
+    always_on_top: bool,
     fullscreen_restore: Option<(WINDOWPLACEMENT, WINDOW_STYLE)>,
     sdr_white_boost: f32,
     pan_drag_position: Option<(i32, i32)>,
@@ -141,6 +142,7 @@ impl Application {
             settings,
             bindings,
             preserve_zoom: false,
+            always_on_top: false,
             fullscreen_restore: None,
             sdr_white_boost: color::sdr_white_boost(window),
             pan_drag_position: None,
@@ -979,6 +981,27 @@ fn dispatch_action(application: &mut Application, window: HWND, action: Action) 
                 "Flip: Off"
             };
             application.show_status_text(window, text.to_string());
+            application.render(window);
+        }
+        Action::AlwaysOnTop => {
+            application.always_on_top = !application.always_on_top;
+            let (order, state) = if application.always_on_top {
+                (HWND_TOPMOST, "On")
+            } else {
+                (HWND_NOTOPMOST, "Off")
+            };
+            let _ = unsafe {
+                SetWindowPos(
+                    window,
+                    Some(order),
+                    0,
+                    0,
+                    0,
+                    0,
+                    SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE,
+                )
+            };
+            application.show_status_text(window, format!("Always on Top: {state}"));
             application.render(window);
         }
         Action::Fullscreen => {
@@ -1841,6 +1864,7 @@ extern "system" fn window_procedure(
                         .is_some_and(|animation| animation.paused),
                     fit_height: application.settings.options.fit_mode == 1,
                     preserve_zoom: application.preserve_zoom,
+                    always_on_top: application.always_on_top,
                     mirrored: application.view_transform.mirrored,
                     flipped: application.view_transform.flipped,
                     fullscreen: application.fullscreen_restore.is_some(),
