@@ -25,6 +25,10 @@ use windows::Win32::System::Com::StructuredStorage::{
 use windows::Win32::System::Com::{CLSCTX_INPROC_SERVER, CoCreateInstance};
 use windows::core::{HSTRING, Interface, PCWSTR, Result as WindowsResult, w};
 
+use super::color::{
+    SDR_REFERENCE_WHITE_NITS, perceptual_quantizer_code, perceptual_quantizer_nits,
+};
+
 pub struct Frame {
     pub pixels: Vec<u8>,
     pub delay_milliseconds: u32,
@@ -1209,33 +1213,6 @@ fn f32_to_half(value: f32) -> u16 {
         half += 1;
     }
     sign | half as u16
-}
-
-/// scRGB 1.0 (D2D scene-referred SDR white).
-const SDR_REFERENCE_WHITE_NITS: f32 = 80.0;
-
-/// SMPTE ST 2084 inverse EOTF (nits -> code).
-fn perceptual_quantizer_code(nits: f32) -> f32 {
-    const M1: f32 = 2610.0 / 16384.0;
-    const M2: f32 = 2523.0 / 4096.0 * 128.0;
-    const C1: f32 = 3424.0 / 4096.0;
-    const C2: f32 = 2413.0 / 4096.0 * 32.0;
-    const C3: f32 = 2392.0 / 4096.0 * 32.0;
-    let normalized = (nits.max(0.0) / 10000.0).powf(M1);
-    ((C1 + C2 * normalized) / (1.0 + C3 * normalized)).powf(M2)
-}
-
-/// SMPTE ST 2084 EOTF (code -> nits).
-fn perceptual_quantizer_nits(code: f32) -> f32 {
-    const M1: f32 = 2610.0 / 16384.0;
-    const M2: f32 = 2523.0 / 4096.0 * 128.0;
-    const C1: f32 = 3424.0 / 4096.0;
-    const C2: f32 = 2413.0 / 4096.0 * 32.0;
-    const C3: f32 = 2392.0 / 4096.0 * 32.0;
-    let power = code.max(0.0).powf(1.0 / M2);
-    let numerator = (power - C1).max(0.0);
-    let denominator = C2 - C3 * power;
-    10000.0 * (numerator / denominator).powf(1.0 / M1)
 }
 
 fn icc_profile_bytes(

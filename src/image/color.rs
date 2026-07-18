@@ -52,9 +52,30 @@ fn srgb_color_to_scrgb(color: D2D1_COLOR_F, sdr_white_boost: f32) -> D2D1_COLOR_
 }
 
 /// scRGB 1.0, the luminance DWM assigns to sRGB white.
-const SCRGB_UNIT_NITS: f32 = 80.0;
+pub const SDR_REFERENCE_WHITE_NITS: f32 = 80.0;
 /// PQ code 1.0.
 const PQ_PEAK_NITS: f32 = 10000.0;
+
+/// SMPTE ST 2084 constants, shared by the encode and decode directions.
+const PQ_M1: f32 = 2610.0 / 16384.0;
+const PQ_M2: f32 = 2523.0 / 4096.0 * 128.0;
+const PQ_C1: f32 = 3424.0 / 4096.0;
+const PQ_C2: f32 = 2413.0 / 4096.0 * 32.0;
+const PQ_C3: f32 = 2392.0 / 4096.0 * 32.0;
+
+/// SMPTE ST 2084 inverse EOTF (nits -> code).
+pub fn perceptual_quantizer_code(nits: f32) -> f32 {
+    let normalized = (nits.max(0.0) / PQ_PEAK_NITS).powf(PQ_M1);
+    ((PQ_C1 + PQ_C2 * normalized) / (1.0 + PQ_C3 * normalized)).powf(PQ_M2)
+}
+
+/// SMPTE ST 2084 EOTF (code -> nits).
+pub fn perceptual_quantizer_nits(code: f32) -> f32 {
+    let power = code.max(0.0).powf(1.0 / PQ_M2);
+    let numerator = (power - PQ_C1).max(0.0);
+    let denominator = PQ_C2 - PQ_C3 * power;
+    PQ_PEAK_NITS * (numerator / denominator).powf(1.0 / PQ_M1)
+}
 
 /// BT.709 -> BT.2020 primaries (rows sum to 1).
 const BT709_TO_BT2020: [[f32; 3]; 3] = [
@@ -69,7 +90,7 @@ fn scrgb_color_to_pq(color: D2D1_COLOR_F) -> D2D1_COLOR_F {
     let mut encoded = [0.0f32; 3];
     for (row, channel) in BT709_TO_BT2020.iter().zip(&mut encoded) {
         let linear = row[0] * source[0] + row[1] * source[1] + row[2] * source[2];
-        *channel = pq_encode((linear * SCRGB_UNIT_NITS / PQ_PEAK_NITS).clamp(0.0, 1.0));
+        *channel = perceptual_quantizer_code((linear * SDR_REFERENCE_WHITE_NITS).min(PQ_PEAK_NITS));
     }
     D2D1_COLOR_F {
         r: encoded[0],
@@ -77,17 +98,6 @@ fn scrgb_color_to_pq(color: D2D1_COLOR_F) -> D2D1_COLOR_F {
         b: encoded[2],
         a: color.a,
     }
-}
-
-/// SMPTE ST 2084 perceptual quantizer; input is luminance normalized to 10000 nits.
-fn pq_encode(value: f32) -> f32 {
-    const M1: f32 = 2610.0 / 16384.0;
-    const M2: f32 = 2523.0 / 4096.0 * 128.0;
-    const C1: f32 = 3424.0 / 4096.0;
-    const C2: f32 = 2413.0 / 4096.0 * 32.0;
-    const C3: f32 = 2392.0 / 4096.0 * 32.0;
-    let eased = value.powf(M1);
-    ((C1 + C2 * eased) / (1.0 + C3 * eased)).powf(M2)
 }
 
 /// SDR white boost for HDR mode; 1.0 elsewhere (ACM output is display-referred).
@@ -250,11 +260,13 @@ mod output_color_tests {
     }
 
     #[test]
-    fn pq_encode_matches_reference_points() {
-        assert!(pq_encode(0.0).abs() < TOLERANCE);
-        assert!((pq_encode(1.0) - 1.0).abs() < TOLERANCE);
+    fn pq_code_matches_reference_points() {
+        assert!(perceptual_quantizer_code(0.0).abs() < TOLERANCE);
+        assert!((perceptual_quantizer_code(10000.0) - 1.0).abs() < TOLERANCE);
         // 100 nits, the HDR reference white anchor of ST 2084.
-        assert!((pq_encode(0.01) - 0.5081).abs() < TOLERANCE);
+        assert!((perceptual_quantizer_code(100.0) - 0.5081).abs() < TOLERANCE);
+        // The directions invert each other.
+        assert!((perceptual_quantizer_nits(0.5081) - 100.0).abs() < 0.1);
     }
 
     #[test]

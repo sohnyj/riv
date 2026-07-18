@@ -49,6 +49,7 @@ use windows::Win32::Graphics::Dxgi::{
 use windows::core::{Interface, Result};
 use windows_numerics::Matrix3x2;
 
+use crate::image::color::SDR_REFERENCE_WHITE_NITS;
 use crate::image::decode::PixelStorage;
 use crate::view::dither::{self, DitherMode};
 use crate::view::quantize::QuantizePass;
@@ -230,9 +231,6 @@ fn source_pixel_format(storage: PixelStorage) -> D2D1_PIXEL_FORMAT {
 fn interface_property_bytes<T: Interface>(interface: &T) -> [u8; size_of::<usize>()] {
     (interface.as_raw() as usize).to_ne_bytes()
 }
-
-/// scRGB 1.0 (D2D scene-referred SDR white).
-const SDR_REFERENCE_WHITE_NITS: f32 = 80.0;
 
 /// WhiteLevelAdjustment multiplies by input/output white level.
 fn set_white_level_input(effect: &ID2D1Effect, input_white_nits: f32) -> Result<()> {
