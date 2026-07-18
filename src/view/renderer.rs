@@ -101,6 +101,8 @@ pub struct Renderer {
     target: Option<ID2D1Bitmap1>,
     image: Option<ID2D1Bitmap1>,
     effect_output: Option<ID2D1Image>,
+    /// scRGB scene ahead of the PQ output encode; present only when that encode is wired.
+    linear_scene_output: Option<ID2D1Image>,
     color_management_effect: Option<ID2D1Effect>,
     white_level_effect: Option<ID2D1Effect>,
     hdr_tone_map_effect: Option<ID2D1Effect>,
@@ -108,6 +110,8 @@ pub struct Renderer {
     output_color_management_effect: Option<ID2D1Effect>,
     /// scRGB -> PQ BT.2020 for the HDR10 backbuffer; None on the FP16 fallback.
     hdr_output_color_management_effect: Option<ID2D1Effect>,
+    /// Second scRGB -> PQ instance for the scaled scene; the primary stays on the 1:1 chain.
+    hdr_scaled_color_management_effect: Option<ID2D1Effect>,
     linearize_effect: Option<ID2D1Effect>,
     delinearize_effect: Option<ID2D1Effect>,
     affine_transform_effect: Option<ID2D1Effect>,
@@ -134,6 +138,7 @@ impl Drop for Renderer {
     fn drop(&mut self) {
         unsafe { self.d2d_context.SetTarget(None) };
         self.effect_output = None;
+        self.linear_scene_output = None;
         self.image = None;
         self.target = None;
         self.flatten_scene = None;
@@ -146,6 +151,7 @@ impl Drop for Renderer {
         self.tone_map_normalize_effect = None;
         self.output_color_management_effect = None;
         self.hdr_output_color_management_effect = None;
+        self.hdr_scaled_color_management_effect = None;
         self.linearize_effect = None;
         self.delinearize_effect = None;
         self.affine_transform_effect = None;
@@ -575,6 +581,10 @@ impl Renderer {
         if swap_chain_format != DXGI_FORMAT_R10G10B10A2_UNORM {
             quantize_pass = None;
         }
+        let hdr_scaled_color_management_effect = hdr_output_color_management_effect
+            .is_some()
+            .then(|| Self::create_pq_output_effect(&d2d_context, scrgb_color_context.as_ref()))
+            .flatten();
 
         let mode_effects = Self::create_mode_effects(
             &d2d_context,
@@ -611,12 +621,14 @@ impl Renderer {
             target: None,
             image: None,
             effect_output: None,
+            linear_scene_output: None,
             color_management_effect: mode_effects.color_management_effect,
             white_level_effect: mode_effects.white_level_effect,
             hdr_tone_map_effect: mode_effects.hdr_tone_map_effect,
             tone_map_normalize_effect: mode_effects.tone_map_normalize_effect,
             output_color_management_effect: mode_effects.output_color_management_effect,
             hdr_output_color_management_effect,
+            hdr_scaled_color_management_effect,
             linearize_effect: mode_effects.linearize_effect,
             delinearize_effect: mode_effects.delinearize_effect,
             affine_transform_effect,
@@ -775,6 +787,7 @@ impl Renderer {
         unsafe { self.d2d_context.SetTarget(None) };
         self.target = None;
         self.effect_output = None;
+        self.linear_scene_output = None;
         self.flatten_scene = None;
         self.scaled_scene = None;
         if let Some(sampling_pass) = &mut self.sampling_pass {
@@ -864,6 +877,12 @@ impl Renderer {
         self.output_color_management_effect = mode_effects.output_color_management_effect;
         self.linearize_effect = mode_effects.linearize_effect;
         self.delinearize_effect = mode_effects.delinearize_effect;
+        self.hdr_scaled_color_management_effect = hdr_output_color_management_effect
+            .is_some()
+            .then(|| {
+                Self::create_pq_output_effect(&self.d2d_context, self.scrgb_color_context.as_ref())
+            })
+            .flatten();
         self.hdr_output_color_management_effect = hdr_output_color_management_effect;
 
         let d2d_factory: Option<ID2D1Factory1> = unsafe { self.d2d_context.GetFactory() }
@@ -978,6 +997,7 @@ impl Renderer {
         peak_luminance_nits: Option<f32>,
     ) {
         self.effect_output = None;
+        self.linear_scene_output = None;
         let Some(color_management) = &self.color_management_effect else {
             return;
         };
@@ -1111,7 +1131,12 @@ impl Renderer {
         self.effect_output = match (&self.hdr_output_color_management_effect, scene) {
             (Some(output_encoding), Some(scene)) => {
                 unsafe { output_encoding.SetInput(0, &scene, true) };
-                unsafe { output_encoding.GetOutput() }.ok()
+                let encoded = unsafe { output_encoding.GetOutput() }.ok();
+                if encoded.is_some() {
+                    // Kept so the scaler convolves linear light and encodes after.
+                    self.linear_scene_output = Some(scene);
+                }
+                encoded
             }
             (None, scene) => scene,
             (Some(_), None) => None,
@@ -1121,6 +1146,7 @@ impl Renderer {
     pub fn clear_image(&mut self) {
         self.image = None;
         self.effect_output = None;
+        self.linear_scene_output = None;
     }
 
     pub fn render(
@@ -1455,10 +1481,17 @@ impl Renderer {
                     };
                     self.d2d_context.SetTransform(&raw const rotation);
                 }
-                let scene: Option<ID2D1Image> = match (&self.effect_output, &self.image) {
-                    (Some(output), _) => Some(output.clone()),
-                    (None, Some(image)) => image.cast().ok(),
-                    _ => None,
+                // The HDR10 chain ends in PQ; flatten the linear scene, encode after scaling.
+                let scene: Option<ID2D1Image> = if self.hdr_scaled_color_management_effect.is_some()
+                    && let Some(linear_scene) = &self.linear_scene_output
+                {
+                    Some(linear_scene.clone())
+                } else {
+                    match (&self.effect_output, &self.image) {
+                        (Some(output), _) => Some(output.clone()),
+                        (None, Some(image)) => image.cast().ok(),
+                        _ => None,
+                    }
                 };
                 if let Some(scene) = scene {
                     // SDR scenes linearize so the convolution runs in linear light.
@@ -1553,8 +1586,16 @@ impl Renderer {
         }
     }
 
-    /// Undoes the SDR linearization on the scaled scene before compositing.
+    /// Applies the deferred PQ encode or the SDR delinearization before compositing.
     fn prescaled_composite_image(&self, scaled: &ID2D1Bitmap1) -> Option<ID2D1Image> {
+        if self.linear_scene_output.is_some()
+            && let Some(output_encoding) = &self.hdr_scaled_color_management_effect
+        {
+            unsafe { output_encoding.SetInput(0, scaled, true) };
+            if let Ok(output) = unsafe { output_encoding.GetOutput() } {
+                return Some(output);
+            }
+        }
         if !self.hdr_mode
             && self.linearize_effect.is_some()
             && let Some(delinearize) = &self.delinearize_effect
