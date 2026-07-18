@@ -5,7 +5,9 @@ use std::os::windows::ffi::OsStrExt;
 use std::path::{Path, PathBuf};
 
 use windows::Win32::Foundation::{HWND, LPARAM, WPARAM};
-use windows::Win32::System::Com::{COINIT_MULTITHREADED, CoInitializeEx, IDataObject};
+use windows::Win32::System::Com::{
+    COINIT_MULTITHREADED, CoInitializeEx, CoTaskMemFree, IDataObject,
+};
 use windows::Win32::UI::Shell::{
     ASSOC_FILTER_RECOMMENDED, ASSOCF_INIT_IGNOREUNKNOWN, ASSOCSTR_EXECUTABLE, AssocQueryStringW,
     BHID_DataObject, IAssocHandler, IShellItem, OAIF_ALLOW_REGISTRATION, OAIF_EXEC, OPENASINFO,
@@ -139,13 +141,21 @@ fn handlers_for(path: &Path) -> Vec<IAssocHandler> {
 }
 
 fn handler_name(handler: &IAssocHandler) -> Option<String> {
-    let name = unsafe { handler.GetName() }.ok()?;
-    (!name.is_null()).then(|| String::from_utf16_lossy(unsafe { name.as_wide() }))
+    take_shell_string(unsafe { handler.GetName() }.ok()?)
 }
 
 fn handler_ui_name(handler: &IAssocHandler) -> Option<String> {
-    let name = unsafe { handler.GetUIName() }.ok()?;
-    (!name.is_null()).then(|| String::from_utf16_lossy(unsafe { name.as_wide() }))
+    take_shell_string(unsafe { handler.GetUIName() }.ok()?)
+}
+
+/// Reads then frees a CoTaskMem-allocated string.
+fn take_shell_string(text: windows::core::PWSTR) -> Option<String> {
+    if text.is_null() {
+        return None;
+    }
+    let result = String::from_utf16_lossy(unsafe { text.as_wide() });
+    unsafe { CoTaskMemFree(Some(text.as_ptr().cast())) };
+    Some(result)
 }
 
 fn default_executable_for(path: &Path) -> Option<String> {
