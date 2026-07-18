@@ -765,22 +765,15 @@ impl ImageCore {
     }
 
     fn step_existing_entry(&self, anchor: Option<usize>, direction: isize) -> Option<ItemLocation> {
-        let length = self.entries.len() as isize;
-        let start = anchor.map_or(0, |index| index as isize);
-        let mut index = start;
-        for _ in 0..length {
-            index += direction;
-            if self.options.loop_folders_enabled {
-                index = index.rem_euclid(length);
-            } else if !(0..length).contains(&index) {
-                return None; // stop at folder ends when not looping
-            }
-            let entry = &self.entries[index as usize];
-            if entry.location.exists() {
-                return Some(entry.location.clone());
-            }
-        }
-        None
+        step_candidate_indices(
+            anchor,
+            direction,
+            self.entries.len(),
+            self.options.loop_folders_enabled,
+        )
+        .map(|index| &self.entries[index])
+        .find(|entry| entry.location.exists())
+        .map(|entry| entry.location.clone())
     }
 
     fn preload_neighbors(&mut self) {
@@ -966,6 +959,29 @@ fn neighbor_index(
 /// Preload targets in priority order: forward first, nearest first.
 fn preload_offsets(backward: usize, forward: usize) -> impl Iterator<Item = isize> {
     (1..=forward as isize).chain((1..=backward as isize).map(|step| -step))
+}
+
+/// Next/Previous candidates in walk order; an absent anchor starts at the matching end.
+fn step_candidate_indices(
+    anchor: Option<usize>,
+    direction: isize,
+    length: usize,
+    loop_enabled: bool,
+) -> impl Iterator<Item = usize> {
+    let length = length as isize;
+    let start = anchor.map_or(if direction > 0 { -1 } else { length }, |index| {
+        index as isize
+    });
+    (1..=length).map_while(move |step| {
+        let index = start + step * direction;
+        if loop_enabled {
+            Some(index.rem_euclid(length) as usize)
+        } else if (0..length).contains(&index) {
+            Some(index as usize)
+        } else {
+            None // stop at folder ends when not looping
+        }
+    })
 }
 
 /// Signed offset from anchor to index; the nearest way round when looping.
@@ -1358,6 +1374,45 @@ fn post_download_progress(window: isize, progress: Box<DownloadProgress>) {
     };
     if posted.is_err() {
         drop(unsafe { Box::from_raw(pointer) });
+    }
+}
+
+#[cfg(test)]
+mod step_candidate_tests {
+    use super::*;
+
+    fn walk(
+        anchor: Option<usize>,
+        direction: isize,
+        length: usize,
+        loop_enabled: bool,
+    ) -> Vec<usize> {
+        step_candidate_indices(anchor, direction, length, loop_enabled).collect()
+    }
+
+    #[test]
+    fn absent_anchor_starts_at_the_matching_end() {
+        assert_eq!(walk(None, 1, 3, false), [0, 1, 2]);
+        assert_eq!(walk(None, -1, 3, false), [2, 1, 0]);
+        assert_eq!(walk(None, 1, 3, true), [0, 1, 2]);
+        assert_eq!(walk(None, -1, 3, true), [2, 1, 0]);
+    }
+
+    #[test]
+    fn anchored_walks_step_away_from_the_anchor() {
+        assert_eq!(walk(Some(1), 1, 4, false), [2, 3]);
+        assert_eq!(walk(Some(1), -1, 4, false), [0]);
+        assert_eq!(walk(Some(1), 1, 4, true), [2, 3, 0, 1]);
+        assert_eq!(walk(Some(1), -1, 4, true), [0, 3, 2, 1]);
+    }
+
+    #[test]
+    fn degenerate_lengths_stay_in_bounds() {
+        assert_eq!(walk(None, 1, 0, true), Vec::<usize>::new());
+        assert_eq!(walk(None, -1, 0, false), Vec::<usize>::new());
+        assert_eq!(walk(None, 1, 1, false), [0]);
+        assert_eq!(walk(Some(0), 1, 1, true), [0]);
+        assert_eq!(walk(Some(0), 1, 1, false), Vec::<usize>::new());
     }
 }
 
