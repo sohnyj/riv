@@ -583,19 +583,7 @@ pub fn decode_raw_preview(path: &Path, cancellation: &AtomicBool) -> Option<Deco
         })
     })
     .ok()?;
-    Some(DecodedImage {
-        width: decoded.width,
-        height: decoded.height,
-        pixel_width: decoded.pixel_width,
-        pixel_height: decoded.pixel_height,
-        format_name: "RAW",
-        icc_profile: decoded.icc_profile,
-        exif: decoded.exif,
-        storage: decoded.storage,
-        source_bits_per_channel: decoded.source_bits_per_channel,
-        peak_luminance_nits: decoded.peak_luminance_nits,
-        frames: decoded.frames,
-    })
+    Some(decoded.into_image("RAW"))
 }
 
 thread_local! {
@@ -629,6 +617,24 @@ struct DecodedFrames {
     frames: Vec<Frame>,
 }
 
+impl DecodedFrames {
+    fn into_image(self, format_name: &'static str) -> DecodedImage {
+        DecodedImage {
+            width: self.width,
+            height: self.height,
+            pixel_width: self.pixel_width,
+            pixel_height: self.pixel_height,
+            format_name,
+            icc_profile: self.icc_profile,
+            exif: self.exif,
+            storage: self.storage,
+            source_bits_per_channel: self.source_bits_per_channel,
+            peak_luminance_nits: self.peak_luminance_nits,
+            frames: self.frames,
+        }
+    }
+}
+
 fn decode_with_wic(
     input: &DecodeInput<'_>,
     format_name: &'static str,
@@ -648,19 +654,7 @@ fn decode_with_wic(
             _ => decode_single_frame(factory, &decoder, 0, cancellation),
         }
     })?;
-    Ok(DecodedImage {
-        width: decoded.width,
-        height: decoded.height,
-        pixel_width: decoded.pixel_width,
-        pixel_height: decoded.pixel_height,
-        format_name,
-        icc_profile: decoded.icc_profile,
-        exif: decoded.exif,
-        storage: decoded.storage,
-        source_bits_per_channel: decoded.source_bits_per_channel,
-        peak_luminance_nits: decoded.peak_luminance_nits,
-        frames: decoded.frames,
-    })
+    Ok(decoded.into_image(format_name))
 }
 
 fn create_wic_decoder(
@@ -781,40 +775,22 @@ fn decode_single_frame(
     let oversized = frame_width.max(frame_height) > MAXIMUM_TEXTURE_DIMENSION;
     // The Fant scaler rejects half floats; oversized integers scale first, convert after.
     let deferred_half = high_depth && !float_native && hdr_encoding.is_none() && oversized;
-    let (source, storage, hdr_encoding) = if high_depth && let Some(encoding) = hdr_encoding {
-        match convert_pixel_format(factory, &frame.cast()?, &GUID_WICPixelFormat64bppRGBA) {
-            Ok(source) => (source, PixelStorage::RgbaHalf, Some(encoding)),
-            Err(_) => (
-                convert_to_pbgra(factory, &frame.cast()?)?,
-                PixelStorage::Bgra8,
-                None,
-            ),
-        }
-    } else if deferred_half {
-        match convert_pixel_format(factory, &frame.cast()?, &GUID_WICPixelFormat64bppRGBA) {
-            Ok(source) => (source, PixelStorage::RgbaHalf, None),
-            Err(_) => (
-                convert_to_pbgra(factory, &frame.cast()?)?,
-                PixelStorage::Bgra8,
-                None,
-            ),
-        }
-    } else if high_depth {
-        match convert_pixel_format(factory, &frame.cast()?, &GUID_WICPixelFormat64bppPRGBAHalf) {
-            Ok(source) => (source, PixelStorage::RgbaHalf, None),
-            Err(_) => (
-                convert_to_pbgra(factory, &frame.cast()?)?,
-                PixelStorage::Bgra8,
-                None,
-            ),
-        }
+    let (source, storage) = if high_depth {
+        // PQ/HLG and deferred sources stay integer at this stage; the rest go straight to half.
+        let target = if hdr_encoding.is_some() || deferred_half {
+            &GUID_WICPixelFormat64bppRGBA
+        } else {
+            &GUID_WICPixelFormat64bppPRGBAHalf
+        };
+        convert_half_or_pbgra(factory, &frame.cast()?, target)?
     } else {
         (
             convert_to_pbgra(factory, &frame.cast()?)?,
             PixelStorage::Bgra8,
-            None,
         )
     };
+    // The 8bpc retreat loses the PQ/HLG code values along with the depth.
+    let hdr_encoding = hdr_encoding.filter(|_| storage == PixelStorage::RgbaHalf);
     let source = apply_orientation(factory, source, orientation)?;
     let (width, height) = source_size(&source)?;
     let (source, pixel_width, pixel_height, storage) =
@@ -832,10 +808,7 @@ fn decode_single_frame(
             Err(error) => return Err(error),
         };
     let (source, storage) = if deferred_half && storage == PixelStorage::RgbaHalf {
-        match convert_pixel_format(factory, &source, &GUID_WICPixelFormat64bppPRGBAHalf) {
-            Ok(converted) => (converted, PixelStorage::RgbaHalf),
-            Err(_) => (convert_to_pbgra(factory, &source)?, PixelStorage::Bgra8),
-        }
+        convert_half_or_pbgra(factory, &source, &GUID_WICPixelFormat64bppPRGBAHalf)?
     } else {
         (source, storage)
     };
@@ -1434,6 +1407,18 @@ fn convert_to_pbgra(
     source: &IWICBitmapSource,
 ) -> WindowsResult<IWICBitmapSource> {
     convert_pixel_format(factory, source, &GUID_WICPixelFormat32bppPBGRA)
+}
+
+/// Converts to the requested half-domain format, retreating to 8-bit PBGRA on refusal.
+fn convert_half_or_pbgra(
+    factory: &IWICImagingFactory,
+    source: &IWICBitmapSource,
+    target: &windows::core::GUID,
+) -> WindowsResult<(IWICBitmapSource, PixelStorage)> {
+    match convert_pixel_format(factory, source, target) {
+        Ok(converted) => Ok((converted, PixelStorage::RgbaHalf)),
+        Err(_) => Ok((convert_to_pbgra(factory, source)?, PixelStorage::Bgra8)),
+    }
 }
 
 fn convert_pixel_format(
