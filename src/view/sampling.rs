@@ -70,6 +70,8 @@ float4 main(float4 position : SV_POSITION) : SV_Target
     float center = dot(position.xy, direction) * position_scale + position_offset - 0.5;
     float base = floor(center);
     float fraction = center - base;
+    float inverse_extent = dot(inverse_source_size, direction);
+    float source_extent = 1.0 / inverse_extent;
     int taps = int(ceil(FILTER_RADIUS * kernel_inverse_scale));
     float4 accumulated = float4(0.0, 0.0, 0.0, 0.0);
     float weight_sum = 0.0;
@@ -78,13 +80,17 @@ float4 main(float4 position : SV_POSITION) : SV_Target
     {
         float distance = abs((float(offset) - fraction) / kernel_inverse_scale);
         float weight = distance < FILTER_RADIUS ? FILTER_WEIGHT(distance) : 0.0;
-        float along = (base + float(offset) + 0.5) * dot(inverse_source_size, direction);
+        float along_index = clamp(base + float(offset), 0.0, source_extent - 1.0);
+        float along = (along_index + 0.5) * inverse_extent;
         float2 coordinate = position.xy * inverse_source_size * (float2(1.0, 1.0) - direction)
             + along * direction;
         accumulated += weight * source_texture.SampleLevel(source_sampler, coordinate, 0.0);
         weight_sum += weight;
     }
-    return accumulated / weight_sum;
+    // Clamped taps extend the edge; a one-output-pixel ramp masks outside the rect.
+    float edge = min(center + 0.5, source_extent - 0.5 - center);
+    float coverage = saturate(edge / abs(position_scale) + 0.5);
+    return accumulated / weight_sum * coverage;
 }
 ";
 
