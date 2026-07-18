@@ -335,6 +335,10 @@ impl SamplingPass {
             MaxDepth: 1.0,
         };
         unsafe {
+            // D2D leaves undefined pipeline state behind; reset to opaque overwrite.
+            context.OMSetBlendState(None, None, u32::MAX);
+            context.OMSetDepthStencilState(None, 0);
+            context.RSSetState(None);
             context.OMSetRenderTargets(Some(&[Some(target.clone())]), None);
             context.RSSetViewports(Some(&[viewport]));
             context.IASetPrimitiveTopology(D3D11_PRIMITIVE_TOPOLOGY_TRIANGLELIST);
