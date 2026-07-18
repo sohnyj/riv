@@ -197,11 +197,8 @@ fn maximum_resource_bytes(dxgi_device: &IDXGIDevice) -> u64 {
             .and_then(|adapter| adapter.GetDesc())
     }
     .map(|description| {
-        if description.DedicatedVideoMemory > 0 {
-            description.DedicatedVideoMemory as u64
-        } else {
-            description.SharedSystemMemory as u64
-        }
+        // UMA adapters under-report dedicated memory; take the larger pool.
+        (description.DedicatedVideoMemory as u64).max(description.SharedSystemMemory as u64)
     })
     .unwrap_or(0);
     (memory / 4).clamp(FLOOR_BYTES, CEILING_BYTES)
