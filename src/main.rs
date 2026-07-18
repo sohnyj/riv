@@ -879,6 +879,19 @@ fn dispatch_action(application: &mut Application, window: HWND, action: Action) 
             application.show_status_text(window, text.to_string());
             application.render(window);
         }
+        Action::FitMode => {
+            application.settings.options.fit_mode ^= 1;
+            let axis = if application.settings.options.fit_mode == 1 {
+                "Height"
+            } else {
+                "Width"
+            };
+            application.show_status_text(window, format!("Fit: {axis}"));
+            let options = application.settings.options.clone();
+            application.settings.set_options(&options);
+            let _ = application.settings.save();
+            application.apply_options(window);
+        }
         Action::PreserveZoom => {
             application.preserve_zoom = !application.preserve_zoom;
             let state = if application.preserve_zoom {
@@ -1819,6 +1832,7 @@ extern "system" fn window_procedure(
                         .animation
                         .as_ref()
                         .is_some_and(|animation| animation.paused),
+                    fit_height: application.settings.options.fit_mode == 1,
                     preserve_zoom: application.preserve_zoom,
                     mirrored: application.view_transform.mirrored,
                     flipped: application.view_transform.flipped,

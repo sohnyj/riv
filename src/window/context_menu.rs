@@ -36,6 +36,7 @@ pub struct MenuState {
     pub playlist_current_slot: Option<usize>,
     pub playlist_hidden_count: usize,
     pub animation_paused: bool,
+    pub fit_height: bool,
     pub preserve_zoom: bool,
     pub mirrored: bool,
     pub flipped: bool,
@@ -243,10 +244,18 @@ impl MenuBuilder {
         self.append_separator(menu)?;
 
         let view = unsafe { CreatePopupMenu()? };
+        // The label names the axis a click switches to (slideshow convention).
+        let fit_label = if self.state_snapshot.fit_height {
+            "Fit Width"
+        } else {
+            "Fit Height"
+        };
+        self.append_action_labeled(view, Action::FitMode, fit_label)?;
+        self.append_action(view, Action::PreserveZoom)?;
+        self.append_separator(view)?;
         self.append_action(view, Action::ZoomIn)?;
         self.append_action(view, Action::ZoomOut)?;
         self.append_action(view, Action::ResetZoom)?;
-        self.append_action(view, Action::PreserveZoom)?;
         self.append_separator(view)?;
         self.append_action(view, Action::RotateLeft)?;
         self.append_action(view, Action::RotateRight)?;
@@ -324,6 +333,7 @@ mod menu_structure_tests {
             playlist_current_slot: None,
             playlist_hidden_count: 0,
             animation_paused: false,
+            fit_height: false,
             preserve_zoom: false,
             mirrored: false,
             flipped: false,
@@ -391,6 +401,38 @@ mod menu_structure_tests {
         let mut text = [0u16; 64];
         let length = unsafe { GetMenuStringW(menu, position, Some(&mut text), MF_BYPOSITION) };
         String::from_utf16_lossy(&text[..length as usize])
+    }
+
+    /// Label without the shortcut column.
+    fn bare_label(menu: HMENU, position: u32) -> String {
+        let label = item_label(menu, position);
+        label.split('\t').next().unwrap_or_default().to_string()
+    }
+
+    #[test]
+    fn view_leads_with_the_fit_toggle() {
+        let mut builder = MenuBuilder {
+            entries: Vec::new(),
+            state_snapshot: state(),
+        };
+        let menu = builder.build().expect("menu builds");
+        let view = submenu_by_label(menu, "View");
+        // The fit label names the other axis: width is current here.
+        assert_eq!(bare_label(view, 0), "Fit Height");
+        assert_eq!(bare_label(view, 1), "Preserve Zoom");
+        assert_eq!(bare_label(view, 3), "Zoom In");
+        assert_eq!(bare_label(view, 4), "Zoom Out");
+        assert_eq!(bare_label(view, 5), "Toggle Zoom");
+
+        let mut height_state = state();
+        height_state.fit_height = true;
+        let mut builder = MenuBuilder {
+            entries: Vec::new(),
+            state_snapshot: height_state,
+        };
+        let menu = builder.build().expect("menu builds");
+        let view = submenu_by_label(menu, "View");
+        assert_eq!(bare_label(view, 0), "Fit Width");
     }
 
     #[test]
