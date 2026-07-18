@@ -1,5 +1,6 @@
 //! OLE drop target; accepts CF_HDROP paths only.
 
+use std::cell::Cell;
 use std::path::PathBuf;
 
 use windows::Win32::Foundation::{HWND, LPARAM, POINTL, WPARAM};
@@ -17,10 +18,16 @@ pub const WM_APP_DROP_PATH: u32 = WM_APP + 3;
 #[implement(IDropTarget)]
 struct DropTarget {
     window: HWND,
+    /// DragEnter verdict; DragOver must not re-derive it from the source's effect mask.
+    accepts_current_drag: Cell<bool>,
 }
 
 pub fn register(window: HWND) -> Result<IDropTarget> {
-    let target: IDropTarget = DropTarget { window }.into();
+    let target: IDropTarget = DropTarget {
+        window,
+        accepts_current_drag: Cell::new(false),
+    }
+    .into();
     unsafe { RegisterDragDrop(window, &target)? };
     Ok(target)
 }
@@ -70,8 +77,10 @@ impl IDropTarget_Impl for DropTarget_Impl {
         _point: &POINTL,
         effect: *mut DROPEFFECT,
     ) -> Result<()> {
+        let accepts = has_paths(data_object.as_ref());
+        self.accepts_current_drag.set(accepts);
         unsafe {
-            *effect = if has_paths(data_object.as_ref()) {
+            *effect = if accepts {
                 DROPEFFECT_COPY
             } else {
                 DROPEFFECT_NONE // refuse non-file drops (URLs etc.)
@@ -87,9 +96,11 @@ impl IDropTarget_Impl for DropTarget_Impl {
         effect: *mut DROPEFFECT,
     ) -> Result<()> {
         unsafe {
-            if *effect != DROPEFFECT_NONE {
-                *effect = DROPEFFECT_COPY;
-            }
+            *effect = if self.accepts_current_drag.get() {
+                DROPEFFECT_COPY
+            } else {
+                DROPEFFECT_NONE
+            };
         }
         Ok(())
     }
