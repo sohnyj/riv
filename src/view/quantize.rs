@@ -33,8 +33,8 @@ pub struct QuantizePass {
 
 impl QuantizePass {
     pub fn new(device: &ID3D11Device) -> Result<Self> {
-        let vertex_bytecode = compile_shader(VERTEX_SHADER_SOURCE, s!("vs_4_0"))?;
-        let pixel_bytecode = compile_shader(PIXEL_SHADER_SOURCE, s!("ps_4_0"))?;
+        let vertex_bytecode = compile_shader(VERTEX_SHADER_SOURCE, s!("vs_5_0"))?;
+        let pixel_bytecode = compile_shader(PIXEL_SHADER_SOURCE, s!("ps_5_0"))?;
         let mut vertex_shader = None;
         let mut pixel_shader = None;
         unsafe {

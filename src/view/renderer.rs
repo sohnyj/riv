@@ -25,7 +25,8 @@ use windows::Win32::Graphics::Direct2D::{
     ID2D1Image,
 };
 use windows::Win32::Graphics::Direct3D::{
-    D3D_DRIVER_TYPE, D3D_DRIVER_TYPE_HARDWARE, D3D_DRIVER_TYPE_WARP, D3D_FEATURE_LEVEL_11_0,
+    D3D_DRIVER_TYPE, D3D_DRIVER_TYPE_HARDWARE, D3D_DRIVER_TYPE_WARP, D3D_FEATURE_LEVEL,
+    D3D_FEATURE_LEVEL_11_0, D3D_FEATURE_LEVEL_12_0,
 };
 use windows::Win32::Graphics::Direct3D11::{
     D3D11_BIND_RENDER_TARGET, D3D11_BIND_SHADER_RESOURCE, D3D11_CREATE_DEVICE_BGRA_SUPPORT,
@@ -109,7 +110,10 @@ impl Drop for Renderer {
     }
 }
 
-fn create_d3d_device(driver_type: D3D_DRIVER_TYPE) -> Result<(ID3D11Device, ID3D11DeviceContext)> {
+fn create_d3d_device(
+    driver_type: D3D_DRIVER_TYPE,
+    feature_levels: &[D3D_FEATURE_LEVEL],
+) -> Result<(ID3D11Device, ID3D11DeviceContext)> {
     let mut device = None;
     let mut context = None;
     unsafe {
@@ -118,7 +122,7 @@ fn create_d3d_device(driver_type: D3D_DRIVER_TYPE) -> Result<(ID3D11Device, ID3D
             driver_type,
             HMODULE::default(),
             D3D11_CREATE_DEVICE_BGRA_SUPPORT,
-            Some(&[D3D_FEATURE_LEVEL_11_0]),
+            Some(feature_levels),
             D3D11_SDK_VERSION,
             Some(&raw mut device),
             None,
@@ -213,8 +217,10 @@ impl Renderer {
         tone_map_target_nits: f32,
         deep_color: bool,
     ) -> Result<Self> {
-        let (d3d_device, d3d_context) = create_d3d_device(D3D_DRIVER_TYPE_HARDWARE)
-            .or_else(|_| create_d3d_device(D3D_DRIVER_TYPE_WARP))?;
+        // D3D11 WARP is documented only through 11_1; shader model 5.0 needs no more.
+        let (d3d_device, d3d_context) =
+            create_d3d_device(D3D_DRIVER_TYPE_HARDWARE, &[D3D_FEATURE_LEVEL_12_0])
+                .or_else(|_| create_d3d_device(D3D_DRIVER_TYPE_WARP, &[D3D_FEATURE_LEVEL_11_0]))?;
         let dxgi_device: IDXGIDevice = d3d_device.cast()?;
 
         // D2D precedes the swapchain: the PQ pipeline decides the backbuffer format.

@@ -115,7 +115,7 @@ fn compiled_bytecode(pattern: DitherPattern, quantization_steps: u32) -> Result<
     }
     .replace("QUANTIZATION_STEPS", &format!("{quantization_steps}.0"));
     let bytecode: &'static [u8] =
-        Box::leak(compile_shader(&source, s!("ps_4_0"))?.into_boxed_slice());
+        Box::leak(compile_shader(&source, s!("ps_5_0"))?.into_boxed_slice());
     cache.insert(key, bytecode);
     Ok(bytecode)
 }

@@ -56,8 +56,8 @@ zip, 7z, rar, tar, and cbz / cbr / cb7 / cbt.
 
 ## Requirements
 
-- Windows 10+, x86-64 (AVX2-capable CPU)
-- Direct3D 11 capable GPU
+- Windows 11, x86-64 (AVX2-capable CPU)
+- DirectX 12 capable GPU (Direct3D feature level 12_0)
 
 ## Building
 
