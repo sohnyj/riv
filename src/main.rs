@@ -63,12 +63,12 @@ use windows::Win32::UI::WindowsAndMessaging::{
     MSG, PostMessageW, PostQuitMessage, RegisterClassExW, SW_HIDE, SW_SHOW, SW_SHOWMAXIMIZED,
     SWP_FRAMECHANGED, SWP_NOACTIVATE, SWP_NOMOVE, SWP_NOSIZE, SWP_NOZORDER, SendMessageW,
     SetCursor, SetTimer, SetWindowLongPtrW, SetWindowPlacement, SetWindowPos, SetWindowTextW,
-    ShowWindow, TranslateMessage, WINDOW_STYLE, WINDOWPLACEMENT, WM_ACTIVATEAPP, WM_APP, WM_CLOSE,
+    ShowWindow, TranslateMessage, WINDOWPLACEMENT, WM_ACTIVATEAPP, WM_APP, WM_CLOSE,
     WM_CONTEXTMENU, WM_DESTROY, WM_DISPLAYCHANGE, WM_DPICHANGED, WM_GESTURE, WM_KEYDOWN,
     WM_LBUTTONDBLCLK, WM_LBUTTONDOWN, WM_LBUTTONUP, WM_MBUTTONDOWN, WM_MOUSEHWHEEL, WM_MOUSEMOVE,
     WM_MOUSEWHEEL, WM_MOVE, WM_NCDESTROY, WM_NCLBUTTONDOWN, WM_PAINT, WM_SETCURSOR,
     WM_SETTINGCHANGE, WM_SIZE, WM_SYSCHAR, WM_SYSKEYDOWN, WM_TIMER, WM_XBUTTONDOWN, WNDCLASSEXW,
-    WS_OVERLAPPEDWINDOW, WS_POPUP, WS_VISIBLE,
+    WS_OVERLAPPEDWINDOW,
 };
 use windows::core::{PCWSTR, Result, w};
 
@@ -95,7 +95,7 @@ struct Application {
     bindings: Bindings,
     preserve_zoom: bool,
     always_on_top: bool,
-    fullscreen_restore: Option<(WINDOWPLACEMENT, WINDOW_STYLE)>,
+    fullscreen_restore: Option<WINDOWPLACEMENT>,
     sdr_white_boost: f32,
     pan_drag_position: Option<(i32, i32)>,
     pan_cursor: HCURSOR,
@@ -315,7 +315,7 @@ impl Application {
             length: size_of::<WINDOWPLACEMENT>() as u32,
             ..Default::default()
         };
-        if let Some((saved, _)) = &self.fullscreen_restore {
+        if let Some(saved) = &self.fullscreen_restore {
             placement = *saved;
         } else if unsafe { GetWindowPlacement(window, &raw mut placement) }.is_err() {
             return;
@@ -1180,8 +1180,9 @@ fn rename_current_file(application: &mut Application, window: HWND) {
 
 fn toggle_fullscreen(application: &mut Application, window: HWND) {
     unsafe {
-        if let Some((placement, style)) = application.fullscreen_restore.take() {
-            SetWindowLongPtrW(window, GWL_STYLE, style.0 as isize);
+        if let Some(placement) = application.fullscreen_restore.take() {
+            let style = GetWindowLongPtrW(window, GWL_STYLE) as u32;
+            SetWindowLongPtrW(window, GWL_STYLE, (style | WS_OVERLAPPEDWINDOW.0) as isize);
             let _ = SetWindowPlacement(window, &raw const placement);
             let _ = SetWindowPos(
                 window,
@@ -1198,8 +1199,7 @@ fn toggle_fullscreen(application: &mut Application, window: HWND) {
                 ..Default::default()
             };
             let _ = GetWindowPlacement(window, &raw mut placement);
-            let style = WINDOW_STYLE(GetWindowLongPtrW(window, GWL_STYLE) as u32);
-            application.fullscreen_restore = Some((placement, style));
+            application.fullscreen_restore = Some(placement);
 
             let monitor = MonitorFromWindow(window, MONITOR_DEFAULTTONEAREST);
             let mut monitor_info = MONITORINFO {
@@ -1209,7 +1209,8 @@ fn toggle_fullscreen(application: &mut Application, window: HWND) {
             let _ = GetMonitorInfoW(monitor, &raw mut monitor_info);
             let bounds = monitor_info.rcMonitor;
 
-            SetWindowLongPtrW(window, GWL_STYLE, ((WS_POPUP | WS_VISIBLE).0) as isize);
+            let style = GetWindowLongPtrW(window, GWL_STYLE) as u32;
+            SetWindowLongPtrW(window, GWL_STYLE, (style & !WS_OVERLAPPEDWINDOW.0) as isize);
             let _ = SetWindowPos(
                 window,
                 Some(HWND_TOP),
