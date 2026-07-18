@@ -503,11 +503,13 @@ fn decode_input(
             DecodeInput::Memory { data, .. } => {
                 super::fallback::decode_exr_bytes(data, format_name)
             }
-        },
+        }
+        .and_then(|decoded| enforce_device_limit(decoded, cancellation)),
         Adapter::HeifWithWicPreferred => {
             decode_with_wic(input, format_name, semantics, cancellation).or_else(|error| {
                 if error.code == WINCODEC_ERR_COMPONENTNOTFOUND.0 {
                     super::fallback::decode_heif(&input.read_all()?, format_name)
+                        .and_then(|decoded| enforce_device_limit(decoded, cancellation))
                 } else {
                     Err(error)
                 }
@@ -691,6 +693,51 @@ fn downscale_to_device_limit(
         )?
     };
     Ok((scaler.cast()?, scaled_width, scaled_height))
+}
+
+/// DP3 for fallback decoders: downscale oversized frames before upload; failure is a decode error.
+fn enforce_device_limit(
+    mut decoded: DecodedImage,
+    cancellation: &AtomicBool,
+) -> Result<DecodedImage, DecodeError> {
+    let (width, height) = (decoded.pixel_width, decoded.pixel_height);
+    if width.max(height) <= MAXIMUM_TEXTURE_DIMENSION {
+        return Ok(decoded);
+    }
+    let pixel_format = match decoded.storage {
+        PixelStorage::Bgra8 => &GUID_WICPixelFormat32bppPBGRA,
+        PixelStorage::RgbaHalf => &GUID_WICPixelFormat64bppPRGBAHalf,
+    };
+    let bytes_per_pixel = decoded.storage.bytes_per_pixel();
+    let frame = decoded
+        .frames
+        .first_mut()
+        .ok_or_else(|| fallback_error("image has no frames"))?;
+    let (pixels, scaled_width, scaled_height) = with_wic_factory(|factory| {
+        let bitmap = unsafe {
+            factory.CreateBitmapFromMemory(
+                width,
+                height,
+                pixel_format,
+                width * bytes_per_pixel,
+                &frame.pixels,
+            )?
+        };
+        let (source, scaled_width, scaled_height) =
+            downscale_to_device_limit(factory, bitmap.cast()?, width, height)?;
+        let pixels = copy_pixels(
+            &source,
+            scaled_width,
+            scaled_height,
+            bytes_per_pixel,
+            cancellation,
+        )?;
+        Ok((pixels, scaled_width, scaled_height))
+    })?;
+    frame.pixels = pixels;
+    decoded.pixel_width = scaled_width;
+    decoded.pixel_height = scaled_height;
+    Ok(decoded)
 }
 
 fn decode_single_frame(
