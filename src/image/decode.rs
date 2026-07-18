@@ -908,88 +908,81 @@ struct HdrEncoding {
     primaries: HdrPrimaries,
 }
 
-/// ICC 'cicp' tag; Some for an HDR transfer (16 = PQ, 18 = HLG) with convertible primaries.
-/// Human-readable profile name from the ICC 'desc' tag (v2 text or v4 mluc).
-pub fn icc_profile_description(icc: &[u8]) -> Option<String> {
-    let read_u32 = |offset: usize| -> Option<u32> {
-        Some(u32::from_be_bytes(
-            icc.get(offset..offset + 4)?.try_into().ok()?,
-        ))
-    };
-    let tag_count = read_u32(128)? as usize;
+/// Big-endian u32 at the offset, when in bounds.
+fn read_u32_be(icc: &[u8], offset: usize) -> Option<u32> {
+    Some(u32::from_be_bytes(
+        icc.get(offset..offset + 4)?.try_into().ok()?,
+    ))
+}
+
+/// Data offset of the first tag-table entry with this signature.
+fn icc_tag_offset(icc: &[u8], signature: &[u8; 4]) -> Option<usize> {
+    let tag_count = read_u32_be(icc, 128)? as usize;
     for index in 0..tag_count {
         let entry = 132 + index * 12;
-        if icc.get(entry..entry + 4)? != b"desc" {
-            continue;
+        if icc.get(entry..entry + 4)? == signature {
+            return read_u32_be(icc, entry + 4).map(|offset| offset as usize);
         }
-        let offset = read_u32(entry + 4)? as usize;
-        let description = match icc.get(offset..offset + 4)? {
-            b"desc" => {
-                let length = read_u32(offset + 8)? as usize;
-                let bytes = icc.get(offset + 12..offset + 12 + length)?;
-                let end = bytes
-                    .iter()
-                    .position(|&byte| byte == 0)
-                    .unwrap_or(bytes.len());
-                String::from_utf8(bytes[..end].to_vec()).ok()?
-            }
-            b"mluc" => {
-                // First record: length at +20, offset at +24, UTF-16BE.
-                let length = read_u32(offset + 20)? as usize;
-                let start = offset + read_u32(offset + 24)? as usize;
-                let bytes = icc.get(start..start + length)?;
-                let units: Vec<u16> = bytes
-                    .chunks_exact(2)
-                    .map(|pair| u16::from_be_bytes([pair[0], pair[1]]))
-                    .collect();
-                String::from_utf16(&units).ok()?
-            }
-            _ => return None,
-        };
-        let trimmed = description.trim_matches(['\0', ' ', '\t', '\r', '\n']);
-        return (!trimmed.is_empty()).then(|| trimmed.to_string());
     }
     None
 }
 
+/// Human-readable profile name from the ICC 'desc' tag (v2 text or v4 mluc).
+pub fn icc_profile_description(icc: &[u8]) -> Option<String> {
+    let offset = icc_tag_offset(icc, b"desc")?;
+    let description = match icc.get(offset..offset + 4)? {
+        b"desc" => {
+            let length = read_u32_be(icc, offset + 8)? as usize;
+            let bytes = icc.get(offset + 12..offset + 12 + length)?;
+            let end = bytes
+                .iter()
+                .position(|&byte| byte == 0)
+                .unwrap_or(bytes.len());
+            String::from_utf8(bytes[..end].to_vec()).ok()?
+        }
+        b"mluc" => {
+            // First record: length at +20, offset at +24, UTF-16BE.
+            let length = read_u32_be(icc, offset + 20)? as usize;
+            let start = offset + read_u32_be(icc, offset + 24)? as usize;
+            let bytes = icc.get(start..start + length)?;
+            let units: Vec<u16> = bytes
+                .chunks_exact(2)
+                .map(|pair| u16::from_be_bytes([pair[0], pair[1]]))
+                .collect();
+            String::from_utf16(&units).ok()?
+        }
+        _ => return None,
+    };
+    let trimmed = description.trim_matches(['\0', ' ', '\t', '\r', '\n']);
+    (!trimmed.is_empty()).then(|| trimmed.to_string())
+}
+
+/// ICC 'cicp' tag; Some for an HDR transfer (16 = PQ, 18 = HLG) with convertible primaries.
 fn icc_hdr_encoding(icc: &[u8]) -> Option<HdrEncoding> {
     const TRANSFER_PQ: u8 = 16;
     const TRANSFER_HLG: u8 = 18;
     const PRIMARIES_BT709: u8 = 1;
     const PRIMARIES_BT2020: u8 = 9;
     const PRIMARIES_P3_D65: u8 = 12;
-    let read_u32 = |offset: usize| -> Option<u32> {
-        Some(u32::from_be_bytes(
-            icc.get(offset..offset + 4)?.try_into().ok()?,
-        ))
-    };
-    let tag_count = read_u32(128)? as usize;
-    for index in 0..tag_count {
-        let entry = 132 + index * 12;
-        if icc.get(entry..entry + 4)? != b"cicp" {
-            continue;
-        }
-        let offset = read_u32(entry + 4)? as usize;
-        if icc.get(offset..offset + 4)? != b"cicp" {
-            return None;
-        }
-        let transfer = match *icc.get(offset + 9)? {
-            TRANSFER_PQ => HdrTransfer::PerceptualQuantizer,
-            TRANSFER_HLG => HdrTransfer::HybridLogGamma,
-            _ => return None,
-        };
-        let primaries = match *icc.get(offset + 8)? {
-            PRIMARIES_BT709 => HdrPrimaries::Bt709,
-            PRIMARIES_BT2020 => HdrPrimaries::Bt2020,
-            PRIMARIES_P3_D65 => HdrPrimaries::DisplayP3,
-            _ => return None,
-        };
-        return Some(HdrEncoding {
-            transfer,
-            primaries,
-        });
+    let offset = icc_tag_offset(icc, b"cicp")?;
+    if icc.get(offset..offset + 4)? != b"cicp" {
+        return None;
     }
-    None
+    let transfer = match *icc.get(offset + 9)? {
+        TRANSFER_PQ => HdrTransfer::PerceptualQuantizer,
+        TRANSFER_HLG => HdrTransfer::HybridLogGamma,
+        _ => return None,
+    };
+    let primaries = match *icc.get(offset + 8)? {
+        PRIMARIES_BT709 => HdrPrimaries::Bt709,
+        PRIMARIES_BT2020 => HdrPrimaries::Bt2020,
+        PRIMARIES_P3_D65 => HdrPrimaries::DisplayP3,
+        _ => return None,
+    };
+    Some(HdrEncoding {
+        transfer,
+        primaries,
+    })
 }
 
 /// Rec. 2100 nominal peak for the HLG OOTF (display-referred mapping).
