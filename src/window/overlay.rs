@@ -49,6 +49,8 @@ pub struct OverlayContent {
     pub download_text: Option<String>,
     pub info_text: Option<String>,
     pub status_text: Option<String>,
+    /// Centered "riv" wordmark for the empty-window state.
+    pub show_wordmark: bool,
     pub background_is_bright: bool,
     pub output_color_target: color::OutputColorTarget,
 }
@@ -56,6 +58,7 @@ pub struct OverlayContent {
 pub struct Overlay {
     text_format: IDWriteTextFormat,
     error_format: IDWriteTextFormat,
+    wordmark_format: IDWriteTextFormat,
     dwrite_factory: IDWriteFactory,
     scale: f32,
 }
@@ -64,10 +67,12 @@ impl Overlay {
     pub fn new() -> Result<Self> {
         let dwrite_factory: IDWriteFactory =
             unsafe { DWriteCreateFactory(DWRITE_FACTORY_TYPE_SHARED)? };
-        let (text_format, error_format) = create_text_formats(&dwrite_factory, 1.0)?;
+        let (text_format, error_format, wordmark_format) =
+            create_text_formats(&dwrite_factory, 1.0)?;
         Ok(Self {
             text_format,
             error_format,
+            wordmark_format,
             dwrite_factory,
             scale: 1.0,
         })
@@ -78,9 +83,12 @@ impl Overlay {
         if (scale - self.scale).abs() < f32::EPSILON {
             return;
         }
-        if let Ok((text_format, error_format)) = create_text_formats(&self.dwrite_factory, scale) {
+        if let Ok((text_format, error_format, wordmark_format)) =
+            create_text_formats(&self.dwrite_factory, scale)
+        {
             self.text_format = text_format;
             self.error_format = error_format;
+            self.wordmark_format = wordmark_format;
             self.scale = scale;
         }
     }
@@ -128,9 +136,19 @@ impl Overlay {
             .as_ref()
             .or(content.download_text.as_ref())
         {
-            self.draw_error_text(
+            self.draw_centered_text(
                 context,
                 centered_text,
+                &self.error_format,
+                viewport_width,
+                viewport_height,
+                content,
+            )?;
+        } else if content.show_wordmark {
+            self.draw_centered_text(
+                context,
+                "riv",
+                &self.wordmark_format,
                 viewport_width,
                 viewport_height,
                 content,
@@ -199,15 +217,16 @@ impl Overlay {
         Ok(panel.rect)
     }
 
-    fn draw_error_text(
+    fn draw_centered_text(
         &self,
         context: &ID2D1DeviceContext,
         text: &str,
+        format: &IDWriteTextFormat,
         viewport_width: f32,
         viewport_height: f32,
         content: &OverlayContent,
     ) -> Result<()> {
-        let layout = self.create_layout(text, &self.error_format, viewport_width)?;
+        let layout = self.create_layout(text, format, viewport_width)?;
         unsafe {
             layout.SetMaxHeight(viewport_height)?;
             let text_color = if content.background_is_bright {
@@ -246,7 +265,7 @@ impl Overlay {
 fn create_text_formats(
     dwrite_factory: &IDWriteFactory,
     scale: f32,
-) -> Result<(IDWriteTextFormat, IDWriteTextFormat)> {
+) -> Result<(IDWriteTextFormat, IDWriteTextFormat, IDWriteTextFormat)> {
     let create_format = |size: f32| unsafe {
         dwrite_factory.CreateTextFormat(
             w!("Lucida Console"),
@@ -260,11 +279,15 @@ fn create_text_formats(
     };
     let text_format = create_format(14.0)?;
     let error_format = create_format(16.0)?;
-    unsafe {
-        error_format.SetTextAlignment(DWRITE_TEXT_ALIGNMENT_CENTER)?;
-        error_format.SetParagraphAlignment(DWRITE_PARAGRAPH_ALIGNMENT_CENTER)?;
+    // The wordmark matches the About title: 40pt, size is the only variation.
+    let wordmark_format = create_format(40.0 * 96.0 / 72.0)?;
+    for format in [&error_format, &wordmark_format] {
+        unsafe {
+            format.SetTextAlignment(DWRITE_TEXT_ALIGNMENT_CENTER)?;
+            format.SetParagraphAlignment(DWRITE_PARAGRAPH_ALIGNMENT_CENTER)?;
+        }
     }
-    Ok((text_format, error_format))
+    Ok((text_format, error_format, wordmark_format))
 }
 
 pub fn build_info_text(

@@ -581,6 +581,10 @@ impl ImageCore {
         self.current = None;
     }
 
+    pub fn has_pending_display(&self) -> bool {
+        self.pending_display.is_some()
+    }
+
     fn navigation_anchor(&self) -> Option<ItemLocation> {
         self.pending_display
             .clone()

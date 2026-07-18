@@ -582,11 +582,18 @@ impl Application {
                 overlay::build_download_text(&location.display_name(), *received_bytes)
             });
         let brightness = 0.299 * background.r + 0.587 * background.g + 0.114 * background.b;
+        // The wordmark marks a truly empty window, never a load in flight.
+        let show_wordmark = error_text.is_none()
+            && download_text.is_none()
+            && self.display.is_none()
+            && self.image_core.current.is_none()
+            && !self.image_core.has_pending_display();
         OverlayContent {
             error_text,
             download_text,
             info_text,
             status_text: self.status_text.clone(),
+            show_wordmark,
             background_is_bright: brightness > 0.5,
             output_color_target: self.output_color_target(),
         }
