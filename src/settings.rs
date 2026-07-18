@@ -22,11 +22,11 @@ pub struct Options {
     pub preloading_mode: u32,
     pub loop_folders_enabled: bool,
     pub slideshow_reversed: bool,
-    pub slideshow_timer_seconds: u32,
+    pub slideshow_interval_seconds: u32,
     pub after_delete: u32,
     pub ask_delete: bool,
-    pub allow_mime_content_detection: bool,
-    pub save_recents: bool,
+    pub detect_format_by_content: bool,
+    pub remember_recents: bool,
     pub skip_hidden: bool,
 }
 
@@ -49,11 +49,11 @@ impl Default for Options {
             preloading_mode: 1,
             loop_folders_enabled: true,
             slideshow_reversed: false,
-            slideshow_timer_seconds: 5,
+            slideshow_interval_seconds: 5,
             after_delete: 1,
             ask_delete: true,
-            allow_mime_content_detection: false,
-            save_recents: true,
+            detect_format_by_content: false,
+            remember_recents: true,
             skip_hidden: true,
         }
     }
@@ -103,15 +103,18 @@ impl Options {
             preloading_mode: bounded("preloadingmode", 2, default.preloading_mode),
             loop_folders_enabled: boolean("loopfoldersenabled", default.loop_folders_enabled),
             slideshow_reversed: boolean("slideshowreversed", default.slideshow_reversed),
-            slideshow_timer_seconds: unsigned("slideshowtimer", default.slideshow_timer_seconds)
-                .clamp(1, 3600),
+            slideshow_interval_seconds: unsigned(
+                "slideshowinterval",
+                default.slideshow_interval_seconds,
+            )
+            .clamp(1, 3600),
             after_delete: bounded("afterdelete", 1, default.after_delete),
             ask_delete: boolean("askdelete", default.ask_delete),
-            allow_mime_content_detection: boolean(
-                "allowmimecontentdetection",
-                default.allow_mime_content_detection,
+            detect_format_by_content: boolean(
+                "detectformatbycontent",
+                default.detect_format_by_content,
             ),
-            save_recents: boolean("saverecents", default.save_recents),
+            remember_recents: boolean("rememberrecents", default.remember_recents),
             skip_hidden: boolean("skiphidden", default.skip_hidden),
         }
     }
@@ -291,9 +294,9 @@ impl SettingsFile {
                 Value::Bool(default.slideshow_reversed),
             ),
             (
-                "slideshowtimer",
-                Value::from(options.slideshow_timer_seconds),
-                Value::from(default.slideshow_timer_seconds),
+                "slideshowinterval",
+                Value::from(options.slideshow_interval_seconds),
+                Value::from(default.slideshow_interval_seconds),
             ),
             (
                 "afterdelete",
@@ -306,14 +309,14 @@ impl SettingsFile {
                 Value::Bool(default.ask_delete),
             ),
             (
-                "allowmimecontentdetection",
-                Value::Bool(options.allow_mime_content_detection),
-                Value::Bool(default.allow_mime_content_detection),
+                "detectformatbycontent",
+                Value::Bool(options.detect_format_by_content),
+                Value::Bool(default.detect_format_by_content),
             ),
             (
-                "saverecents",
-                Value::Bool(options.save_recents),
-                Value::Bool(default.save_recents),
+                "rememberrecents",
+                Value::Bool(options.remember_recents),
+                Value::Bool(default.remember_recents),
             ),
             (
                 "skiphidden",
@@ -336,7 +339,7 @@ impl SettingsFile {
                 options_object.insert(key.to_string(), value);
             }
         }
-        if !options.save_recents
+        if !options.remember_recents
             && let Some(document) = self.document.as_object_mut()
         {
             document.remove("recents");
@@ -504,7 +507,7 @@ impl SettingsFile {
     }
 
     pub fn add_recent_file(&mut self, path: &std::path::Path) -> bool {
-        if !self.options.save_recents {
+        if !self.options.remember_recents {
             return self.clear_recent_files();
         }
         let path_text = path.to_string_lossy().into_owned();
@@ -595,11 +598,11 @@ mod option_bounds_tests {
     fn numeric_values_clamp_to_their_ranges() {
         let document = serde_json::json!({ "options": {
             "zoomstep": 0,
-            "slideshowtimer": 100_000,
+            "slideshowinterval": 100_000,
         }});
         let options = Options::from_document(&document);
         assert_eq!(options.zoom_step_percent, 1);
-        assert_eq!(options.slideshow_timer_seconds, 3600);
+        assert_eq!(options.slideshow_interval_seconds, 3600);
     }
 
     #[test]

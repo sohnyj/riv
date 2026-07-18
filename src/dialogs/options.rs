@@ -618,18 +618,20 @@ fn handle_page_command(
         (IDC_MISC_SLIDESHOW_DIRECTION, CBN_SELCHANGE) => {
             options.slideshow_reversed = combo_selection(page, control) == 0;
         }
-        (IDC_MISC_SLIDESHOW_TIMER_EDIT, EN_CHANGE) => {
+        (IDC_MISC_SLIDESHOW_INTERVAL_EDIT, EN_CHANGE) => {
             let value = unsafe { GetDlgItemInt(page, control, None, false) };
-            options.slideshow_timer_seconds = value.clamp(1, 3600);
+            options.slideshow_interval_seconds = value.clamp(1, 3600);
         }
         (IDC_MISC_AFTER_DELETE, CBN_SELCHANGE) => {
             options.after_delete = combo_selection(page, control);
         }
         (IDC_MISC_ASK_DELETE, BN_CLICKED) => options.ask_delete = is_checked(page, control),
-        (IDC_MISC_MIME_DETECTION, BN_CLICKED) => {
-            options.allow_mime_content_detection = is_checked(page, control);
+        (IDC_MISC_CONTENT_DETECTION, BN_CLICKED) => {
+            options.detect_format_by_content = is_checked(page, control);
         }
-        (IDC_MISC_SAVE_RECENTS, BN_CLICKED) => options.save_recents = is_checked(page, control),
+        (IDC_MISC_REMEMBER_RECENTS, BN_CLICKED) => {
+            options.remember_recents = is_checked(page, control)
+        }
         (IDC_MISC_SKIP_HIDDEN, BN_CLICKED) => options.skip_hidden = is_checked(page, control),
         (IDC_SHORTCUTS_RESET, BN_CLICKED) => {
             state.transient_shortcuts = default_shortcut_rows();
@@ -700,7 +702,7 @@ fn initialize_misc_page(state: &OptionsState) {
     );
     combo_fill(page, IDC_MISC_SLIDESHOW_DIRECTION, &["Backward", "Forward"]);
     combo_fill(page, IDC_MISC_AFTER_DELETE, &["Move Back", "Move Forward"]);
-    if let Ok(spin) = unsafe { GetDlgItem(Some(page), IDC_MISC_SLIDESHOW_TIMER_SPIN) } {
+    if let Ok(spin) = unsafe { GetDlgItem(Some(page), IDC_MISC_SLIDESHOW_INTERVAL_SPIN) } {
         unsafe { SendMessageW(spin, UDM_SETRANGE32, Some(WPARAM(1)), Some(LPARAM(3600))) };
     }
 }
@@ -774,17 +776,21 @@ fn sync_all_pages(state: &mut OptionsState) {
     );
     set_dialog_item_text(
         misc_page,
-        IDC_MISC_SLIDESHOW_TIMER_EDIT,
-        &options.slideshow_timer_seconds.to_string(),
+        IDC_MISC_SLIDESHOW_INTERVAL_EDIT,
+        &options.slideshow_interval_seconds.to_string(),
     );
     combo_select(misc_page, IDC_MISC_AFTER_DELETE, options.after_delete);
     set_check(misc_page, IDC_MISC_ASK_DELETE, options.ask_delete);
     set_check(
         misc_page,
-        IDC_MISC_MIME_DETECTION,
-        options.allow_mime_content_detection,
+        IDC_MISC_CONTENT_DETECTION,
+        options.detect_format_by_content,
     );
-    set_check(misc_page, IDC_MISC_SAVE_RECENTS, options.save_recents);
+    set_check(
+        misc_page,
+        IDC_MISC_REMEMBER_RECENTS,
+        options.remember_recents,
+    );
     set_check(misc_page, IDC_MISC_SKIP_HIDDEN, options.skip_hidden);
     set_check(
         state.pages[5],

@@ -158,7 +158,7 @@ pub struct CoreOptions {
     pub preloading_mode: usize,
     pub loop_folders_enabled: bool,
     pub skip_hidden: bool,
-    pub allow_mime_content_detection: bool,
+    pub detect_format_by_content: bool,
 }
 
 #[derive(Clone, Copy, PartialEq, Eq)]
@@ -273,7 +273,7 @@ impl ImageCore {
         let list_affected = options.sort_mode != self.options.sort_mode
             || options.sort_descending != self.options.sort_descending
             || options.skip_hidden != self.options.skip_hidden
-            || options.allow_mime_content_detection != self.options.allow_mime_content_detection;
+            || options.detect_format_by_content != self.options.detect_format_by_content;
         self.options = options;
         if list_affected {
             self.rescan_listing();
@@ -1082,8 +1082,7 @@ fn scan_folder(directory: &Path, options: &CoreOptions) -> Vec<FolderEntry> {
             .map(|extension| extension.to_string_lossy().to_lowercase())
             .is_some_and(|extension| decode::is_supported_extension(&extension));
         let included = extension_matched
-            || (options.allow_mime_content_detection
-                && decode::probe_file(&entry.path()).is_some());
+            || (options.detect_format_by_content && decode::probe_file(&entry.path()).is_some());
         if !included {
             continue;
         }
@@ -1624,7 +1623,7 @@ mod url_session_state_tests {
                 preloading_mode: 1,
                 loop_folders_enabled: true,
                 skip_hidden: true,
-                allow_mime_content_detection: false,
+                detect_format_by_content: false,
             },
         )
     }
@@ -1802,7 +1801,7 @@ mod playlist_window_tests {
                 preloading_mode: 1,
                 loop_folders_enabled: true,
                 skip_hidden: true,
-                allow_mime_content_detection: false,
+                detect_format_by_content: false,
             },
         );
         core.entries = (0..count)

@@ -551,7 +551,7 @@ impl Application {
         if self.slideshow_active {
             self.cancel_slideshow(window);
         } else {
-            let interval = self.settings.options.slideshow_timer_seconds * 1000;
+            let interval = self.settings.options.slideshow_interval_seconds * 1000;
             unsafe { SetTimer(Some(window), SLIDESHOW_TIMER, interval, None) };
             self.slideshow_active = true;
             self.show_status_text(window, "Slideshow: Start".to_string());
@@ -815,7 +815,7 @@ fn core_options(options: &Options) -> CoreOptions {
         preloading_mode: options.preloading_mode as usize,
         loop_folders_enabled: options.loop_folders_enabled,
         skip_hidden: options.skip_hidden,
-        allow_mime_content_detection: options.allow_mime_content_detection,
+        detect_format_by_content: options.detect_format_by_content,
     }
 }
 
