@@ -2,8 +2,8 @@
 
 use windows::Win32::Foundation::{HWND, LPARAM, WPARAM};
 use windows::Win32::Graphics::Gdi::{
-    CLEARTYPE_QUALITY, CLIP_DEFAULT_PRECIS, CreateFontW, DEFAULT_CHARSET, DeleteObject, FW_LIGHT,
-    FW_NORMAL, HFONT, OUT_DEFAULT_PRECIS,
+    CLEARTYPE_QUALITY, CLIP_DEFAULT_PRECIS, CreateFontW, DEFAULT_CHARSET, DeleteObject, FW_NORMAL,
+    HFONT, OUT_DEFAULT_PRECIS,
 };
 use windows::Win32::System::LibraryLoader::GetModuleHandleW;
 use windows::Win32::UI::HiDpi::GetDpiForWindow;
@@ -102,8 +102,8 @@ fn initialize(dialog: HWND, state: &mut AboutState) {
     );
 
     let dpi = unsafe { GetDpiForWindow(dialog) }.max(96) as i32;
-    state.title_font = create_segoe_font(TITLE_POINT_SIZE, dpi, FW_LIGHT.0 as i32);
-    state.version_font = create_segoe_font(VERSION_POINT_SIZE, dpi, FW_NORMAL.0 as i32);
+    state.title_font = create_dialog_font(TITLE_POINT_SIZE, dpi);
+    state.version_font = create_dialog_font(VERSION_POINT_SIZE, dpi);
     apply_font(dialog, IDC_ABOUT_TITLE, state.title_font);
     apply_font(dialog, IDC_ABOUT_VERSION, state.version_font);
     center_link(dialog);
@@ -206,14 +206,15 @@ fn apply_font(dialog: HWND, control: i32, font: HFONT) {
     }
 }
 
-fn create_segoe_font(point_size: i32, dpi: i32, weight: i32) -> HFONT {
+/// Point size is the only variation; weight and style stay untouched.
+fn create_dialog_font(point_size: i32, dpi: i32) -> HFONT {
     unsafe {
         CreateFontW(
             -(point_size * dpi / 72),
             0,
             0,
             0,
-            weight,
+            FW_NORMAL.0 as i32,
             0,
             0,
             0,
@@ -222,7 +223,7 @@ fn create_segoe_font(point_size: i32, dpi: i32, weight: i32) -> HFONT {
             CLIP_DEFAULT_PRECIS,
             CLEARTYPE_QUALITY,
             Default::default(),
-            w!("Segoe UI"),
+            w!("Lucida Console"),
         )
     }
 }

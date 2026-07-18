@@ -249,7 +249,7 @@ fn create_text_formats(
 ) -> Result<(IDWriteTextFormat, IDWriteTextFormat)> {
     let create_format = |size: f32| unsafe {
         dwrite_factory.CreateTextFormat(
-            w!("Segoe UI"),
+            w!("Lucida Console"),
             None,
             DWRITE_FONT_WEIGHT_NORMAL,
             DWRITE_FONT_STYLE_NORMAL,
