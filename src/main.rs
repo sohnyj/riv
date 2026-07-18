@@ -947,6 +947,10 @@ fn dispatch_action(application: &mut Application, window: HWND, action: Action) 
         }
         Action::ShowFileInfo => {
             application.show_file_info = !application.show_file_info;
+            // Calling up the panel dismisses a lingering pill at once.
+            if application.show_file_info && application.status_text.take().is_some() {
+                let _ = unsafe { KillTimer(Some(window), STATUS_TEXT_TIMER) };
+            }
             application.render(window);
         }
         Action::Loop => {
