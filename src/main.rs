@@ -131,7 +131,7 @@ impl Application {
         let settings = SettingsFile::load();
         let bindings =
             Bindings::from_settings(settings.keyboard_bindings(), settings.mouse_bindings());
-        let mut view_transform = ViewTransform::new(device_pixel_ratio);
+        let mut view_transform = ViewTransform::new();
         view_transform.fit_mode = FitMode::from_setting(settings.options.fit_mode);
         let mut application = Self {
             renderer,
@@ -706,9 +706,7 @@ impl Application {
         let previous_scale = self.view_transform.scale;
         self.view_transform.zoom(factor, anchor, viewport, image);
         if (self.view_transform.scale - previous_scale).abs() > f32::EPSILON {
-            let percent = (self.view_transform.scale / self.view_transform.device_pixel_ratio
-                * 100.0)
-                .round();
+            let percent = (self.view_transform.scale * 100.0).round();
             self.show_status_text(window, format!("Zoom: {percent}%"));
         }
         self.render(window);
@@ -1965,7 +1963,6 @@ extern "system" fn window_procedure(
         WM_DPICHANGED => {
             if let Some(application) = application_from_window(window) {
                 let ratio = (wparam.0 & 0xFFFF) as f32 / 96.0;
-                application.view_transform.device_pixel_ratio = ratio;
                 application.overlay.set_scale(ratio);
             }
             let suggested_bounds = unsafe { &*(lparam.0 as *const RECT) };

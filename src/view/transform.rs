@@ -17,9 +17,9 @@ impl FitMode {
     }
 }
 
-/// Logical zoom limits; incremental zoom clamps to these.
-const MINIMUM_LOGICAL_ZOOM: f32 = 0.1;
-const MAXIMUM_LOGICAL_ZOOM: f32 = 5.0;
+/// Physical zoom limits; incremental zoom clamps to these.
+const MINIMUM_ZOOM: f32 = 0.1;
+const MAXIMUM_ZOOM: f32 = 5.0;
 
 #[derive(Clone, Copy)]
 pub struct Size {
@@ -27,6 +27,7 @@ pub struct Size {
     pub height: f32,
 }
 
+/// Scale is physical: image pixels to device pixels, 1.0 = untouched 1:1.
 pub struct ViewTransform {
     pub scale: f32,
     /// While true the scale is recomputed from the viewport at render time.
@@ -37,11 +38,10 @@ pub struct ViewTransform {
     pub pan_offset_x: f32,
     pub pan_offset_y: f32,
     pub fit_mode: FitMode,
-    pub device_pixel_ratio: f32,
 }
 
 impl ViewTransform {
-    pub fn new(device_pixel_ratio: f32) -> Self {
+    pub fn new() -> Self {
         Self {
             scale: 1.0,
             fit_tracking: true,
@@ -51,7 +51,6 @@ impl ViewTransform {
             pan_offset_x: 0.0,
             pan_offset_y: 0.0,
             fit_mode: FitMode::Width,
-            device_pixel_ratio,
         }
     }
 
@@ -95,16 +94,12 @@ impl ViewTransform {
         viewport: Size,
         image: Size,
     ) {
-        let current_logical = self.scale / self.device_pixel_ratio;
         // Limits stretch to the current scale so an out-of-range fit can step back in.
-        let logical = (current_logical * factor).clamp(
-            MINIMUM_LOGICAL_ZOOM.min(current_logical),
-            MAXIMUM_LOGICAL_ZOOM.max(current_logical),
-        );
-        if logical == current_logical {
+        let new_scale =
+            (self.scale * factor).clamp(MINIMUM_ZOOM.min(self.scale), MAXIMUM_ZOOM.max(self.scale));
+        if new_scale == self.scale {
             return; // no movement toward the limits
         }
-        let new_scale = logical * self.device_pixel_ratio;
         let factor = new_scale / self.scale;
         // Cursor anchor only when enlarging beyond fit.
         let cursor_anchor = cursor_from_center
@@ -132,8 +127,8 @@ impl ViewTransform {
         image: Size,
     ) {
         if self.fit_tracking {
-            let factor = self.device_pixel_ratio / self.fit_scale(viewport, image);
-            self.scale = self.device_pixel_ratio;
+            let factor = 1.0 / self.fit_scale(viewport, image);
+            self.scale = 1.0;
             self.fit_tracking = false;
             let (pan_x, pan_y) = match cursor_from_center.filter(|_| factor > 1.0) {
                 Some((cursor_x, cursor_y)) => {
@@ -152,7 +147,7 @@ impl ViewTransform {
     pub fn rotate(&mut self, quadrant_step: i32, viewport: Size, image: Size) {
         self.rotation_quadrant =
             (self.rotation_quadrant as i32 + quadrant_step).rem_euclid(4) as u32;
-        if (self.scale - self.device_pixel_ratio).abs() < f32::EPSILON && !self.fit_tracking {
+        if (self.scale - 1.0).abs() < f32::EPSILON && !self.fit_tracking {
             self.pan_offset_x = 0.0;
             self.pan_offset_y = 0.0;
             self.clamp_pan(viewport, image);
@@ -199,8 +194,7 @@ impl ViewTransform {
         let mut translate_y = viewport.height / 2.0 + self.pan_offset_y;
 
         let axis_aligned = self.rotation_quadrant.is_multiple_of(2);
-        let snappable_scale = (self.scale - 1.0).abs() < f32::EPSILON
-            || (self.scale - self.device_pixel_ratio).abs() < f32::EPSILON;
+        let snappable_scale = (self.scale - 1.0).abs() < f32::EPSILON;
         // Snap the final translation so the texel grid lands on device pixels.
         if axis_aligned && snappable_scale {
             let origin_x = translate_x - center_x * scale_x * cosine + center_y * scale_y * sine;
@@ -241,8 +235,8 @@ mod zoom_limit_tests {
         height: 600.0,
     };
 
-    fn transform_at(scale: f32, device_pixel_ratio: f32) -> ViewTransform {
-        let mut transform = ViewTransform::new(device_pixel_ratio);
+    fn transform_at(scale: f32) -> ViewTransform {
+        let mut transform = ViewTransform::new();
         transform.scale = scale;
         transform.fit_tracking = false;
         transform
@@ -250,22 +244,22 @@ mod zoom_limit_tests {
 
     #[test]
     fn zoom_in_climbs_out_of_a_fit_below_the_minimum() {
-        let mut transform = ViewTransform::new(1.0);
+        let mut transform = ViewTransform::new();
         transform.refit(VIEWPORT, HUGE_IMAGE);
-        assert!(transform.scale < MINIMUM_LOGICAL_ZOOM);
+        assert!(transform.scale < MINIMUM_ZOOM);
         let mut steps = 0;
-        while transform.scale < MINIMUM_LOGICAL_ZOOM && steps < 32 {
+        while transform.scale < MINIMUM_ZOOM && steps < 32 {
             let before = transform.scale;
             transform.zoom(1.25, None, VIEWPORT, HUGE_IMAGE);
             assert!(transform.scale > before);
             steps += 1;
         }
-        assert!(transform.scale >= MINIMUM_LOGICAL_ZOOM);
+        assert!(transform.scale >= MINIMUM_ZOOM);
     }
 
     #[test]
     fn zoom_out_from_a_fit_below_the_minimum_is_ignored() {
-        let mut transform = ViewTransform::new(1.0);
+        let mut transform = ViewTransform::new();
         transform.refit(VIEWPORT, HUGE_IMAGE);
         let fit = transform.scale;
         transform.zoom(0.8, None, VIEWPORT, HUGE_IMAGE);
@@ -275,35 +269,28 @@ mod zoom_limit_tests {
 
     #[test]
     fn zoom_steps_land_exactly_on_the_boundaries() {
-        let mut transform = transform_at(4.5, 1.0);
+        let mut transform = transform_at(4.5);
         transform.zoom(1.25, None, VIEWPORT, PLAIN_IMAGE);
-        assert_eq!(transform.scale, MAXIMUM_LOGICAL_ZOOM);
+        assert_eq!(transform.scale, MAXIMUM_ZOOM);
         transform.zoom(1.25, None, VIEWPORT, PLAIN_IMAGE);
-        assert_eq!(transform.scale, MAXIMUM_LOGICAL_ZOOM);
+        assert_eq!(transform.scale, MAXIMUM_ZOOM);
 
-        let mut transform = transform_at(0.11, 1.0);
+        let mut transform = transform_at(0.11);
         transform.zoom(0.8, None, VIEWPORT, PLAIN_IMAGE);
-        assert_eq!(transform.scale, MINIMUM_LOGICAL_ZOOM);
+        assert_eq!(transform.scale, MINIMUM_ZOOM);
         transform.zoom(0.8, None, VIEWPORT, PLAIN_IMAGE);
-        assert_eq!(transform.scale, MINIMUM_LOGICAL_ZOOM);
+        assert_eq!(transform.scale, MINIMUM_ZOOM);
     }
 
     #[test]
     fn zoom_out_moves_inward_from_a_fit_above_the_maximum() {
-        let mut transform = ViewTransform::new(1.0);
+        let mut transform = ViewTransform::new();
         transform.refit(VIEWPORT, TINY_IMAGE);
-        assert!(transform.scale > MAXIMUM_LOGICAL_ZOOM);
+        assert!(transform.scale > MAXIMUM_ZOOM);
         let fit = transform.scale;
         transform.zoom(1.25, None, VIEWPORT, TINY_IMAGE);
         assert_eq!(transform.scale, fit);
         transform.zoom(0.8, None, VIEWPORT, TINY_IMAGE);
-        assert!(transform.scale < fit && transform.scale > MAXIMUM_LOGICAL_ZOOM);
-    }
-
-    #[test]
-    fn limits_apply_in_the_logical_domain() {
-        let mut transform = transform_at(9.5, 2.0);
-        transform.zoom(1.25, None, VIEWPORT, PLAIN_IMAGE);
-        assert_eq!(transform.scale, MAXIMUM_LOGICAL_ZOOM * 2.0);
+        assert!(transform.scale < fit && transform.scale > MAXIMUM_ZOOM);
     }
 }

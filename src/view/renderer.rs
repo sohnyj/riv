@@ -911,14 +911,27 @@ impl Renderer {
             M32: matrix[5],
         };
         // The separable pass needs an axis-aligned transform; 90/270 falls back.
-        let prescaled =
-            if custom_scaling && self.image.is_some() && matrix[1] == 0.0 && matrix[2] == 0.0 {
-                self.prepare_scaled_scene(&transform)
-            } else {
-                None
-            };
+        // 1:1 on whole pixels resamples nothing; leave the pixels untouched.
+        let identity_placement = (transform.M11.abs() - 1.0).abs() < 1e-6
+            && (transform.M22.abs() - 1.0).abs() < 1e-6
+            && (transform.M31 - transform.M31.round()).abs() < 1e-4
+            && (transform.M32 - transform.M32.round()).abs() < 1e-4;
+        let prescaled = if custom_scaling
+            && !identity_placement
+            && self.image.is_some()
+            && matrix[1] == 0.0
+            && matrix[2] == 0.0
+        {
+            self.prepare_scaled_scene(&transform)
+        } else {
+            None
+        };
         if custom_scaling && self.image.is_some() && prescaled.is_none() {
-            self.scaler_description = "High Quality (fallback)";
+            self.scaler_description = if identity_placement {
+                "None (1:1)"
+            } else {
+                "High Quality (fallback)"
+            };
         }
         unsafe {
             self.d2d_context.BeginDraw();
