@@ -287,8 +287,18 @@ impl ImageCore {
         Some((index + 1, self.entries.len()))
     }
 
-    pub fn has_folder_entries(&self) -> bool {
-        !self.entries.is_empty()
+    /// A Folder-gated action can act: somewhere to go besides the anchor itself.
+    pub fn has_navigation_targets(&self) -> bool {
+        match self.entries.len() {
+            0 => false,
+            // A single listed entry is a real target only for an unlisted anchor.
+            1 => self
+                .navigation_anchor()
+                .as_ref()
+                .and_then(|anchor| self.position_of(anchor))
+                .is_none(),
+            _ => true,
+        }
     }
 
     /// Listing window for the menu: `capacity` names centered on the anchor, the rest a count.
@@ -1631,6 +1641,48 @@ mod url_session_state_tests {
             modified: UNIX_EPOCH,
             created: UNIX_EPOCH,
         }];
+    }
+
+    fn decode_error(message: &str) -> DecodeError {
+        DecodeError {
+            code: 0,
+            message: message.to_string(),
+            store_extension: None,
+        }
+    }
+
+    #[test]
+    fn navigation_targets_need_more_than_the_anchor_itself() {
+        let mut core = core();
+        assert!(!core.has_navigation_targets());
+
+        // A single entry that is the anchor itself leaves nowhere to go.
+        folder_state(&mut core, "C:\\pictures\\a.png");
+        core.load_error = Some((
+            ItemLocation::File(PathBuf::from("C:\\pictures\\a.png")),
+            decode_error("broken"),
+        ));
+        assert!(!core.has_navigation_targets());
+
+        // An unlisted anchor can still reach the one listed entry.
+        core.load_error = Some((
+            ItemLocation::File(PathBuf::from("C:\\pictures\\note.txt")),
+            decode_error("no decoder"),
+        ));
+        assert!(core.has_navigation_targets());
+
+        core.entries.push(FolderEntry {
+            location: ItemLocation::File(PathBuf::from("C:\\pictures\\b.png")),
+            wide_name: Vec::new(),
+            file_size: 0,
+            modified: UNIX_EPOCH,
+            created: UNIX_EPOCH,
+        });
+        core.load_error = Some((
+            ItemLocation::File(PathBuf::from("C:\\pictures\\a.png")),
+            decode_error("broken"),
+        ));
+        assert!(core.has_navigation_targets());
     }
 
     #[test]
