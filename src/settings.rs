@@ -13,7 +13,7 @@ pub struct Options {
     pub save_window_position: bool,
     pub scaling_filter: u32,
     pub fit_mode: u32,
-    pub scale_factor_percent: u32,
+    pub zoom_step_percent: u32,
     pub dither: u32,
     pub fractional_zoom: bool,
     pub cursor_zoom: bool,
@@ -40,7 +40,7 @@ impl Default for Options {
             save_window_position: true,
             scaling_filter: 1,
             fit_mode: 0,
-            scale_factor_percent: 25,
+            zoom_step_percent: 25,
             dither: 2,
             fractional_zoom: true,
             cursor_zoom: true,
@@ -94,8 +94,7 @@ impl Options {
             save_window_position: boolean("savewindowposition", default.save_window_position),
             scaling_filter: bounded("filteringenabled", 4, default.scaling_filter),
             fit_mode: bounded("fitmode", 1, default.fit_mode),
-            scale_factor_percent: unsigned("scalefactor", default.scale_factor_percent)
-                .clamp(1, 200),
+            zoom_step_percent: unsigned("zoomstep", default.zoom_step_percent).clamp(1, 200),
             dither: bounded("dither", 2, default.dither),
             fractional_zoom: boolean("fractionalzoom", default.fractional_zoom),
             cursor_zoom: boolean("cursorzoom", default.cursor_zoom),
@@ -247,9 +246,9 @@ impl SettingsFile {
                 Value::from(default.fit_mode),
             ),
             (
-                "scalefactor",
-                Value::from(options.scale_factor_percent),
-                Value::from(default.scale_factor_percent),
+                "zoomstep",
+                Value::from(options.zoom_step_percent),
+                Value::from(default.zoom_step_percent),
             ),
             (
                 "dither",
@@ -595,11 +594,11 @@ mod option_bounds_tests {
     #[test]
     fn numeric_values_clamp_to_their_ranges() {
         let document = serde_json::json!({ "options": {
-            "scalefactor": 0,
+            "zoomstep": 0,
             "slideshowtimer": 100_000,
         }});
         let options = Options::from_document(&document);
-        assert_eq!(options.scale_factor_percent, 1);
+        assert_eq!(options.zoom_step_percent, 1);
         assert_eq!(options.slideshow_timer_seconds, 3600);
     }
 
@@ -610,13 +609,13 @@ mod option_bounds_tests {
             "filteringenabled": 3,
             "fitmode": 1,
             "preloadingmode": 2,
-            "scalefactor": 200,
+            "zoomstep": 200,
         }});
         let options = Options::from_document(&document);
         assert_eq!(options.title_bar_mode, 2);
         assert_eq!(options.scaling_filter, 3);
         assert_eq!(options.fit_mode, 1);
         assert_eq!(options.preloading_mode, 2);
-        assert_eq!(options.scale_factor_percent, 200);
+        assert_eq!(options.zoom_step_percent, 200);
     }
 }

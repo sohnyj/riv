@@ -779,7 +779,7 @@ impl Application {
     }
 
     fn wheel_zoom(&mut self, window: HWND, wheel_delta: i16) {
-        let step = 1.0 + self.settings.options.scale_factor_percent as f32 / 100.0;
+        let step = 1.0 + self.settings.options.zoom_step_percent as f32 / 100.0;
         let exponent = if self.settings.options.fractional_zoom {
             f32::from(wheel_delta) / 120.0
         } else {
@@ -930,7 +930,7 @@ fn dispatch_action(application: &mut Application, window: HWND, action: Action) 
     if !application.gate_satisfied(action.gate()) {
         return;
     }
-    let zoom_step = 1.0 + application.settings.options.scale_factor_percent as f32 / 100.0;
+    let zoom_step = 1.0 + application.settings.options.zoom_step_percent as f32 / 100.0;
     match action {
         Action::Quit => {
             let _ = unsafe { PostMessageW(Some(window), WM_CLOSE, WPARAM(0), LPARAM(0)) };
