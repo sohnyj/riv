@@ -39,7 +39,7 @@ pub struct Bindings {
 
 const DEFAULT_KEYBOARD: &[(&str, &[&str])] = &[
     ("open", &["Ctrl+O"]),
-    ("showfileinfo", &["I"]),
+    ("showfileinfo", &["I", "Tab"]),
     ("opencontainingfolder", &["Ctrl+E"]),
     ("firstfile", &["Home"]),
     ("previousfile", &["Left"]),
