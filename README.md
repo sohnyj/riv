@@ -61,7 +61,7 @@ zip, 7z, rar, tar, and cbz / cbr / cb7 / cbt.
 ## Requirements
 
 - Windows 11 23H2+, x86-64
-- DirectX 12 capable GPU
+- DirectX 12 capable GPU with 4 GB+ VRAM
 
 ## Building
 

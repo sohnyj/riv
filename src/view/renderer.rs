@@ -17,9 +17,9 @@ use windows::Win32::Graphics::Direct2D::{
     D2D1_FACTORY_TYPE_SINGLE_THREADED, D2D1_HDRTONEMAP_DISPLAY_MODE_HDR,
     D2D1_HDRTONEMAP_PROP_DISPLAY_MODE, D2D1_HDRTONEMAP_PROP_INPUT_MAX_LUMINANCE,
     D2D1_HDRTONEMAP_PROP_OUTPUT_MAX_LUMINANCE, D2D1_INTERPOLATION_MODE,
-    D2D1_INTERPOLATION_MODE_NEAREST_NEIGHBOR, D2D1_PROPERTY_TYPE_COLOR_CONTEXT,
-    D2D1_PROPERTY_TYPE_ENUM, D2D1_PROPERTY_TYPE_FLOAT, D2D1_PROPERTY_TYPE_MATRIX_3X2,
-    D2D1_WHITELEVELADJUSTMENT_PROP_INPUT_WHITE_LEVEL,
+    D2D1_INTERPOLATION_MODE_HIGH_QUALITY_CUBIC, D2D1_INTERPOLATION_MODE_NEAREST_NEIGHBOR,
+    D2D1_PROPERTY_TYPE_COLOR_CONTEXT, D2D1_PROPERTY_TYPE_ENUM, D2D1_PROPERTY_TYPE_FLOAT,
+    D2D1_PROPERTY_TYPE_MATRIX_3X2, D2D1_WHITELEVELADJUSTMENT_PROP_INPUT_WHITE_LEVEL,
     D2D1_WHITELEVELADJUSTMENT_PROP_OUTPUT_WHITE_LEVEL, D2D1CreateFactory, ID2D1Bitmap1,
     ID2D1ColorContext, ID2D1DeviceContext, ID2D1DeviceContext5, ID2D1Effect, ID2D1Factory,
     ID2D1Factory1, ID2D1Image,
@@ -132,6 +132,8 @@ pub struct Renderer {
     dither_description: &'static str,
     /// Bumped on any change that alters the flattened scene content.
     scene_version: u64,
+    /// Guaranteed per-resource size; the flatten reduces itself to fit.
+    maximum_resource_bytes: u64,
 }
 
 impl Drop for Renderer {
@@ -183,6 +185,26 @@ fn create_d3d_device(
         device.expect("D3D11CreateDevice succeeded without device"),
         context.expect("D3D11CreateDevice succeeded without context"),
     ))
+}
+
+/// D3D11 guaranteed per-resource limit: min(max(128 MiB, adapter memory / 4), 2 GiB - 1).
+fn maximum_resource_bytes(dxgi_device: &IDXGIDevice) -> u64 {
+    const FLOOR_BYTES: u64 = 128 << 20;
+    const CEILING_BYTES: u64 = (2 << 30) - 1;
+    let memory = unsafe {
+        dxgi_device
+            .GetAdapter()
+            .and_then(|adapter| adapter.GetDesc())
+    }
+    .map(|description| {
+        if description.DedicatedVideoMemory > 0 {
+            description.DedicatedVideoMemory as u64
+        } else {
+            description.SharedSystemMemory as u64
+        }
+    })
+    .unwrap_or(0);
+    (memory / 4).clamp(FLOOR_BYTES, CEILING_BYTES)
 }
 
 /// Declares only with reported PRESENT support; an undeclared surface stays sRGB.
@@ -463,6 +485,7 @@ impl Renderer {
             create_d3d_device(D3D_DRIVER_TYPE_HARDWARE, &[D3D_FEATURE_LEVEL_12_0])
                 .or_else(|_| create_d3d_device(D3D_DRIVER_TYPE_WARP, &[D3D_FEATURE_LEVEL_11_0]))?;
         let dxgi_device: IDXGIDevice = d3d_device.cast()?;
+        let maximum_resource_bytes = maximum_resource_bytes(&dxgi_device);
 
         // D2D precedes the swapchain: the PQ pipeline decides the backbuffer format.
         let d2d_factory: ID2D1Factory1 =
@@ -646,6 +669,7 @@ impl Renderer {
             scaler_description: "Lanczos / Hermite",
             dither_description: "None",
             scene_version: 0,
+            maximum_resource_bytes,
         };
         renderer.create_target()?;
         Ok(renderer)
@@ -1435,7 +1459,7 @@ impl Renderer {
         Ok(())
     }
 
-    /// Flattens the effect chain 1:1, then convolves it to backbuffer space.
+    /// Flattens the effect chain within the budget, then convolves it to backbuffer space.
     fn prepare_scaled_scene(
         &mut self,
         transform: &Matrix3x2,
@@ -1458,7 +1482,25 @@ impl Renderer {
         if source_size.0 == 0 || source_size.1 == 0 || target_size.0 == 0 || target_size.1 == 0 {
             return None;
         }
-        self.ensure_flatten_scene(source_size).ok()?;
+        // Sources past the budget flatten reduced; the convolution restores them.
+        const FLATTEN_BYTES_PER_PIXEL: u64 = 8;
+        let budget_pixels = self.maximum_resource_bytes / FLATTEN_BYTES_PER_PIXEL;
+        let source_pixels = u64::from(source_size.0) * u64::from(source_size.1);
+        let flatten_size = if source_pixels <= budget_pixels {
+            source_size
+        } else {
+            let ratio = (budget_pixels as f64 / source_pixels as f64).sqrt();
+            (
+                ((f64::from(source_size.0) * ratio) as u32).max(1),
+                ((f64::from(source_size.1) * ratio) as u32).max(1),
+            )
+        };
+        let reduction = (
+            flatten_size.0 as f32 / source_size.0 as f32,
+            flatten_size.1 as f32 / source_size.1 as f32,
+        );
+        let reduced = flatten_size != source_size;
+        self.ensure_flatten_scene(flatten_size).ok()?;
         self.ensure_scaled_scene(target_size).ok()?;
         // The flatten only depends on scene content and quadrant; pan and zoom reuse it.
         let flatten_current = self.flatten_scene.as_ref().is_some_and(|flatten| {
@@ -1470,16 +1512,27 @@ impl Renderer {
                 self.d2d_context.SetTarget(&flatten.target);
                 self.d2d_context.BeginDraw();
                 self.d2d_context.Clear(None);
-                if rotated {
-                    let rotation = Matrix3x2 {
-                        M11: 0.0,
-                        M12: 1.0,
-                        M21: -1.0,
-                        M22: 0.0,
-                        M31: pixel_size.1 as f32,
-                        M32: 0.0,
+                if rotated || reduced {
+                    let placement = if rotated {
+                        Matrix3x2 {
+                            M11: 0.0,
+                            M12: reduction.1,
+                            M21: -reduction.0,
+                            M22: 0.0,
+                            M31: flatten_size.0 as f32,
+                            M32: 0.0,
+                        }
+                    } else {
+                        Matrix3x2 {
+                            M11: reduction.0,
+                            M12: 0.0,
+                            M21: 0.0,
+                            M22: reduction.1,
+                            M31: 0.0,
+                            M32: 0.0,
+                        }
                     };
-                    self.d2d_context.SetTransform(&raw const rotation);
+                    self.d2d_context.SetTransform(&raw const placement);
                 }
                 // The HDR10 chain ends in PQ; flatten the linear scene, encode after scaling.
                 let scene: Option<ID2D1Image> = if self.hdr_scaled_color_management_effect.is_some()
@@ -1508,11 +1561,15 @@ impl Renderer {
                         &source,
                         None,
                         None,
-                        D2D1_INTERPOLATION_MODE_NEAREST_NEIGHBOR,
+                        if reduced {
+                            D2D1_INTERPOLATION_MODE_HIGH_QUALITY_CUBIC
+                        } else {
+                            D2D1_INTERPOLATION_MODE_NEAREST_NEIGHBOR
+                        },
                         D2D1_COMPOSITE_MODE_SOURCE_OVER,
                     );
                 }
-                if rotated {
+                if rotated || reduced {
                     self.d2d_context.SetTransform(&Matrix3x2::identity());
                 }
                 let finished = self.d2d_context.EndDraw(None, None);
@@ -1527,13 +1584,14 @@ impl Renderer {
                 flatten.rotated = rotated;
             }
         }
+        // Output pixel -> flatten texel; the reduction folds into the mapping.
         let horizontal = AxisMapping {
-            position_scale: 1.0 / transform.M11,
-            position_offset: -transform.M31 / transform.M11,
+            position_scale: reduction.0 / transform.M11,
+            position_offset: -transform.M31 * reduction.0 / transform.M11,
         };
         let vertical = AxisMapping {
-            position_scale: 1.0 / transform.M22,
-            position_offset: -transform.M32 / transform.M22,
+            position_scale: reduction.1 / transform.M22,
+            position_offset: -transform.M32 * reduction.1 / transform.M22,
         };
         let source_view = self.flatten_scene.as_ref()?.shader_resource_view.clone();
         let scaled = self.scaled_scene.as_ref()?;
@@ -1545,7 +1603,7 @@ impl Renderer {
                 &self.d3d_device,
                 &self.d3d_context,
                 &source_view,
-                source_size,
+                flatten_size,
                 &render_target_view,
                 target_size,
                 horizontal,
