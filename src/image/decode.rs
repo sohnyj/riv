@@ -286,7 +286,7 @@ static REGISTRY: &[FormatDescriptor] = &[
         ],
         semantics: FrameSemantics::Single,
         adapter: Adapter::Wic,
-        store_extension: Some("JPEG XL Image Extension (Windows 11 24H2+)"),
+        store_extension: Some("JPEG XL Image Extension"),
     },
     FormatDescriptor {
         name: "RAW",

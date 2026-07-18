@@ -7,9 +7,10 @@ A fast, precise, minimal image viewer for Windows.
 - HDR and native 10-bit output: scRGB FP16 render pipeline, content peak
   detection, and display-adaptive tone mapping
 - Color management: embedded ICC profiles, PQ/HLG sources, Windows Advanced Color
+- Lanczos / Hermite scaling shaders and Ordered or Fruit output dither
 - Animation playback (GIF, APNG, animated WebP) with pause, frame stepping, and speed control
-- Browse images inside archives (Windows 11 23H2+)
-- Open http/https image URLs
+- Browse images inside archives (via archiveint.dll, shipped with Windows)
+- Open http/https image URLs (via curl.exe, shipped with Windows)
 - Per-extension file associations, reversible with no registry leftovers
 - Configurable preload range
 - Single portable executable (~7 MB), no installation
@@ -32,17 +33,20 @@ files fail without it; the error names the one to install:
 
 † paid · ‡ free, no sign-in required
 
-The HEVC extension is optional; without it, uses the built-in decoder.
+HEVC Video Extensions is optional; without it, the app uses its built-in decoder.
 
 Decoded by built-in codecs:
 
 | Format | Decoder |
 |---|---|
-| HEIC / HEIF | libheif + libde265 |
+| HEIC / HEIF | libheif + libde265 § |
 | SVG / SVGZ | resvg |
 | EXR | OpenEXR |
 | APNG | png |
 | Animated WebP | libwebp |
+
+§ 8-bit output: 10-bit and HDR HEIC still decode, reduced to 8-bit.
+By contrast, HEVC Video Extensions keeps the full depth.
 
 Decoded by Windows Imaging Component codecs:
 
@@ -51,17 +55,17 @@ Decoded by Windows Imaging Component codecs:
 | PNG, JPEG, GIF, BMP, ICO, TIFF | |
 | DDS | BC1–BC3 (DXT1–5) only |
 
-Archives browsable as image folders (Windows 11 23H2+):
+Archives browsable as image folders:
 zip, 7z, rar, tar, and cbz / cbr / cb7 / cbt.
 
 ## Requirements
 
-- Windows 11, x86-64
+- Windows 11 23H2+, x86-64
 - DirectX 12 capable GPU
 
 ## Building
 
-The build cross-compiles from Linux (including WSL) to `x86_64-pc-windows-msvc`.
+The build cross-compiles from Linux (tested on WSL) to `x86_64-pc-windows-msvc`.
 
 Prerequisites:
 
