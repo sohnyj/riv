@@ -312,10 +312,10 @@ pub fn build_info_text(
     output_description: &str,
 ) -> String {
     let megapixels = f64::from(image.width) * f64::from(image.height) / 1_000_000.0;
+    // Content and render facts first, file-system facts second; Path wraps, so it closes the block.
     let mut lines = vec![
         file_name.to_string(),
         format!("Format: {}", image.format_name),
-        format!("Size: {}", format_file_size(file_size)),
         format!(
             "Resolution: {} x {} ({megapixels:.1} MP)",
             image.width, image.height
@@ -328,22 +328,82 @@ pub fn build_info_text(
         }
     }
     lines.push(format!("Output: {output_description}"));
-    lines.push(format!("Path: {location_text}"));
-    if let Some(modified) = modified {
-        lines.push(format!("Modified: {}", format_local_datetime(modified)));
-    }
     if image.frames.len() > 1 {
         lines.push(format!("Frames: {}", image.frames.len()));
     }
+    lines.push(format!("Size: {}", format_file_size(file_size)));
+    if let Some(modified) = modified {
+        lines.push(format!("Modified: {}", format_local_datetime(modified)));
+    }
+    lines.push(format!("Path: {location_text}"));
     if let Some(exif) = &image.exif {
         append_exif_lines(&mut lines, exif);
     }
     lines.join("\n")
 }
 
+/// Photography notation, shooting-settings order; Rating is Windows metadata and goes last.
 fn append_exif_lines(lines: &mut Vec<String>, exif: &crate::image::decode::ExifInfo) {
     if let Some(taken) = exif.date_taken {
         lines.push(format!("Date taken: {}", format_local_datetime(taken)));
+    }
+    if let Some(maker) = &exif.camera_maker {
+        lines.push(format!("Camera maker: {maker}"));
+    }
+    if let Some(model) = &exif.camera_model {
+        lines.push(format!("Camera model: {model}"));
+    }
+    if let Some(focal) = exif.focal_length_millimeters {
+        lines.push(format!("Focal length: {}mm", trim_number(focal, 1)));
+    }
+    if let Some(f_stop) = exif.f_stop {
+        lines.push(format!("Aperture: f/{}", trim_number(f_stop, 1)));
+    }
+    if let Some(seconds) = exif.exposure_time_seconds {
+        let text = if seconds > 0.0 && seconds < 1.0 {
+            format!("1/{}s", (1.0 / seconds).round() as u64)
+        } else {
+            format!("{}s", trim_number(seconds, 1))
+        };
+        lines.push(format!("Exposure time: {text}"));
+    }
+    if let Some(iso) = exif.iso_speed {
+        lines.push(format!("ISO: {iso}"));
+    }
+    if let Some(bias) = exif.exposure_bias {
+        let value = trim_number(bias, 1);
+        let signed = if value.starts_with('-') || value == "0" {
+            value
+        } else {
+            format!("+{value}")
+        };
+        lines.push(format!("Exposure bias: {signed} EV"));
+    }
+    if let Some(aperture) = exif.max_aperture {
+        lines.push(format!("Max aperture: f/{}", trim_number(aperture, 2)));
+    }
+    if let Some(mode) = exif.metering_mode {
+        let text = match mode {
+            1 => "Average",
+            2 => "Center-weighted average",
+            3 => "Spot",
+            4 => "Multi-spot",
+            5 => "Pattern",
+            6 => "Partial",
+            _ => "Unknown",
+        };
+        lines.push(format!("Metering mode: {text}"));
+    }
+    if let Some(flash) = exif.flash {
+        let fired = flash & 0x1 != 0;
+        let mode = (flash >> 3) & 0x3;
+        let mut text = String::from(if fired { "Fired" } else { "Did not fire" });
+        match mode {
+            1 | 2 => text.push_str(", compulsory"),
+            3 => text.push_str(", auto"),
+            _ => {}
+        }
+        lines.push(format!("Flash: {text}"));
     }
     if let Some(rating) = exif.rating {
         let stars = match rating {
@@ -357,58 +417,6 @@ fn append_exif_lines(lines: &mut Vec<String>, exif: &crate::image::decode::ExifI
             "Rating: {stars} star{}",
             if stars == 1 { "" } else { "s" }
         ));
-    }
-    if let Some(maker) = &exif.camera_maker {
-        lines.push(format!("Camera maker: {maker}"));
-    }
-    if let Some(model) = &exif.camera_model {
-        lines.push(format!("Camera model: {model}"));
-    }
-    if let Some(f_stop) = exif.f_stop {
-        lines.push(format!("F-stop: F/{}", trim_number(f_stop, 1)));
-    }
-    if let Some(seconds) = exif.exposure_time_seconds {
-        let text = if seconds > 0.0 && seconds < 1.0 {
-            format!("1/{} s", (1.0 / seconds).round() as u64)
-        } else {
-            format!("{} s", trim_number(seconds, 1))
-        };
-        lines.push(format!("Exposure time: {text}"));
-    }
-    if let Some(iso) = exif.iso_speed {
-        lines.push(format!("ISO speed: ISO-{iso}"));
-    }
-    if let Some(bias) = exif.exposure_bias {
-        lines.push(format!("Exposure bias: {} step", trim_number(bias, 1)));
-    }
-    if let Some(focal) = exif.focal_length_millimeters {
-        lines.push(format!("Focal length: {} mm", trim_number(focal, 1)));
-    }
-    if let Some(aperture) = exif.max_aperture {
-        lines.push(format!("Max aperture: {}", trim_number(aperture, 2)));
-    }
-    if let Some(mode) = exif.metering_mode {
-        let text = match mode {
-            1 => "Average",
-            2 => "Center weighted average",
-            3 => "Spot",
-            4 => "Multi-spot",
-            5 => "Pattern",
-            6 => "Partial",
-            _ => "Unknown",
-        };
-        lines.push(format!("Metering mode: {text}"));
-    }
-    if let Some(flash) = exif.flash {
-        let fired = flash & 0x1 != 0;
-        let mode = (flash >> 3) & 0x3;
-        let mut text = String::from(if fired { "Flash" } else { "No flash" });
-        match mode {
-            1 | 2 => text.push_str(", compulsory"),
-            3 => text.push_str(", auto"),
-            _ => {}
-        }
-        lines.push(format!("Flash mode: {text}"));
     }
 }
 
@@ -508,6 +516,69 @@ fn format_local_datetime(time: SystemTime) -> String {
         "{:04}-{:02}-{:02} {:02}:{:02}:{:02}",
         local.wYear, local.wMonth, local.wDay, local.wHour, local.wMinute, local.wSecond
     )
+}
+
+#[cfg(test)]
+mod exif_line_tests {
+    use super::*;
+    use crate::image::decode::ExifInfo;
+
+    #[test]
+    fn exif_lines_follow_the_standard_notation_and_order() {
+        let exif = ExifInfo {
+            date_taken: None,
+            rating: Some(80),
+            camera_maker: Some("NIKON CORPORATION".to_string()),
+            camera_model: Some("NIKON Z 8".to_string()),
+            f_stop: Some(6.3),
+            exposure_time_seconds: Some(0.004),
+            iso_speed: Some(64),
+            exposure_bias: Some(-0.7),
+            focal_length_millimeters: Some(20.0),
+            max_aperture: Some(4.0),
+            metering_mode: Some(5),
+            flash: Some(0),
+        };
+        let mut lines = Vec::new();
+        append_exif_lines(&mut lines, &exif);
+        assert_eq!(
+            lines,
+            vec![
+                "Camera maker: NIKON CORPORATION",
+                "Camera model: NIKON Z 8",
+                "Focal length: 20mm",
+                "Aperture: f/6.3",
+                "Exposure time: 1/250s",
+                "ISO: 64",
+                "Exposure bias: -0.7 EV",
+                "Max aperture: f/4",
+                "Metering mode: Pattern",
+                "Flash: Did not fire",
+                "Rating: 4 stars",
+            ]
+        );
+    }
+
+    #[test]
+    fn positive_bias_carries_its_sign() {
+        let exif = ExifInfo {
+            date_taken: None,
+            rating: None,
+            camera_maker: None,
+            camera_model: None,
+            f_stop: None,
+            exposure_time_seconds: Some(2.0),
+            iso_speed: None,
+            exposure_bias: Some(0.7),
+            focal_length_millimeters: None,
+            max_aperture: None,
+            metering_mode: None,
+            flash: None,
+        };
+        let mut lines = Vec::new();
+        append_exif_lines(&mut lines, &exif);
+        assert_eq!(lines, vec!["Exposure time: 2s", "Exposure bias: +0.7 EV"]);
+    }
 }
 
 #[cfg(test)]
