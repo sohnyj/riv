@@ -56,8 +56,8 @@ zip, 7z, rar, tar, and cbz / cbr / cb7 / cbt.
 
 ## Requirements
 
-- Windows 11, x86-64 (AVX2-capable CPU)
-- DirectX 12 capable GPU (Direct3D feature level 12_0)
+- Windows 11, x86-64
+- DirectX 12 capable GPU
 
 ## Building
 
@@ -70,6 +70,21 @@ Prerequisites:
 - A Windows CRT + SDK splat from [xwin](https://github.com/Jake-Shadle/xwin)
   in `~/.xwin` (override the location with `XWIN_ROOT`)
 - CMake and Ninja, for static codec dependencies
+
+On Ubuntu 26.04, everything but Rust and xwin comes from apt:
+
+```sh
+sudo apt-get install clang-21 lld-21 llvm-21 cmake ninja-build git
+```
+
+Rust and xwin:
+
+```sh
+curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh
+rustup target add x86_64-pc-windows-msvc
+cargo install xwin
+xwin --accept-license splat --output ~/.xwin
+```
 
 ```sh
 ./deps/build_deps.sh   # static build of the C/C++ codecs
