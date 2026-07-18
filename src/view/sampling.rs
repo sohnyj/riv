@@ -133,6 +133,13 @@ impl AxisMapping {
         }
     }
 
+    pub fn filter_name(&self) -> &'static str {
+        match self.filter() {
+            SamplingFilter::Lanczos => "Lanczos",
+            SamplingFilter::Hermite => "Hermite",
+        }
+    }
+
     fn kernel_inverse_scale(&self) -> f32 {
         self.position_scale.abs().max(1.0)
     }

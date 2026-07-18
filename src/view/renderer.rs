@@ -105,6 +105,8 @@ pub struct Renderer {
     source_color_context: Option<ID2D1ColorContext>,
     image_display_size: (f32, f32),
     image_pixel_size: (f32, f32),
+    /// What the last frame actually scaled with, for the info panel.
+    scaler_description: &'static str,
 }
 
 impl Drop for Renderer {
@@ -537,6 +539,7 @@ impl Renderer {
             source_color_context: None,
             image_display_size: (0.0, 0.0),
             image_pixel_size: (0.0, 0.0),
+            scaler_description: "Lanczos / Hermite",
         };
         renderer.create_target()?;
         Ok(renderer)
@@ -914,6 +917,9 @@ impl Renderer {
             } else {
                 None
             };
+        if custom_scaling && self.image.is_some() && prescaled.is_none() {
+            self.scaler_description = "High Quality (fallback)";
+        }
         unsafe {
             self.d2d_context.BeginDraw();
             self.d2d_context.Clear(Some(&raw const clear_color));
@@ -1186,7 +1192,16 @@ impl Renderer {
                 vertical,
             )
             .ok()?;
+        self.scaler_description = if horizontal.filter_name() == vertical.filter_name() {
+            horizontal.filter_name()
+        } else {
+            "Lanczos + Hermite"
+        };
         Some(bitmap)
+    }
+
+    pub fn scaler_description(&self) -> &'static str {
+        self.scaler_description
     }
 
     /// The registered dither effect, when the source depth calls for one.

@@ -255,6 +255,16 @@ impl Application {
         self.settings.options.scaling_filter == 4
     }
 
+    fn scaling_description(&self) -> &'static str {
+        match self.settings.options.scaling_filter {
+            0 => "Nearest",
+            2 => "Bicubic",
+            3 => "High Quality",
+            4 => self.renderer.scaler_description(),
+            _ => "Bilinear",
+        }
+    }
+
     fn background_color(&self) -> D2D1_COLOR_F {
         let (red, green, blue) = if self.settings.options.background_color_enabled {
             self.settings.options.background_color
@@ -578,6 +588,7 @@ impl Application {
                     file_size,
                     modified,
                     self.renderer.output_description(),
+                    self.scaling_description(),
                 )
             })
         } else {

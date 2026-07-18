@@ -303,6 +303,7 @@ pub fn build_info_text(
     file_size: u64,
     modified: Option<SystemTime>,
     output_description: &str,
+    scaling_description: &str,
 ) -> String {
     let megapixels = f64::from(image.width) * f64::from(image.height) / 1_000_000.0;
     // Content and render facts first, file-system facts second; Path wraps, so it closes the block.
@@ -324,6 +325,7 @@ pub fn build_info_text(
         }
     }
     lines.push(format!("Output: {output_description}"));
+    lines.push(format!("Scaling: {scaling_description}"));
     if image.frames.len() > 1 {
         lines.push(format!("Frames: {}", image.frames.len()));
     }
@@ -537,7 +539,15 @@ mod info_text_tests {
                 delay_milliseconds: 0,
             }],
         };
-        let text = build_info_text("a.png", "C:\\a.png", &image, 100, None, "8-bit sRGB");
+        let text = build_info_text(
+            "a.png",
+            "C:\\a.png",
+            &image,
+            100,
+            None,
+            "8-bit sRGB",
+            "Bilinear",
+        );
         assert!(text.contains("Bit depth: 8-bit"));
     }
 }
