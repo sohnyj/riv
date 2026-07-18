@@ -116,6 +116,8 @@ pub struct Renderer {
     image_pixel_size: (f32, f32),
     /// What the last frame actually scaled with, for the info panel.
     scaler_description: &'static str,
+    /// What the last frame actually dithered with, for the info panel.
+    dither_description: &'static str,
 }
 
 impl Drop for Renderer {
@@ -596,6 +598,7 @@ impl Renderer {
             image_display_size: (0.0, 0.0),
             image_pixel_size: (0.0, 0.0),
             scaler_description: "Lanczos / Hermite",
+            dither_description: "None",
         };
         renderer.create_target()?;
         Ok(renderer)
@@ -1134,6 +1137,16 @@ impl Renderer {
                 "High Quality (fallback)"
             };
         }
+        self.dither_description =
+            if self.image.is_some() && self.active_dither_effect(!identity_placement).is_some() {
+                match self.dither_mode {
+                    DitherMode::None => "None",
+                    DitherMode::Ordered => "Ordered",
+                    DitherMode::Fruit => "Fruit",
+                }
+            } else {
+                "None"
+            };
         unsafe {
             self.d2d_context.BeginDraw();
             self.d2d_context.Clear(Some(&raw const clear_color));
@@ -1152,7 +1165,12 @@ impl Renderer {
                     }
                     (None, Some(output), _) => {
                         // Dither must run in destination pixel space (identity context transform).
-                        if !self.draw_image_dithered(output, &transform, interpolation) {
+                        if !self.draw_image_dithered(
+                            output,
+                            &transform,
+                            interpolation,
+                            !identity_placement,
+                        ) {
                             self.d2d_context.SetTransform(&raw const transform);
                             self.d2d_context.DrawImage(
                                 output,
@@ -1166,22 +1184,32 @@ impl Renderer {
                     }
                     // Untouched pixels, or no effect support.
                     (None, None, Some(image)) => {
-                        let destination = D2D_RECT_F {
-                            left: 0.0,
-                            top: 0.0,
-                            right: self.image_pixel_size.0,
-                            bottom: self.image_pixel_size.1,
-                        };
-                        self.d2d_context.SetTransform(&raw const transform);
-                        self.d2d_context.DrawBitmap(
-                            image,
-                            Some(&raw const destination),
-                            1.0,
-                            interpolation,
-                            None,
-                            None,
-                        );
-                        self.d2d_context.SetTransform(&Matrix3x2::identity());
+                        let dithered = image.cast::<ID2D1Image>().is_ok_and(|bitmap_image| {
+                            self.draw_image_dithered(
+                                &bitmap_image,
+                                &transform,
+                                interpolation,
+                                !identity_placement,
+                            )
+                        });
+                        if !dithered {
+                            let destination = D2D_RECT_F {
+                                left: 0.0,
+                                top: 0.0,
+                                right: self.image_pixel_size.0,
+                                bottom: self.image_pixel_size.1,
+                            };
+                            self.d2d_context.SetTransform(&raw const transform);
+                            self.d2d_context.DrawBitmap(
+                                image,
+                                Some(&raw const destination),
+                                1.0,
+                                interpolation,
+                                None,
+                                None,
+                            );
+                            self.d2d_context.SetTransform(&Matrix3x2::identity());
+                        }
                     }
                     _ => {}
                 }
@@ -1441,27 +1469,20 @@ impl Renderer {
         self.scaler_description
     }
 
-    /// What dithering the current frame actually gets, for the info panel.
+    /// What dithering the last frame actually got, for the info panel.
     pub fn dither_description(&self) -> &'static str {
-        if self.active_dither_effect().is_none() {
-            return "None";
-        }
-        match self.dither_mode {
-            DitherMode::None => "None",
-            DitherMode::Ordered => "Ordered",
-            DitherMode::Fruit => "Fruit",
-        }
+        self.dither_description
     }
 
-    /// The registered dither effect, when the source depth calls for one.
-    fn active_dither_effect(&self) -> Option<&ID2D1Effect> {
-        // A source no deeper than the backbuffer brings nothing for it to lose.
+    /// The registered dither effect. Only a 1:1 draw of a source no deeper
+    /// than the backbuffer has nothing to lose; resampling always does.
+    fn active_dither_effect(&self, resampled: bool) -> Option<&ID2D1Effect> {
         let backbuffer_bits = if self.swap_chain_format == DXGI_FORMAT_R10G10B10A2_UNORM {
             10
         } else {
             8
         };
-        if self.image_source_bits_per_channel <= backbuffer_bits {
+        if !resampled && self.image_source_bits_per_channel <= backbuffer_bits {
             return None;
         }
         match self.dither_mode {
@@ -1473,7 +1494,7 @@ impl Renderer {
 
     /// Prescaled scene -> dither -> target; false when the caller draws plain.
     fn draw_prescaled_dithered(&self, scaled: &ID2D1Bitmap1) -> bool {
-        let Some(dither_effect) = self.active_dither_effect() else {
+        let Some(dither_effect) = self.active_dither_effect(true) else {
             return false;
         };
         unsafe { dither_effect.SetInput(0, scaled, true) };
@@ -1498,10 +1519,12 @@ impl Renderer {
         output: &ID2D1Image,
         transform: &Matrix3x2,
         interpolation: D2D1_INTERPOLATION_MODE,
+        resampled: bool,
     ) -> bool {
-        let (Some(dither_effect), Some(affine_transform)) =
-            (self.active_dither_effect(), &self.affine_transform_effect)
-        else {
+        let (Some(dither_effect), Some(affine_transform)) = (
+            self.active_dither_effect(resampled),
+            &self.affine_transform_effect,
+        ) else {
             return false;
         };
         let wired = unsafe {
