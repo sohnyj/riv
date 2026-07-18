@@ -89,18 +89,19 @@ impl Options {
                 .and_then(Value::as_str)
                 .and_then(parse_hex_color)
                 .unwrap_or(default.background_color),
-            title_bar_mode: unsigned("titlebarmode", default.title_bar_mode),
+            title_bar_mode: bounded("titlebarmode", 2, default.title_bar_mode),
             control_drag_window: boolean("ctrldragwindow", default.control_drag_window),
             save_window_position: boolean("savewindowposition", default.save_window_position),
-            scaling_filter: unsigned("filteringenabled", default.scaling_filter),
-            fit_mode: unsigned("fitmode", default.fit_mode),
-            scale_factor_percent: unsigned("scalefactor", default.scale_factor_percent),
+            scaling_filter: bounded("filteringenabled", 3, default.scaling_filter),
+            fit_mode: bounded("fitmode", 1, default.fit_mode),
+            scale_factor_percent: unsigned("scalefactor", default.scale_factor_percent)
+                .clamp(1, 200),
             dither: bounded("dither", 2, default.dither),
             fractional_zoom: boolean("fractionalzoom", default.fractional_zoom),
             cursor_zoom: boolean("cursorzoom", default.cursor_zoom),
             sort_mode: bounded("sortmode", 4, default.sort_mode),
             sort_descending: boolean("sortdescending", default.sort_descending),
-            preloading_mode: unsigned("preloadingmode", default.preloading_mode),
+            preloading_mode: bounded("preloadingmode", 2, default.preloading_mode),
             loop_folders_enabled: boolean("loopfoldersenabled", default.loop_folders_enabled),
             slideshow_reversed: boolean("slideshowreversed", default.slideshow_reversed),
             slideshow_timer_seconds: unsigned("slideshowtimer", default.slideshow_timer_seconds)
@@ -563,4 +564,59 @@ fn read_document(path: &PathBuf) -> Value {
         .and_then(|text| serde_json::from_str(&text).ok())
         .filter(Value::is_object)
         .unwrap_or_else(|| Value::Object(Map::new()))
+}
+
+#[cfg(test)]
+mod option_bounds_tests {
+    use super::*;
+
+    #[test]
+    fn out_of_range_indexes_fall_back_to_defaults() {
+        let document = serde_json::json!({ "options": {
+            "titlebarmode": 9,
+            "filteringenabled": 9,
+            "fitmode": 9,
+            "preloadingmode": 9,
+            "dither": 9,
+            "sortmode": 9,
+            "afterdelete": 9,
+        }});
+        let options = Options::from_document(&document);
+        let default = Options::default();
+        assert_eq!(options.title_bar_mode, default.title_bar_mode);
+        assert_eq!(options.scaling_filter, default.scaling_filter);
+        assert_eq!(options.fit_mode, default.fit_mode);
+        assert_eq!(options.preloading_mode, default.preloading_mode);
+        assert_eq!(options.dither, default.dither);
+        assert_eq!(options.sort_mode, default.sort_mode);
+        assert_eq!(options.after_delete, default.after_delete);
+    }
+
+    #[test]
+    fn numeric_values_clamp_to_their_ranges() {
+        let document = serde_json::json!({ "options": {
+            "scalefactor": 0,
+            "slideshowtimer": 100_000,
+        }});
+        let options = Options::from_document(&document);
+        assert_eq!(options.scale_factor_percent, 1);
+        assert_eq!(options.slideshow_timer_seconds, 3600);
+    }
+
+    #[test]
+    fn in_range_values_are_kept() {
+        let document = serde_json::json!({ "options": {
+            "titlebarmode": 2,
+            "filteringenabled": 3,
+            "fitmode": 1,
+            "preloadingmode": 2,
+            "scalefactor": 200,
+        }});
+        let options = Options::from_document(&document);
+        assert_eq!(options.title_bar_mode, 2);
+        assert_eq!(options.scaling_filter, 3);
+        assert_eq!(options.fit_mode, 1);
+        assert_eq!(options.preloading_mode, 2);
+        assert_eq!(options.scale_factor_percent, 200);
+    }
 }
