@@ -193,10 +193,9 @@ impl ViewTransform {
         let mut translate_x = viewport.width / 2.0 + self.pan_offset_x;
         let mut translate_y = viewport.height / 2.0 + self.pan_offset_y;
 
-        let axis_aligned = self.rotation_quadrant.is_multiple_of(2);
         let snappable_scale = (self.scale - 1.0).abs() < f32::EPSILON;
         // Snap the final translation so the texel grid lands on device pixels.
-        if axis_aligned && snappable_scale {
+        if snappable_scale {
             let origin_x = translate_x - center_x * scale_x * cosine + center_y * scale_y * sine;
             let origin_y = translate_y - center_x * scale_x * sine - center_y * scale_y * cosine;
             translate_x += origin_x.round() - origin_x;

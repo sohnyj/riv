@@ -1091,19 +1091,39 @@ impl Renderer {
             M31: matrix[4],
             M32: matrix[5],
         };
-        // The separable pass needs an axis-aligned transform; 90/270 falls back.
+        // 90/270 fold into the flatten as a lossless permutation; the pass then
+        // sees the axis-aligned remainder in rotated-image space.
+        let separable = if matrix[1] == 0.0 && matrix[2] == 0.0 {
+            Some((transform, false))
+        } else if matrix[0] == 0.0 && matrix[3] == 0.0 {
+            let source_height = self.image_pixel_size.1.round();
+            Some((
+                Matrix3x2 {
+                    M11: -transform.M21,
+                    M12: 0.0,
+                    M21: 0.0,
+                    M22: transform.M12,
+                    M31: source_height * transform.M21 + transform.M31,
+                    M32: transform.M32,
+                },
+                true,
+            ))
+        } else {
+            None
+        };
         // 1:1 on whole pixels resamples nothing; leave the pixels untouched.
-        let identity_placement = (transform.M11.abs() - 1.0).abs() < 1e-6
-            && (transform.M22.abs() - 1.0).abs() < 1e-6
-            && (transform.M31 - transform.M31.round()).abs() < 1e-4
-            && (transform.M32 - transform.M32.round()).abs() < 1e-4;
+        let identity_placement = separable.as_ref().is_some_and(|(effective, _)| {
+            (effective.M11.abs() - 1.0).abs() < 1e-6
+                && (effective.M22.abs() - 1.0).abs() < 1e-6
+                && (effective.M31 - effective.M31.round()).abs() < 1e-4
+                && (effective.M32 - effective.M32.round()).abs() < 1e-4
+        });
         let prescaled = if custom_scaling
             && !identity_placement
             && self.image.is_some()
-            && matrix[1] == 0.0
-            && matrix[2] == 0.0
+            && let Some((effective, rotated)) = &separable
         {
-            self.prepare_scaled_scene(&transform)
+            self.prepare_scaled_scene(effective, *rotated)
         } else {
             None
         };
@@ -1308,15 +1328,24 @@ impl Renderer {
     }
 
     /// Flattens the effect chain 1:1, then convolves it to backbuffer space.
-    fn prepare_scaled_scene(&mut self, transform: &Matrix3x2) -> Option<ID2D1Bitmap1> {
+    fn prepare_scaled_scene(
+        &mut self,
+        transform: &Matrix3x2,
+        rotated: bool,
+    ) -> Option<ID2D1Bitmap1> {
         self.sampling_pass.as_ref()?;
         if transform.M11 == 0.0 || transform.M22 == 0.0 {
             return None;
         }
-        let source_size = (
+        let pixel_size = (
             self.image_pixel_size.0.round() as u32,
             self.image_pixel_size.1.round() as u32,
         );
+        let source_size = if rotated {
+            (pixel_size.1, pixel_size.0)
+        } else {
+            pixel_size
+        };
         let target_size = self.backbuffer_size;
         if source_size.0 == 0 || source_size.1 == 0 || target_size.0 == 0 || target_size.1 == 0 {
             return None;
@@ -1328,6 +1357,17 @@ impl Renderer {
             self.d2d_context.SetTarget(&flatten.target);
             self.d2d_context.BeginDraw();
             self.d2d_context.Clear(None);
+            if rotated {
+                let rotation = Matrix3x2 {
+                    M11: 0.0,
+                    M12: 1.0,
+                    M21: -1.0,
+                    M22: 0.0,
+                    M31: pixel_size.1 as f32,
+                    M32: 0.0,
+                };
+                self.d2d_context.SetTransform(&raw const rotation);
+            }
             match (&self.effect_output, &self.image) {
                 (Some(output), _) => self.d2d_context.DrawImage(
                     output,
@@ -1340,8 +1380,8 @@ impl Renderer {
                     let destination = D2D_RECT_F {
                         left: 0.0,
                         top: 0.0,
-                        right: source_size.0 as f32,
-                        bottom: source_size.1 as f32,
+                        right: pixel_size.0 as f32,
+                        bottom: pixel_size.1 as f32,
                     };
                     self.d2d_context.DrawBitmap(
                         image,
@@ -1353,6 +1393,9 @@ impl Renderer {
                     );
                 }
                 _ => {}
+            }
+            if rotated {
+                self.d2d_context.SetTransform(&Matrix3x2::identity());
             }
             let finished = self.d2d_context.EndDraw(None, None);
             match &self.target {

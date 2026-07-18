@@ -255,7 +255,7 @@ impl Application {
             0 => D2D1_INTERPOLATION_MODE_NEAREST_NEIGHBOR,
             2 => D2D1_INTERPOLATION_MODE_CUBIC,
             // 3 is High Quality Cubic; 4 falls back to it when the
-            // Lanczos/Hermite pass cannot run (90/270 rotation, no device).
+            // Lanczos/Hermite pass cannot run.
             3 | 4 => D2D1_INTERPOLATION_MODE_HIGH_QUALITY_CUBIC,
             _ => D2D1_INTERPOLATION_MODE_LINEAR,
         }
