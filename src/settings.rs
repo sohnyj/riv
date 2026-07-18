@@ -1,6 +1,6 @@
 //! JSON settings in riv.json next to the exe; defaults are never written.
 
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
 use serde_json::{Map, Value};
 
@@ -560,7 +560,7 @@ fn settings_path() -> PathBuf {
         .join("riv.json")
 }
 
-fn read_document(path: &PathBuf) -> Value {
+fn read_document(path: &Path) -> Value {
     std::fs::read_to_string(path)
         .ok()
         .and_then(|text| serde_json::from_str(&text).ok())
