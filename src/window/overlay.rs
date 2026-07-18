@@ -321,6 +321,12 @@ pub fn build_info_text(
         lines.push(format!("Frames: {}", image.frames.len()));
     }
     lines.push(format!("Scaling: {scaling_description}"));
+    let color_profile = match &image.icc_profile {
+        Some(profile) => crate::image::decode::icc_profile_description(profile)
+            .unwrap_or_else(|| "Embedded".to_string()),
+        None => "None".to_string(),
+    };
+    lines.push(format!("Color profile: {color_profile}"));
     match image.storage {
         PixelStorage::RgbaHalf => match image.peak_luminance_nits {
             Some(peak) => lines.push(format!("Bit depth: FP16 linear, peak {peak:.0} nits")),
@@ -553,6 +559,49 @@ mod info_text_tests {
             "None",
         );
         assert!(text.contains("Bit depth: 8-bit"));
+    }
+
+    #[test]
+    fn color_profile_line_reports_the_tag_state() {
+        let mut image = DecodedImage {
+            width: 2,
+            height: 1,
+            pixel_width: 2,
+            pixel_height: 1,
+            format_name: "PNG",
+            icc_profile: None,
+            exif: None,
+            storage: PixelStorage::Bgra8,
+            source_bits_per_channel: 8,
+            peak_luminance_nits: None,
+            frames: vec![Frame {
+                pixels: vec![0; 8],
+                delay_milliseconds: 0,
+            }],
+        };
+        let untagged = build_info_text(
+            "a.png",
+            "C:\\a.png",
+            &image,
+            100,
+            None,
+            "8-bit sRGB",
+            "Bilinear",
+            "None",
+        );
+        assert!(untagged.contains("Color profile: None"));
+        image.icc_profile = Some(vec![0; 4]);
+        let unparsable = build_info_text(
+            "a.png",
+            "C:\\a.png",
+            &image,
+            100,
+            None,
+            "8-bit sRGB",
+            "Bilinear",
+            "None",
+        );
+        assert!(unparsable.contains("Color profile: Embedded"));
     }
 }
 

@@ -932,6 +932,49 @@ struct HdrEncoding {
 }
 
 /// ICC 'cicp' tag; Some for an HDR transfer (16 = PQ, 18 = HLG) with convertible primaries.
+/// Human-readable profile name from the ICC 'desc' tag (v2 text or v4 mluc).
+pub fn icc_profile_description(icc: &[u8]) -> Option<String> {
+    let read_u32 = |offset: usize| -> Option<u32> {
+        Some(u32::from_be_bytes(
+            icc.get(offset..offset + 4)?.try_into().ok()?,
+        ))
+    };
+    let tag_count = read_u32(128)? as usize;
+    for index in 0..tag_count {
+        let entry = 132 + index * 12;
+        if icc.get(entry..entry + 4)? != b"desc" {
+            continue;
+        }
+        let offset = read_u32(entry + 4)? as usize;
+        let description = match icc.get(offset..offset + 4)? {
+            b"desc" => {
+                let length = read_u32(offset + 8)? as usize;
+                let bytes = icc.get(offset + 12..offset + 12 + length)?;
+                let end = bytes
+                    .iter()
+                    .position(|&byte| byte == 0)
+                    .unwrap_or(bytes.len());
+                String::from_utf8(bytes[..end].to_vec()).ok()?
+            }
+            b"mluc" => {
+                // First record: length at +20, offset at +24, UTF-16BE.
+                let length = read_u32(offset + 20)? as usize;
+                let start = offset + read_u32(offset + 24)? as usize;
+                let bytes = icc.get(start..start + length)?;
+                let units: Vec<u16> = bytes
+                    .chunks_exact(2)
+                    .map(|pair| u16::from_be_bytes([pair[0], pair[1]]))
+                    .collect();
+                String::from_utf16(&units).ok()?
+            }
+            _ => return None,
+        };
+        let trimmed = description.trim_matches(['\0', ' ', '\t', '\r', '\n']);
+        return (!trimmed.is_empty()).then(|| trimmed.to_string());
+    }
+    None
+}
+
 fn icc_hdr_encoding(icc: &[u8]) -> Option<HdrEncoding> {
     const TRANSFER_PQ: u8 = 16;
     const TRANSFER_HLG: u8 = 18;
@@ -1829,6 +1872,57 @@ fn copy_pixels(
         row += rows;
     }
     Ok(pixels)
+}
+
+#[cfg(test)]
+mod icc_description_tests {
+    use super::*;
+
+    fn profile(tag_type: &[u8; 4], payload: &[u8]) -> Vec<u8> {
+        let mut icc = vec![0u8; 128];
+        icc.extend_from_slice(&1u32.to_be_bytes());
+        icc.extend_from_slice(b"desc");
+        icc.extend_from_slice(&144u32.to_be_bytes());
+        icc.extend_from_slice(&(8 + payload.len() as u32).to_be_bytes());
+        icc.extend_from_slice(tag_type);
+        icc.extend_from_slice(&[0u8; 4]);
+        icc.extend_from_slice(payload);
+        icc
+    }
+
+    #[test]
+    fn reads_a_version2_text_description() {
+        let name = b"Adobe RGB (1998)\0";
+        let mut payload = (name.len() as u32).to_be_bytes().to_vec();
+        payload.extend_from_slice(name);
+        let icc = profile(b"desc", &payload);
+        assert_eq!(
+            icc_profile_description(&icc).as_deref(),
+            Some("Adobe RGB (1998)")
+        );
+    }
+
+    #[test]
+    fn reads_a_version4_mluc_description() {
+        let text: Vec<u8> = "Display P3"
+            .encode_utf16()
+            .flat_map(|unit| unit.to_be_bytes())
+            .collect();
+        let mut payload = 1u32.to_be_bytes().to_vec();
+        payload.extend_from_slice(&12u32.to_be_bytes());
+        payload.extend_from_slice(b"enUS");
+        payload.extend_from_slice(&(text.len() as u32).to_be_bytes());
+        payload.extend_from_slice(&28u32.to_be_bytes());
+        payload.extend_from_slice(&text);
+        let icc = profile(b"mluc", &payload);
+        assert_eq!(icc_profile_description(&icc).as_deref(), Some("Display P3"));
+    }
+
+    #[test]
+    fn garbage_profiles_yield_none() {
+        assert_eq!(icc_profile_description(&[0u8; 16]), None);
+        assert_eq!(icc_profile_description(b"not an icc profile"), None);
+    }
 }
 
 #[cfg(test)]
