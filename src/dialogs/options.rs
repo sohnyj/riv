@@ -1,4 +1,4 @@
-//! Settings dialog: five tab pages editing a transient copy applied on OK/Apply.
+//! Settings dialog: six tab pages editing a transient copy applied on OK/Apply.
 
 use windows::Win32::Foundation::{COLORREF, HWND, LPARAM, POINT, RECT, WPARAM};
 use windows::Win32::Graphics::Gdi::{
