@@ -3,15 +3,15 @@
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use windows::Win32::Foundation::{FILETIME, SYSTEMTIME};
-use windows::Win32::Globalization::{DATE_SHORTDATE, GetDateFormatEx, GetTimeFormatEx};
 use windows::Win32::Graphics::Direct2D::Common::{D2D_RECT_F, D2D1_COLOR_F};
 use windows::Win32::Graphics::Direct2D::{
     D2D1_DRAW_TEXT_OPTIONS_NONE, D2D1_ROUNDED_RECT, ID2D1DeviceContext,
 };
 use windows::Win32::Graphics::DirectWrite::{
     DWRITE_FACTORY_TYPE_SHARED, DWRITE_FONT_STRETCH_NORMAL, DWRITE_FONT_STYLE_NORMAL,
-    DWRITE_FONT_WEIGHT_NORMAL, DWRITE_PARAGRAPH_ALIGNMENT_CENTER, DWRITE_TEXT_ALIGNMENT_CENTER,
-    DWRITE_TEXT_METRICS, DWriteCreateFactory, IDWriteFactory, IDWriteTextFormat, IDWriteTextLayout,
+    DWRITE_FONT_WEIGHT_NORMAL, DWRITE_LINE_SPACING_METHOD_UNIFORM,
+    DWRITE_PARAGRAPH_ALIGNMENT_CENTER, DWRITE_TEXT_ALIGNMENT_CENTER, DWRITE_TEXT_METRICS,
+    DWriteCreateFactory, IDWriteFactory, IDWriteTextFormat, IDWriteTextLayout,
 };
 use windows::Win32::System::Time::{FileTimeToSystemTime, SystemTimeToTzSpecificLocalTime};
 use windows::core::{Result, w};
@@ -19,6 +19,11 @@ use windows_numerics::Vector2;
 
 use crate::image::color;
 use crate::image::decode::{DecodedImage, PixelStorage};
+
+/// Lucida Console design metrics: ascent 1616/2048 em, natural line exactly 1 em (R12).
+const FONT_ASCENT_RATIO: f32 = 1616.0 / 2048.0;
+/// Roomier than the font's tight single-em natural line.
+const LINE_SPACING_RATIO: f32 = 1.3;
 
 const PANEL_MARGIN: f32 = 12.0;
 const PANEL_PADDING_X: f32 = 12.0;
@@ -287,6 +292,14 @@ fn create_text_formats(
             format.SetParagraphAlignment(DWRITE_PARAGRAPH_ALIGNMENT_CENTER)?;
         }
     }
+    // Uniform spacing keeps fallback glyphs (CJK names) from bloating single lines.
+    let set_line_spacing = |format: &IDWriteTextFormat, size: f32| {
+        let line = size * LINE_SPACING_RATIO;
+        let baseline = size * FONT_ASCENT_RATIO + (line - size) / 2.0;
+        unsafe { format.SetLineSpacing(DWRITE_LINE_SPACING_METHOD_UNIFORM, line, baseline) }
+    };
+    set_line_spacing(&text_format, 14.0 * scale)?;
+    set_line_spacing(&error_format, 16.0 * scale)?;
     Ok((text_format, error_format, wordmark_format))
 }
 
@@ -317,7 +330,7 @@ pub fn build_info_text(
     lines.push(format!("Output: {output_description}"));
     lines.push(format!("Path: {location_text}"));
     if let Some(modified) = modified {
-        lines.push(format!("Modified: {}", format_locale_datetime(modified)));
+        lines.push(format!("Modified: {}", format_local_datetime(modified)));
     }
     if image.frames.len() > 1 {
         lines.push(format!("Frames: {}", image.frames.len()));
@@ -330,7 +343,7 @@ pub fn build_info_text(
 
 fn append_exif_lines(lines: &mut Vec<String>, exif: &crate::image::decode::ExifInfo) {
     if let Some(taken) = exif.date_taken {
-        lines.push(format!("Date taken: {}", format_locale_datetime(taken)));
+        lines.push(format!("Date taken: {}", format_local_datetime(taken)));
     }
     if let Some(rating) = exif.rating {
         let stars = match rating {
@@ -474,7 +487,8 @@ fn group_thousands(value: u64) -> String {
     grouped
 }
 
-fn format_locale_datetime(time: SystemTime) -> String {
+/// Fixed 24-hour local time; locale forms can pull fallback glyphs into the panel.
+fn format_local_datetime(time: SystemTime) -> String {
     let Ok(elapsed) = time.duration_since(UNIX_EPOCH) else {
         return String::new();
     };
@@ -490,30 +504,10 @@ fn format_locale_datetime(time: SystemTime) -> String {
     {
         return String::new();
     }
-    let mut date_buffer = [0u16; 64];
-    let date_length = unsafe {
-        GetDateFormatEx(
-            None,
-            DATE_SHORTDATE,
-            Some(&raw const local),
-            None,
-            Some(&mut date_buffer),
-            None,
-        )
-    };
-    let mut time_buffer = [0u16; 64];
-    let time_length = unsafe {
-        GetTimeFormatEx(
-            None,
-            windows::Win32::Globalization::TIME_FORMAT_FLAGS(0),
-            Some(&raw const local),
-            None,
-            Some(&mut time_buffer),
-        )
-    };
-    let date = String::from_utf16_lossy(&date_buffer[..date_length.max(1) as usize - 1]);
-    let time = String::from_utf16_lossy(&time_buffer[..time_length.max(1) as usize - 1]);
-    format!("{date} {time}")
+    format!(
+        "{:04}-{:02}-{:02} {:02}:{:02}:{:02}",
+        local.wYear, local.wMonth, local.wDay, local.wHour, local.wMinute, local.wSecond
+    )
 }
 
 #[cfg(test)]
