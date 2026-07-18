@@ -518,8 +518,11 @@ fn decode_input(
     }
 }
 
+/// Extension-only: magic probing never yields RAW, and this runs on the UI thread.
 pub fn is_raw_two_stage(path: &Path) -> bool {
-    descriptor_for_path(path)
+    path.extension()
+        .map(|extension| extension.to_string_lossy().to_lowercase())
+        .and_then(|extension| descriptor_for_extension(&extension))
         .is_some_and(|descriptor| matches!(descriptor.adapter, Adapter::WicRawTwoStage))
 }
 
@@ -1786,6 +1789,14 @@ fn copy_pixels(
 #[cfg(test)]
 mod descriptor_probe_tests {
     use super::*;
+
+    #[test]
+    fn raw_two_stage_detection_is_extension_only() {
+        assert!(is_raw_two_stage(Path::new("photo.dng")));
+        assert!(is_raw_two_stage(Path::new("PHOTO.DNG")));
+        assert!(!is_raw_two_stage(Path::new("photo.png")));
+        assert!(!is_raw_two_stage(Path::new("photo")));
+    }
 
     /// PNG signature + IHDR(13 bytes) + an acTL chunk header.
     fn animated_png_header() -> Vec<u8> {
