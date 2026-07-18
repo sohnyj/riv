@@ -116,7 +116,7 @@ const ACTION_TABLE: &[(Action, &str, &str, ActivationGate)] = &[
         "Last File",
         ActivationGate::Folder,
     ),
-    (Action::Loop, "loop", "Loop", ActivationGate::Window),
+    (Action::Loop, "loop", "Loop", ActivationGate::Folder),
     (Action::Pause, "pause", "Pause", ActivationGate::Animation),
     (
         Action::NextFrame,
