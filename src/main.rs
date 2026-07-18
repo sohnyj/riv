@@ -1108,9 +1108,12 @@ fn rename_current_file(application: &mut Application, window: HWND) {
     let Some(new_name) = dialogs::rename::show(window, &current_name) else {
         return;
     };
-    if let Ok(new_path) = file_ops::rename_file(&path, &new_name) {
-        application.image_core.refresh_folder();
-        open_external_path(application, window, &new_path);
+    match file_ops::rename_file(&path, &new_name) {
+        Ok(new_path) => {
+            application.image_core.refresh_folder();
+            open_external_path(application, window, &new_path);
+        }
+        Err(error) => file_ops::show_rename_error(window, &error),
     }
 }
 

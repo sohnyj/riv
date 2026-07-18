@@ -5,10 +5,11 @@ use std::os::windows::ffi::OsStrExt;
 use std::path::{Path, PathBuf};
 
 use windows::Win32::Foundation::HWND;
+use windows::Win32::Storage::FileSystem::{MOVE_FILE_FLAGS, MoveFileExW};
 use windows::Win32::System::Com::{CLSCTX_INPROC_SERVER, CoCreateInstance};
 use windows::Win32::UI::Controls::{
-    TASKDIALOG_BUTTON, TASKDIALOGCONFIG, TDCBF_CANCEL_BUTTON, TDF_ALLOW_DIALOG_CANCELLATION,
-    TaskDialogIndirect,
+    TASKDIALOG_BUTTON, TASKDIALOGCONFIG, TDCBF_CANCEL_BUTTON, TDCBF_CLOSE_BUTTON,
+    TDF_ALLOW_DIALOG_CANCELLATION, TaskDialogIndirect,
 };
 use windows::Win32::UI::Shell::{
     FOF_ALLOWUNDO, FOF_NOCONFIRMATION, FOF_SILENT, FileOperation, IFileOperation, IShellItem,
@@ -102,7 +103,18 @@ pub fn delete_file(path: &Path, permanent: bool) -> Result<()> {
     }
 }
 
+/// Path separators would silently turn a rename into a move.
+fn new_name_is_invalid(name: &str) -> bool {
+    name.contains(['\\', '/'])
+}
+
 pub fn rename_file(path: &Path, new_name: &str) -> std::io::Result<PathBuf> {
+    if new_name_is_invalid(new_name) {
+        return Err(std::io::Error::new(
+            std::io::ErrorKind::InvalidInput,
+            "The new name cannot contain \\ or /",
+        ));
+    }
     let destination = path.with_file_name(new_name);
     if destination
         .as_os_str()
@@ -111,6 +123,46 @@ pub fn rename_file(path: &Path, new_name: &str) -> std::io::Result<PathBuf> {
     {
         return Ok(destination);
     }
-    std::fs::rename(path, &destination)?;
+    // No replace flag: renaming onto an existing file must fail, not overwrite it.
+    unsafe {
+        MoveFileExW(
+            &HSTRING::from(path.as_os_str()),
+            &HSTRING::from(destination.as_os_str()),
+            MOVE_FILE_FLAGS(0),
+        )
+    }
+    .map_err(std::io::Error::other)?;
     Ok(destination)
+}
+
+pub fn show_rename_error(window: HWND, error: &std::io::Error) {
+    let content: Vec<u16> = error
+        .to_string()
+        .encode_utf16()
+        .chain(std::iter::once(0))
+        .collect();
+    let configuration = TASKDIALOGCONFIG {
+        cbSize: size_of::<TASKDIALOGCONFIG>() as u32,
+        hwndParent: window,
+        pszWindowTitle: w!("riv"),
+        pszMainInstruction: w!("Cannot rename the file"),
+        pszContent: PCWSTR(content.as_ptr()),
+        dwCommonButtons: TDCBF_CLOSE_BUTTON,
+        ..Default::default()
+    };
+    let _ = unsafe { TaskDialogIndirect(&raw const configuration, None, None, None) };
+}
+
+#[cfg(test)]
+mod rename_name_tests {
+    use super::*;
+
+    #[test]
+    fn separators_are_rejected() {
+        assert!(new_name_is_invalid("..\\a.png"));
+        assert!(new_name_is_invalid("sub/a.png"));
+        assert!(new_name_is_invalid("/a.png"));
+        assert!(!new_name_is_invalid("a.png"));
+        assert!(!new_name_is_invalid("한글 이미지.png"));
+    }
 }
