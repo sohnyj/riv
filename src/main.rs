@@ -174,7 +174,7 @@ impl Application {
         Ok(application)
     }
 
-    /// Rebuild the renderer on HDR mode or bit depth change; else refresh the boost.
+    /// Rebuild the renderer on HDR mode or bit depth change; else refresh boost and tone map target.
     fn refresh_display_color_state(&mut self, window: HWND) {
         if color::monitor_is_hdr(window) != self.renderer.hdr_mode()
             || color::display_bits_per_color(window) != self.renderer.bits_per_color()
@@ -185,10 +185,21 @@ impl Application {
             }
             return;
         }
+        let mut stale = false;
         let boost = color::sdr_white_boost(window);
         if (boost - self.sdr_white_boost).abs() > f32::EPSILON {
             self.sdr_white_boost = boost;
             self.renderer.set_sdr_white_boost(boost);
+            stale = true;
+        }
+        let hdr_mode = self.renderer.hdr_mode();
+        if self
+            .renderer
+            .set_tone_map_target_nits(tone_map_target_luminance(window, hdr_mode))
+        {
+            stale = true;
+        }
+        if stale {
             self.render(window);
         }
     }

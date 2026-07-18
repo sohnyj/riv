@@ -635,6 +635,24 @@ impl Renderer {
         }
     }
 
+    /// Updates the tone map target in place; true when it changed (monitor move).
+    pub fn set_tone_map_target_nits(&mut self, nits: f32) -> bool {
+        if (nits - self.tone_map_target_nits).abs() < f32::EPSILON {
+            return false;
+        }
+        self.tone_map_target_nits = nits;
+        if let Some(effect) = &self.hdr_tone_map_effect {
+            let _ = unsafe {
+                effect.SetValue(
+                    D2D1_HDRTONEMAP_PROP_OUTPUT_MAX_LUMINANCE.0 as u32,
+                    D2D1_PROPERTY_TYPE_FLOAT,
+                    &nits.to_ne_bytes(),
+                )
+            };
+        }
+        true
+    }
+
     #[expect(clippy::too_many_arguments)]
     pub fn set_image(
         &mut self,
