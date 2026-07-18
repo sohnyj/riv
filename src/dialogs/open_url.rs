@@ -22,7 +22,8 @@ pub fn show(window: HWND) -> Option<String> {
 #[cfg(test)]
 mod dialog_tests {
     use super::*;
-    use crate::dialogs::text_input::{EDIT_IDENTIFIER, IDOK};
+    use crate::dialogs::IDOK;
+    use crate::dialogs::text_input::EDIT_IDENTIFIER;
     use windows::Win32::Foundation::{LPARAM, WPARAM};
     use windows::Win32::UI::WindowsAndMessaging::{SetDlgItemTextW, WM_COMMAND};
     use windows::core::w;

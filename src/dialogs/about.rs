@@ -9,15 +9,12 @@ use windows::Win32::System::LibraryLoader::GetModuleHandleW;
 use windows::Win32::UI::HiDpi::GetDpiForWindow;
 use windows::Win32::UI::WindowsAndMessaging::{
     DialogBoxParamW, EndDialog, GetDlgItem, SendMessageW, SetDlgItemTextW, SetWindowLongPtrW,
-    WINDOW_LONG_PTR_INDEX, WM_COMMAND, WM_DESTROY, WM_INITDIALOG, WM_NOTIFY, WM_SETFONT,
+    WM_COMMAND, WM_DESTROY, WM_INITDIALOG, WM_NOTIFY, WM_SETFONT,
 };
 use windows::core::{PCWSTR, w};
 
+use super::{DWLP_USER, IDCANCEL, IDOK};
 use crate::dialogs::resource::{IDC_ABOUT_LINK, IDC_ABOUT_TITLE, IDC_ABOUT_VERSION, IDD_ABOUT};
-
-const IDOK: usize = 1;
-const IDCANCEL: usize = 2;
-const DWLP_USER: WINDOW_LONG_PTR_INDEX = WINDOW_LONG_PTR_INDEX(16);
 
 const TITLE_POINT_SIZE: i32 = 40;
 const VERSION_POINT_SIZE: i32 = 14;
@@ -78,10 +75,7 @@ extern "system" fn dialog_procedure(
             0
         }
         WM_DESTROY => {
-            let pointer = unsafe {
-                windows::Win32::UI::WindowsAndMessaging::GetWindowLongPtrW(dialog, DWLP_USER)
-            } as *mut AboutState;
-            if let Some(state) = unsafe { pointer.as_ref() } {
+            if let Some(state) = super::state_mut::<AboutState>(dialog) {
                 for font in [state.title_font, state.version_font] {
                     if !font.is_invalid() {
                         let _ = unsafe { DeleteObject(font.into()) };

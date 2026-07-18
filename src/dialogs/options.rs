@@ -23,9 +23,9 @@ use windows::Win32::UI::Input::KeyboardAndMouse::{EnableWindow, VK_SPACE};
 use windows::Win32::UI::WindowsAndMessaging::{
     CB_ADDSTRING, CB_GETCURSEL, CB_SETCURSEL, CreateDialogParamW, DestroyWindow, DialogBoxParamW,
     EndDialog, GetClientRect, GetDlgItem, GetDlgItemInt, GetMessagePos, GetSystemMetrics,
-    GetWindowLongPtrW, GetWindowRect, SM_CXVSCROLL, SW_HIDE, SW_SHOW, SendMessageW,
-    SetDlgItemTextW, SetWindowLongPtrW, SetWindowPos, ShowWindow, WINDOW_LONG_PTR_INDEX, WM_APP,
-    WM_COMMAND, WM_DESTROY, WM_DRAWITEM, WM_INITDIALOG, WM_NOTIFY,
+    GetWindowRect, SM_CXVSCROLL, SW_HIDE, SW_SHOW, SendMessageW, SetDlgItemTextW,
+    SetWindowLongPtrW, SetWindowPos, ShowWindow, WM_APP, WM_COMMAND, WM_DESTROY, WM_DRAWITEM,
+    WM_INITDIALOG, WM_NOTIFY,
 };
 use windows::core::PCWSTR;
 
@@ -47,9 +47,8 @@ pub struct AppliedOptions {
     pub mouse: Vec<(String, Vec<String>)>,
 }
 
-const IDOK: usize = 1;
-const IDCANCEL: usize = 2;
-const DWLP_USER: WINDOW_LONG_PTR_INDEX = WINDOW_LONG_PTR_INDEX(16);
+use super::{DWLP_USER, IDCANCEL, IDOK};
+
 const BN_CLICKED: usize = 0;
 const CBN_SELCHANGE: usize = 1;
 const EN_CHANGE: usize = 0x0300;
@@ -188,8 +187,7 @@ pub fn show(parent: HWND, settings: &SettingsFile) {
 }
 
 fn state_mut(dialog: HWND) -> Option<&'static mut OptionsState> {
-    let pointer = unsafe { GetWindowLongPtrW(dialog, DWLP_USER) } as *mut OptionsState;
-    unsafe { pointer.as_mut() }
+    super::state_mut(dialog)
 }
 
 fn wide(text: &str) -> Vec<u16> {

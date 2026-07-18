@@ -31,9 +31,7 @@ use crate::dialogs::resource::{
     IDC_CAPTURE_MOUSE_FIELD, IDD_CAPTURE_KEYBOARD, IDD_CAPTURE_MOUSE,
 };
 
-const IDOK: usize = 1;
-const IDCANCEL: usize = 2;
-const DWLP_USER: WINDOW_LONG_PTR_INDEX = WINDOW_LONG_PTR_INDEX(16);
+use super::{DWLP_USER, IDCANCEL, IDOK, state_mut};
 
 const WM_RIV_KEY_CAPTURED: u32 = WM_APP + 0x40;
 const WM_RIV_MOUSE_CAPTURED: u32 = WM_APP + 0x41;
@@ -436,11 +434,6 @@ unsafe extern "system" fn key_list_procedure(
         }
     }
     unsafe { CallWindowProcW(original, listbox, message, wparam, lparam) }
-}
-
-fn state_mut<State>(dialog: HWND) -> Option<&'static mut State> {
-    let pointer = unsafe { GetWindowLongPtrW(dialog, DWLP_USER) } as *mut State;
-    unsafe { pointer.as_mut() }
 }
 
 fn listbox_add(dialog: HWND, control: i32, text: &str) {

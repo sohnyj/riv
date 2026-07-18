@@ -5,13 +5,12 @@ use windows::Win32::UI::Controls::EM_SETSEL;
 use windows::Win32::UI::Input::KeyboardAndMouse::SetFocus;
 use windows::Win32::UI::WindowsAndMessaging::{
     DLGTEMPLATE, DialogBoxIndirectParamW, EndDialog, GetDlgItem, GetDlgItemTextW, SendMessageW,
-    SetDlgItemTextW, WINDOW_LONG_PTR_INDEX, WM_COMMAND, WM_INITDIALOG,
+    SetDlgItemTextW, WM_COMMAND, WM_INITDIALOG,
 };
 
+use super::{DWLP_USER, IDCANCEL, IDOK};
+
 pub(crate) const EDIT_IDENTIFIER: i32 = 100;
-pub(crate) const IDOK: usize = 1;
-const IDCANCEL: usize = 2;
-const DWLP_USER: WINDOW_LONG_PTR_INDEX = WINDOW_LONG_PTR_INDEX(16);
 
 /// One edit line with OK/Cancel; width in dialog units.
 pub struct TextInputRequest<'a> {
@@ -60,7 +59,7 @@ extern "system" fn dialog_procedure(
     wparam: WPARAM,
     lparam: LPARAM,
 ) -> isize {
-    use windows::Win32::UI::WindowsAndMessaging::{GetWindowLongPtrW, SetWindowLongPtrW};
+    use windows::Win32::UI::WindowsAndMessaging::SetWindowLongPtrW;
     match message {
         WM_INITDIALOG => {
             unsafe { SetWindowLongPtrW(dialog, DWLP_USER, lparam.0) };
@@ -90,9 +89,7 @@ extern "system" fn dialog_procedure(
             let command = wparam.0 & 0xFFFF;
             match command {
                 IDOK => {
-                    let pointer =
-                        unsafe { GetWindowLongPtrW(dialog, DWLP_USER) } as *mut TextInputState;
-                    if let Some(state) = unsafe { pointer.as_mut() } {
+                    if let Some(state) = super::state_mut::<TextInputState>(dialog) {
                         let mut buffer = [0u16; 2048];
                         let length =
                             unsafe { GetDlgItemTextW(dialog, EDIT_IDENTIFIER, &mut buffer) };
