@@ -244,9 +244,15 @@ impl Application {
         match self.settings.options.scaling_filter {
             0 => D2D1_INTERPOLATION_MODE_NEAREST_NEIGHBOR,
             2 => D2D1_INTERPOLATION_MODE_CUBIC,
-            3 => D2D1_INTERPOLATION_MODE_HIGH_QUALITY_CUBIC,
+            // 3 is High Quality Cubic; 4 falls back to it when the
+            // Lanczos/Hermite pass cannot run (90/270 rotation, no device).
+            3 | 4 => D2D1_INTERPOLATION_MODE_HIGH_QUALITY_CUBIC,
             _ => D2D1_INTERPOLATION_MODE_LINEAR,
         }
+    }
+
+    fn custom_scaling(&self) -> bool {
+        self.settings.options.scaling_filter == 4
     }
 
     fn background_color(&self) -> D2D1_COLOR_F {
@@ -617,19 +623,22 @@ impl Application {
         let clear_color = color::output_color(background, self.output_color_target());
         let overlay = &self.overlay;
         let draw = |context: &_| overlay.draw(context, viewport.width, viewport.height, &content);
+        let custom_scaling = self.custom_scaling();
         if self
             .renderer
-            .render(matrix, interpolation, clear_color, draw)
+            .render(matrix, interpolation, custom_scaling, clear_color, draw)
             .is_err()
         {
             // Device lost: rebuild once and retry.
             if self.rebuild_renderer(window).is_ok() {
                 let overlay = &self.overlay;
-                let _ = self
-                    .renderer
-                    .render(matrix, interpolation, clear_color, |context| {
-                        overlay.draw(context, viewport.width, viewport.height, &content)
-                    });
+                let _ = self.renderer.render(
+                    matrix,
+                    interpolation,
+                    custom_scaling,
+                    clear_color,
+                    |context| overlay.draw(context, viewport.width, viewport.height, &content),
+                );
             }
         }
     }

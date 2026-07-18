@@ -51,6 +51,19 @@ use windows_numerics::Matrix3x2;
 use crate::image::decode::PixelStorage;
 use crate::view::dither::{self, DitherMode};
 use crate::view::quantize::QuantizePass;
+use crate::view::sampling::{AxisMapping, SamplingPass};
+
+struct FlattenScene {
+    shader_resource_view: ID3D11ShaderResourceView,
+    target: ID2D1Bitmap1,
+    size: (u32, u32),
+}
+
+struct ScaledScene {
+    render_target_view: ID3D11RenderTargetView,
+    bitmap: ID2D1Bitmap1,
+    size: (u32, u32),
+}
 
 pub struct Renderer {
     hdr_mode: bool,
@@ -63,6 +76,10 @@ pub struct Renderer {
     d2d_context: ID2D1DeviceContext,
     /// Fullscreen quantizing copy for the 10-bit backbuffers D2D cannot target.
     quantize_pass: Option<QuantizePass>,
+    /// Separable Lanczos/Hermite scaling; None falls back to D2D interpolation.
+    sampling_pass: Option<SamplingPass>,
+    flatten_scene: Option<FlattenScene>,
+    scaled_scene: Option<ScaledScene>,
     scene_shader_resource_view: Option<ID3D11ShaderResourceView>,
     backbuffer_render_target_view: Option<ID3D11RenderTargetView>,
     backbuffer_size: (u32, u32),
@@ -96,6 +113,8 @@ impl Drop for Renderer {
         self.effect_output = None;
         self.image = None;
         self.target = None;
+        self.flatten_scene = None;
+        self.scaled_scene = None;
         self.scene_shader_resource_view = None;
         self.backbuffer_render_target_view = None;
         self.color_management_effect = None;
@@ -480,6 +499,7 @@ impl Renderer {
                 (None, None, None)
             };
 
+        let sampling_pass = SamplingPass::new(&d3d_device).ok();
         let mut renderer = Self {
             hdr_mode,
             bits_per_color,
@@ -490,6 +510,9 @@ impl Renderer {
             d3d_context,
             d2d_context,
             quantize_pass,
+            sampling_pass,
+            flatten_scene: None,
+            scaled_scene: None,
             scene_shader_resource_view: None,
             backbuffer_render_target_view: None,
             backbuffer_size: (0, 0),
@@ -566,10 +589,10 @@ impl Renderer {
         };
         unsafe {
             let buffer: ID3D11Texture2D = self.swap_chain.GetBuffer(0)?;
+            let mut buffer_description = D3D11_TEXTURE2D_DESC::default();
+            buffer.GetDesc(&raw mut buffer_description);
+            self.backbuffer_size = (buffer_description.Width, buffer_description.Height);
             let surface: IDXGISurface = if self.quantize_pass.is_some() {
-                let mut buffer_description = D3D11_TEXTURE2D_DESC::default();
-                buffer.GetDesc(&raw mut buffer_description);
-                self.backbuffer_size = (buffer_description.Width, buffer_description.Height);
                 let scene_description = D3D11_TEXTURE2D_DESC {
                     Width: buffer_description.Width,
                     Height: buffer_description.Height,
@@ -622,6 +645,10 @@ impl Renderer {
         unsafe {
             self.d2d_context.SetTarget(None);
             self.target = None;
+            self.scaled_scene = None;
+            if let Some(sampling_pass) = &mut self.sampling_pass {
+                sampling_pass.invalidate();
+            }
             self.scene_shader_resource_view = None;
             self.backbuffer_render_target_view = None;
             self.swap_chain.ResizeBuffers(
@@ -865,26 +892,45 @@ impl Renderer {
         &mut self,
         matrix: [f32; 6],
         interpolation: D2D1_INTERPOLATION_MODE,
+        custom_scaling: bool,
         clear_color: D2D1_COLOR_F,
         draw_overlay: impl FnOnce(&ID2D1DeviceContext) -> Result<()>,
     ) -> Result<()> {
+        // DrawImage has no destination rect; fold the display scale into the matrix.
+        let scale_x = self.image_display_size.0 / self.image_pixel_size.0.max(1.0);
+        let scale_y = self.image_display_size.1 / self.image_pixel_size.1.max(1.0);
+        let transform = Matrix3x2 {
+            M11: matrix[0] * scale_x,
+            M12: matrix[1] * scale_x,
+            M21: matrix[2] * scale_y,
+            M22: matrix[3] * scale_y,
+            M31: matrix[4],
+            M32: matrix[5],
+        };
+        // The separable pass needs an axis-aligned transform; 90/270 falls back.
+        let prescaled =
+            if custom_scaling && self.image.is_some() && matrix[1] == 0.0 && matrix[2] == 0.0 {
+                self.prepare_scaled_scene(&transform)
+            } else {
+                None
+            };
         unsafe {
             self.d2d_context.BeginDraw();
             self.d2d_context.Clear(Some(&raw const clear_color));
             if self.image.is_some() {
-                // DrawImage has no destination rect; fold the display scale into the matrix.
-                let scale_x = self.image_display_size.0 / self.image_pixel_size.0.max(1.0);
-                let scale_y = self.image_display_size.1 / self.image_pixel_size.1.max(1.0);
-                let transform = Matrix3x2 {
-                    M11: matrix[0] * scale_x,
-                    M12: matrix[1] * scale_x,
-                    M21: matrix[2] * scale_y,
-                    M22: matrix[3] * scale_y,
-                    M31: matrix[4],
-                    M32: matrix[5],
-                };
-                match (&self.effect_output, &self.image) {
-                    (Some(output), _) => {
+                match (&prescaled, &self.effect_output, &self.image) {
+                    (Some(scaled), _, _) => {
+                        if !self.draw_prescaled_dithered(scaled) {
+                            self.d2d_context.DrawImage(
+                                scaled,
+                                None,
+                                None,
+                                D2D1_INTERPOLATION_MODE_NEAREST_NEIGHBOR,
+                                D2D1_COMPOSITE_MODE_SOURCE_OVER,
+                            );
+                        }
+                    }
+                    (None, Some(output), _) => {
                         // Dither must run in destination pixel space (identity context transform).
                         if !self.draw_image_dithered(output, &transform, interpolation) {
                             self.d2d_context.SetTransform(&raw const transform);
@@ -899,7 +945,7 @@ impl Renderer {
                         }
                     }
                     // Untouched pixels, or no effect support.
-                    (None, Some(image)) => {
+                    (None, None, Some(image)) => {
                         let destination = D2D_RECT_F {
                             left: 0.0,
                             top: 0.0,
@@ -941,13 +987,210 @@ impl Renderer {
         }
     }
 
-    /// Scene -> affine -> dither -> target; false when unavailable, the caller draws undithered.
-    fn draw_image_dithered(
-        &self,
-        output: &ID2D1Image,
-        transform: &Matrix3x2,
-        interpolation: D2D1_INTERPOLATION_MODE,
-    ) -> bool {
+    fn ensure_flatten_scene(&mut self, size: (u32, u32)) -> Result<()> {
+        if self
+            .flatten_scene
+            .as_ref()
+            .is_some_and(|held| held.size == size)
+        {
+            return Ok(());
+        }
+        self.flatten_scene = None;
+        let description = D3D11_TEXTURE2D_DESC {
+            Width: size.0,
+            Height: size.1,
+            MipLevels: 1,
+            ArraySize: 1,
+            Format: DXGI_FORMAT_R16G16B16A16_FLOAT,
+            SampleDesc: DXGI_SAMPLE_DESC {
+                Count: 1,
+                Quality: 0,
+            },
+            Usage: D3D11_USAGE_DEFAULT,
+            BindFlags: (D3D11_BIND_RENDER_TARGET.0 | D3D11_BIND_SHADER_RESOURCE.0) as u32,
+            ..Default::default()
+        };
+        let properties = D2D1_BITMAP_PROPERTIES1 {
+            pixelFormat: D2D1_PIXEL_FORMAT {
+                format: DXGI_FORMAT_R16G16B16A16_FLOAT,
+                alphaMode: D2D1_ALPHA_MODE_PREMULTIPLIED,
+            },
+            dpiX: 96.0,
+            dpiY: 96.0,
+            bitmapOptions: D2D1_BITMAP_OPTIONS_TARGET | D2D1_BITMAP_OPTIONS_CANNOT_DRAW,
+            ..Default::default()
+        };
+        unsafe {
+            let mut texture: Option<ID3D11Texture2D> = None;
+            self.d3d_device.CreateTexture2D(
+                &raw const description,
+                None,
+                Some(&raw mut texture),
+            )?;
+            let texture = texture.ok_or_else(windows::core::Error::empty)?;
+            let mut shader_resource_view = None;
+            self.d3d_device.CreateShaderResourceView(
+                &texture,
+                None,
+                Some(&raw mut shader_resource_view),
+            )?;
+            let surface: IDXGISurface = texture.cast()?;
+            let target = self
+                .d2d_context
+                .CreateBitmapFromDxgiSurface(&surface, Some(&raw const properties))?;
+            self.flatten_scene = Some(FlattenScene {
+                shader_resource_view: shader_resource_view
+                    .ok_or_else(windows::core::Error::empty)?,
+                target,
+                size,
+            });
+        }
+        Ok(())
+    }
+
+    fn ensure_scaled_scene(&mut self, size: (u32, u32)) -> Result<()> {
+        if self
+            .scaled_scene
+            .as_ref()
+            .is_some_and(|held| held.size == size)
+        {
+            return Ok(());
+        }
+        self.scaled_scene = None;
+        let description = D3D11_TEXTURE2D_DESC {
+            Width: size.0,
+            Height: size.1,
+            MipLevels: 1,
+            ArraySize: 1,
+            Format: DXGI_FORMAT_R16G16B16A16_FLOAT,
+            SampleDesc: DXGI_SAMPLE_DESC {
+                Count: 1,
+                Quality: 0,
+            },
+            Usage: D3D11_USAGE_DEFAULT,
+            BindFlags: (D3D11_BIND_RENDER_TARGET.0 | D3D11_BIND_SHADER_RESOURCE.0) as u32,
+            ..Default::default()
+        };
+        let properties = D2D1_BITMAP_PROPERTIES1 {
+            pixelFormat: D2D1_PIXEL_FORMAT {
+                format: DXGI_FORMAT_R16G16B16A16_FLOAT,
+                alphaMode: D2D1_ALPHA_MODE_PREMULTIPLIED,
+            },
+            dpiX: 96.0,
+            dpiY: 96.0,
+            ..Default::default()
+        };
+        unsafe {
+            let mut texture: Option<ID3D11Texture2D> = None;
+            self.d3d_device.CreateTexture2D(
+                &raw const description,
+                None,
+                Some(&raw mut texture),
+            )?;
+            let texture = texture.ok_or_else(windows::core::Error::empty)?;
+            let mut render_target_view = None;
+            self.d3d_device.CreateRenderTargetView(
+                &texture,
+                None,
+                Some(&raw mut render_target_view),
+            )?;
+            let surface: IDXGISurface = texture.cast()?;
+            let bitmap = self
+                .d2d_context
+                .CreateBitmapFromDxgiSurface(&surface, Some(&raw const properties))?;
+            self.scaled_scene = Some(ScaledScene {
+                render_target_view: render_target_view.ok_or_else(windows::core::Error::empty)?,
+                bitmap,
+                size,
+            });
+        }
+        Ok(())
+    }
+
+    /// Flattens the effect chain 1:1, then convolves it to backbuffer space.
+    fn prepare_scaled_scene(&mut self, transform: &Matrix3x2) -> Option<ID2D1Bitmap1> {
+        self.sampling_pass.as_ref()?;
+        if transform.M11 == 0.0 || transform.M22 == 0.0 {
+            return None;
+        }
+        let source_size = (
+            self.image_pixel_size.0.round() as u32,
+            self.image_pixel_size.1.round() as u32,
+        );
+        let target_size = self.backbuffer_size;
+        if source_size.0 == 0 || source_size.1 == 0 || target_size.0 == 0 || target_size.1 == 0 {
+            return None;
+        }
+        self.ensure_flatten_scene(source_size).ok()?;
+        self.ensure_scaled_scene(target_size).ok()?;
+        let flatten = self.flatten_scene.as_ref()?;
+        unsafe {
+            self.d2d_context.SetTarget(&flatten.target);
+            self.d2d_context.BeginDraw();
+            self.d2d_context.Clear(None);
+            match (&self.effect_output, &self.image) {
+                (Some(output), _) => self.d2d_context.DrawImage(
+                    output,
+                    None,
+                    None,
+                    D2D1_INTERPOLATION_MODE_NEAREST_NEIGHBOR,
+                    D2D1_COMPOSITE_MODE_SOURCE_OVER,
+                ),
+                (None, Some(image)) => {
+                    let destination = D2D_RECT_F {
+                        left: 0.0,
+                        top: 0.0,
+                        right: source_size.0 as f32,
+                        bottom: source_size.1 as f32,
+                    };
+                    self.d2d_context.DrawBitmap(
+                        image,
+                        Some(&raw const destination),
+                        1.0,
+                        D2D1_INTERPOLATION_MODE_NEAREST_NEIGHBOR,
+                        None,
+                        None,
+                    );
+                }
+                _ => {}
+            }
+            let finished = self.d2d_context.EndDraw(None, None);
+            match &self.target {
+                Some(target) => self.d2d_context.SetTarget(target),
+                None => self.d2d_context.SetTarget(None),
+            }
+            finished.ok()?;
+        }
+        let horizontal = AxisMapping {
+            position_scale: 1.0 / transform.M11,
+            position_offset: -transform.M31 / transform.M11,
+        };
+        let vertical = AxisMapping {
+            position_scale: 1.0 / transform.M22,
+            position_offset: -transform.M32 / transform.M22,
+        };
+        let source_view = self.flatten_scene.as_ref()?.shader_resource_view.clone();
+        let scaled = self.scaled_scene.as_ref()?;
+        let render_target_view = scaled.render_target_view.clone();
+        let bitmap = scaled.bitmap.clone();
+        self.sampling_pass
+            .as_mut()?
+            .scale(
+                &self.d3d_device,
+                &self.d3d_context,
+                &source_view,
+                source_size,
+                &render_target_view,
+                target_size,
+                horizontal,
+                vertical,
+            )
+            .ok()?;
+        Some(bitmap)
+    }
+
+    /// The registered dither effect, when the source depth calls for one.
+    fn active_dither_effect(&self) -> Option<&ID2D1Effect> {
         // A source no deeper than the backbuffer brings nothing for it to lose.
         let backbuffer_bits = if self.swap_chain_format == DXGI_FORMAT_R10G10B10A2_UNORM {
             10
@@ -955,15 +1198,45 @@ impl Renderer {
             8
         };
         if self.image_source_bits_per_channel <= backbuffer_bits {
-            return false;
+            return None;
         }
-        let dither_effect = match self.dither_mode {
-            DitherMode::None => return false,
-            DitherMode::Ordered => &self.dither_ordered_effect,
-            DitherMode::Fruit => &self.dither_fruit_effect,
+        match self.dither_mode {
+            DitherMode::None => None,
+            DitherMode::Ordered => self.dither_ordered_effect.as_ref(),
+            DitherMode::Fruit => self.dither_fruit_effect.as_ref(),
+        }
+    }
+
+    /// Prescaled scene -> dither -> target; false when the caller draws plain.
+    fn draw_prescaled_dithered(&self, scaled: &ID2D1Bitmap1) -> bool {
+        let Some(dither_effect) = self.active_dither_effect() else {
+            return false;
         };
+        unsafe { dither_effect.SetInput(0, scaled, true) };
+        let Ok(dithered) = (unsafe { dither_effect.GetOutput() }) else {
+            return false;
+        };
+        unsafe {
+            self.d2d_context.DrawImage(
+                &dithered,
+                None,
+                None,
+                D2D1_INTERPOLATION_MODE_NEAREST_NEIGHBOR,
+                D2D1_COMPOSITE_MODE_SOURCE_OVER,
+            );
+        }
+        true
+    }
+
+    /// Scene -> affine -> dither -> target; false when unavailable, the caller draws undithered.
+    fn draw_image_dithered(
+        &self,
+        output: &ID2D1Image,
+        transform: &Matrix3x2,
+        interpolation: D2D1_INTERPOLATION_MODE,
+    ) -> bool {
         let (Some(dither_effect), Some(affine_transform)) =
-            (dither_effect, &self.affine_transform_effect)
+            (self.active_dither_effect(), &self.affine_transform_effect)
         else {
             return false;
         };

@@ -92,7 +92,7 @@ impl Options {
             title_bar_mode: bounded("titlebarmode", 2, default.title_bar_mode),
             control_drag_window: boolean("ctrldragwindow", default.control_drag_window),
             save_window_position: boolean("savewindowposition", default.save_window_position),
-            scaling_filter: bounded("filteringenabled", 3, default.scaling_filter),
+            scaling_filter: bounded("filteringenabled", 4, default.scaling_filter),
             fit_mode: bounded("fitmode", 1, default.fit_mode),
             scale_factor_percent: unsigned("scalefactor", default.scale_factor_percent)
                 .clamp(1, 200),

@@ -672,7 +672,13 @@ fn initialize_image_page(state: &OptionsState) {
     combo_fill(
         page,
         IDC_IMAGE_FILTERING,
-        &["Nearest", "Bilinear", "Bicubic", "High Quality"],
+        &[
+            "Nearest",
+            "Bilinear",
+            "Bicubic",
+            "High Quality",
+            "Lanczos / Hermite",
+        ],
     );
     combo_fill(page, IDC_IMAGE_DITHER, &["None", "Ordered", "Fruit"]);
     if let Ok(spin) = unsafe { GetDlgItem(Some(page), IDC_IMAGE_SCALEFACTOR_SPIN) } {

@@ -96,7 +96,7 @@ cargo build --release
 Inspired by [qView](https://github.com/jurplel/qView).
 [mpv](https://github.com/mpv-player/mpv) and
 [libplacebo](https://code.videolan.org/videolan/libplacebo) served as references
-for window handling, context menu, and HDR pipeline.
+for context menu, shaders, and HDR pipeline.
 
 ## License
 
