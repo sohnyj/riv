@@ -1,4 +1,0 @@
-blue_noise_64.png: 64x64 blue-noise dither texture.
-Source: "Free blue noise textures" by Christoph Peters (momentsingraphics.de),
-Data/64_64/LDR_LLL1_0.png, dedicated to the public domain under CC0 1.0:
-https://creativecommons.org/publicdomain/zero/1.0/

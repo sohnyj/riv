@@ -1,4 +1,8 @@
-//! Custom D2D output-dither effects: Ordered (Bayer 8x8) and Fruit (blue noise).
+//! Custom D2D output-dither effects: Ordered (Bayer 16x16) and Fruit (blue noise).
+//!
+//! The dither math is ported from libplacebo's pl_shader_dither
+//! (src/shaders/dithering.c, LGPL-2.1-or-later): ordered-fixed and
+//! blue-noise bias generation followed by a biased floor quantization.
 
 use std::cell::RefCell;
 use std::collections::HashMap;
@@ -7,7 +11,7 @@ use std::sync::{Mutex, OnceLock};
 
 use windows::Win32::Foundation::{E_INVALIDARG, E_NOTIMPL, RECT, S_OK};
 use windows::Win32::Graphics::Direct2D::{
-    D2D1_BUFFER_PRECISION_8BPC_UNORM, D2D1_CHANGE_TYPE, D2D1_CHANNEL_DEPTH_1,
+    D2D1_BUFFER_PRECISION_32BPC_FLOAT, D2D1_CHANGE_TYPE, D2D1_CHANNEL_DEPTH_1,
     D2D1_EXTEND_MODE_WRAP, D2D1_FILTER_MIN_MAG_MIP_POINT, D2D1_PIXEL_OPTIONS_NONE,
     D2D1_RESOURCE_TEXTURE_PROPERTIES, ID2D1DrawInfo, ID2D1DrawTransform, ID2D1DrawTransform_Impl,
     ID2D1EffectContext, ID2D1EffectImpl, ID2D1EffectImpl_Impl, ID2D1Factory1, ID2D1ResourceTexture,
@@ -24,48 +28,64 @@ const SHADER_ORDERED: GUID = GUID::from_u128(0x64b8e2a1_7c3f_49d6_a0b5_29f1c8d47
 const SHADER_FRUIT: GUID = GUID::from_u128(0xd94a3c76_58e2_4b1f_9c08_7a61b5f0d284);
 const BLUE_NOISE_TEXTURE: GUID = GUID::from_u128(0x417f9d25_c680_4e8a_b1d7_063e94a8c5f2);
 
-const BLUE_NOISE_SIZE: u32 = 64;
-const BLUE_NOISE_PNG: &[u8] = include_bytes!("../../res/blue_noise_64.png");
+const BLUE_NOISE_SIZE: u32 = super::blue_noise::SIZE as u32;
 
-const ORDERED_SHADER_SOURCE: &str = "\
+// Runtime-agnostic core shared by both entry points; the bytecode is plain
+// shader model 5.0 DXBC, loadable by Direct3D 11 and Direct3D 12 alike.
+const SHADER_PROLOGUE: &str = "\
 Texture2D input_texture : register(t0);
 SamplerState input_sampler : register(s0);
 
-static const float bayer_8x8[64] = {
-     0.0, 32.0,  8.0, 40.0,  2.0, 34.0, 10.0, 42.0,
-    48.0, 16.0, 56.0, 24.0, 50.0, 18.0, 58.0, 26.0,
-    12.0, 44.0,  4.0, 36.0, 14.0, 46.0,  6.0, 38.0,
-    60.0, 28.0, 52.0, 20.0, 62.0, 30.0, 54.0, 22.0,
-     3.0, 35.0, 11.0, 43.0,  1.0, 33.0,  9.0, 41.0,
-    51.0, 19.0, 59.0, 27.0, 49.0, 17.0, 57.0, 25.0,
-    15.0, 47.0,  7.0, 39.0, 13.0, 45.0,  5.0, 37.0,
-    63.0, 31.0, 55.0, 23.0, 61.0, 29.0, 53.0, 21.0 };
+float ordered_bias(float2 position)
+{
+    float2 pos = frac(position * (1.0 / 16.0));
+    uint2 xy = uint2(pos * 16.0) % 16u;
+    xy.x = xy.x ^ xy.y;
+    xy = (xy | xy << 2) & 0x33333333u;
+    xy = (xy | xy << 1) & 0x55555555u;
+    uint b = xy.x + (xy.y << 1);
+    b = (b * 0x0802u & 0x22110u) | (b * 0x8020u & 0x88440u);
+    b = 0x10101u * b;
+    b = (b >> 16) & 0xFFu;
+    return float(b) * (1.0 / 256.0);
+}
 
+float blue_noise_bias(Texture2D noise, float2 position)
+{
+    float2 pos = frac(position * (1.0 / 64.0));
+    return noise.Load(int3(int2(pos * 64.0), 0)).r;
+}
+
+float3 dither_quantize(float3 color, float bias)
+{
+    const float scale = QUANTIZATION_STEPS;
+    color = (abs(color) < 1e-5) ? float3(0.0, 0.0, 0.0) : color;
+    color = scale * color + bias;
+    return floor(color) * (1.0 / scale);
+}
+";
+
+const ORDERED_SHADER_SOURCE: &str = "\
 float4 main(float4 clip_position : SV_POSITION,
             float4 scene_position : SCENE_POSITION,
             float4 texture_coordinate : TEXCOORD0) : SV_Target
 {
     float4 color = input_texture.Sample(input_sampler, texture_coordinate.xy);
-    uint2 cell = uint2(scene_position.xy) & 7u;
-    float threshold = (bayer_8x8[cell.y * 8u + cell.x] + 0.5) / 64.0 - 0.5;
-    color.rgb += threshold / QUANTIZATION_STEPS;
+    color.rgb = dither_quantize(color.rgb, ordered_bias(scene_position.xy));
     return color;
 }
 ";
 
 const FRUIT_SHADER_SOURCE: &str = "\
-Texture2D input_texture : register(t0);
-SamplerState input_sampler : register(s0);
 Texture2D blue_noise_texture : register(t1);
-SamplerState blue_noise_sampler : register(s1);
 
 float4 main(float4 clip_position : SV_POSITION,
             float4 scene_position : SCENE_POSITION,
             float4 texture_coordinate : TEXCOORD0) : SV_Target
 {
     float4 color = input_texture.Sample(input_sampler, texture_coordinate.xy);
-    float noise = blue_noise_texture.Sample(blue_noise_sampler, scene_position.xy / 64.0).r;
-    color.rgb += (noise - 0.5) / QUANTIZATION_STEPS;
+    color.rgb =
+        dither_quantize(color.rgb, blue_noise_bias(blue_noise_texture, scene_position.xy));
     return color;
 }
 ";
@@ -109,34 +129,27 @@ fn compiled_bytecode(pattern: DitherPattern, quantization_steps: u32) -> Result<
     if let Some(bytecode) = cache.get(&key) {
         return Ok(bytecode);
     }
-    let source = match pattern {
+    let body = match pattern {
         DitherPattern::Ordered => ORDERED_SHADER_SOURCE,
         DitherPattern::Fruit => FRUIT_SHADER_SOURCE,
-    }
-    .replace("QUANTIZATION_STEPS", &format!("{quantization_steps}.0"));
+    };
+    let source = format!("{SHADER_PROLOGUE}{body}")
+        .replace("QUANTIZATION_STEPS", &format!("{quantization_steps}.0"));
     let bytecode: &'static [u8] =
         Box::leak(compile_shader(&source, s!("ps_5_0"))?.into_boxed_slice());
     cache.insert(key, bytecode);
     Ok(bytecode)
 }
 
-/// Single-channel 8-bit texels decoded from the embedded CC0 texture.
-fn blue_noise_texels() -> Result<&'static [u8]> {
-    static TEXELS: OnceLock<Option<Vec<u8>>> = OnceLock::new();
-    TEXELS
-        .get_or_init(|| {
-            let mut decoder = png::Decoder::new(std::io::Cursor::new(BLUE_NOISE_PNG));
-            decoder.set_transformations(png::Transformations::normalize_to_color8());
-            let mut reader = decoder.read_info().ok()?;
-            let mut buffer = vec![0u8; reader.output_buffer_size()?];
-            reader.next_frame(&mut buffer).ok()?;
-            let (color_type, _) = reader.output_color_type();
-            let samples = color_type.samples();
-            let texels: Vec<u8> = buffer.chunks_exact(samples).map(|pixel| pixel[0]).collect();
-            (texels.len() == (BLUE_NOISE_SIZE * BLUE_NOISE_SIZE) as usize).then_some(texels)
-        })
-        .as_deref()
-        .ok_or_else(windows::core::Error::empty)
+/// Single-channel f32 texels, generated once per process.
+fn blue_noise_texels() -> &'static [u8] {
+    static TEXELS: OnceLock<Vec<u8>> = OnceLock::new();
+    TEXELS.get_or_init(|| {
+        super::blue_noise::generate()
+            .iter()
+            .flat_map(|value| value.to_ne_bytes())
+            .collect()
+    })
 }
 
 /// Settings-selected output dither (0 = None, 1 = Ordered, 2 = Fruit).
@@ -200,17 +213,17 @@ impl ID2D1EffectImpl_Impl for DitherEffect_Impl {
                         let properties = D2D1_RESOURCE_TEXTURE_PROPERTIES {
                             extents: extents.as_ptr(),
                             dimensions: 2,
-                            bufferPrecision: D2D1_BUFFER_PRECISION_8BPC_UNORM,
+                            bufferPrecision: D2D1_BUFFER_PRECISION_32BPC_FLOAT,
                             channelDepth: D2D1_CHANNEL_DEPTH_1,
                             filter: D2D1_FILTER_MIN_MAG_MIP_POINT,
                             extendModes: extend_modes.as_ptr(),
                         };
-                        let strides = [BLUE_NOISE_SIZE];
+                        let strides = [BLUE_NOISE_SIZE * 4];
                         unsafe {
                             context.CreateResourceTexture(
                                 Some(&BLUE_NOISE_TEXTURE),
                                 &raw const properties,
-                                Some(blue_noise_texels()?),
+                                Some(blue_noise_texels()),
                                 Some(strides.as_ptr()),
                             )
                         }
@@ -321,7 +334,7 @@ unsafe extern "system" fn create_fruit_effect(effect: OutRef<'_, IUnknown>) -> H
 pub fn register_dither_effects(factory: &ID2D1Factory1, quantization_steps: u32) -> Result<()> {
     compiled_bytecode(DitherPattern::Ordered, quantization_steps)?;
     compiled_bytecode(DitherPattern::Fruit, quantization_steps)?;
-    blue_noise_texels()?;
+    blue_noise_texels();
     REGISTERED_QUANTIZATION_STEPS.store(quantization_steps, Ordering::Relaxed);
     let property_xml = w!("<?xml version='1.0'?>\
 <Effect>\

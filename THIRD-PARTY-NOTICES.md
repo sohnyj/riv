@@ -126,6 +126,19 @@ The libde265 library is distributed under the GNU Lesser General Public License
 v3 (see [GNU LGPL v3](#gnu-lesser-general-public-license-v3) below). It is
 conveyed here as part of a work licensed under GPL-3.0.
 
+### libplacebo
+
+Copyright (c) libplacebo contributors. The blue-noise generator is
+originally from mpv, Copyright 2013 Wessel Dankers.
+Source: <https://code.videolan.org/videolan/libplacebo>
+
+The output dither shaders and the blue-noise matrix generator are ported
+from libplacebo sources (`src/shaders/dithering.c`, `src/dither.c`),
+distributed under the GNU Lesser General Public License v2.1 or later.
+riv takes the LGPL v3 option (see
+[GNU LGPL v3](#gnu-lesser-general-public-license-v3) below); it is conveyed
+here as part of a work licensed under GPL-3.0.
+
 ## Rust crates
 
 The `windows*` crates are Copyright (c) Microsoft Corporation.
@@ -213,8 +226,6 @@ The `windows*` crates are Copyright (c) Microsoft Corporation.
 - The application icon is derived from
   [Fluent UI System Icons](https://github.com/microsoft/fluentui-system-icons),
   Copyright (c) Microsoft Corporation — MIT License.
-- The blue-noise dither texture is dedicated to the public domain under
-  [CC0 1.0](https://creativecommons.org/publicdomain/zero/1.0/).
 
 ## License texts
 
