@@ -58,6 +58,9 @@ struct FlattenScene {
     shader_resource_view: ID3D11ShaderResourceView,
     target: ID2D1Bitmap1,
     size: (u32, u32),
+    /// Scene version and quadrant the held pixels were drawn from.
+    version: u64,
+    rotated: bool,
 }
 
 struct ScaledScene {
@@ -118,6 +121,8 @@ pub struct Renderer {
     scaler_description: &'static str,
     /// What the last frame actually dithered with, for the info panel.
     dither_description: &'static str,
+    /// Bumped on any change that alters the flattened scene content.
+    scene_version: u64,
 }
 
 impl Drop for Renderer {
@@ -599,6 +604,7 @@ impl Renderer {
             image_pixel_size: (0.0, 0.0),
             scaler_description: "Lanczos / Hermite",
             dither_description: "None",
+            scene_version: 0,
         };
         renderer.create_target()?;
         Ok(renderer)
@@ -846,12 +852,19 @@ impl Renderer {
             _ => (None, None, None),
         };
         self.swap_chain_format = swap_chain_format;
+        self.bump_scene_version();
         self.create_target()
+    }
+
+    /// Any change that alters the flattened scene content.
+    fn bump_scene_version(&mut self) {
+        self.scene_version = self.scene_version.wrapping_add(1);
     }
 
     pub fn set_sdr_white_boost(&mut self, boost: f32) {
         if let Some(effect) = &self.white_level_effect {
             let _ = set_white_level_input(effect, SDR_REFERENCE_WHITE_NITS * boost.max(0.01));
+            self.bump_scene_version();
         }
     }
 
@@ -870,6 +883,7 @@ impl Renderer {
                 )
             };
         }
+        self.bump_scene_version();
         true
     }
 
@@ -906,6 +920,7 @@ impl Renderer {
         self.image_source_bits_per_channel = source_bits_per_channel;
         self.rewire_effect_chain(&bitmap, icc_profile, storage, peak_luminance_nits);
         self.image = Some(bitmap);
+        self.bump_scene_version();
         Ok(())
     }
 
@@ -919,7 +934,9 @@ impl Renderer {
             return Err(windows::core::Error::empty());
         };
         let pitch = self.image_pixel_size.0 as u32 * self.image_storage.bytes_per_pixel();
-        unsafe { bitmap.CopyFromMemory(None, pixels.as_ptr().cast(), pitch) }
+        unsafe { bitmap.CopyFromMemory(None, pixels.as_ptr().cast(), pitch) }?;
+        self.bump_scene_version();
+        Ok(())
     }
 
     fn rewire_effect_chain(
@@ -1291,6 +1308,8 @@ impl Renderer {
                     .ok_or_else(windows::core::Error::empty)?,
                 target,
                 size,
+                version: self.scene_version.wrapping_sub(1),
+                rotated: false,
             });
         }
         Ok(())
@@ -1380,57 +1399,67 @@ impl Renderer {
         }
         self.ensure_flatten_scene(source_size).ok()?;
         self.ensure_scaled_scene(target_size).ok()?;
-        let flatten = self.flatten_scene.as_ref()?;
-        unsafe {
-            self.d2d_context.SetTarget(&flatten.target);
-            self.d2d_context.BeginDraw();
-            self.d2d_context.Clear(None);
-            if rotated {
-                let rotation = Matrix3x2 {
-                    M11: 0.0,
-                    M12: 1.0,
-                    M21: -1.0,
-                    M22: 0.0,
-                    M31: pixel_size.1 as f32,
-                    M32: 0.0,
-                };
-                self.d2d_context.SetTransform(&raw const rotation);
-            }
-            match (&self.effect_output, &self.image) {
-                (Some(output), _) => self.d2d_context.DrawImage(
-                    output,
-                    None,
-                    None,
-                    D2D1_INTERPOLATION_MODE_NEAREST_NEIGHBOR,
-                    D2D1_COMPOSITE_MODE_SOURCE_OVER,
-                ),
-                (None, Some(image)) => {
-                    let destination = D2D_RECT_F {
-                        left: 0.0,
-                        top: 0.0,
-                        right: pixel_size.0 as f32,
-                        bottom: pixel_size.1 as f32,
+        // The flatten only depends on scene content and quadrant; pan and zoom reuse it.
+        let flatten_current = self.flatten_scene.as_ref().is_some_and(|flatten| {
+            flatten.version == self.scene_version && flatten.rotated == rotated
+        });
+        if !flatten_current {
+            let flatten = self.flatten_scene.as_ref()?;
+            unsafe {
+                self.d2d_context.SetTarget(&flatten.target);
+                self.d2d_context.BeginDraw();
+                self.d2d_context.Clear(None);
+                if rotated {
+                    let rotation = Matrix3x2 {
+                        M11: 0.0,
+                        M12: 1.0,
+                        M21: -1.0,
+                        M22: 0.0,
+                        M31: pixel_size.1 as f32,
+                        M32: 0.0,
                     };
-                    self.d2d_context.DrawBitmap(
-                        image,
-                        Some(&raw const destination),
-                        1.0,
-                        D2D1_INTERPOLATION_MODE_NEAREST_NEIGHBOR,
-                        None,
-                        None,
-                    );
+                    self.d2d_context.SetTransform(&raw const rotation);
                 }
-                _ => {}
+                match (&self.effect_output, &self.image) {
+                    (Some(output), _) => self.d2d_context.DrawImage(
+                        output,
+                        None,
+                        None,
+                        D2D1_INTERPOLATION_MODE_NEAREST_NEIGHBOR,
+                        D2D1_COMPOSITE_MODE_SOURCE_OVER,
+                    ),
+                    (None, Some(image)) => {
+                        let destination = D2D_RECT_F {
+                            left: 0.0,
+                            top: 0.0,
+                            right: pixel_size.0 as f32,
+                            bottom: pixel_size.1 as f32,
+                        };
+                        self.d2d_context.DrawBitmap(
+                            image,
+                            Some(&raw const destination),
+                            1.0,
+                            D2D1_INTERPOLATION_MODE_NEAREST_NEIGHBOR,
+                            None,
+                            None,
+                        );
+                    }
+                    _ => {}
+                }
+                if rotated {
+                    self.d2d_context.SetTransform(&Matrix3x2::identity());
+                }
+                let finished = self.d2d_context.EndDraw(None, None);
+                match &self.target {
+                    Some(target) => self.d2d_context.SetTarget(target),
+                    None => self.d2d_context.SetTarget(None),
+                }
+                finished.ok()?;
             }
-            if rotated {
-                self.d2d_context.SetTransform(&Matrix3x2::identity());
+            if let Some(flatten) = &mut self.flatten_scene {
+                flatten.version = self.scene_version;
+                flatten.rotated = rotated;
             }
-            let finished = self.d2d_context.EndDraw(None, None);
-            match &self.target {
-                Some(target) => self.d2d_context.SetTarget(target),
-                None => self.d2d_context.SetTarget(None),
-            }
-            finished.ok()?;
         }
         let horizontal = AxisMapping {
             position_scale: 1.0 / transform.M11,
