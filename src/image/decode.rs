@@ -773,9 +773,22 @@ fn decode_single_frame(
     } else {
         icc_profile.as_deref().and_then(icc_hdr_encoding)
     };
+    let (frame_width, frame_height) = source_size(&frame.cast()?)?;
+    let oversized = frame_width.max(frame_height) > MAXIMUM_TEXTURE_DIMENSION;
+    // The Fant scaler rejects half floats; oversized integers scale first, convert after.
+    let deferred_half = high_depth && !float_native && hdr_encoding.is_none() && oversized;
     let (source, storage, hdr_encoding) = if high_depth && let Some(encoding) = hdr_encoding {
         match convert_pixel_format(factory, &frame.cast()?, &GUID_WICPixelFormat64bppRGBA) {
             Ok(source) => (source, PixelStorage::RgbaHalf, Some(encoding)),
+            Err(_) => (
+                convert_to_pbgra(factory, &frame.cast()?)?,
+                PixelStorage::Bgra8,
+                None,
+            ),
+        }
+    } else if deferred_half {
+        match convert_pixel_format(factory, &frame.cast()?, &GUID_WICPixelFormat64bppRGBA) {
+            Ok(source) => (source, PixelStorage::RgbaHalf, None),
             Err(_) => (
                 convert_to_pbgra(factory, &frame.cast()?)?,
                 PixelStorage::Bgra8,
@@ -800,8 +813,28 @@ fn decode_single_frame(
     };
     let source = apply_orientation(factory, source, orientation)?;
     let (width, height) = source_size(&source)?;
-    let (source, pixel_width, pixel_height) =
-        downscale_to_device_limit(factory, source, width, height)?;
+    let (source, pixel_width, pixel_height, storage) =
+        match downscale_to_device_limit(factory, source.clone(), width, height) {
+            Ok((scaled, scaled_width, scaled_height)) => {
+                (scaled, scaled_width, scaled_height, storage)
+            }
+            // Refused formats retreat to 8-bit; PQ/HLG keeps the error to avoid false colors.
+            Err(_) if storage == PixelStorage::RgbaHalf && hdr_encoding.is_none() => {
+                let fallback = convert_to_pbgra(factory, &source)?;
+                let (scaled, scaled_width, scaled_height) =
+                    downscale_to_device_limit(factory, fallback, width, height)?;
+                (scaled, scaled_width, scaled_height, PixelStorage::Bgra8)
+            }
+            Err(error) => return Err(error),
+        };
+    let (source, storage) = if deferred_half && storage == PixelStorage::RgbaHalf {
+        match convert_pixel_format(factory, &source, &GUID_WICPixelFormat64bppPRGBAHalf) {
+            Ok(converted) => (converted, PixelStorage::RgbaHalf),
+            Err(_) => (convert_to_pbgra(factory, &source)?, PixelStorage::Bgra8),
+        }
+    } else {
+        (source, storage)
+    };
     let mut pixels = copy_pixels(
         &source,
         pixel_width,
