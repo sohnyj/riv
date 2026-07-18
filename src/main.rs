@@ -86,7 +86,10 @@ const ANIMATION_TIMER: usize = 6;
 const PAN_STEP: f32 = 64.0;
 
 struct Application {
-    renderer: Renderer,
+    /// None between a device loss and the next successful rebuild.
+    renderer: Option<Renderer>,
+    /// A failed output mode switch retries on the next paint.
+    output_reconfigure_pending: bool,
     view_transform: ViewTransform,
     image_core: ImageCore,
     display: Option<Arc<DecodedImage>>,
@@ -134,7 +137,8 @@ impl Application {
         let mut view_transform = ViewTransform::new();
         view_transform.fit_mode = FitMode::from_setting(settings.options.fit_mode);
         let mut application = Self {
-            renderer,
+            renderer: Some(renderer),
+            output_reconfigure_pending: false,
             view_transform,
             image_core: ImageCore::new(window, core_options(&settings.options)),
             display: None,
@@ -161,14 +165,12 @@ impl Application {
             drop_target: None,
             open_with_list: None,
         };
-        application
-            .renderer
-            .set_sdr_white_boost(application.sdr_white_boost);
-        application
-            .renderer
-            .set_dither_mode(DitherMode::from_setting(
+        if let Some(renderer) = &mut application.renderer {
+            renderer.set_sdr_white_boost(application.sdr_white_boost);
+            renderer.set_dither_mode(DitherMode::from_setting(
                 application.settings.options.dither,
             ));
+        }
         application.overlay.set_scale(device_pixel_ratio);
         if let Some(path) = initial_path {
             application.image_core.load_path(path);
@@ -178,22 +180,7 @@ impl Application {
 
     /// Reconfigure the output on HDR mode or bit depth change; else refresh boost and tone map target.
     fn refresh_display_color_state(&mut self, window: HWND) {
-        let hdr_mode = color::monitor_is_hdr(window);
-        let bits_per_color = color::display_bits_per_color(window);
-        if hdr_mode != self.renderer.hdr_mode() || bits_per_color != self.renderer.bits_per_color()
-        {
-            self.sdr_white_boost = color::sdr_white_boost(window);
-            if self
-                .renderer
-                .reconfigure_output(
-                    hdr_mode,
-                    bits_per_color,
-                    tone_map_target_luminance(window, hdr_mode),
-                )
-                .is_ok()
-            {
-                let _ = self.apply_renderer_state();
-            }
+        if self.reconfigure_display_output(window, false) {
             self.render(window);
             return;
         }
@@ -201,13 +188,17 @@ impl Application {
         let boost = color::sdr_white_boost(window);
         if (boost - self.sdr_white_boost).abs() > f32::EPSILON {
             self.sdr_white_boost = boost;
-            self.renderer.set_sdr_white_boost(boost);
+            if let Some(renderer) = &mut self.renderer {
+                renderer.set_sdr_white_boost(boost);
+            }
             stale = true;
         }
-        let hdr_mode = self.renderer.hdr_mode();
+        let hdr_mode = self.renderer.as_ref().is_some_and(Renderer::hdr_mode);
+        let target_nits = tone_map_target_luminance(window, hdr_mode);
         if self
             .renderer
-            .set_tone_map_target_nits(tone_map_target_luminance(window, hdr_mode))
+            .as_mut()
+            .is_some_and(|renderer| renderer.set_tone_map_target_nits(target_nits))
         {
             stale = true;
         }
@@ -216,11 +207,38 @@ impl Application {
         }
     }
 
+    /// True when the output mode changed (repaint due); arms the retry on failure.
+    fn reconfigure_display_output(&mut self, window: HWND, force: bool) -> bool {
+        let hdr_mode = color::monitor_is_hdr(window);
+        let bits_per_color = color::display_bits_per_color(window);
+        let mismatch = self.renderer.as_ref().is_some_and(|renderer| {
+            hdr_mode != renderer.hdr_mode() || bits_per_color != renderer.bits_per_color()
+        });
+        if !mismatch && !force {
+            return false;
+        }
+        self.sdr_white_boost = color::sdr_white_boost(window);
+        let target_nits = tone_map_target_luminance(window, hdr_mode);
+        let reconfigured = self.renderer.as_mut().is_some_and(|renderer| {
+            renderer
+                .reconfigure_output(hdr_mode, bits_per_color, target_nits)
+                .is_ok()
+        });
+        self.output_reconfigure_pending = !reconfigured;
+        if reconfigured {
+            let _ = self.apply_renderer_state();
+        }
+        true
+    }
+
     fn output_color_target(&self) -> color::OutputColorTarget {
-        if !self.renderer.hdr_mode() {
+        let Some(renderer) = &self.renderer else {
+            return color::OutputColorTarget::Srgb;
+        };
+        if !renderer.hdr_mode() {
             return color::OutputColorTarget::Srgb;
         }
-        if self.renderer.pq_output() {
+        if renderer.pq_output() {
             color::OutputColorTarget::Pq {
                 sdr_white_boost: self.sdr_white_boost,
             }
@@ -270,7 +288,10 @@ impl Application {
             0 => "Nearest",
             2 => "Bicubic",
             3 => "High Quality",
-            4 => self.renderer.scaler_description(),
+            4 => self
+                .renderer
+                .as_ref()
+                .map_or("Lanczos / Hermite", Renderer::scaler_description),
             _ => "Bilinear",
         }
     }
@@ -392,16 +413,19 @@ impl Application {
                 previous.width == image.width && previous.height == image.height
             });
         let frame = &image.frames[0];
-        let upload = self.renderer.set_image(
-            &frame.pixels,
-            image.pixel_width,
-            image.pixel_height,
-            (image.width, image.height),
-            image.icc_profile.as_deref(),
-            image.storage,
-            image.source_bits_per_channel,
-            image.peak_luminance_nits,
-        );
+        let upload = match &mut self.renderer {
+            Some(renderer) => renderer.set_image(
+                &frame.pixels,
+                image.pixel_width,
+                image.pixel_height,
+                (image.width, image.height),
+                image.icc_profile.as_deref(),
+                image.storage,
+                image.source_bits_per_channel,
+                image.peak_luminance_nits,
+            ),
+            None => Err(windows::core::Error::empty()),
+        };
         self.display = Some(image);
         self.displayed_location = Some(location.clone());
         if !same_view {
@@ -458,7 +482,9 @@ impl Application {
         self.animation = None;
         self.display = None;
         self.displayed_location = None;
-        self.renderer.clear_image();
+        if let Some(renderer) = &mut self.renderer {
+            renderer.clear_image();
+        }
         self.update_window_title(window);
         self.render(window);
     }
@@ -496,8 +522,10 @@ impl Application {
             return;
         };
         let frame = &image.frames[frame_index];
-        if self.renderer.update_frame_pixels(&frame.pixels).is_err() {
-            let _ = self.renderer.set_image(
+        if let Some(renderer) = &mut self.renderer
+            && renderer.update_frame_pixels(&frame.pixels).is_err()
+        {
+            let _ = renderer.set_image(
                 &frame.pixels,
                 image.pixel_width,
                 image.pixel_height,
@@ -541,30 +569,34 @@ impl Application {
     }
 
     fn rebuild_renderer(&mut self, window: HWND) -> Result<()> {
+        // The old swapchain must release the window first: DXGI allows one per window.
+        self.renderer = None;
         let (width, height) = client_size(window);
         let hdr_mode = color::monitor_is_hdr(window);
-        self.renderer = Renderer::new(
+        self.renderer = Some(Renderer::new(
             window,
             width.max(1),
             height.max(1),
             hdr_mode,
             color::display_bits_per_color(window),
             tone_map_target_luminance(window, hdr_mode),
-        )?;
+        )?);
         self.apply_renderer_state()
     }
 
     /// Reapplies the application-held state after a renderer rebuild or reconfigure.
     fn apply_renderer_state(&mut self) -> Result<()> {
-        self.renderer.set_sdr_white_boost(self.sdr_white_boost);
-        self.renderer
-            .set_dither_mode(DitherMode::from_setting(self.settings.options.dither));
+        let Some(renderer) = &mut self.renderer else {
+            return Ok(());
+        };
+        renderer.set_sdr_white_boost(self.sdr_white_boost);
+        renderer.set_dither_mode(DitherMode::from_setting(self.settings.options.dither));
         if let Some(image) = &self.display {
             let frame_index = self
                 .animation
                 .as_ref()
                 .map_or(0, |animation| animation.frame_index);
-            self.renderer.set_image(
+            renderer.set_image(
                 &image.frames[frame_index].pixels,
                 image.pixel_width,
                 image.pixel_height,
@@ -602,9 +634,13 @@ impl Application {
                     &current.image,
                     file_size,
                     modified,
-                    self.renderer.output_description(),
+                    self.renderer
+                        .as_ref()
+                        .map_or("", |renderer| renderer.output_description()),
                     self.scaling_description(),
-                    self.renderer.dither_description(),
+                    self.renderer
+                        .as_ref()
+                        .map_or("None", |renderer| renderer.dither_description()),
                 )
             })
         } else {
@@ -640,6 +676,14 @@ impl Application {
         if width == 0 || height == 0 {
             return;
         }
+        // A lost renderer or a failed output switch retries once per paint.
+        if self.renderer.is_none() {
+            let _ = self.rebuild_renderer(window);
+        }
+        if self.output_reconfigure_pending {
+            self.output_reconfigure_pending = false;
+            let _ = self.reconfigure_display_output(window, true);
+        }
         let viewport = self.viewport(window);
         let image = self.image_size();
         self.view_transform.synchronize(viewport, image);
@@ -648,18 +692,23 @@ impl Application {
         let background = self.background_color();
         let content = self.overlay_content(background);
         let clear_color = color::output_color(background, self.output_color_target());
+        let custom_scaling = self.custom_scaling();
         let overlay = &self.overlay;
         let draw = |context: &_| overlay.draw(context, viewport.width, viewport.height, &content);
-        let custom_scaling = self.custom_scaling();
-        if self
-            .renderer
+        let Some(renderer) = &mut self.renderer else {
+            return;
+        };
+        if renderer
             .render(matrix, interpolation, custom_scaling, clear_color, draw)
             .is_err()
         {
-            // Device lost: rebuild once and retry.
-            if self.rebuild_renderer(window).is_ok() {
+            // Device lost: drop the swapchain, rebuild once and retry.
+            self.renderer = None;
+            if self.rebuild_renderer(window).is_ok()
+                && let Some(renderer) = &mut self.renderer
+            {
                 let overlay = &self.overlay;
-                let _ = self.renderer.render(
+                let _ = renderer.render(
                     matrix,
                     interpolation,
                     custom_scaling,
@@ -676,8 +725,9 @@ impl Application {
             self.settings.mouse_bindings(),
         );
         self.view_transform.fit_mode = FitMode::from_setting(self.settings.options.fit_mode);
-        self.renderer
-            .set_dither_mode(DitherMode::from_setting(self.settings.options.dither));
+        if let Some(renderer) = &mut self.renderer {
+            renderer.set_dither_mode(DitherMode::from_setting(self.settings.options.dither));
+        }
         self.image_core
             .update_options(core_options(&self.settings.options));
         self.update_window_title(window);
@@ -1577,7 +1627,11 @@ extern "system" fn window_procedure(
                 let width = (lparam.0 & 0xFFFF) as u32;
                 let height = ((lparam.0 >> 16) & 0xFFFF) as u32;
                 if width > 0 && height > 0 {
-                    if application.renderer.resize(width, height).is_err() {
+                    let resized = application
+                        .renderer
+                        .as_mut()
+                        .is_some_and(|renderer| renderer.resize(width, height).is_ok());
+                    if !resized {
                         let _ = application.rebuild_renderer(window);
                     }
                     application.render(window);
