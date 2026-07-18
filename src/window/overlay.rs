@@ -316,8 +316,11 @@ pub fn build_info_text(
             "Resolution: {} x {} ({megapixels:.1} MP)",
             image.width, image.height
         ),
-        format!("Scaling: {scaling_description}"),
     ];
+    if image.frames.len() > 1 {
+        lines.push(format!("Frames: {}", image.frames.len()));
+    }
+    lines.push(format!("Scaling: {scaling_description}"));
     match image.storage {
         PixelStorage::RgbaHalf => match image.peak_luminance_nits {
             Some(peak) => lines.push(format!("Bit depth: FP16 linear, peak {peak:.0} nits")),
@@ -329,9 +332,6 @@ pub fn build_info_text(
     }
     lines.push(format!("Output: {output_description}"));
     lines.push(format!("Dither: {dither_description}"));
-    if image.frames.len() > 1 {
-        lines.push(format!("Frames: {}", image.frames.len()));
-    }
     lines.push(format!("Size: {}", format_file_size(file_size)));
     if let Some(modified) = modified {
         lines.push(format!("Modified: {}", format_local_datetime(modified)));
