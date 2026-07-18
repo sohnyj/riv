@@ -36,7 +36,7 @@ use crate::dialogs::resource::*;
 use crate::dialogs::shortcut_capture;
 use crate::image::decode;
 use crate::settings::{Options, SettingsFile};
-use crate::shell::file_association;
+use crate::shell::{file_association, start_menu};
 
 pub const WM_APP_OPTIONS_APPLIED: u32 = WM_APP + 5;
 pub const WM_APP_OPTIONS_GEOMETRY: u32 = WM_APP + 6;
@@ -81,12 +81,15 @@ struct AssociationGroup {
 struct OptionsState {
     parent: HWND,
     dialog: HWND,
-    pages: [HWND; 5],
+    pages: [HWND; 6],
     saved_options: Options,
     transient_options: Options,
     saved_shortcuts: Vec<ShortcutRow>,
     transient_shortcuts: Vec<ShortcutRow>,
     saved_associations: Vec<String>,
+    /// Start Menu shortcut presence; no default concept, the on-disk state is the baseline.
+    start_menu_saved: bool,
+    start_menu_desired: bool,
     extensions: Vec<AssociationExtension>,
     groups: Vec<AssociationGroup>,
     /// Ignore control notifications during programmatic sync.
@@ -114,6 +117,7 @@ impl OptionsState {
         self.transient_options != self.saved_options
             || self.transient_shortcuts != self.saved_shortcuts
             || self.desired_associations() != self.saved_associations
+            || self.start_menu_desired != self.start_menu_saved
     }
 
     fn differs_from_defaults(&self) -> bool {
@@ -152,15 +156,18 @@ pub fn show(parent: HWND, settings: &SettingsFile) {
         .collect();
     let mut saved_associations = file_association::registered_extensions();
     saved_associations.sort();
+    let start_menu_present = start_menu::shortcut_exists();
     let mut state = OptionsState {
         parent,
         dialog: HWND::default(),
-        pages: [HWND::default(); 5],
+        pages: [HWND::default(); 6],
         saved_options: settings.options.clone(),
         transient_options: settings.options.clone(),
         saved_shortcuts: shortcuts.clone(),
         transient_shortcuts: shortcuts,
         saved_associations,
+        start_menu_saved: start_menu_present,
+        start_menu_desired: start_menu_present,
         extensions: Vec::new(),
         groups: Vec::new(),
         syncing: false,
@@ -323,6 +330,7 @@ fn initialize_frame(state: &mut OptionsState) {
         "Miscellaneous",
         "Shortcuts",
         "File Association",
+        "Start Menu",
     ]
     .iter()
     .enumerate()
@@ -373,6 +381,7 @@ fn initialize_frame(state: &mut OptionsState) {
         IDD_PAGE_MISC,
         IDD_PAGE_SHORTCUTS,
         IDD_PAGE_ASSOCIATION,
+        IDD_PAGE_STARTMENU,
     ]
     .iter()
     .enumerate()
@@ -429,6 +438,15 @@ fn apply(state: &mut OptionsState) {
     if desired != state.saved_associations {
         file_association::set_file_associations(&desired);
         state.saved_associations = desired;
+    }
+    if state.start_menu_desired != state.start_menu_saved {
+        if state.start_menu_desired {
+            start_menu::create_shortcut();
+        } else {
+            start_menu::remove_shortcut();
+        }
+        // Re-probe so a failed create keeps Apply armed instead of lying.
+        state.start_menu_saved = start_menu::shortcut_exists();
     }
     let payload = AppliedOptions {
         options: state.transient_options.clone(),
@@ -626,6 +644,9 @@ fn handle_page_command(
         }
         (IDC_ASSOC_SELECT_ALL, BN_CLICKED) => set_all_associations(state, true),
         (IDC_ASSOC_SELECT_NONE, BN_CLICKED) => set_all_associations(state, false),
+        (IDC_STARTMENU_SHORTCUT, BN_CLICKED) => {
+            state.start_menu_desired = is_checked(page, control);
+        }
         _ => handled = false,
     }
     if handled {
@@ -759,6 +780,11 @@ fn sync_all_pages(state: &mut OptionsState) {
     );
     set_check(misc_page, IDC_MISC_SAVE_RECENTS, options.save_recents);
     set_check(misc_page, IDC_MISC_SKIP_HIDDEN, options.skip_hidden);
+    set_check(
+        state.pages[5],
+        IDC_STARTMENU_SHORTCUT,
+        state.start_menu_desired,
+    );
 
     state.syncing = false;
     refresh_shortcut_rows(state);

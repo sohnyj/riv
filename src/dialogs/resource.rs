@@ -6,6 +6,7 @@ pub const IDD_PAGE_IMAGE: u16 = 120;
 pub const IDD_PAGE_MISC: u16 = 130;
 pub const IDD_PAGE_SHORTCUTS: u16 = 140;
 pub const IDD_PAGE_ASSOCIATION: u16 = 150;
+pub const IDD_PAGE_STARTMENU: u16 = 190;
 pub const IDD_CAPTURE_KEYBOARD: u16 = 160;
 pub const IDD_CAPTURE_MOUSE: u16 = 170;
 pub const IDD_ABOUT: u16 = 180;
@@ -49,6 +50,7 @@ pub const IDC_SHORTCUTS_CLEAR_ALL: i32 = 1403;
 pub const IDC_ASSOC_TREE: i32 = 1501;
 pub const IDC_ASSOC_SELECT_ALL: i32 = 1502;
 pub const IDC_ASSOC_SELECT_NONE: i32 = 1503;
+pub const IDC_STARTMENU_SHORTCUT: i32 = 1601;
 
 pub const IDC_CAPTURE_KEY_FIELD: i32 = 1601;
 pub const IDC_CAPTURE_KEY_LIST: i32 = 1602;
