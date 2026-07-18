@@ -296,6 +296,7 @@ fn create_text_formats(
     Ok((text_format, error_format, wordmark_format))
 }
 
+#[expect(clippy::too_many_arguments)]
 pub fn build_info_text(
     file_name: &str,
     location_text: &str,
@@ -304,6 +305,7 @@ pub fn build_info_text(
     modified: Option<SystemTime>,
     output_description: &str,
     scaling_description: &str,
+    dither_description: &str,
 ) -> String {
     let megapixels = f64::from(image.width) * f64::from(image.height) / 1_000_000.0;
     // Content and render facts first, file-system facts second; Path wraps, so it closes the block.
@@ -314,6 +316,7 @@ pub fn build_info_text(
             "Resolution: {} x {} ({megapixels:.1} MP)",
             image.width, image.height
         ),
+        format!("Scaling: {scaling_description}"),
     ];
     match image.storage {
         PixelStorage::RgbaHalf => match image.peak_luminance_nits {
@@ -325,7 +328,7 @@ pub fn build_info_text(
         }
     }
     lines.push(format!("Output: {output_description}"));
-    lines.push(format!("Scaling: {scaling_description}"));
+    lines.push(format!("Dither: {dither_description}"));
     if image.frames.len() > 1 {
         lines.push(format!("Frames: {}", image.frames.len()));
     }
@@ -547,6 +550,7 @@ mod info_text_tests {
             None,
             "8-bit sRGB",
             "Bilinear",
+            "None",
         );
         assert!(text.contains("Bit depth: 8-bit"));
     }

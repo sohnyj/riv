@@ -1441,6 +1441,18 @@ impl Renderer {
         self.scaler_description
     }
 
+    /// What dithering the current frame actually gets, for the info panel.
+    pub fn dither_description(&self) -> &'static str {
+        if self.active_dither_effect().is_none() {
+            return "None";
+        }
+        match self.dither_mode {
+            DitherMode::None => "None",
+            DitherMode::Ordered => "Ordered",
+            DitherMode::Fruit => "Fruit",
+        }
+    }
+
     /// The registered dither effect, when the source depth calls for one.
     fn active_dither_effect(&self) -> Option<&ID2D1Effect> {
         // A source no deeper than the backbuffer brings nothing for it to lose.

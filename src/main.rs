@@ -604,6 +604,7 @@ impl Application {
                     modified,
                     self.renderer.output_description(),
                     self.scaling_description(),
+                    self.renderer.dither_description(),
                 )
             })
         } else {
