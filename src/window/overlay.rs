@@ -178,7 +178,7 @@ impl Overlay {
         top: f32,
         viewport_width: f32,
         output_color_target: color::OutputColorTarget,
-    ) -> Result<D2D_RECT_F> {
+    ) -> Result<()> {
         let layout = self.panel_layout(text, viewport_width)?;
         let mut metrics = DWRITE_TEXT_METRICS::default();
         unsafe { layout.GetMetrics(&raw mut metrics)? };
@@ -212,7 +212,7 @@ impl Overlay {
                 D2D1_DRAW_TEXT_OPTIONS_NONE,
             );
         }
-        Ok(panel.rect)
+        Ok(())
     }
 
     fn draw_centered_text(
