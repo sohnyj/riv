@@ -461,7 +461,7 @@ pub fn build_error_text(
     };
     if let Some(extension_name) = store_extension {
         text.push_str(&format!(
-            "\nInstall \"{extension_name}\" from the Microsoft Store to view this file."
+            "\nInstall \"{extension_name}\" (Microsoft Corporation)\nfrom the Microsoft Store to view this file."
         ));
     }
     text
