@@ -107,31 +107,24 @@ impl Overlay {
     ) -> Result<()> {
         let output_color_target = content.output_color_target;
         let margin = PANEL_MARGIN * self.scale;
-        let panel_gap = 8.0 * self.scale;
-        let info_rect = if let Some(info_text) = &content.info_text {
-            Some(self.draw_panel(
+        if let Some(info_text) = &content.info_text {
+            self.draw_panel(
                 context,
                 info_text,
                 margin,
                 margin,
                 viewport_width,
                 output_color_target,
-            )?)
-        } else {
-            None
-        };
+            )?;
+        }
         if let Some(status_text) = &content.status_text {
             let status_width = self.measure_panel_width(status_text, viewport_width)?;
             let centered_left = ((viewport_width - status_width) / 2.0).max(margin);
-            let top = match &info_rect {
-                Some(info) if centered_left < info.right + panel_gap => info.bottom + panel_gap,
-                _ => margin,
-            };
             self.draw_panel(
                 context,
                 status_text,
                 centered_left,
-                top,
+                margin,
                 viewport_width,
                 output_color_target,
             )?;

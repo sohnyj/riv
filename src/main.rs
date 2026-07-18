@@ -560,7 +560,8 @@ impl Application {
                     error.store_extension,
                 )
             });
-        let info_text = if self.show_file_info {
+        // The pill borrows the top edge: the info panel yields while one shows.
+        let info_text = if self.show_file_info && self.status_text.is_none() {
             self.image_core.current.as_ref().map(|current| {
                 let (file_size, modified) =
                     self.image_core.current_item_metadata().unwrap_or((0, None));
