@@ -397,7 +397,11 @@ pub fn build_error_text(
     } else {
         message.trim().to_string()
     };
-    let mut text = format!("Error occurred opening\n{file_name}\n{reason} (Error 0x{code:08X})");
+    let mut text = if file_name.is_empty() {
+        format!("Error occurred opening\n{reason} (Error 0x{code:08X})")
+    } else {
+        format!("Error occurred opening\n{file_name}\n{reason} (Error 0x{code:08X})")
+    };
     if let Some(extension_name) = store_extension {
         text.push_str(&format!(
             "\nInstall \"{extension_name}\" from the Microsoft Store to view this file."
@@ -481,4 +485,23 @@ fn format_locale_datetime(time: SystemTime) -> String {
     let date = String::from_utf16_lossy(&date_buffer[..date_length.max(1) as usize - 1]);
     let time = String::from_utf16_lossy(&time_buffer[..time_length.max(1) as usize - 1]);
     format!("{date} {time}")
+}
+
+#[cfg(test)]
+mod error_text_tests {
+    use super::*;
+
+    #[test]
+    fn an_empty_name_drops_its_line() {
+        let text = build_error_text("", "no URL in the clipboard", 0, None);
+        assert_eq!(
+            text,
+            "Error occurred opening\nno URL in the clipboard (Error 0x00000000)"
+        );
+        let named = build_error_text("a.png", "Decode failed", 0, None);
+        assert_eq!(
+            named,
+            "Error occurred opening\na.png\nDecode failed (Error 0x00000000)"
+        );
+    }
 }

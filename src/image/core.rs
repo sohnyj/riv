@@ -401,7 +401,9 @@ impl ImageCore {
         // Even a failed attempt leaves the single-item state; no listing survives.
         self.entries = Vec::new();
         self.listing_scope = None;
-        let failure = if !curl::is_supported_protocol(url) {
+        let failure = if url.is_empty() {
+            Some("no URL in the clipboard") // only the paste path can deliver an empty URL
+        } else if !curl::is_supported_protocol(url) {
             Some("unsupported URL protocol")
         } else if !curl::available() {
             Some("URL support is unavailable on this Windows")
@@ -1637,6 +1639,17 @@ mod url_session_state_tests {
         let (location, error) = core.load_error.as_ref().expect("error recorded");
         assert!(matches!(location, ItemLocation::Url(_)));
         assert!(error.message.contains("protocol"));
+    }
+
+    #[test]
+    fn an_empty_paste_reports_no_url() {
+        let mut core = core();
+        folder_state(&mut core, "C:\\pictures\\a.png");
+        assert!(!core.load_url(""));
+        assert!(core.entries.is_empty());
+        assert!(core.listing_scope.is_none());
+        let (_, error) = core.load_error.as_ref().expect("error recorded");
+        assert!(error.message.contains("clipboard"));
     }
 
     #[test]

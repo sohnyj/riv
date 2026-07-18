@@ -824,11 +824,9 @@ fn open_external_url(application: &mut Application, window: HWND, url: &str) {
     }
 }
 
-/// Opens clipboard text as a URL; non-URL text surfaces the load error.
+/// Opens clipboard text as a URL; empty or non-text clipboard surfaces an error too.
 fn paste_open_url(application: &mut Application, window: HWND) -> bool {
-    let Some(text) = clipboard::read_text(window) else {
-        return false;
-    };
+    let text = clipboard::read_text(window).unwrap_or_default();
     open_external_url(application, window, &text);
     true
 }
