@@ -321,10 +321,13 @@ pub fn build_info_text(
             image.width, image.height
         ),
     ];
-    if image.storage == PixelStorage::RgbaHalf {
-        match image.peak_luminance_nits {
+    match image.storage {
+        PixelStorage::RgbaHalf => match image.peak_luminance_nits {
             Some(peak) => lines.push(format!("Bit depth: FP16 linear, peak {peak:.0} nits")),
             None => lines.push("Bit depth: high (FP16)".to_string()),
+        },
+        PixelStorage::Bgra8 => {
+            lines.push(format!("Bit depth: {}-bit", image.source_bits_per_channel));
         }
     }
     lines.push(format!("Output: {output_description}"));
@@ -516,6 +519,34 @@ fn format_local_datetime(time: SystemTime) -> String {
         "{:04}-{:02}-{:02} {:02}:{:02}:{:02}",
         local.wYear, local.wMonth, local.wDay, local.wHour, local.wMinute, local.wSecond
     )
+}
+
+#[cfg(test)]
+mod info_text_tests {
+    use super::*;
+    use crate::image::decode::Frame;
+
+    #[test]
+    fn bit_depth_always_appears() {
+        let image = DecodedImage {
+            width: 2,
+            height: 1,
+            pixel_width: 2,
+            pixel_height: 1,
+            format_name: "PNG",
+            icc_profile: None,
+            exif: None,
+            storage: PixelStorage::Bgra8,
+            source_bits_per_channel: 8,
+            peak_luminance_nits: None,
+            frames: vec![Frame {
+                pixels: vec![0; 8],
+                delay_milliseconds: 0,
+            }],
+        };
+        let text = build_info_text("a.png", "C:\\a.png", &image, 100, None, "8-bit sRGB");
+        assert!(text.contains("Bit depth: 8-bit"));
+    }
 }
 
 #[cfg(test)]
