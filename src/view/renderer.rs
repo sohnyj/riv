@@ -1185,8 +1185,10 @@ impl Renderer {
                 "High Quality (fallback)"
             };
         }
+        // An active effect chain leaves fractional pixels even at 1:1.
+        let pixels_transformed = !identity_placement || self.effect_output.is_some();
         self.dither_description =
-            if self.image.is_some() && self.active_dither_effect(!identity_placement).is_some() {
+            if self.image.is_some() && self.active_dither_effect(pixels_transformed).is_some() {
                 match self.dither_mode {
                     DitherMode::None => "None",
                     DitherMode::Ordered => "Ordered",
@@ -1219,7 +1221,7 @@ impl Renderer {
                             output,
                             &transform,
                             interpolation,
-                            !identity_placement,
+                            pixels_transformed,
                         ) {
                             self.d2d_context.SetTransform(&raw const transform);
                             self.d2d_context.DrawImage(
@@ -1239,7 +1241,7 @@ impl Renderer {
                                 &bitmap_image,
                                 &transform,
                                 interpolation,
-                                !identity_placement,
+                                pixels_transformed,
                             )
                         });
                         if !dithered {
@@ -1534,15 +1536,14 @@ impl Renderer {
         self.dither_description
     }
 
-    /// The registered dither effect. Only a 1:1 draw of a source no deeper
-    /// than the backbuffer has nothing to lose; resampling always does.
-    fn active_dither_effect(&self, resampled: bool) -> Option<&ID2D1Effect> {
+    /// The registered dither effect; untouched 1:1 draws within the backbuffer depth skip it.
+    fn active_dither_effect(&self, pixels_transformed: bool) -> Option<&ID2D1Effect> {
         let backbuffer_bits = if self.swap_chain_format == DXGI_FORMAT_R10G10B10A2_UNORM {
             10
         } else {
             8
         };
-        if !resampled && self.image_source_bits_per_channel <= backbuffer_bits {
+        if !pixels_transformed && self.image_source_bits_per_channel <= backbuffer_bits {
             return None;
         }
         match self.dither_mode {
@@ -1593,10 +1594,10 @@ impl Renderer {
         output: &ID2D1Image,
         transform: &Matrix3x2,
         interpolation: D2D1_INTERPOLATION_MODE,
-        resampled: bool,
+        pixels_transformed: bool,
     ) -> bool {
         let (Some(dither_effect), Some(affine_transform)) = (
-            self.active_dither_effect(resampled),
+            self.active_dither_effect(pixels_transformed),
             &self.affine_transform_effect,
         ) else {
             return false;
