@@ -186,7 +186,7 @@ static REGISTRY: &[FormatDescriptor] = &[
     FormatDescriptor {
         name: "SVG",
         extensions: &["svg", "svgz"],
-        magic: &[&[(0, b"<svg")], &[(0, b"<?xml")]],
+        magic: &[&[(0, b"<svg")]],
         semantics: FrameSemantics::Single,
         adapter: Adapter::Svg,
         store_extension: None,
@@ -335,15 +335,27 @@ pub fn probe_file(path: &Path) -> Option<&'static FormatDescriptor> {
 }
 
 fn probe_magic(header: &[u8]) -> Option<&'static FormatDescriptor> {
-    REGISTRY.iter().find(|descriptor| {
-        descriptor.magic.iter().any(|signature| {
-            signature.iter().all(|(offset, bytes)| {
-                header
-                    .get(*offset..offset + bytes.len())
-                    .is_some_and(|slice| slice == *bytes)
+    REGISTRY
+        .iter()
+        .find(|descriptor| {
+            descriptor.magic.iter().any(|signature| {
+                signature.iter().all(|(offset, bytes)| {
+                    header
+                        .get(*offset..offset + bytes.len())
+                        .is_some_and(|slice| slice == *bytes)
+                })
             })
         })
-    })
+        .or_else(|| xml_svg_probe(header))
+}
+
+/// An XML prologue counts as SVG only when an <svg tag follows in the header.
+fn xml_svg_probe(header: &[u8]) -> Option<&'static FormatDescriptor> {
+    if header.starts_with(b"<?xml") && header.windows(4).any(|window| window == b"<svg") {
+        descriptor_for_extension("svg")
+    } else {
+        None
+    }
 }
 
 static ANIMATED_WEBP: FormatDescriptor = FormatDescriptor {
@@ -1796,6 +1808,16 @@ mod descriptor_probe_tests {
         assert!(is_raw_two_stage(Path::new("PHOTO.DNG")));
         assert!(!is_raw_two_stage(Path::new("photo.png")));
         assert!(!is_raw_two_stage(Path::new("photo")));
+    }
+
+    #[test]
+    fn xml_probes_as_svg_only_with_an_svg_tag() {
+        let svg_document = b"<?xml version=\"1.0\"?>\n<svg xmlns=\"http://www.w3.org/2000/svg\"/>";
+        assert_eq!(probe_magic(svg_document).map(|d| d.name), Some("SVG"));
+        let plain_xml = b"<?xml version=\"1.0\"?>\n<note><to>reader</to></note>";
+        assert!(probe_magic(plain_xml).is_none());
+        let bare_svg = b"<svg xmlns=\"http://www.w3.org/2000/svg\"/>";
+        assert_eq!(probe_magic(bare_svg).map(|d| d.name), Some("SVG"));
     }
 
     /// PNG signature + IHDR(13 bytes) + an acTL chunk header.
