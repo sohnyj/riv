@@ -572,6 +572,13 @@ impl ImageCore {
         self.rescan_listing();
     }
 
+    /// Empty-window state for when a delete leaves nothing to show.
+    pub fn clear_current_item(&mut self) {
+        self.pending_display = None;
+        self.load_error = None;
+        self.current = None;
+    }
+
     fn navigation_anchor(&self) -> Option<ItemLocation> {
         self.pending_display
             .clone()

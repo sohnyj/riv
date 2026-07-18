@@ -1065,23 +1065,31 @@ fn delete_current_file(application: &mut Application, window: HWND, permanent: b
             unsafe { SetTimer(Some(window), RECENTS_SAVE_TIMER, 500, None) };
         }
     }
-    let command = if application.settings.options.after_delete == 0 {
-        NavigationCommand::Previous
+    let (command, opposite) = if application.settings.options.after_delete == 0 {
+        (NavigationCommand::Previous, NavigationCommand::Next)
     } else {
-        NavigationCommand::Next
+        (NavigationCommand::Next, NavigationCommand::Previous)
     };
     let deleted = ItemLocation::File(path.clone());
-    // Compute the after-delete target before the file disappears.
-    let target = application
-        .image_core
-        .peek_navigation_target(command)
-        .filter(|candidate| *candidate != deleted)
+    // Compute the after-delete target before the file disappears; folder ends fall back.
+    let target = [command, opposite]
+        .into_iter()
+        .find_map(|direction| {
+            application
+                .image_core
+                .peek_navigation_target(direction)
+                .filter(|candidate| *candidate != deleted)
+        })
         .and_then(|candidate| candidate.as_file().map(Path::to_path_buf));
     match file_ops::delete_file(&path, permanent) {
         Ok(()) => {
             application.image_core.refresh_folder();
-            if let Some(target) = target {
-                open_external_path(application, window, &target);
+            match target {
+                Some(target) => open_external_path(application, window, &target),
+                None => {
+                    application.image_core.clear_current_item();
+                    application.clear_displayed_image(window);
+                }
             }
         }
         Err(_) => {
