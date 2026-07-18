@@ -17,7 +17,7 @@ impl FitMode {
     }
 }
 
-/// Logical zoom limits; requests outside are ignored.
+/// Logical zoom limits; incremental zoom clamps to these.
 const MINIMUM_LOGICAL_ZOOM: f32 = 0.1;
 const MAXIMUM_LOGICAL_ZOOM: f32 = 5.0;
 
@@ -95,11 +95,17 @@ impl ViewTransform {
         viewport: Size,
         image: Size,
     ) {
-        let new_scale = self.scale * factor;
-        let logical = new_scale / self.device_pixel_ratio;
-        if !(MINIMUM_LOGICAL_ZOOM..=MAXIMUM_LOGICAL_ZOOM).contains(&logical) {
-            return; // outside the zoom limits
+        let current_logical = self.scale / self.device_pixel_ratio;
+        // Limits stretch to the current scale so an out-of-range fit can step back in.
+        let logical = (current_logical * factor).clamp(
+            MINIMUM_LOGICAL_ZOOM.min(current_logical),
+            MAXIMUM_LOGICAL_ZOOM.max(current_logical),
+        );
+        if logical == current_logical {
+            return; // no movement toward the limits
         }
+        let new_scale = logical * self.device_pixel_ratio;
+        let factor = new_scale / self.scale;
         // Cursor anchor only when enlarging beyond fit.
         let cursor_anchor = cursor_from_center
             .filter(|_| factor > 1.0 && new_scale > self.fit_scale(viewport, image));
@@ -211,5 +217,93 @@ impl ViewTransform {
             -center_x * scale_x * cosine + center_y * scale_y * sine + translate_x,
             -center_x * scale_x * sine - center_y * scale_y * cosine + translate_y,
         ]
+    }
+}
+
+#[cfg(test)]
+mod zoom_limit_tests {
+    use super::*;
+
+    const VIEWPORT: Size = Size {
+        width: 640.0,
+        height: 480.0,
+    };
+    const HUGE_IMAGE: Size = Size {
+        width: 17000.0,
+        height: 12750.0,
+    };
+    const TINY_IMAGE: Size = Size {
+        width: 16.0,
+        height: 12.0,
+    };
+    const PLAIN_IMAGE: Size = Size {
+        width: 800.0,
+        height: 600.0,
+    };
+
+    fn transform_at(scale: f32, device_pixel_ratio: f32) -> ViewTransform {
+        let mut transform = ViewTransform::new(device_pixel_ratio);
+        transform.scale = scale;
+        transform.fit_tracking = false;
+        transform
+    }
+
+    #[test]
+    fn zoom_in_climbs_out_of_a_fit_below_the_minimum() {
+        let mut transform = ViewTransform::new(1.0);
+        transform.refit(VIEWPORT, HUGE_IMAGE);
+        assert!(transform.scale < MINIMUM_LOGICAL_ZOOM);
+        let mut steps = 0;
+        while transform.scale < MINIMUM_LOGICAL_ZOOM && steps < 32 {
+            let before = transform.scale;
+            transform.zoom(1.25, None, VIEWPORT, HUGE_IMAGE);
+            assert!(transform.scale > before);
+            steps += 1;
+        }
+        assert!(transform.scale >= MINIMUM_LOGICAL_ZOOM);
+    }
+
+    #[test]
+    fn zoom_out_from_a_fit_below_the_minimum_is_ignored() {
+        let mut transform = ViewTransform::new(1.0);
+        transform.refit(VIEWPORT, HUGE_IMAGE);
+        let fit = transform.scale;
+        transform.zoom(0.8, None, VIEWPORT, HUGE_IMAGE);
+        assert_eq!(transform.scale, fit);
+        assert!(transform.fit_tracking);
+    }
+
+    #[test]
+    fn zoom_steps_land_exactly_on_the_boundaries() {
+        let mut transform = transform_at(4.5, 1.0);
+        transform.zoom(1.25, None, VIEWPORT, PLAIN_IMAGE);
+        assert_eq!(transform.scale, MAXIMUM_LOGICAL_ZOOM);
+        transform.zoom(1.25, None, VIEWPORT, PLAIN_IMAGE);
+        assert_eq!(transform.scale, MAXIMUM_LOGICAL_ZOOM);
+
+        let mut transform = transform_at(0.11, 1.0);
+        transform.zoom(0.8, None, VIEWPORT, PLAIN_IMAGE);
+        assert_eq!(transform.scale, MINIMUM_LOGICAL_ZOOM);
+        transform.zoom(0.8, None, VIEWPORT, PLAIN_IMAGE);
+        assert_eq!(transform.scale, MINIMUM_LOGICAL_ZOOM);
+    }
+
+    #[test]
+    fn zoom_out_moves_inward_from_a_fit_above_the_maximum() {
+        let mut transform = ViewTransform::new(1.0);
+        transform.refit(VIEWPORT, TINY_IMAGE);
+        assert!(transform.scale > MAXIMUM_LOGICAL_ZOOM);
+        let fit = transform.scale;
+        transform.zoom(1.25, None, VIEWPORT, TINY_IMAGE);
+        assert_eq!(transform.scale, fit);
+        transform.zoom(0.8, None, VIEWPORT, TINY_IMAGE);
+        assert!(transform.scale < fit && transform.scale > MAXIMUM_LOGICAL_ZOOM);
+    }
+
+    #[test]
+    fn limits_apply_in_the_logical_domain() {
+        let mut transform = transform_at(9.5, 2.0);
+        transform.zoom(1.25, None, VIEWPORT, PLAIN_IMAGE);
+        assert_eq!(transform.scale, MAXIMUM_LOGICAL_ZOOM * 2.0);
     }
 }
