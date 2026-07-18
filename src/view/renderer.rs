@@ -75,6 +75,9 @@ struct ModeEffects {
     tone_map_normalize_effect: Option<ID2D1Effect>,
     output_color_management_effect: Option<ID2D1Effect>,
     white_level_effect: Option<ID2D1Effect>,
+    /// SDR only: sRGB <-> scRGB pair so the scaler convolves linear light.
+    linearize_effect: Option<ID2D1Effect>,
+    delinearize_effect: Option<ID2D1Effect>,
 }
 
 pub struct Renderer {
@@ -105,6 +108,8 @@ pub struct Renderer {
     output_color_management_effect: Option<ID2D1Effect>,
     /// scRGB -> PQ BT.2020 for the HDR10 backbuffer; None on the FP16 fallback.
     hdr_output_color_management_effect: Option<ID2D1Effect>,
+    linearize_effect: Option<ID2D1Effect>,
+    delinearize_effect: Option<ID2D1Effect>,
     affine_transform_effect: Option<ID2D1Effect>,
     dither_ordered_effect: Option<ID2D1Effect>,
     dither_fruit_effect: Option<ID2D1Effect>,
@@ -141,6 +146,8 @@ impl Drop for Renderer {
         self.tone_map_normalize_effect = None;
         self.output_color_management_effect = None;
         self.hdr_output_color_management_effect = None;
+        self.linearize_effect = None;
+        self.delinearize_effect = None;
         self.affine_transform_effect = None;
         self.dither_ordered_effect = None;
         self.dither_fruit_effect = None;
@@ -291,6 +298,31 @@ impl Renderer {
         Some(effect)
     }
 
+    fn create_transfer_effect(
+        d2d_context: &ID2D1DeviceContext,
+        source: Option<&ID2D1ColorContext>,
+        destination: Option<&ID2D1ColorContext>,
+    ) -> Option<ID2D1Effect> {
+        let effect = Self::create_color_management_effect(d2d_context)?;
+        unsafe {
+            effect.SetValue(
+                D2D1_COLORMANAGEMENT_PROP_SOURCE_COLOR_CONTEXT.0 as u32,
+                D2D1_PROPERTY_TYPE_COLOR_CONTEXT,
+                &interface_property_bytes(source?),
+            )
+        }
+        .ok()?;
+        unsafe {
+            effect.SetValue(
+                D2D1_COLORMANAGEMENT_PROP_DESTINATION_COLOR_CONTEXT.0 as u32,
+                D2D1_PROPERTY_TYPE_COLOR_CONTEXT,
+                &interface_property_bytes(destination?),
+            )
+        }
+        .ok()?;
+        Some(effect)
+    }
+
     fn create_mode_effects(
         d2d_context: &ID2D1DeviceContext,
         hdr_mode: bool,
@@ -333,25 +365,18 @@ impl Renderer {
             .then_some(())
             .and(hdr_tone_map_effect.as_ref())
             .and_then(|_| {
-                let effect = Self::create_color_management_effect(d2d_context)?;
-                unsafe {
-                    effect.SetValue(
-                        D2D1_COLORMANAGEMENT_PROP_SOURCE_COLOR_CONTEXT.0 as u32,
-                        D2D1_PROPERTY_TYPE_COLOR_CONTEXT,
-                        &interface_property_bytes(scrgb_color_context?),
-                    )
-                }
-                .ok()?;
-                unsafe {
-                    effect.SetValue(
-                        D2D1_COLORMANAGEMENT_PROP_DESTINATION_COLOR_CONTEXT.0 as u32,
-                        D2D1_PROPERTY_TYPE_COLOR_CONTEXT,
-                        &interface_property_bytes(srgb_color_context?),
-                    )
-                }
-                .ok()?;
-                Some(effect)
+                Self::create_transfer_effect(d2d_context, scrgb_color_context, srgb_color_context)
             });
+        let linearize_effect = (!hdr_mode)
+            .then(|| {
+                Self::create_transfer_effect(d2d_context, srgb_color_context, scrgb_color_context)
+            })
+            .flatten();
+        let delinearize_effect = (!hdr_mode)
+            .then(|| {
+                Self::create_transfer_effect(d2d_context, scrgb_color_context, srgb_color_context)
+            })
+            .flatten();
         let white_level_effect = hdr_mode
             .then_some(())
             .and(color_management_effect.as_ref())
@@ -375,6 +400,8 @@ impl Renderer {
             tone_map_normalize_effect,
             output_color_management_effect,
             white_level_effect,
+            linearize_effect,
+            delinearize_effect,
         }
     }
 
@@ -590,6 +617,8 @@ impl Renderer {
             tone_map_normalize_effect: mode_effects.tone_map_normalize_effect,
             output_color_management_effect: mode_effects.output_color_management_effect,
             hdr_output_color_management_effect,
+            linearize_effect: mode_effects.linearize_effect,
+            delinearize_effect: mode_effects.delinearize_effect,
             affine_transform_effect,
             dither_ordered_effect,
             dither_fruit_effect,
@@ -833,6 +862,8 @@ impl Renderer {
         self.hdr_tone_map_effect = mode_effects.hdr_tone_map_effect;
         self.tone_map_normalize_effect = mode_effects.tone_map_normalize_effect;
         self.output_color_management_effect = mode_effects.output_color_management_effect;
+        self.linearize_effect = mode_effects.linearize_effect;
+        self.delinearize_effect = mode_effects.delinearize_effect;
         self.hdr_output_color_management_effect = hdr_output_color_management_effect;
 
         let d2d_factory: Option<ID2D1Factory1> = unsafe { self.d2d_context.GetFactory() }
@@ -1170,9 +1201,11 @@ impl Renderer {
             if self.image.is_some() {
                 match (&prescaled, &self.effect_output, &self.image) {
                     (Some(scaled), _, _) => {
-                        if !self.draw_prescaled_dithered(scaled) {
+                        if let Some(composite) = self.prescaled_composite_image(scaled)
+                            && !self.draw_prescaled_dithered(&composite)
+                        {
                             self.d2d_context.DrawImage(
-                                scaled,
+                                &composite,
                                 None,
                                 None,
                                 D2D1_INTERPOLATION_MODE_NEAREST_NEIGHBOR,
@@ -1420,31 +1453,29 @@ impl Renderer {
                     };
                     self.d2d_context.SetTransform(&raw const rotation);
                 }
-                match (&self.effect_output, &self.image) {
-                    (Some(output), _) => self.d2d_context.DrawImage(
-                        output,
+                let scene: Option<ID2D1Image> = match (&self.effect_output, &self.image) {
+                    (Some(output), _) => Some(output.clone()),
+                    (None, Some(image)) => image.cast().ok(),
+                    _ => None,
+                };
+                if let Some(scene) = scene {
+                    // SDR scenes linearize so the convolution runs in linear light.
+                    let source = if !self.hdr_mode
+                        && self.delinearize_effect.is_some()
+                        && let Some(linearize) = &self.linearize_effect
+                    {
+                        linearize.SetInput(0, &scene, true);
+                        linearize.GetOutput().ok().unwrap_or(scene)
+                    } else {
+                        scene
+                    };
+                    self.d2d_context.DrawImage(
+                        &source,
                         None,
                         None,
                         D2D1_INTERPOLATION_MODE_NEAREST_NEIGHBOR,
                         D2D1_COMPOSITE_MODE_SOURCE_OVER,
-                    ),
-                    (None, Some(image)) => {
-                        let destination = D2D_RECT_F {
-                            left: 0.0,
-                            top: 0.0,
-                            right: pixel_size.0 as f32,
-                            bottom: pixel_size.1 as f32,
-                        };
-                        self.d2d_context.DrawBitmap(
-                            image,
-                            Some(&raw const destination),
-                            1.0,
-                            D2D1_INTERPOLATION_MODE_NEAREST_NEIGHBOR,
-                            None,
-                            None,
-                        );
-                    }
-                    _ => {}
+                    );
                 }
                 if rotated {
                     self.d2d_context.SetTransform(&Matrix3x2::identity());
@@ -1521,12 +1552,26 @@ impl Renderer {
         }
     }
 
+    /// Undoes the SDR linearization on the scaled scene before compositing.
+    fn prescaled_composite_image(&self, scaled: &ID2D1Bitmap1) -> Option<ID2D1Image> {
+        if !self.hdr_mode
+            && self.linearize_effect.is_some()
+            && let Some(delinearize) = &self.delinearize_effect
+        {
+            unsafe { delinearize.SetInput(0, scaled, true) };
+            if let Ok(output) = unsafe { delinearize.GetOutput() } {
+                return Some(output);
+            }
+        }
+        scaled.cast().ok()
+    }
+
     /// Prescaled scene -> dither -> target; false when the caller draws plain.
-    fn draw_prescaled_dithered(&self, scaled: &ID2D1Bitmap1) -> bool {
+    fn draw_prescaled_dithered(&self, composite: &ID2D1Image) -> bool {
         let Some(dither_effect) = self.active_dither_effect(true) else {
             return false;
         };
-        unsafe { dither_effect.SetInput(0, scaled, true) };
+        unsafe { dither_effect.SetInput(0, composite, true) };
         let Ok(dithered) = (unsafe { dither_effect.GetOutput() }) else {
             return false;
         };
