@@ -10,7 +10,7 @@ use windows::Win32::Graphics::Gdi::{
 use windows::Win32::System::LibraryLoader::GetModuleHandleW;
 use windows::Win32::UI::Controls::{DRAWITEMSTRUCT, ODS_SELECTED, TASKDIALOGCONFIG};
 use windows::Win32::UI::Input::KeyboardAndMouse::{
-    GetKeyState, SetFocus, VK_CONTROL, VK_LWIN, VK_MENU, VK_RWIN, VK_SHIFT,
+    SetFocus, VK_CONTROL, VK_LWIN, VK_MENU, VK_RWIN, VK_SHIFT,
 };
 use windows::Win32::UI::WindowsAndMessaging::{
     CS_DBLCLKS, CallWindowProcW, DLGC_WANTALLKEYS, DefWindowProcW, DialogBoxParamW, EndDialog,
@@ -23,9 +23,7 @@ use windows::Win32::UI::WindowsAndMessaging::{
 };
 use windows::core::{PCWSTR, w};
 
-use crate::bindings::{
-    self, MODIFIER_ALT, MODIFIER_CONTROL, MODIFIER_META, MODIFIER_SHIFT, MouseBase,
-};
+use crate::bindings::{self, MouseBase, current_modifiers};
 use crate::dialogs::resource::{
     IDC_CAPTURE_KEY_CLEAR, IDC_CAPTURE_KEY_FIELD, IDC_CAPTURE_KEY_LIST, IDC_CAPTURE_MOUSE_CLEAR,
     IDC_CAPTURE_MOUSE_FIELD, IDD_CAPTURE_KEYBOARD, IDD_CAPTURE_MOUSE,
@@ -116,24 +114,6 @@ fn warn_conflict(dialog: HWND, encoding: &str, owner_label: &str) {
     let _ = unsafe {
         windows::Win32::UI::Controls::TaskDialogIndirect(&raw const configuration, None, None, None)
     };
-}
-
-fn held_modifiers() -> u8 {
-    let pressed = |key: i32| (unsafe { GetKeyState(key) } as u16 & 0x8000) != 0;
-    let mut modifiers = 0u8;
-    if pressed(VK_CONTROL.0 as i32) {
-        modifiers |= MODIFIER_CONTROL;
-    }
-    if pressed(VK_SHIFT.0 as i32) {
-        modifiers |= MODIFIER_SHIFT;
-    }
-    if pressed(VK_MENU.0 as i32) {
-        modifiers |= MODIFIER_ALT;
-    }
-    if pressed(VK_LWIN.0 as i32) || pressed(VK_RWIN.0 as i32) {
-        modifiers |= MODIFIER_META;
-    }
-    modifiers
 }
 
 struct KeyboardCaptureState {
@@ -568,7 +548,7 @@ unsafe extern "system" fn key_field_procedure(
             if is_modifier_key(virtual_key) {
                 let _ = unsafe { InvalidateRect(Some(field), None, true) };
             } else {
-                let packed = ((held_modifiers() as usize) << 16) | virtual_key as usize;
+                let packed = ((current_modifiers() as usize) << 16) | virtual_key as usize;
                 if let Ok(parent) = unsafe { GetParent(field) } {
                     unsafe {
                         SendMessageW(parent, WM_RIV_KEY_CAPTURED, Some(WPARAM(packed)), None)
@@ -593,7 +573,7 @@ unsafe extern "system" fn key_field_procedure(
             let focused =
                 unsafe { windows::Win32::UI::Input::KeyboardAndMouse::GetFocus() } == field;
             if focused {
-                let prefix = bindings::modifier_prefix(held_modifiers());
+                let prefix = bindings::modifier_prefix(current_modifiers());
                 if prefix.is_empty() {
                     field_paint(field, "Press a key combination\u{2026}", true);
                 } else {
@@ -616,7 +596,7 @@ unsafe extern "system" fn mouse_field_procedure(
 ) -> LRESULT {
     fn notify(field: HWND, double_click: bool, base_index: usize) -> LRESULT {
         let packed =
-            ((held_modifiers() as usize) << 8) | (usize::from(double_click) << 7) | base_index;
+            ((current_modifiers() as usize) << 8) | (usize::from(double_click) << 7) | base_index;
         if let Ok(parent) = unsafe { GetParent(field) } {
             unsafe { SendMessageW(parent, WM_RIV_MOUSE_CAPTURED, Some(WPARAM(packed)), None) };
         }

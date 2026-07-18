@@ -7,15 +7,7 @@ use windows::Win32::Graphics::Direct3D11::{
 };
 use windows::core::{Result, s};
 
-use crate::view::dither::compile_shader;
-
-const VERTEX_SHADER_SOURCE: &str = "\
-float4 main(uint vertex_id : SV_VertexID) : SV_POSITION
-{
-    float2 position = float2((vertex_id << 1) & 2, vertex_id & 2);
-    return float4(position * float2(2.0, -2.0) + float2(-1.0, 1.0), 0.0, 1.0);
-}
-";
+use crate::view::dither::{FULLSCREEN_TRIANGLE_VERTEX_SHADER, compile_shader};
 
 const PIXEL_SHADER_SOURCE: &str = "\
 Texture2D scene_texture : register(t0);
@@ -33,7 +25,7 @@ pub struct QuantizePass {
 
 impl QuantizePass {
     pub fn new(device: &ID3D11Device) -> Result<Self> {
-        let vertex_bytecode = compile_shader(VERTEX_SHADER_SOURCE, s!("vs_5_0"))?;
+        let vertex_bytecode = compile_shader(FULLSCREEN_TRIANGLE_VERTEX_SHADER, s!("vs_5_0"))?;
         let pixel_bytecode = compile_shader(PIXEL_SHADER_SOURCE, s!("ps_5_0"))?;
         let mut vertex_shader = None;
         let mut pixel_shader = None;

@@ -1153,8 +1153,12 @@ fn sort_entries(entries: &mut [FolderEntry], options: &CoreOptions) {
 }
 
 fn compare_natural_names(a: &FolderEntry, b: &FolderEntry) -> std::cmp::Ordering {
-    let result =
-        unsafe { StrCmpLogicalW(PCWSTR(a.wide_name.as_ptr()), PCWSTR(b.wide_name.as_ptr())) };
+    natural_order(&a.wide_name, &b.wide_name)
+}
+
+/// Explorer's natural order over null-terminated UTF-16 names.
+pub fn natural_order(a: &[u16], b: &[u16]) -> std::cmp::Ordering {
+    let result = unsafe { StrCmpLogicalW(PCWSTR(a.as_ptr()), PCWSTR(b.as_ptr())) };
     result.cmp(&0)
 }
 

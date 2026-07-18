@@ -11,25 +11,15 @@
 use windows::Win32::Graphics::Direct3D::D3D11_PRIMITIVE_TOPOLOGY_TRIANGLELIST;
 use windows::Win32::Graphics::Direct3D11::D3D11_FILTER_MIN_MAG_MIP_POINT;
 use windows::Win32::Graphics::Direct3D11::{
-    D3D11_BIND_CONSTANT_BUFFER, D3D11_BIND_RENDER_TARGET, D3D11_BIND_SHADER_RESOURCE,
-    D3D11_BUFFER_DESC, D3D11_CPU_ACCESS_WRITE, D3D11_MAP_WRITE_DISCARD, D3D11_SAMPLER_DESC,
-    D3D11_TEXTURE_ADDRESS_BORDER, D3D11_TEXTURE2D_DESC, D3D11_USAGE_DEFAULT, D3D11_USAGE_DYNAMIC,
-    D3D11_VIEWPORT, ID3D11Buffer, ID3D11Device, ID3D11DeviceContext, ID3D11PixelShader,
-    ID3D11RenderTargetView, ID3D11SamplerState, ID3D11ShaderResourceView, ID3D11Texture2D,
-    ID3D11VertexShader,
+    D3D11_BIND_CONSTANT_BUFFER, D3D11_BUFFER_DESC, D3D11_CPU_ACCESS_WRITE, D3D11_MAP_WRITE_DISCARD,
+    D3D11_SAMPLER_DESC, D3D11_TEXTURE_ADDRESS_BORDER, D3D11_USAGE_DYNAMIC, D3D11_VIEWPORT,
+    ID3D11Buffer, ID3D11Device, ID3D11DeviceContext, ID3D11PixelShader, ID3D11RenderTargetView,
+    ID3D11SamplerState, ID3D11ShaderResourceView, ID3D11VertexShader,
 };
-use windows::Win32::Graphics::Dxgi::Common::{DXGI_FORMAT_R16G16B16A16_FLOAT, DXGI_SAMPLE_DESC};
+use windows::Win32::Graphics::Dxgi::Common::DXGI_FORMAT_R16G16B16A16_FLOAT;
 use windows::core::{Result, s};
 
-use crate::view::dither::compile_shader;
-
-const VERTEX_SHADER_SOURCE: &str = "\
-float4 main(uint vertex_id : SV_VertexID) : SV_POSITION
-{
-    float2 position = float2((vertex_id << 1) & 2, vertex_id & 2);
-    return float4(position * float2(2.0, -2.0) + float2(-1.0, 1.0), 0.0, 1.0);
-}
-";
+use crate::view::dither::{FULLSCREEN_TRIANGLE_VERTEX_SHADER, compile_shader};
 
 const PIXEL_SHADER_SOURCE: &str = "\
 Texture2D source_texture : register(t0);
@@ -178,7 +168,7 @@ pub struct SamplingPass {
 
 impl SamplingPass {
     pub fn new(device: &ID3D11Device) -> Result<Self> {
-        let vertex_bytecode = compile_shader(VERTEX_SHADER_SOURCE, s!("vs_5_0"))?;
+        let vertex_bytecode = compile_shader(FULLSCREEN_TRIANGLE_VERTEX_SHADER, s!("vs_5_0"))?;
         let lanczos_bytecode = compiled_pixel_shader(SamplingFilter::Lanczos)?;
         let hermite_bytecode = compiled_pixel_shader(SamplingFilter::Hermite)?;
         let mut vertex_shader = None;
@@ -236,26 +226,11 @@ impl SamplingPass {
             .as_ref()
             .is_none_or(|held| held.size != size)
         {
-            let description = D3D11_TEXTURE2D_DESC {
-                Width: size.0,
-                Height: size.1,
-                MipLevels: 1,
-                ArraySize: 1,
-                Format: DXGI_FORMAT_R16G16B16A16_FLOAT,
-                SampleDesc: DXGI_SAMPLE_DESC {
-                    Count: 1,
-                    Quality: 0,
-                },
-                Usage: D3D11_USAGE_DEFAULT,
-                BindFlags: (D3D11_BIND_RENDER_TARGET.0 | D3D11_BIND_SHADER_RESOURCE.0) as u32,
-                ..Default::default()
-            };
-            let mut texture: Option<ID3D11Texture2D> = None;
+            let texture =
+                crate::view::create_scene_texture(device, size, DXGI_FORMAT_R16G16B16A16_FLOAT)?;
             let mut shader_resource_view = None;
             let mut render_target_view = None;
             unsafe {
-                device.CreateTexture2D(&raw const description, None, Some(&raw mut texture))?;
-                let texture = texture.ok_or_else(windows::core::Error::empty)?;
                 device.CreateShaderResourceView(
                     &texture,
                     None,
@@ -408,7 +383,7 @@ mod tests {
     #[test]
     fn scaling_shaders_compile_as_shader_model_5() {
         let vertex_bytecode =
-            compile_shader(VERTEX_SHADER_SOURCE, s!("vs_5_0")).expect("vertex shader");
+            compile_shader(FULLSCREEN_TRIANGLE_VERTEX_SHADER, s!("vs_5_0")).expect("vertex shader");
         assert_eq!(&vertex_bytecode[..4], b"DXBC");
         for filter in [SamplingFilter::Lanczos, SamplingFilter::Hermite] {
             let pixel_bytecode = compiled_pixel_shader(filter).expect("pixel shader");

@@ -507,7 +507,8 @@ fn format_local_datetime(time: SystemTime) -> String {
     let Ok(elapsed) = time.duration_since(UNIX_EPOCH) else {
         return String::new();
     };
-    let intervals = elapsed.as_nanos() / 100 + 116_444_736_000_000_000;
+    let intervals =
+        elapsed.as_nanos() / 100 + u128::from(crate::image::decode::FILETIME_UNIX_EPOCH);
     let file_time = FILETIME {
         dwLowDateTime: intervals as u32,
         dwHighDateTime: (intervals >> 32) as u32,

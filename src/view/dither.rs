@@ -98,6 +98,15 @@ float4 main(float4 clip_position : SV_POSITION,
 }
 ";
 
+/// Fullscreen triangle from SV_VertexID, shared by the D3D11 passes.
+pub(crate) const FULLSCREEN_TRIANGLE_VERTEX_SHADER: &str = "\
+float4 main(uint vertex_id : SV_VertexID) : SV_POSITION
+{
+    float2 position = float2((vertex_id << 1) & 2, vertex_id & 2);
+    return float4(position * float2(2.0, -2.0) + float2(-1.0, 1.0), 0.0, 1.0);
+}
+";
+
 pub(crate) fn compile_shader(source: &str, profile: PCSTR) -> Result<Vec<u8>> {
     let mut code = None;
     unsafe {

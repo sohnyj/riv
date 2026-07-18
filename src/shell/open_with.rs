@@ -176,9 +176,7 @@ fn default_executable_for(path: &Path) -> Option<String> {
 }
 
 fn natural_compare(a: &str, b: &str) -> std::cmp::Ordering {
-    use windows::Win32::UI::Shell::StrCmpLogicalW;
     let a_wide: Vec<u16> = a.encode_utf16().chain(std::iter::once(0)).collect();
     let b_wide: Vec<u16> = b.encode_utf16().chain(std::iter::once(0)).collect();
-    let result = unsafe { StrCmpLogicalW(PCWSTR(a_wide.as_ptr()), PCWSTR(b_wide.as_ptr())) };
-    result.cmp(&0)
+    crate::image::core::natural_order(&a_wide, &b_wide)
 }

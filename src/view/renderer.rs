@@ -29,9 +29,9 @@ use windows::Win32::Graphics::Direct3D::{
     D3D_FEATURE_LEVEL_11_0, D3D_FEATURE_LEVEL_12_0,
 };
 use windows::Win32::Graphics::Direct3D11::{
-    D3D11_BIND_RENDER_TARGET, D3D11_BIND_SHADER_RESOURCE, D3D11_CREATE_DEVICE_BGRA_SUPPORT,
-    D3D11_SDK_VERSION, D3D11_TEXTURE2D_DESC, D3D11_USAGE_DEFAULT, D3D11CreateDevice, ID3D11Device,
-    ID3D11DeviceContext, ID3D11RenderTargetView, ID3D11ShaderResourceView, ID3D11Texture2D,
+    D3D11_CREATE_DEVICE_BGRA_SUPPORT, D3D11_SDK_VERSION, D3D11_TEXTURE2D_DESC, D3D11CreateDevice,
+    ID3D11Device, ID3D11DeviceContext, ID3D11RenderTargetView, ID3D11ShaderResourceView,
+    ID3D11Texture2D,
 };
 use windows::Win32::Graphics::Dxgi::Common::{
     DXGI_ALPHA_MODE_IGNORE, DXGI_COLOR_SPACE_RGB_FULL_G10_NONE_P709,
@@ -721,27 +721,11 @@ impl Renderer {
             buffer.GetDesc(&raw mut buffer_description);
             self.backbuffer_size = (buffer_description.Width, buffer_description.Height);
             let surface: IDXGISurface = if self.quantize_pass.is_some() {
-                let scene_description = D3D11_TEXTURE2D_DESC {
-                    Width: buffer_description.Width,
-                    Height: buffer_description.Height,
-                    MipLevels: 1,
-                    ArraySize: 1,
-                    Format: scene_format,
-                    SampleDesc: DXGI_SAMPLE_DESC {
-                        Count: 1,
-                        Quality: 0,
-                    },
-                    Usage: D3D11_USAGE_DEFAULT,
-                    BindFlags: (D3D11_BIND_RENDER_TARGET.0 | D3D11_BIND_SHADER_RESOURCE.0) as u32,
-                    ..Default::default()
-                };
-                let mut scene_texture = None;
-                self.d3d_device.CreateTexture2D(
-                    &raw const scene_description,
-                    None,
-                    Some(&raw mut scene_texture),
+                let scene_texture = crate::view::create_scene_texture(
+                    &self.d3d_device,
+                    self.backbuffer_size,
+                    scene_format,
                 )?;
-                let scene_texture = scene_texture.ok_or_else(windows::core::Error::empty)?;
                 let mut scene_view = None;
                 self.d3d_device.CreateShaderResourceView(
                     &scene_texture,
@@ -1341,20 +1325,6 @@ impl Renderer {
             return Ok(());
         }
         self.flatten_scene = None;
-        let description = D3D11_TEXTURE2D_DESC {
-            Width: size.0,
-            Height: size.1,
-            MipLevels: 1,
-            ArraySize: 1,
-            Format: DXGI_FORMAT_R16G16B16A16_FLOAT,
-            SampleDesc: DXGI_SAMPLE_DESC {
-                Count: 1,
-                Quality: 0,
-            },
-            Usage: D3D11_USAGE_DEFAULT,
-            BindFlags: (D3D11_BIND_RENDER_TARGET.0 | D3D11_BIND_SHADER_RESOURCE.0) as u32,
-            ..Default::default()
-        };
         let properties = D2D1_BITMAP_PROPERTIES1 {
             pixelFormat: D2D1_PIXEL_FORMAT {
                 format: DXGI_FORMAT_R16G16B16A16_FLOAT,
@@ -1365,14 +1335,12 @@ impl Renderer {
             bitmapOptions: D2D1_BITMAP_OPTIONS_TARGET | D2D1_BITMAP_OPTIONS_CANNOT_DRAW,
             ..Default::default()
         };
+        let texture = crate::view::create_scene_texture(
+            &self.d3d_device,
+            size,
+            DXGI_FORMAT_R16G16B16A16_FLOAT,
+        )?;
         unsafe {
-            let mut texture: Option<ID3D11Texture2D> = None;
-            self.d3d_device.CreateTexture2D(
-                &raw const description,
-                None,
-                Some(&raw mut texture),
-            )?;
-            let texture = texture.ok_or_else(windows::core::Error::empty)?;
             let mut shader_resource_view = None;
             self.d3d_device.CreateShaderResourceView(
                 &texture,
@@ -1404,20 +1372,6 @@ impl Renderer {
             return Ok(());
         }
         self.scaled_scene = None;
-        let description = D3D11_TEXTURE2D_DESC {
-            Width: size.0,
-            Height: size.1,
-            MipLevels: 1,
-            ArraySize: 1,
-            Format: DXGI_FORMAT_R16G16B16A16_FLOAT,
-            SampleDesc: DXGI_SAMPLE_DESC {
-                Count: 1,
-                Quality: 0,
-            },
-            Usage: D3D11_USAGE_DEFAULT,
-            BindFlags: (D3D11_BIND_RENDER_TARGET.0 | D3D11_BIND_SHADER_RESOURCE.0) as u32,
-            ..Default::default()
-        };
         let properties = D2D1_BITMAP_PROPERTIES1 {
             pixelFormat: D2D1_PIXEL_FORMAT {
                 format: DXGI_FORMAT_R16G16B16A16_FLOAT,
@@ -1427,14 +1381,12 @@ impl Renderer {
             dpiY: 96.0,
             ..Default::default()
         };
+        let texture = crate::view::create_scene_texture(
+            &self.d3d_device,
+            size,
+            DXGI_FORMAT_R16G16B16A16_FLOAT,
+        )?;
         unsafe {
-            let mut texture: Option<ID3D11Texture2D> = None;
-            self.d3d_device.CreateTexture2D(
-                &raw const description,
-                None,
-                Some(&raw mut texture),
-            )?;
-            let texture = texture.ok_or_else(windows::core::Error::empty)?;
             let mut render_target_view = None;
             self.d3d_device.CreateRenderTargetView(
                 &texture,

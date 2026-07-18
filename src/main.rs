@@ -15,9 +15,7 @@ use std::path::Path;
 use std::sync::Arc;
 
 use actions::{Action, ActivationGate};
-use bindings::{
-    Bindings, MODIFIER_ALT, MODIFIER_CONTROL, MODIFIER_META, MODIFIER_SHIFT, MouseBase,
-};
+use bindings::{Bindings, MODIFIER_CONTROL, MODIFIER_SHIFT, MouseBase, current_modifiers};
 use dialogs::options::{WM_APP_OPTIONS_APPLIED, WM_APP_OPTIONS_GEOMETRY};
 use image::animation::Animation;
 use image::color;
@@ -52,8 +50,7 @@ use windows::Win32::System::LibraryLoader::GetModuleHandleW;
 use windows::Win32::System::Ole::{IDropTarget, OleInitialize, RevokeDragDrop};
 use windows::Win32::UI::HiDpi::GetDpiForWindow;
 use windows::Win32::UI::Input::KeyboardAndMouse::{
-    GetKeyState, ReleaseCapture, SetCapture, VIRTUAL_KEY, VK_CONTROL, VK_ESCAPE, VK_LWIN, VK_MENU,
-    VK_RWIN, VK_SHIFT,
+    ReleaseCapture, SetCapture, VK_CONTROL, VK_ESCAPE, VK_LWIN, VK_MENU, VK_RWIN, VK_SHIFT,
 };
 use windows::Win32::UI::WindowsAndMessaging::{
     CS_DBLCLKS, CS_HREDRAW, CS_VREDRAW, CW_USEDEFAULT, CreateWindowExW, DefWindowProcW,
@@ -719,6 +716,14 @@ impl Application {
         }
     }
 
+    /// Writes the current options back to disk and rebroadcasts them.
+    fn persist_options(&mut self, window: HWND) {
+        let options = self.settings.options.clone();
+        self.settings.set_options(&options);
+        let _ = self.settings.save();
+        self.apply_options(window);
+    }
+
     fn apply_options(&mut self, window: HWND) {
         self.bindings = Bindings::from_settings(
             self.settings.keyboard_bindings(),
@@ -757,12 +762,17 @@ impl Application {
         }
     }
 
-    fn zoom_by(&mut self, window: HWND, factor: f32) {
-        let anchor = if self.settings.options.cursor_zoom {
+    /// Cursor anchor for zoom operations, when enabled and over the client area.
+    fn zoom_anchor(&self, window: HWND) -> Option<(f32, f32)> {
+        if self.settings.options.cursor_zoom {
             cursor_from_center(window)
         } else {
             None
-        };
+        }
+    }
+
+    fn zoom_by(&mut self, window: HWND, factor: f32) {
+        let anchor = self.zoom_anchor(window);
         self.zoom_at(window, factor, anchor);
     }
 
@@ -852,24 +862,6 @@ fn cursor_from_center(window: HWND) -> Option<(f32, f32)> {
     ))
 }
 
-fn current_modifiers() -> u8 {
-    let pressed = |key: VIRTUAL_KEY| unsafe { GetKeyState(i32::from(key.0)) } < 0;
-    let mut modifiers = 0u8;
-    if pressed(VK_CONTROL) {
-        modifiers |= MODIFIER_CONTROL;
-    }
-    if pressed(VK_SHIFT) {
-        modifiers |= MODIFIER_SHIFT;
-    }
-    if pressed(VK_MENU) {
-        modifiers |= MODIFIER_ALT;
-    }
-    if pressed(VK_LWIN) || pressed(VK_RWIN) {
-        modifiers |= MODIFIER_META;
-    }
-    modifiers
-}
-
 fn execute_navigation(
     application: &mut Application,
     window: HWND,
@@ -898,24 +890,26 @@ fn apply_navigation_result(
     true
 }
 
-fn open_external_path(application: &mut Application, window: HWND, path: &Path) {
+fn open_external(
+    application: &mut Application,
+    window: HWND,
+    load: impl FnOnce(&mut ImageCore) -> bool,
+) {
     application.cancel_slideshow(window);
     application.freeze_animation_for_load(window);
-    if application.image_core.load_path(path) {
+    if load(&mut application.image_core) {
         application.apply_current_image(window);
     } else if application.image_core.load_error.is_some() {
         application.apply_load_error(window);
     }
 }
 
+fn open_external_path(application: &mut Application, window: HWND, path: &Path) {
+    open_external(application, window, |core| core.load_path(path));
+}
+
 fn open_external_url(application: &mut Application, window: HWND, url: &str) {
-    application.cancel_slideshow(window);
-    application.freeze_animation_for_load(window);
-    if application.image_core.load_url(url) {
-        application.apply_current_image(window);
-    } else if application.image_core.load_error.is_some() {
-        application.apply_load_error(window);
-    }
+    open_external(application, window, |core| core.load_url(url));
 }
 
 /// Opens clipboard text as a URL; empty or non-text clipboard surfaces an error too.
@@ -957,11 +951,7 @@ fn dispatch_action(application: &mut Application, window: HWND, action: Action) 
         Action::ResetZoom => {
             let viewport = application.viewport(window);
             let image = application.image_size();
-            let anchor = if application.settings.options.cursor_zoom {
-                cursor_from_center(window)
-            } else {
-                None
-            };
+            let anchor = application.zoom_anchor(window);
             application
                 .view_transform
                 .toggle_zoom(anchor, viewport, image);
@@ -981,10 +971,7 @@ fn dispatch_action(application: &mut Application, window: HWND, action: Action) 
                 "Width"
             };
             application.show_status_text(window, format!("Fit: {axis}"));
-            let options = application.settings.options.clone();
-            application.settings.set_options(&options);
-            let _ = application.settings.save();
-            application.apply_options(window);
+            application.persist_options(window);
         }
         Action::PreserveZoom => {
             application.preserve_zoom = !application.preserve_zoom;
@@ -1013,10 +1000,7 @@ fn dispatch_action(application: &mut Application, window: HWND, action: Action) 
             };
             // The pill spells out the full option name the short menu label elides.
             application.show_status_text(window, format!("Loop within Folder: {state}"));
-            let options = application.settings.options.clone();
-            application.settings.set_options(&options);
-            let _ = application.settings.save();
-            application.apply_options(window);
+            application.persist_options(window);
         }
         Action::Slideshow => application.toggle_slideshow(window),
         Action::Recent(index) => {
@@ -1356,10 +1340,7 @@ fn handle_wheel(application: &mut Application, window: HWND, wheel_delta: i16) {
     } else {
         MouseBase::WheelDown
     };
-    let Some(action) = application
-        .bindings
-        .lookup_mouse(current_modifiers(), false, base)
-    else {
+    let Some(action) = application.bindings.lookup_mouse(modifiers, false, base) else {
         return;
     };
     if !application.gate_satisfied(action.gate()) {

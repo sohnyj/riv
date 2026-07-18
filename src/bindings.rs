@@ -9,6 +9,28 @@ pub const MODIFIER_SHIFT: u8 = 1 << 1;
 pub const MODIFIER_ALT: u8 = 1 << 2;
 pub const MODIFIER_META: u8 = 1 << 3;
 
+/// Modifier mask from the live keyboard state.
+pub fn current_modifiers() -> u8 {
+    use windows::Win32::UI::Input::KeyboardAndMouse::{
+        GetKeyState, VIRTUAL_KEY, VK_CONTROL, VK_LWIN, VK_MENU, VK_RWIN, VK_SHIFT,
+    };
+    let pressed = |key: VIRTUAL_KEY| unsafe { GetKeyState(i32::from(key.0)) } < 0;
+    let mut modifiers = 0u8;
+    if pressed(VK_CONTROL) {
+        modifiers |= MODIFIER_CONTROL;
+    }
+    if pressed(VK_SHIFT) {
+        modifiers |= MODIFIER_SHIFT;
+    }
+    if pressed(VK_MENU) {
+        modifiers |= MODIFIER_ALT;
+    }
+    if pressed(VK_LWIN) || pressed(VK_RWIN) {
+        modifiers |= MODIFIER_META;
+    }
+    modifiers
+}
+
 #[derive(Clone, Copy, PartialEq, Eq)]
 pub enum MouseBase {
     Left,

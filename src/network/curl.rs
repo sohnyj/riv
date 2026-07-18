@@ -106,6 +106,7 @@ pub fn download(
     }
     let executable = executable_path()
         .ok_or_else(|| NetworkError::new("URL support is unavailable on this Windows"))?;
+    let maximum_bytes = MAXIMUM_DOWNLOAD_BYTES.to_string();
     let mut child = Command::new(executable)
         .args([
             "--silent",
@@ -118,7 +119,7 @@ pub fn download(
             "--proto-redir",
             "=http,https",
             "--max-filesize",
-            "1073741824",
+            maximum_bytes.as_str(),
             "--connect-timeout",
             "5",
             "--speed-limit",

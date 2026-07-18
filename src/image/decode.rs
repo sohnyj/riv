@@ -148,6 +148,9 @@ enum FrameSemantics {
 /// D3D11 FL11 texture limit; larger sources are downscaled before upload.
 const MAXIMUM_TEXTURE_DIMENSION: u32 = 16384;
 
+/// 100 ns intervals from 1601-01-01 (FILETIME zero) to the UNIX epoch.
+pub(crate) const FILETIME_UNIX_EPOCH: u64 = 116_444_736_000_000_000;
+
 type MagicSignature = &'static [(usize, &'static [u8])];
 
 enum Adapter {
@@ -1516,7 +1519,7 @@ fn query_filetime(reader: &IWICMetadataQueryReader, name: PCWSTR) -> Option<std:
     let file_time = file_time?;
     let intervals =
         (u64::from(file_time.dwHighDateTime) << 32) | u64::from(file_time.dwLowDateTime);
-    let unix_intervals = intervals.checked_sub(116_444_736_000_000_000)?;
+    let unix_intervals = intervals.checked_sub(FILETIME_UNIX_EPOCH)?;
     Some(std::time::UNIX_EPOCH + std::time::Duration::from_nanos(unix_intervals * 100))
 }
 
