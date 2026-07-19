@@ -141,8 +141,10 @@ impl Overlay {
                 viewport_width,
                 viewport_height,
                 content,
+                true,
             )?;
         } else if content.show_wordmark {
+            // The wordmark is a mark, not a message; it stays unboxed.
             self.draw_centered_text(
                 context,
                 "riv",
@@ -150,6 +152,7 @@ impl Overlay {
                 viewport_width,
                 viewport_height,
                 content,
+                false,
             )?;
         }
         Ok(())
@@ -215,6 +218,8 @@ impl Overlay {
         Ok(())
     }
 
+    /// Boxed messages take the panel styling; the unboxed wordmark follows the background.
+    #[expect(clippy::too_many_arguments)]
     fn draw_centered_text(
         &self,
         context: &ID2D1DeviceContext,
@@ -223,21 +228,49 @@ impl Overlay {
         viewport_width: f32,
         viewport_height: f32,
         content: &OverlayContent,
+        boxed: bool,
     ) -> Result<()> {
-        let layout = self.create_layout(text, format, viewport_width)?;
+        let padding_x = PANEL_PADDING_X * self.scale;
+        let padding_y = PANEL_PADDING_Y * self.scale;
+        // The box must fit the viewport, so boxed text wraps inside the margins.
+        let inset = if boxed {
+            (PANEL_MARGIN * self.scale + padding_x).min(viewport_width / 2.0)
+        } else {
+            0.0
+        };
+        let layout = self.create_layout(text, format, viewport_width - inset * 2.0)?;
         unsafe {
             layout.SetMaxHeight(viewport_height)?;
-            let text_color = if content.background_is_bright {
-                BLACK
-            } else {
+            if boxed {
+                let mut metrics = DWRITE_TEXT_METRICS::default();
+                layout.GetMetrics(&raw mut metrics)?;
+                let panel = D2D1_ROUNDED_RECT {
+                    rect: D2D_RECT_F {
+                        left: inset + metrics.left - padding_x,
+                        top: metrics.top - padding_y,
+                        right: inset + metrics.left + metrics.width + padding_x,
+                        bottom: metrics.top + metrics.height + padding_y,
+                    },
+                    radiusX: PANEL_CORNER_RADIUS * self.scale,
+                    radiusY: PANEL_CORNER_RADIUS * self.scale,
+                };
+                let background = context.CreateSolidColorBrush(
+                    &color::output_color(PANEL_BACKGROUND, content.output_color_target),
+                    None,
+                )?;
+                context.FillRoundedRectangle(&raw const panel, &background);
+            }
+            let text_color = if boxed || !content.background_is_bright {
                 WHITE
+            } else {
+                BLACK
             };
             let brush = context.CreateSolidColorBrush(
                 &color::output_color(text_color, content.output_color_target),
                 None,
             )?;
             context.DrawTextLayout(
-                Vector2 { X: 0.0, Y: 0.0 },
+                Vector2 { X: inset, Y: 0.0 },
                 &layout,
                 &brush,
                 D2D1_DRAW_TEXT_OPTIONS_NONE,
