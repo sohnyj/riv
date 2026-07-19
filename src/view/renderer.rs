@@ -50,7 +50,7 @@ use windows::core::{Interface, Result};
 use windows_numerics::Matrix3x2;
 
 use crate::image::color::SDR_REFERENCE_WHITE_NITS;
-use crate::image::decode::PixelStorage;
+use crate::image::decode::{DecodedImage, PixelStorage};
 use crate::view::dither::{self, DitherMode};
 use crate::view::quantize::QuantizePass;
 use crate::view::sampling::{AxisMapping, SamplingPass};
@@ -940,20 +940,9 @@ impl Renderer {
         true
     }
 
-    #[expect(clippy::too_many_arguments)]
-    pub fn set_image(
-        &mut self,
-        pixels: &[u8],
-        width: u32,
-        height: u32,
-        display_size: (u32, u32),
-        icc_profile: Option<&[u8]>,
-        storage: PixelStorage,
-        source_bits_per_channel: u32,
-        peak_luminance_nits: Option<f32>,
-    ) -> Result<()> {
+    pub fn set_image(&mut self, frame_pixels: &[u8], image: &DecodedImage) -> Result<()> {
         let properties = D2D1_BITMAP_PROPERTIES1 {
-            pixelFormat: source_pixel_format(storage),
+            pixelFormat: source_pixel_format(image.storage),
             dpiX: 96.0,
             dpiY: 96.0,
             bitmapOptions: D2D1_BITMAP_OPTIONS_NONE,
@@ -961,17 +950,25 @@ impl Renderer {
         };
         let bitmap = unsafe {
             self.d2d_context.CreateBitmap(
-                D2D_SIZE_U { width, height },
-                Some(pixels.as_ptr().cast()),
-                width * storage.bytes_per_pixel(),
+                D2D_SIZE_U {
+                    width: image.pixel_width,
+                    height: image.pixel_height,
+                },
+                Some(frame_pixels.as_ptr().cast()),
+                image.pixel_width * image.storage.bytes_per_pixel(),
                 &raw const properties,
             )?
         };
-        self.image_display_size = (display_size.0 as f32, display_size.1 as f32);
-        self.image_pixel_size = (width as f32, height as f32);
-        self.image_storage = storage;
-        self.image_source_bits_per_channel = source_bits_per_channel;
-        self.rewire_effect_chain(&bitmap, icc_profile, storage, peak_luminance_nits);
+        self.image_display_size = (image.width as f32, image.height as f32);
+        self.image_pixel_size = (image.pixel_width as f32, image.pixel_height as f32);
+        self.image_storage = image.storage;
+        self.image_source_bits_per_channel = image.source_bits_per_channel;
+        self.rewire_effect_chain(
+            &bitmap,
+            image.icc_profile.as_deref(),
+            image.storage,
+            image.peak_luminance_nits,
+        );
         self.image = Some(bitmap);
         self.bump_scene_version();
         Ok(())

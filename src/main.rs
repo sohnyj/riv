@@ -411,16 +411,7 @@ impl Application {
             });
         let frame = &image.frames[0];
         let upload = match &mut self.renderer {
-            Some(renderer) => renderer.set_image(
-                &frame.pixels,
-                image.pixel_width,
-                image.pixel_height,
-                (image.width, image.height),
-                image.icc_profile.as_deref(),
-                image.storage,
-                image.source_bits_per_channel,
-                image.peak_luminance_nits,
-            ),
+            Some(renderer) => renderer.set_image(&frame.pixels, &image),
             None => Err(windows::core::Error::empty()),
         };
         self.display = Some(image);
@@ -522,16 +513,7 @@ impl Application {
         if let Some(renderer) = &mut self.renderer
             && renderer.update_frame_pixels(&frame.pixels).is_err()
         {
-            let _ = renderer.set_image(
-                &frame.pixels,
-                image.pixel_width,
-                image.pixel_height,
-                (image.width, image.height),
-                image.icc_profile.as_deref(),
-                image.storage,
-                image.source_bits_per_channel,
-                image.peak_luminance_nits,
-            );
+            let _ = renderer.set_image(&frame.pixels, &image);
         }
         if !paused {
             unsafe { SetTimer(Some(window), ANIMATION_TIMER, delay, None) };
@@ -596,16 +578,7 @@ impl Application {
                 .animation
                 .as_ref()
                 .map_or(0, |animation| animation.frame_index);
-            renderer.set_image(
-                &image.frames[frame_index].pixels,
-                image.pixel_width,
-                image.pixel_height,
-                (image.width, image.height),
-                image.icc_profile.as_deref(),
-                image.storage,
-                image.source_bits_per_channel,
-                image.peak_luminance_nits,
-            )?;
+            renderer.set_image(&image.frames[frame_index].pixels, image)?;
         }
         Ok(())
     }

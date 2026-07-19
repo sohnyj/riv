@@ -1343,8 +1343,8 @@ fn decode_animation(
     })
 }
 
-#[expect(clippy::too_many_arguments)]
 /// Premultiplied source-over blend, clipped to the canvas.
+#[expect(clippy::too_many_arguments)]
 pub fn blend_over(
     canvas: &mut [u8],
     canvas_width: u32,
