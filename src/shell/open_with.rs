@@ -32,7 +32,7 @@ pub struct OpenWithList {
 pub fn enumerate_in_background(window: HWND, path: PathBuf) {
     let window_handle = window.0 as isize;
     std::thread::spawn(move || {
-        let _ = unsafe { CoInitializeEx(None, COINIT_MULTITHREADED) };
+        let initialized = unsafe { CoInitializeEx(None, COINIT_MULTITHREADED) }.is_ok();
         let list = Box::new(enumerate(&path));
         let pointer = Box::into_raw(list);
         let posted = unsafe {
@@ -45,6 +45,9 @@ pub fn enumerate_in_background(window: HWND, path: PathBuf) {
         };
         if posted.is_err() {
             drop(unsafe { Box::from_raw(pointer) });
+        }
+        if initialized {
+            unsafe { windows::Win32::System::Com::CoUninitialize() };
         }
     });
 }
