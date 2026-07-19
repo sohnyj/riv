@@ -262,7 +262,7 @@ impl MenuBuilder {
         self.append_separator(view)?;
         self.append_action(view, Action::ZoomIn)?;
         self.append_action(view, Action::ZoomOut)?;
-        self.append_action(view, Action::ResetZoom)?;
+        self.append_action(view, Action::ToggleZoom)?;
         self.append_separator(view)?;
         self.append_action(view, Action::RotateLeft)?;
         self.append_action(view, Action::RotateRight)?;

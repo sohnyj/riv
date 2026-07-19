@@ -948,7 +948,7 @@ fn dispatch_action(application: &mut Application, window: HWND, action: Action) 
         }
         Action::ZoomIn => application.zoom_by(window, zoom_step),
         Action::ZoomOut => application.zoom_by(window, 1.0 / zoom_step),
-        Action::ResetZoom => {
+        Action::ToggleZoom => {
             let viewport = application.viewport(window);
             let image = application.image_size();
             let anchor = application.zoom_anchor(window);

@@ -81,7 +81,7 @@ const DEFAULT_KEYBOARD: &[(&str, &[&str])] = &[
     ("preservezoom", &["Z"]),
     ("zoomin", &["="]),
     ("zoomout", &["-"]),
-    ("resetzoom", &["Backspace"]),
+    ("togglezoom", &["Backspace"]),
     ("panup", &["Ctrl+Up"]),
     ("pandown", &["Ctrl+Down"]),
     ("panleft", &["Ctrl+Left"]),
@@ -102,7 +102,7 @@ const DEFAULT_MOUSE: &[(&str, &[&str])] = &[
     ("nextfile", &["WheelDown"]),
     ("zoomin", &["Ctrl+WheelUp"]),
     ("zoomout", &["Ctrl+WheelDown"]),
-    ("resetzoom", &["Double+Left"]),
+    ("togglezoom", &["Double+Left"]),
     ("fullscreen", &["Middle"]),
 ];
 
