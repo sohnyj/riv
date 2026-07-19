@@ -385,7 +385,7 @@ impl Application {
         let title = match (self.settings.options.title_bar_mode, file_name) {
             (0, _) | (_, None) => "riv".to_string(),
             (2, Some(name)) => match self.image_core.listing_position() {
-                Some((index, total)) => format!("{index}/{total} - {name}"),
+                Some((index, total)) => format!("[{index}/{total}] {name}"),
                 None => name,
             },
             (_, Some(name)) => name,
