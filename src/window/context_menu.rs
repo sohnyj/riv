@@ -198,9 +198,6 @@ impl MenuBuilder {
         self.append_action(menu, Action::Reload)?;
         self.append_separator(menu)?;
 
-        self.append_action(menu, Action::PreviousFile)?;
-        self.append_action(menu, Action::NextFile)?;
-        self.append_action(menu, Action::Loop)?;
         let playlist = unsafe { CreatePopupMenu()? };
         let playlist_names = self.state_snapshot.playlist_names.clone();
         for (slot, name) in playlist_names.iter().enumerate() {
@@ -224,6 +221,9 @@ impl MenuBuilder {
             "Playlist",
             self.state_snapshot.has_navigation_targets,
         )?;
+        self.append_action(menu, Action::PreviousFile)?;
+        self.append_action(menu, Action::NextFile)?;
+        self.append_action(menu, Action::Loop)?;
         let playback = unsafe { CreatePopupMenu()? };
         let pause_label = if self.state_snapshot.animation_paused {
             "Resume"
@@ -552,10 +552,10 @@ mod menu_structure_tests {
             "Show File Info",
             "Reload",
             "", // separator
+            "Playlist",
             "Previous",
             "Next",
             "Loop",
-            "Playlist",
             "Playback",
             "", // separator
             "View",
