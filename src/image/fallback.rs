@@ -6,7 +6,7 @@ use std::path::Path;
 
 use super::decode::{
     DecodeError, DecodedImage, Frame, PixelStorage, blend_over, clear_rectangle, copy_rectangle,
-    fallback_error, peak_luminance_from_half_pixels,
+    peak_luminance_from_half_pixels, uncoded_error,
 };
 
 /// Must match the built libwebpdemux ABI or WebPDemuxInternal returns null.
@@ -84,7 +84,7 @@ pub fn decode_webp_animation(
         )
     };
     if demuxer.is_null() {
-        return Err(fallback_error("WebP demux failed"));
+        return Err(uncoded_error("WebP demux failed"));
     }
     let result = compose_webp_frames(demuxer, format_name);
     unsafe { WebPDemuxDelete(demuxer) };
@@ -98,11 +98,11 @@ fn compose_webp_frames(
     let canvas_width = unsafe { WebPDemuxGetI(demuxer, WEBP_FF_CANVAS_WIDTH) };
     let canvas_height = unsafe { WebPDemuxGetI(demuxer, WEBP_FF_CANVAS_HEIGHT) };
     if canvas_width == 0 || canvas_height == 0 {
-        return Err(fallback_error("WebP canvas has no size"));
+        return Err(uncoded_error("WebP canvas has no size"));
     }
     let mut iterator: WebPIterator = unsafe { std::mem::zeroed() };
     if unsafe { WebPDemuxGetFrame(demuxer, 1, &raw mut iterator) } == 0 {
-        return Err(fallback_error("WebP has no frames"));
+        return Err(uncoded_error("WebP has no frames"));
     }
     let mut canvas = vec![0u8; canvas_width as usize * canvas_height as usize * 4];
     let mut frames = Vec::with_capacity(iterator.frame_count.max(1) as usize);
@@ -121,7 +121,7 @@ fn compose_webp_frames(
         };
         if decoded.is_null() {
             unsafe { WebPDemuxReleaseIterator(&raw mut iterator) };
-            return Err(fallback_error("WebP frame decode failed"));
+            return Err(uncoded_error("WebP frame decode failed"));
         }
         premultiply_bgra_in_place(&mut frame_pixels);
         if iterator.blend_method == WEBP_MUX_NO_BLEND {
@@ -266,7 +266,7 @@ fn decode_exr_with(
             .map_or("EXR decode failed", |message| {
                 message.to_str().unwrap_or("EXR decode failed")
             });
-        return Err(fallback_error(text));
+        return Err(uncoded_error(text));
     }
     let pixel_count = width as usize * height as usize;
     // The shim hands over associated-alpha linear RGBA halves - the FP16 storage layout.
@@ -319,7 +319,7 @@ impl HeifError {
                 .to_string_lossy()
                 .into_owned()
         };
-        Err(fallback_error(text))
+        Err(uncoded_error(text))
     }
 }
 
@@ -362,7 +362,7 @@ unsafe extern "C" {
 pub fn decode_heif(data: &[u8], format_name: &'static str) -> Result<DecodedImage, DecodeError> {
     let context = unsafe { heif_context_alloc() };
     if context.is_null() {
-        return Err(fallback_error("HEIF context allocation failed"));
+        return Err(uncoded_error("HEIF context allocation failed"));
     }
     let result = decode_heif_primary_image(context, data, format_name);
     unsafe { heif_context_free(context) };
@@ -419,7 +419,7 @@ fn decode_heif_primary_image(
         unsafe { heif_image_get_plane_readonly(image, HEIF_CHANNEL_INTERLEAVED, &raw mut stride) };
     if plane.is_null() || width <= 0 || height <= 0 || stride < width * 4 {
         unsafe { heif_image_release(image) };
-        return Err(fallback_error("HEIF image plane unavailable"));
+        return Err(uncoded_error("HEIF image plane unavailable"));
     }
     let mut pixels = Vec::with_capacity(width as usize * height as usize * 4);
     for row in 0..height as usize {

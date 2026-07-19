@@ -476,7 +476,7 @@ impl DecodeInput<'_> {
         match self {
             DecodeInput::File(path) => std::fs::read(path)
                 .map(std::borrow::Cow::Owned)
-                .map_err(fallback_error),
+                .map_err(uncoded_error),
             DecodeInput::Memory { data, .. } => Ok(std::borrow::Cow::Borrowed(*data)),
         }
     }
@@ -506,7 +506,7 @@ fn decode_input(
         }
         Adapter::Apng => match input {
             DecodeInput::File(path) => {
-                let file = File::open(path).map_err(fallback_error)?;
+                let file = File::open(path).map_err(uncoded_error)?;
                 decode_apng(BufReader::new(file), format_name, cancellation)
             }
             DecodeInput::Memory { data, .. } => {
@@ -728,7 +728,7 @@ fn enforce_device_limit(
     let frame = decoded
         .frames
         .first_mut()
-        .ok_or_else(|| fallback_error("image has no frames"))?;
+        .ok_or_else(|| uncoded_error("image has no frames"))?;
     let (pixels, scaled_width, scaled_height) = with_wic_factory(|factory| {
         let bitmap = unsafe {
             factory.CreateBitmapFromMemory(
@@ -1537,7 +1537,8 @@ fn source_size(source: &IWICBitmapSource) -> WindowsResult<(u32, u32)> {
     Ok((width, height))
 }
 
-pub fn fallback_error(message: impl std::fmt::Display) -> DecodeError {
+/// Code 0 means "no code", not a real HRESULT; the error overlay omits it.
+pub fn uncoded_error(message: impl std::fmt::Display) -> DecodeError {
     DecodeError {
         code: 0,
         message: message.to_string(),
@@ -1552,7 +1553,7 @@ fn decode_apng<Input: BufRead + Seek>(
 ) -> Result<DecodedImage, DecodeError> {
     let mut decoder = png::Decoder::new(input);
     decoder.set_transformations(png::Transformations::normalize_to_color8());
-    let mut reader = decoder.read_info().map_err(fallback_error)?;
+    let mut reader = decoder.read_info().map_err(uncoded_error)?;
 
     let (canvas_width, canvas_height) = {
         let information = reader.info();
@@ -1572,11 +1573,11 @@ fn decode_apng<Input: BufRead + Seek>(
 
     let buffer_size = reader
         .output_buffer_size()
-        .ok_or_else(|| fallback_error("APNG output buffer size overflow"))?;
+        .ok_or_else(|| uncoded_error("APNG output buffer size overflow"))?;
     let mut buffer = vec![0u8; buffer_size];
 
     if has_animation && !default_image_is_first_frame {
-        reader.next_frame(&mut buffer).map_err(fallback_error)?;
+        reader.next_frame(&mut buffer).map_err(uncoded_error)?;
     }
 
     let mut canvas = vec![0u8; canvas_width as usize * canvas_height as usize * 4];
@@ -1586,7 +1587,7 @@ fn decode_apng<Input: BufRead + Seek>(
             return Err(DecodeError::cancelled());
         }
         if !(index == 0 && (default_image_is_first_frame || !has_animation)) {
-            reader.next_frame_info().map_err(fallback_error)?;
+            reader.next_frame_info().map_err(uncoded_error)?;
         }
         let frame_control = reader.info().frame_control.unwrap_or(png::FrameControl {
             width: canvas_width,
@@ -1594,7 +1595,7 @@ fn decode_apng<Input: BufRead + Seek>(
             blend_op: png::BlendOp::Source,
             ..Default::default()
         });
-        let output = reader.next_frame(&mut buffer).map_err(fallback_error)?;
+        let output = reader.next_frame(&mut buffer).map_err(uncoded_error)?;
         let region_pixels = pixels_to_premultiplied_bgra(
             &buffer[..output.buffer_size()],
             output.color_type,
@@ -1689,7 +1690,7 @@ fn pixels_to_premultiplied_bgra(
             }
         }
         other => {
-            return Err(fallback_error(format!(
+            return Err(uncoded_error(format!(
                 "unsupported PNG color type after normalization: {other:?}"
             )));
         }
@@ -1723,17 +1724,17 @@ fn decode_svg(data: &[u8], format_name: &'static str) -> Result<DecodedImage, De
         fontdb: font_database().clone(),
         ..Default::default()
     };
-    let tree = resvg::usvg::Tree::from_data(data, &options).map_err(fallback_error)?;
+    let tree = resvg::usvg::Tree::from_data(data, &options).map_err(uncoded_error)?;
     let size = tree.size();
     if !(size.width() > 0.0 && size.height() > 0.0) {
-        return Err(fallback_error("SVG has no intrinsic size"));
+        return Err(uncoded_error("SVG has no intrinsic size"));
     }
     let target = largest_monitor_long_side().min(MAXIMUM_TEXTURE_DIMENSION) as f32;
     let scale = target / size.width().max(size.height());
     let pixel_width = (size.width() * scale).round().max(1.0) as u32;
     let pixel_height = (size.height() * scale).round().max(1.0) as u32;
     let mut pixmap = resvg::tiny_skia::Pixmap::new(pixel_width, pixel_height)
-        .ok_or_else(|| fallback_error("SVG raster target allocation failed"))?;
+        .ok_or_else(|| uncoded_error("SVG raster target allocation failed"))?;
     resvg::render(
         &tree,
         resvg::tiny_skia::Transform::from_scale(scale, scale),
