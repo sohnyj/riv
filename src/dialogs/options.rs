@@ -684,7 +684,7 @@ fn initialize_image_page(state: &OptionsState) {
     combo_fill(
         page,
         IDC_IMAGE_PRELOADING,
-        &["Disabled", "Adjacent", "Extended"],
+        &["Disabled", "Nearby", "Extended"],
     );
     if let Ok(spin) = unsafe { GetDlgItem(Some(page), IDC_IMAGE_ZOOM_STEP_SPIN) } {
         unsafe { SendMessageW(spin, UDM_SETRANGE32, Some(WPARAM(1)), Some(LPARAM(200))) };
