@@ -7,22 +7,21 @@ use windows::Win32::Graphics::Direct2D::Common::{
 };
 use windows::Win32::Graphics::Direct2D::{
     CLSID_D2D1ColorManagement, CLSID_D2D1HdrToneMap, CLSID_D2D1WhiteLevelAdjustment,
-    CLSID_D2D12DAffineTransform, D2D1_2DAFFINETRANSFORM_PROP_INTERPOLATION_MODE,
-    D2D1_2DAFFINETRANSFORM_PROP_TRANSFORM_MATRIX, D2D1_BITMAP_OPTIONS_CANNOT_DRAW,
-    D2D1_BITMAP_OPTIONS_NONE, D2D1_BITMAP_OPTIONS_TARGET, D2D1_BITMAP_PROPERTIES1,
-    D2D1_BUFFER_PRECISION_16BPC_FLOAT, D2D1_COLOR_SPACE_CUSTOM, D2D1_COLOR_SPACE_SCRGB,
-    D2D1_COLOR_SPACE_SRGB, D2D1_COLORMANAGEMENT_PROP_DESTINATION_COLOR_CONTEXT,
-    D2D1_COLORMANAGEMENT_PROP_QUALITY, D2D1_COLORMANAGEMENT_PROP_SOURCE_COLOR_CONTEXT,
-    D2D1_COLORMANAGEMENT_QUALITY_BEST, D2D1_DEVICE_CONTEXT_OPTIONS_NONE,
-    D2D1_FACTORY_TYPE_SINGLE_THREADED, D2D1_HDRTONEMAP_DISPLAY_MODE_HDR,
-    D2D1_HDRTONEMAP_PROP_DISPLAY_MODE, D2D1_HDRTONEMAP_PROP_INPUT_MAX_LUMINANCE,
-    D2D1_HDRTONEMAP_PROP_OUTPUT_MAX_LUMINANCE, D2D1_INTERPOLATION_MODE,
-    D2D1_INTERPOLATION_MODE_HIGH_QUALITY_CUBIC, D2D1_INTERPOLATION_MODE_NEAREST_NEIGHBOR,
-    D2D1_PROPERTY_TYPE_COLOR_CONTEXT, D2D1_PROPERTY_TYPE_ENUM, D2D1_PROPERTY_TYPE_FLOAT,
-    D2D1_PROPERTY_TYPE_MATRIX_3X2, D2D1_WHITELEVELADJUSTMENT_PROP_INPUT_WHITE_LEVEL,
+    D2D1_BITMAP_OPTIONS_CANNOT_DRAW, D2D1_BITMAP_OPTIONS_NONE, D2D1_BITMAP_OPTIONS_TARGET,
+    D2D1_BITMAP_PROPERTIES1, D2D1_BUFFER_PRECISION_16BPC_FLOAT, D2D1_COLOR_SPACE_CUSTOM,
+    D2D1_COLOR_SPACE_SCRGB, D2D1_COLOR_SPACE_SRGB,
+    D2D1_COLORMANAGEMENT_PROP_DESTINATION_COLOR_CONTEXT, D2D1_COLORMANAGEMENT_PROP_QUALITY,
+    D2D1_COLORMANAGEMENT_PROP_SOURCE_COLOR_CONTEXT, D2D1_COLORMANAGEMENT_QUALITY_BEST,
+    D2D1_DEVICE_CONTEXT_OPTIONS_NONE, D2D1_FACTORY_TYPE_SINGLE_THREADED,
+    D2D1_HDRTONEMAP_DISPLAY_MODE_HDR, D2D1_HDRTONEMAP_PROP_DISPLAY_MODE,
+    D2D1_HDRTONEMAP_PROP_INPUT_MAX_LUMINANCE, D2D1_HDRTONEMAP_PROP_OUTPUT_MAX_LUMINANCE,
+    D2D1_INTERPOLATION_MODE, D2D1_INTERPOLATION_MODE_HIGH_QUALITY_CUBIC,
+    D2D1_INTERPOLATION_MODE_NEAREST_NEIGHBOR, D2D1_PROPERTY_TYPE_COLOR_CONTEXT,
+    D2D1_PROPERTY_TYPE_ENUM, D2D1_PROPERTY_TYPE_FLOAT,
+    D2D1_WHITELEVELADJUSTMENT_PROP_INPUT_WHITE_LEVEL,
     D2D1_WHITELEVELADJUSTMENT_PROP_OUTPUT_WHITE_LEVEL, D2D1CreateFactory, ID2D1Bitmap1,
-    ID2D1ColorContext, ID2D1DeviceContext, ID2D1DeviceContext5, ID2D1Effect, ID2D1Factory,
-    ID2D1Factory1, ID2D1Image,
+    ID2D1ColorContext, ID2D1DeviceContext, ID2D1DeviceContext5, ID2D1Effect, ID2D1Factory1,
+    ID2D1Image,
 };
 use windows::Win32::Graphics::Direct3D::{
     D3D_DRIVER_TYPE, D3D_DRIVER_TYPE_HARDWARE, D3D_DRIVER_TYPE_WARP, D3D_FEATURE_LEVEL,
@@ -51,7 +50,7 @@ use windows_numerics::Matrix3x2;
 
 use crate::image::color::SDR_REFERENCE_WHITE_NITS;
 use crate::image::decode::{DecodedImage, PixelStorage};
-use crate::view::dither::{self, DitherMode};
+use crate::view::dither::DitherMode;
 use crate::view::quantize::QuantizePass;
 use crate::view::sampling::{AxisMapping, SamplingPass};
 
@@ -115,9 +114,6 @@ pub struct Renderer {
     hdr_scaled_color_management_effect: Option<ID2D1Effect>,
     linearize_effect: Option<ID2D1Effect>,
     delinearize_effect: Option<ID2D1Effect>,
-    affine_transform_effect: Option<ID2D1Effect>,
-    dither_ordered_effect: Option<ID2D1Effect>,
-    dither_fruit_effect: Option<ID2D1Effect>,
     dither_mode: DitherMode,
     image_storage: PixelStorage,
     image_source_bits_per_channel: u32,
@@ -157,9 +153,6 @@ impl Drop for Renderer {
         self.hdr_scaled_color_management_effect = None;
         self.linearize_effect = None;
         self.delinearize_effect = None;
-        self.affine_transform_effect = None;
-        self.dither_ordered_effect = None;
-        self.dither_fruit_effect = None;
     }
 }
 
@@ -439,33 +432,6 @@ impl Renderer {
         }
     }
 
-    fn create_dither_effects(
-        d2d_context: &ID2D1DeviceContext,
-        d2d_factory: &ID2D1Factory1,
-        quantization_steps: u32,
-    ) -> (
-        Option<ID2D1Effect>,
-        Option<ID2D1Effect>,
-        Option<ID2D1Effect>,
-    ) {
-        if dither::prepare_dither_effects(quantization_steps).is_err() {
-            return (None, None, None);
-        }
-        // A repeat registration is harmless; creation fails if none ever succeeded.
-        let _ = dither::register_dither_effects(d2d_factory);
-        unsafe {
-            (
-                d2d_context.CreateEffect(&CLSID_D2D12DAffineTransform).ok(),
-                d2d_context
-                    .CreateEffect(&dither::CLSID_RIV_DITHER_ORDERED)
-                    .ok(),
-                d2d_context
-                    .CreateEffect(&dither::CLSID_RIV_DITHER_FRUIT)
-                    .ok(),
-            )
-        }
-    }
-
     fn build(
         window: HWND,
         width: u32,
@@ -495,7 +461,7 @@ impl Renderer {
             rendering_controls.bufferPrecision = D2D1_BUFFER_PRECISION_16BPC_FLOAT;
             d2d_context.SetRenderingControls(&raw const rendering_controls);
         }
-        // D2D cannot target 10-bit UNORM: draw on UNORM16, then a fullscreen pass quantizes.
+        // D2D draws the UNORM16 scene; the pass dithers and its UNORM write quantizes.
         let mut quantize_pass = (deep_color
             && unsafe { d2d_context.IsDxgiFormatSupported(DXGI_FORMAT_R16G16B16A16_UNORM) }
                 .as_bool())
@@ -595,8 +561,8 @@ impl Renderer {
                 }
             }
         }
-        // The pass exists only for the 10-bit backbuffer it feeds.
-        if swap_chain_format != DXGI_FORMAT_R10G10B10A2_UNORM {
+        // FP16 leaves quantization to DWM; the UNORM backbuffers keep the pass.
+        if swap_chain_format == DXGI_FORMAT_R16G16B16A16_FLOAT {
             quantize_pass = None;
         }
         let hdr_scaled_color_management_effect = hdr_output_color_management_effect
@@ -611,14 +577,6 @@ impl Renderer {
             scrgb_color_context.as_ref(),
             srgb_color_context.as_ref(),
         );
-        let (affine_transform_effect, dither_ordered_effect, dither_fruit_effect) =
-            match Self::quantization_steps_for(swap_chain_format) {
-                Some(quantization_steps) => {
-                    Self::create_dither_effects(&d2d_context, &d2d_factory, quantization_steps)
-                }
-                None => (None, None, None),
-            };
-
         let sampling_pass = SamplingPass::new(&d3d_device).ok();
         let mut renderer = Self {
             hdr_mode,
@@ -649,9 +607,6 @@ impl Renderer {
             hdr_scaled_color_management_effect,
             linearize_effect: mode_effects.linearize_effect,
             delinearize_effect: mode_effects.delinearize_effect,
-            affine_transform_effect,
-            dither_ordered_effect,
-            dither_fruit_effect,
             dither_mode: DitherMode::None,
             image_storage: PixelStorage::Bgra8,
             image_source_bits_per_channel: 8,
@@ -700,7 +655,7 @@ impl Renderer {
 
     fn create_target(&mut self) -> Result<()> {
         let scene_format = if self.quantize_pass.is_some() {
-            // D2D cannot target the 10-bit backbuffer; it draws the UNORM16 scene.
+            // D2D draws the UNORM16 scene; the pass dithers and quantizes to the backbuffer.
             DXGI_FORMAT_R16G16B16A16_UNORM
         } else {
             self.swap_chain_format
@@ -862,7 +817,7 @@ impl Renderer {
             // Undo any HDR declaration; SDR composition reads sRGB.
             let _ = declare_color_space(swap_chain3, DXGI_COLOR_SPACE_RGB_FULL_G22_NONE_P709);
         }
-        if swap_chain_format != DXGI_FORMAT_R10G10B10A2_UNORM {
+        if swap_chain_format == DXGI_FORMAT_R16G16B16A16_FLOAT {
             self.quantize_pass = None;
         }
 
@@ -887,23 +842,6 @@ impl Renderer {
             })
             .flatten();
         self.hdr_output_color_management_effect = hdr_output_color_management_effect;
-
-        let d2d_factory: Option<ID2D1Factory1> = unsafe { self.d2d_context.GetFactory() }
-            .ok()
-            .and_then(|factory: ID2D1Factory| factory.cast().ok());
-        (
-            self.affine_transform_effect,
-            self.dither_ordered_effect,
-            self.dither_fruit_effect,
-        ) = match (
-            Self::quantization_steps_for(swap_chain_format),
-            &d2d_factory,
-        ) {
-            (Some(quantization_steps), Some(d2d_factory)) => {
-                Self::create_dither_effects(&self.d2d_context, d2d_factory, quantization_steps)
-            }
-            _ => (None, None, None),
-        };
         self.swap_chain_format = swap_chain_format;
         self.bump_scene_version();
         self.create_target()
@@ -1213,25 +1151,24 @@ impl Renderer {
         }
         // An active effect chain leaves fractional pixels even at 1:1.
         let pixels_transformed = !identity_placement || self.effect_output.is_some();
-        self.dither_description =
-            if self.image.is_some() && self.active_dither_effect(pixels_transformed).is_some() {
-                match self.dither_mode {
-                    DitherMode::None => "None",
-                    DitherMode::Ordered => "Ordered",
-                    DitherMode::Fruit => "Fruit",
-                }
-            } else {
-                "None"
-            };
+        let quantization_steps = Self::quantization_steps_for(self.swap_chain_format)
+            .filter(|_| self.quantize_pass.is_some());
+        let pass_dither = match quantization_steps {
+            Some(_) if self.image.is_some() => self.active_dither_mode(pixels_transformed),
+            _ => DitherMode::None,
+        };
+        self.dither_description = match pass_dither {
+            DitherMode::None => "None",
+            DitherMode::Ordered => "Ordered",
+            DitherMode::Fruit => "Fruit",
+        };
         unsafe {
             self.d2d_context.BeginDraw();
             self.d2d_context.Clear(Some(&raw const clear_color));
             if self.image.is_some() {
                 match (&prescaled, &self.effect_output, &self.image) {
                     (Some(scaled), _, _) => {
-                        if let Some(composite) = self.prescaled_composite_image(scaled)
-                            && !self.draw_prescaled_dithered(&composite)
-                        {
+                        if let Some(composite) = self.prescaled_composite_image(scaled) {
                             self.d2d_context.DrawImage(
                                 &composite,
                                 None,
@@ -1242,52 +1179,34 @@ impl Renderer {
                         }
                     }
                     (None, Some(output), _) => {
-                        // Dither must run in destination pixel space (identity context transform).
-                        if !self.draw_image_dithered(
+                        self.d2d_context.SetTransform(&raw const transform);
+                        self.d2d_context.DrawImage(
                             output,
-                            &transform,
+                            None,
+                            None,
                             interpolation,
-                            pixels_transformed,
-                        ) {
-                            self.d2d_context.SetTransform(&raw const transform);
-                            self.d2d_context.DrawImage(
-                                output,
-                                None,
-                                None,
-                                interpolation,
-                                D2D1_COMPOSITE_MODE_SOURCE_OVER,
-                            );
-                            self.d2d_context.SetTransform(&Matrix3x2::identity());
-                        }
+                            D2D1_COMPOSITE_MODE_SOURCE_OVER,
+                        );
+                        self.d2d_context.SetTransform(&Matrix3x2::identity());
                     }
                     // Untouched pixels, or no effect support.
                     (None, None, Some(image)) => {
-                        let dithered = image.cast::<ID2D1Image>().is_ok_and(|bitmap_image| {
-                            self.draw_image_dithered(
-                                &bitmap_image,
-                                &transform,
-                                interpolation,
-                                pixels_transformed,
-                            )
-                        });
-                        if !dithered {
-                            let destination = D2D_RECT_F {
-                                left: 0.0,
-                                top: 0.0,
-                                right: self.image_pixel_size.0,
-                                bottom: self.image_pixel_size.1,
-                            };
-                            self.d2d_context.SetTransform(&raw const transform);
-                            self.d2d_context.DrawBitmap(
-                                image,
-                                Some(&raw const destination),
-                                1.0,
-                                interpolation,
-                                None,
-                                None,
-                            );
-                            self.d2d_context.SetTransform(&Matrix3x2::identity());
-                        }
+                        let destination = D2D_RECT_F {
+                            left: 0.0,
+                            top: 0.0,
+                            right: self.image_pixel_size.0,
+                            bottom: self.image_pixel_size.1,
+                        };
+                        self.d2d_context.SetTransform(&raw const transform);
+                        self.d2d_context.DrawBitmap(
+                            image,
+                            Some(&raw const destination),
+                            1.0,
+                            interpolation,
+                            None,
+                            None,
+                        );
+                        self.d2d_context.SetTransform(&Matrix3x2::identity());
                     }
                     _ => {}
                 }
@@ -1295,8 +1214,9 @@ impl Renderer {
             // Overlay failure must not block presenting the frame.
             let overlay_result = draw_overlay(&self.d2d_context);
             self.d2d_context.EndDraw(None, None)?;
-            if let (Some(quantize_pass), Some(scene), Some(backbuffer)) = (
+            if let (Some(quantize_pass), Some(quantization_steps), Some(scene), Some(backbuffer)) = (
                 &self.quantize_pass,
+                quantization_steps,
                 &self.scene_shader_resource_view,
                 &self.backbuffer_render_target_view,
             ) {
@@ -1304,8 +1224,9 @@ impl Renderer {
                     &self.d3d_context,
                     scene,
                     backbuffer,
-                    self.backbuffer_size.0,
-                    self.backbuffer_size.1,
+                    self.backbuffer_size,
+                    pass_dither,
+                    quantization_steps,
                 );
             }
             self.swap_chain.Present(1, DXGI_PRESENT(0)).ok()?;
@@ -1571,21 +1492,17 @@ impl Renderer {
         self.dither_description
     }
 
-    /// The registered dither effect; untouched 1:1 draws within the backbuffer depth skip it.
-    fn active_dither_effect(&self, pixels_transformed: bool) -> Option<&ID2D1Effect> {
+    /// The frame's output dither; untouched 1:1 draws within the backbuffer depth skip it.
+    fn active_dither_mode(&self, pixels_transformed: bool) -> DitherMode {
         let backbuffer_bits = if self.swap_chain_format == DXGI_FORMAT_R10G10B10A2_UNORM {
             10
         } else {
             8
         };
         if !pixels_transformed && self.image_source_bits_per_channel <= backbuffer_bits {
-            return None;
+            return DitherMode::None;
         }
-        match self.dither_mode {
-            DitherMode::None => None,
-            DitherMode::Ordered => self.dither_ordered_effect.as_ref(),
-            DitherMode::Fruit => self.dither_fruit_effect.as_ref(),
-        }
+        self.dither_mode
     }
 
     /// Applies the deferred PQ encode or the SDR delinearization before compositing.
@@ -1609,90 +1526,4 @@ impl Renderer {
         }
         scaled.cast().ok()
     }
-
-    /// Prescaled scene -> dither -> target; false when the caller draws plain.
-    fn draw_prescaled_dithered(&self, composite: &ID2D1Image) -> bool {
-        let Some(dither_effect) = self.active_dither_effect(true) else {
-            return false;
-        };
-        unsafe { dither_effect.SetInput(0, composite, true) };
-        let Ok(dithered) = (unsafe { dither_effect.GetOutput() }) else {
-            return false;
-        };
-        unsafe {
-            self.d2d_context.DrawImage(
-                &dithered,
-                None,
-                None,
-                D2D1_INTERPOLATION_MODE_NEAREST_NEIGHBOR,
-                D2D1_COMPOSITE_MODE_SOURCE_OVER,
-            );
-        }
-        true
-    }
-
-    /// Scene -> affine -> dither -> target; false when unavailable, the caller draws undithered.
-    fn draw_image_dithered(
-        &self,
-        output: &ID2D1Image,
-        transform: &Matrix3x2,
-        interpolation: D2D1_INTERPOLATION_MODE,
-        pixels_transformed: bool,
-    ) -> bool {
-        let (Some(dither_effect), Some(affine_transform)) = (
-            self.active_dither_effect(pixels_transformed),
-            &self.affine_transform_effect,
-        ) else {
-            return false;
-        };
-        let wired = unsafe {
-            affine_transform.SetValue(
-                D2D1_2DAFFINETRANSFORM_PROP_TRANSFORM_MATRIX.0 as u32,
-                D2D1_PROPERTY_TYPE_MATRIX_3X2,
-                &matrix_property_bytes(transform),
-            )
-        }
-        .is_ok()
-            && unsafe {
-                // The affine interpolation enum shares the interpolation mode values.
-                affine_transform.SetValue(
-                    D2D1_2DAFFINETRANSFORM_PROP_INTERPOLATION_MODE.0 as u32,
-                    D2D1_PROPERTY_TYPE_ENUM,
-                    &interpolation.0.to_ne_bytes(),
-                )
-            }
-            .is_ok();
-        if !wired {
-            return false;
-        }
-        unsafe { affine_transform.SetInput(0, output, true) };
-        let Ok(scaled) = (unsafe { affine_transform.GetOutput() }) else {
-            return false;
-        };
-        unsafe { dither_effect.SetInput(0, &scaled, true) };
-        let Ok(dithered) = (unsafe { dither_effect.GetOutput() }) else {
-            return false;
-        };
-        unsafe {
-            self.d2d_context.DrawImage(
-                &dithered,
-                None,
-                None,
-                D2D1_INTERPOLATION_MODE_NEAREST_NEIGHBOR,
-                D2D1_COMPOSITE_MODE_SOURCE_OVER,
-            );
-        }
-        true
-    }
-}
-
-fn matrix_property_bytes(matrix: &Matrix3x2) -> [u8; 24] {
-    let elements = [
-        matrix.M11, matrix.M12, matrix.M21, matrix.M22, matrix.M31, matrix.M32,
-    ];
-    let mut bytes = [0u8; 24];
-    for (index, element) in elements.iter().enumerate() {
-        bytes[index * 4..index * 4 + 4].copy_from_slice(&element.to_ne_bytes());
-    }
-    bytes
 }
