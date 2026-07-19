@@ -203,11 +203,11 @@ struct DitherEffect {
 impl ID2D1EffectImpl_Impl for DitherEffect_Impl {
     fn Initialize(
         &self,
-        effectcontext: Ref<'_, ID2D1EffectContext>,
-        transformgraph: Ref<'_, ID2D1TransformGraph>,
+        effect_context: Ref<'_, ID2D1EffectContext>,
+        transform_graph: Ref<'_, ID2D1TransformGraph>,
     ) -> Result<()> {
-        let context = effectcontext.ok()?;
-        let graph = transformgraph.ok()?;
+        let context = effect_context.ok()?;
+        let graph = transform_graph.ok()?;
         match self.pattern {
             DitherPattern::Ordered => unsafe {
                 context.LoadPixelShader(
@@ -252,11 +252,11 @@ impl ID2D1EffectImpl_Impl for DitherEffect_Impl {
         unsafe { graph.SetSingleTransformNode(&node) }
     }
 
-    fn PrepareForRender(&self, _changetype: D2D1_CHANGE_TYPE) -> Result<()> {
+    fn PrepareForRender(&self, _change_type: D2D1_CHANGE_TYPE) -> Result<()> {
         Ok(())
     }
 
-    fn SetGraph(&self, _transformgraph: Ref<'_, ID2D1TransformGraph>) -> Result<()> {
+    fn SetGraph(&self, _transform_graph: Ref<'_, ID2D1TransformGraph>) -> Result<()> {
         // Only reached by variable-input effects.
         Err(E_NOTIMPL.into())
     }
@@ -271,43 +271,43 @@ impl ID2D1TransformNode_Impl for DitherEffect_Impl {
 impl ID2D1Transform_Impl for DitherEffect_Impl {
     fn MapOutputRectToInputRects(
         &self,
-        outputrect: *const RECT,
-        inputrects: *mut RECT,
-        inputrectscount: u32,
+        output_rect: *const RECT,
+        input_rects: *mut RECT,
+        input_rects_count: u32,
     ) -> Result<()> {
-        if inputrectscount != 1 {
+        if input_rects_count != 1 {
             return Err(E_INVALIDARG.into());
         }
-        unsafe { *inputrects = *outputrect };
+        unsafe { *input_rects = *output_rect };
         Ok(())
     }
 
     fn MapInputRectsToOutputRect(
         &self,
-        inputrects: *const RECT,
-        inputopaquesubrects: *const RECT,
-        inputrectcount: u32,
-        outputrect: *mut RECT,
-        outputopaquesubrect: *mut RECT,
+        input_rects: *const RECT,
+        input_opaque_subrects: *const RECT,
+        input_rect_count: u32,
+        output_rect: *mut RECT,
+        output_opaque_subrect: *mut RECT,
     ) -> Result<()> {
-        if inputrectcount != 1 {
+        if input_rect_count != 1 {
             return Err(E_INVALIDARG.into());
         }
         unsafe {
-            *outputrect = *inputrects;
-            *outputopaquesubrect = *inputopaquesubrects;
+            *output_rect = *input_rects;
+            *output_opaque_subrect = *input_opaque_subrects;
         }
         Ok(())
     }
 
-    fn MapInvalidRect(&self, _inputindex: u32, invalidinputrect: &RECT) -> Result<RECT> {
-        Ok(*invalidinputrect)
+    fn MapInvalidRect(&self, _input_index: u32, invalid_input_rect: &RECT) -> Result<RECT> {
+        Ok(*invalid_input_rect)
     }
 }
 
 impl ID2D1DrawTransform_Impl for DitherEffect_Impl {
-    fn SetDrawInfo(&self, drawinfo: Ref<'_, ID2D1DrawInfo>) -> Result<()> {
-        let info = drawinfo.ok()?;
+    fn SetDrawInfo(&self, draw_info: Ref<'_, ID2D1DrawInfo>) -> Result<()> {
+        let info = draw_info.ok()?;
         match self.pattern {
             DitherPattern::Ordered => unsafe {
                 info.SetPixelShader(
