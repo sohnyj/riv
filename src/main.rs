@@ -823,7 +823,7 @@ fn core_options(options: &Options) -> CoreOptions {
         sort_mode: SortMode::from_setting(options.sort_mode),
         sort_descending: options.sort_descending,
         preloading_mode: options.preloading_mode as usize,
-        loop_folders_enabled: options.loop_folders_enabled,
+        loop_within_folder: options.loop_within_folder,
         skip_hidden: options.skip_hidden,
         detect_format_by_content: options.detect_format_by_content,
     }
@@ -992,8 +992,8 @@ fn dispatch_action(application: &mut Application, window: HWND, action: Action) 
             application.render(window);
         }
         Action::Loop => {
-            application.settings.options.loop_folders_enabled ^= true;
-            let state = if application.settings.options.loop_folders_enabled {
+            application.settings.options.loop_within_folder ^= true;
+            let state = if application.settings.options.loop_within_folder {
                 "On"
             } else {
                 "Off"
@@ -1922,7 +1922,7 @@ extern "system" fn window_procedure(
                         .is_some_and(|current| current.location.containing_file().is_some()),
                     has_navigation_targets: application.image_core.has_navigation_targets(),
                     file_info_shown: application.show_file_info,
-                    loop_enabled: application.settings.options.loop_folders_enabled,
+                    loop_enabled: application.settings.options.loop_within_folder,
                     open_url_available: curl::available(),
                     playlist_names: playlist.names,
                     playlist_first_index: playlist.first_index,

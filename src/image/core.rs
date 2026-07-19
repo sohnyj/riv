@@ -156,7 +156,7 @@ pub struct CoreOptions {
     pub sort_mode: SortMode,
     pub sort_descending: bool,
     pub preloading_mode: usize,
-    pub loop_folders_enabled: bool,
+    pub loop_within_folder: bool,
     pub skip_hidden: bool,
     pub detect_format_by_content: bool,
 }
@@ -788,7 +788,7 @@ impl ImageCore {
             anchor,
             direction,
             self.entries.len(),
-            self.options.loop_folders_enabled,
+            self.options.loop_within_folder,
         )
         .map(|index| &self.entries[index])
         .find(|entry| entry.location.exists())
@@ -811,7 +811,7 @@ impl ImageCore {
                     anchor_index,
                     offset,
                     length,
-                    self.options.loop_folders_enabled,
+                    self.options.loop_within_folder,
                 ) else {
                     continue;
                 };
@@ -874,7 +874,7 @@ impl ImageCore {
                     anchor_index,
                     offset,
                     length,
-                    self.options.loop_folders_enabled,
+                    self.options.loop_within_folder,
                 ) {
                     relevant.insert(self.entries[index].location.clone());
                 }
@@ -907,7 +907,7 @@ impl ImageCore {
             .as_ref()
             .and_then(|location| self.position_of(location));
         let length = self.entries.len();
-        let loop_enabled = self.options.loop_folders_enabled;
+        let loop_enabled = self.options.loop_within_folder;
         let priorities = anchor_index.map_or_else(HashMap::new, |anchor| {
             preload_priorities(anchor, backward, forward, length, loop_enabled)
         });
@@ -1621,7 +1621,7 @@ mod url_session_state_tests {
                 sort_mode: SortMode::Name,
                 sort_descending: false,
                 preloading_mode: 1,
-                loop_folders_enabled: true,
+                loop_within_folder: true,
                 skip_hidden: true,
                 detect_format_by_content: false,
             },
@@ -1799,7 +1799,7 @@ mod playlist_window_tests {
                 sort_mode: SortMode::Name,
                 sort_descending: false,
                 preloading_mode: 1,
-                loop_folders_enabled: true,
+                loop_within_folder: true,
                 skip_hidden: true,
                 detect_format_by_content: false,
             },

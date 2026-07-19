@@ -610,8 +610,8 @@ fn handle_page_command(
         (IDC_MISC_PRELOADING, CBN_SELCHANGE) => {
             options.preloading_mode = combo_selection(page, control);
         }
-        (IDC_MISC_LOOP_FOLDERS, BN_CLICKED) => {
-            options.loop_folders_enabled = is_checked(page, control);
+        (IDC_MISC_LOOP_WITHIN_FOLDER, BN_CLICKED) => {
+            options.loop_within_folder = is_checked(page, control);
         }
         (IDC_MISC_SLIDESHOW_DIRECTION, CBN_SELCHANGE) => {
             options.slideshow_reversed = combo_selection(page, control) == 0;
@@ -764,8 +764,8 @@ fn sync_all_pages(state: &mut OptionsState) {
     combo_select(misc_page, IDC_MISC_PRELOADING, options.preloading_mode);
     set_check(
         misc_page,
-        IDC_MISC_LOOP_FOLDERS,
-        options.loop_folders_enabled,
+        IDC_MISC_LOOP_WITHIN_FOLDER,
+        options.loop_within_folder,
     );
     combo_select(
         misc_page,
