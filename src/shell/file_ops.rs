@@ -103,16 +103,34 @@ pub fn delete_file(path: &Path, permanent: bool) -> Result<()> {
     }
 }
 
-/// Path separators would silently turn a rename into a move.
+/// Rejects names that would move the file, alias it to another, or hit a device.
 fn new_name_is_invalid(name: &str) -> bool {
-    name.contains(['\\', '/'])
+    if name.is_empty() {
+        return true;
+    }
+    // Separators move the file; ':' is a stream/drive; the rest NTFS forbids.
+    if name.contains(['\\', '/', ':', '<', '>', '"', '|', '?', '*'])
+        || name.chars().any(|character| (character as u32) < 0x20)
+    {
+        return true;
+    }
+    // Reserved device names resolve regardless of directory (MS file-naming rules).
+    let name_before_first_dot = name.split('.').next().unwrap_or(name).to_ascii_uppercase();
+    const RESERVED: &[&str] = &[
+        "CON", "PRN", "AUX", "NUL", "COM0", "COM1", "COM2", "COM3", "COM4", "COM5", "COM6", "COM7",
+        "COM8", "COM9", "COM¹", "COM²", "COM³", "LPT0", "LPT1", "LPT2", "LPT3", "LPT4", "LPT5",
+        "LPT6", "LPT7", "LPT8", "LPT9", "LPT¹", "LPT²", "LPT³",
+    ];
+    RESERVED.contains(&name_before_first_dot.as_str())
 }
 
 pub fn rename_file(path: &Path, new_name: &str) -> std::io::Result<PathBuf> {
+    // Win32 strips trailing dots and spaces; trim first so the real target is validated.
+    let new_name = new_name.trim_end_matches([' ', '.']);
     if new_name_is_invalid(new_name) {
         return Err(std::io::Error::new(
             std::io::ErrorKind::InvalidInput,
-            "The new name cannot contain \\ or /",
+            "The new name is not a valid file name",
         ));
     }
     let destination = path.with_file_name(new_name);
@@ -164,5 +182,29 @@ mod rename_name_tests {
         assert!(new_name_is_invalid("/a.png"));
         assert!(!new_name_is_invalid("a.png"));
         assert!(!new_name_is_invalid("한글 이미지.png"));
+    }
+
+    #[test]
+    fn streams_and_reserved_devices_are_rejected() {
+        assert!(new_name_is_invalid("photo.png:hidden")); // alternate data stream
+        assert!(new_name_is_invalid("NUL")); // reserved device
+        assert!(new_name_is_invalid("nul.png")); // case- and extension-insensitive
+        assert!(new_name_is_invalid("COM1"));
+        assert!(new_name_is_invalid("COM0"));
+        assert!(new_name_is_invalid("lpt¹.png")); // superscript variant is reserved too
+        assert!(new_name_is_invalid("a<b>.png"));
+        assert!(new_name_is_invalid(""));
+        assert!(!new_name_is_invalid("com1x.png")); // not a reserved device
+        assert!(!new_name_is_invalid("COM10.png")); // two digits, not reserved
+        assert!(!new_name_is_invalid("my.photo.png"));
+    }
+
+    #[test]
+    fn trailing_dots_and_spaces_are_trimmed_before_renaming() {
+        // Same file after the trim: the early no-op return, no filesystem touched.
+        let renamed = rename_file(Path::new("dir\\photo.png"), "photo.png. ").expect("trimmed");
+        assert_eq!(renamed, Path::new("dir\\photo.png"));
+        // A name that trims to nothing is invalid, not an empty rename.
+        assert!(rename_file(Path::new("dir\\photo.png"), " . .").is_err());
     }
 }
