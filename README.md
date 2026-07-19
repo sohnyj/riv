@@ -12,7 +12,7 @@ A fast, precise, minimal image viewer for Windows.
 - Browse images inside archives (via archiveint.dll, shipped with Windows)
 - Open http/https image URLs (via curl.exe, shipped with Windows)
 - Per-extension file associations, reversible with no registry leftovers
-- Configurable preload range
+- Configurable preloading that follows the browsing direction
 - Single portable executable (~7 MB), no installation
 - Settings stored in `riv.json` next to `riv.exe`
 
