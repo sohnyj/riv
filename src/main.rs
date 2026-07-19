@@ -550,6 +550,9 @@ impl Application {
         } else {
             let interval = self.settings.options.slideshow_interval_seconds * 1000;
             unsafe { SetTimer(Some(window), SLIDESHOW_TIMER, interval, None) };
+            // The declared direction aims the preload before the first tick.
+            self.image_core
+                .set_travel_direction(self.settings.options.slideshow_reversed);
             self.slideshow_active = true;
             self.show_status_text(window, "Slideshow: Start".to_string());
             self.render(window);

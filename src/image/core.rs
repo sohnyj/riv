@@ -249,6 +249,10 @@ pub struct ImageCore {
     cache: HashMap<ItemLocation, CacheEntry>,
     pub current: Option<CurrentImage>,
     pub load_error: Option<(ItemLocation, DecodeError)>,
+    /// Preload polarity: the deeper reach aims along the travel direction.
+    travel_backward: bool,
+    /// Consecutive steps against the polarity; the second one flips it.
+    opposite_steps: u32,
 }
 
 impl ImageCore {
@@ -263,6 +267,60 @@ impl ImageCore {
             cache: HashMap::new(),
             current: None,
             load_error: None,
+            travel_backward: false,
+            opposite_steps: 0,
+        }
+    }
+
+    /// Aims the preload polarity at a declared direction (slideshow start).
+    pub fn set_travel_direction(&mut self, backward: bool) {
+        self.travel_backward = backward;
+        self.opposite_steps = 0;
+        self.preload_neighbors();
+    }
+
+    /// A fresh listing starts with the forward default.
+    fn reset_travel_direction(&mut self) {
+        self.travel_backward = false;
+        self.opposite_steps = 0;
+    }
+
+    /// Jumps declare their direction; steps flip the polarity on the second one in a row.
+    fn note_navigation(&mut self, command: NavigationCommand) {
+        match command {
+            NavigationCommand::First => {
+                self.travel_backward = false;
+                self.opposite_steps = 0;
+            }
+            NavigationCommand::Last => {
+                self.travel_backward = true;
+                self.opposite_steps = 0;
+            }
+            NavigationCommand::Next => self.note_step(false),
+            NavigationCommand::Previous => self.note_step(true),
+        }
+    }
+
+    fn note_step(&mut self, backward: bool) {
+        if backward == self.travel_backward {
+            self.opposite_steps = 0;
+            return;
+        }
+        self.opposite_steps += 1;
+        if self.opposite_steps >= 2 {
+            self.travel_backward = backward;
+            self.opposite_steps = 0;
+        }
+    }
+
+    /// Preload distances and budget, aimed along the current travel direction.
+    fn preload_distances(&self) -> (usize, usize, u64) {
+        let (backward, forward, budget) =
+            PRELOAD_SPECIFICATIONS[self.options.preloading_mode.min(2)];
+        if self.travel_backward {
+            (forward, backward, budget)
+        } else {
+            (backward, forward, budget)
         }
     }
 
@@ -376,6 +434,7 @@ impl ImageCore {
             return false;
         };
         if path.is_dir() {
+            self.reset_travel_direction();
             self.rescan_folder(&path);
             let Some(first) = self.first_existing_entry() else {
                 return false;
@@ -401,6 +460,7 @@ impl ImageCore {
         if let Some(directory) = directory
             && !already_scanned
         {
+            self.reset_travel_direction();
             self.rescan_folder(&directory);
         }
         self.load_item(&ItemLocation::File(path))
@@ -442,6 +502,7 @@ impl ImageCore {
 
     /// Opens an archive as a virtual folder of its image members.
     fn load_archive(&mut self, archive: &Path) -> bool {
+        self.reset_travel_direction();
         self.entries = Vec::new();
         self.listing_scope = Some(ListingScope::Archive(archive.to_path_buf()));
         let members = match archive_reader::enumerate(archive) {
@@ -560,6 +621,7 @@ impl ImageCore {
         if anchor.is_some_and(|anchor| anchor == target) {
             return None; // same item, nothing to do
         }
+        self.note_navigation(command);
         Some(self.load_item(&target))
     }
 
@@ -572,6 +634,7 @@ impl ImageCore {
         {
             return None; // same item, nothing to do
         }
+        self.opposite_steps = 0; // a jump keeps the polarity but breaks the run
         Some(self.load_item(&target))
     }
 
@@ -796,8 +859,7 @@ impl ImageCore {
     }
 
     fn preload_neighbors(&mut self) {
-        let (backward, forward, budget) =
-            PRELOAD_SPECIFICATIONS[self.options.preloading_mode.min(2)];
+        let (backward, forward, budget) = self.preload_distances();
         if backward == 0 && forward == 0 {
             self.cache.clear(); // preloading off: drop the cache
         } else if let Some(anchor_index) = self
@@ -862,7 +924,7 @@ impl ImageCore {
         if let Some(current) = &self.current {
             relevant.insert(current.location.clone());
         }
-        let (backward, forward, _) = PRELOAD_SPECIFICATIONS[self.options.preloading_mode.min(2)];
+        let (backward, forward, _) = self.preload_distances();
         let anchor_index = self
             .navigation_anchor()
             .as_ref()
@@ -892,8 +954,7 @@ impl ImageCore {
 
     /// Evicts entries in reverse preload priority until within budget.
     fn evict_cache(&mut self) {
-        let (backward, forward, budget) =
-            PRELOAD_SPECIFICATIONS[self.options.preloading_mode.min(2)];
+        let (backward, forward, budget) = self.preload_distances();
         let mut total: u64 = self
             .cache
             .values()
@@ -1784,6 +1845,75 @@ mod url_session_state_tests {
         ));
         assert_eq!(core.entries.len(), 1);
         let _ = std::fs::remove_dir_all(&directory);
+    }
+}
+
+/// Preload polarity follows the travel direction with a one-step grace.
+#[cfg(test)]
+mod travel_direction_tests {
+    use super::*;
+
+    fn core() -> ImageCore {
+        ImageCore::new(
+            HWND::default(),
+            CoreOptions {
+                sort_mode: SortMode::Name,
+                sort_descending: false,
+                preloading_mode: 1,
+                loop_within_folder: true,
+                skip_hidden: true,
+                detect_format_by_content: false,
+            },
+        )
+    }
+
+    #[test]
+    fn a_single_back_step_keeps_the_forward_polarity() {
+        let mut core = core();
+        core.note_navigation(NavigationCommand::Previous);
+        assert!(!core.travel_backward);
+        assert_eq!(core.preload_distances(), (1, 3, 1 << 30));
+    }
+
+    #[test]
+    fn two_consecutive_back_steps_flip_the_polarity() {
+        let mut core = core();
+        core.note_navigation(NavigationCommand::Previous);
+        core.note_navigation(NavigationCommand::Previous);
+        assert!(core.travel_backward);
+        assert_eq!(core.preload_distances(), (3, 1, 1 << 30));
+        // The way back flips with the same grace.
+        core.note_navigation(NavigationCommand::Next);
+        assert!(core.travel_backward);
+        core.note_navigation(NavigationCommand::Next);
+        assert!(!core.travel_backward);
+    }
+
+    #[test]
+    fn an_interrupted_run_starts_over() {
+        let mut core = core();
+        core.note_navigation(NavigationCommand::Previous);
+        core.note_navigation(NavigationCommand::Next);
+        core.note_navigation(NavigationCommand::Previous);
+        assert!(!core.travel_backward); // never two in a row
+    }
+
+    #[test]
+    fn jumps_declare_their_direction() {
+        let mut core = core();
+        core.note_navigation(NavigationCommand::Last);
+        assert!(core.travel_backward);
+        core.note_navigation(NavigationCommand::First);
+        assert!(!core.travel_backward);
+    }
+
+    #[test]
+    fn a_declared_direction_aims_at_once() {
+        let mut core = core();
+        core.set_travel_direction(true);
+        assert_eq!(core.preload_distances(), (3, 1, 1 << 30));
+        core.reset_travel_direction();
+        assert_eq!(core.preload_distances(), (1, 3, 1 << 30));
     }
 }
 
