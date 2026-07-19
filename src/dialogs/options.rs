@@ -579,7 +579,7 @@ fn handle_page_command(
         (IDC_WINDOW_TITLEBAR_MODE, CBN_SELCHANGE) => {
             options.title_bar_mode = combo_selection(page, control);
         }
-        (IDC_WINDOW_FITMODE, CBN_SELCHANGE) => {
+        (IDC_IMAGE_FITMODE, CBN_SELCHANGE) => {
             options.fit_mode = combo_selection(page, control);
         }
         (IDC_WINDOW_SAVE_POSITION, BN_CLICKED) => {
@@ -607,7 +607,7 @@ fn handle_page_command(
         (IDC_MISC_SORT, CBN_SELCHANGE) => options.sort_mode = combo_selection(page, control),
         (IDC_MISC_ASCENDING, BN_CLICKED) => options.sort_descending = false,
         (IDC_MISC_DESCENDING, BN_CLICKED) => options.sort_descending = true,
-        (IDC_MISC_PRELOADING, CBN_SELCHANGE) => {
+        (IDC_IMAGE_PRELOADING, CBN_SELCHANGE) => {
             options.preloading_mode = combo_selection(page, control);
         }
         (IDC_MISC_LOOP_WITHIN_FOLDER, BN_CLICKED) => {
@@ -664,7 +664,6 @@ fn initialize_window_page(state: &OptionsState) {
         IDC_WINDOW_TITLEBAR_MODE,
         &["App Name", "File Name", "[N/N] File Name"],
     );
-    combo_fill(page, IDC_WINDOW_FITMODE, &["Width", "Height"]);
 }
 
 fn initialize_image_page(state: &OptionsState) {
@@ -681,6 +680,12 @@ fn initialize_image_page(state: &OptionsState) {
         ],
     );
     combo_fill(page, IDC_IMAGE_DITHER, &["None", "Ordered", "Fruit"]);
+    combo_fill(page, IDC_IMAGE_FITMODE, &["Width", "Height"]);
+    combo_fill(
+        page,
+        IDC_IMAGE_PRELOADING,
+        &["Disabled", "Adjacent", "Extended"],
+    );
     if let Ok(spin) = unsafe { GetDlgItem(Some(page), IDC_IMAGE_ZOOM_STEP_SPIN) } {
         unsafe { SendMessageW(spin, UDM_SETRANGE32, Some(WPARAM(1)), Some(LPARAM(200))) };
     }
@@ -692,11 +697,6 @@ fn initialize_misc_page(state: &OptionsState) {
         page,
         IDC_MISC_SORT,
         &["Name", "Date Modified", "Date Created", "Size", "Type"],
-    );
-    combo_fill(
-        page,
-        IDC_MISC_PRELOADING,
-        &["Disabled", "Adjacent", "Extended"],
     );
     combo_fill(page, IDC_MISC_SLIDESHOW_DIRECTION, &["Backward", "Forward"]);
     combo_fill(page, IDC_MISC_AFTER_DELETE, &["Move Back", "Move Forward"]);
@@ -719,7 +719,6 @@ fn sync_all_pages(state: &mut OptionsState) {
         IDC_WINDOW_TITLEBAR_MODE,
         options.title_bar_mode.min(2),
     );
-    combo_select(window_page, IDC_WINDOW_FITMODE, options.fit_mode);
     set_check(
         window_page,
         IDC_WINDOW_SAVE_POSITION,
@@ -735,6 +734,8 @@ fn sync_all_pages(state: &mut OptionsState) {
     let image_page = state.pages[1];
     combo_select(image_page, IDC_IMAGE_FILTERING, options.scaling_filter);
     combo_select(image_page, IDC_IMAGE_DITHER, options.dither);
+    combo_select(image_page, IDC_IMAGE_FITMODE, options.fit_mode);
+    combo_select(image_page, IDC_IMAGE_PRELOADING, options.preloading_mode);
     set_dialog_item_text(
         image_page,
         IDC_IMAGE_ZOOM_STEP_EDIT,
@@ -761,7 +762,6 @@ fn sync_all_pages(state: &mut OptionsState) {
             },
         )
     };
-    combo_select(misc_page, IDC_MISC_PRELOADING, options.preloading_mode);
     set_check(
         misc_page,
         IDC_MISC_LOOP_WITHIN_FOLDER,
