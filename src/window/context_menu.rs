@@ -195,7 +195,7 @@ impl MenuBuilder {
         self.append_separator(menu)?;
 
         self.append_action(menu, Action::ShowFileInfo)?;
-        self.append_action(menu, Action::OpenContainingFolder)?;
+        self.append_action(menu, Action::Reload)?;
         self.append_separator(menu)?;
 
         self.append_action(menu, Action::PreviousFile)?;
@@ -245,11 +245,6 @@ impl MenuBuilder {
         )?;
         self.append_separator(menu)?;
 
-        self.append_action(menu, Action::Reload)?;
-        self.append_action(menu, Action::Rename)?;
-        self.append_action(menu, Action::Delete)?;
-        self.append_separator(menu)?;
-
         let view = unsafe { CreatePopupMenu()? };
         // The label names the axis a click switches to (slideshow convention).
         let fit_label = if self.state_snapshot.fit_height {
@@ -271,7 +266,21 @@ impl MenuBuilder {
         self.append_action(view, Action::Flip)?;
         self.append_submenu(menu, view, "View", true)?;
 
+        let window = unsafe { CreatePopupMenu()? };
+        self.append_action(window, Action::AlwaysOnTop)?;
+        let fullscreen_label = if self.state_snapshot.fullscreen {
+            "Exit Fullscreen"
+        } else {
+            "Enter Fullscreen"
+        };
+        self.append_action_labeled(window, Action::Fullscreen, fullscreen_label)?;
+        self.append_submenu(menu, window, "Window", true)?;
+
         let tools = unsafe { CreatePopupMenu()? };
+        self.append_action(tools, Action::OpenContainingFolder)?;
+        self.append_action(tools, Action::Rename)?;
+        self.append_action(tools, Action::Delete)?;
+        self.append_separator(tools)?;
         let slideshow_label = if self.state_snapshot.slideshow_active {
             "Stop Slideshow"
         } else {
@@ -282,14 +291,6 @@ impl MenuBuilder {
         self.append_action(tools, Action::Options)?;
         self.append_action(tools, Action::About)?;
         self.append_submenu(menu, tools, "Tools", true)?;
-
-        self.append_action(menu, Action::AlwaysOnTop)?;
-        let fullscreen_label = if self.state_snapshot.fullscreen {
-            "Exit Fullscreen"
-        } else {
-            "Enter Fullscreen"
-        };
-        self.append_action_labeled(menu, Action::Fullscreen, fullscreen_label)?;
         self.append_separator(menu)?;
         self.append_action(menu, Action::Quit)?;
         Ok(menu)
@@ -549,7 +550,7 @@ mod menu_structure_tests {
             "Open With",
             "", // separator
             "Show File Info",
-            "Show in Explorer",
+            "Reload",
             "", // separator
             "Previous",
             "Next",
@@ -557,17 +558,42 @@ mod menu_structure_tests {
             "Playlist",
             "Playback",
             "", // separator
-            "Reload",
-            "Rename...",
-            "Delete",
-            "", // separator
             "View",
+            "Window",
             "Tools",
-            "Always on Top",
-            "Enter Fullscreen",
             "", // separator
             "Exit",
         ];
         assert_eq!(labels, expected);
+    }
+
+    #[test]
+    fn window_and_tools_carry_their_sections() {
+        let mut builder = MenuBuilder {
+            entries: Vec::new(),
+            state_snapshot: state(),
+        };
+        let menu = builder.build().expect("menu builds");
+        let window = submenu_by_label(menu, "Window");
+        assert_eq!(bare_label(window, 0), "Always on Top");
+        assert_eq!(bare_label(window, 1), "Enter Fullscreen");
+        let tools = submenu_by_label(menu, "Tools");
+        let tools_labels: Vec<String> = (0..unsafe { GetMenuItemCount(Some(tools)) })
+            .map(|position| bare_label(tools, position as u32))
+            .collect();
+        assert_eq!(
+            tools_labels,
+            vec![
+                "Show in Explorer",
+                "Rename...",
+                "Delete",
+                "", // separator
+                "Start Slideshow",
+                "", // separator
+                "Settings...",
+                "About",
+            ]
+        );
+        let _ = unsafe { DestroyMenu(menu) };
     }
 }
