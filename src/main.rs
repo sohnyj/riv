@@ -26,7 +26,7 @@ use image::core::{
 use image::decode::DecodedImage;
 use network::curl;
 use settings::{Options, SettingsFile};
-use shell::drag_drop::{self, WM_APP_DROP_PATH};
+use shell::drag_drop::{self, WM_APP_DROP_PATHS};
 use shell::open_with::{self, OpenWithList, WM_APP_OPEN_WITH_LIST};
 use shell::{clipboard, file_ops, open_dialog};
 use view::dither::DitherMode;
@@ -1644,7 +1644,7 @@ extern "system" fn window_procedure(
             }
             LRESULT(0)
         }
-        WM_APP_DROP_PATH => {
+        WM_APP_DROP_PATHS => {
             let paths = unsafe { Box::from_raw(lparam.0 as *mut Vec<std::path::PathBuf>) };
             for rest in paths.iter().skip(1) {
                 open_in_new_window(rest);

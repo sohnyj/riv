@@ -13,7 +13,7 @@ use windows::Win32::UI::Shell::{DragQueryFileW, HDROP};
 use windows::Win32::UI::WindowsAndMessaging::{PostMessageW, WM_APP};
 use windows::core::{Result, implement};
 
-pub const WM_APP_DROP_PATH: u32 = WM_APP + 3;
+pub const WM_APP_DROP_PATHS: u32 = WM_APP + 3;
 
 #[implement(IDropTarget)]
 struct DropTarget {
@@ -122,7 +122,7 @@ impl IDropTarget_Impl for DropTarget_Impl {
             let posted = unsafe {
                 PostMessageW(
                     Some(self.window),
-                    WM_APP_DROP_PATH,
+                    WM_APP_DROP_PATHS,
                     WPARAM(0),
                     LPARAM(pointer as isize),
                 )
