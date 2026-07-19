@@ -25,6 +25,9 @@ const OPEN_BLOCK_BYTES: usize = 128 * 1024;
 /// Extraction chunk; cancellation is checked between chunks.
 const READ_BLOCK_BYTES: usize = 256 * 1024;
 
+/// Initial reservation cap; the declared size is attacker controlled (SECURITY_AUDIT.md).
+const MEMBER_RESERVATION_CEILING_BYTES: u64 = 16 << 20;
+
 pub fn format_groups() -> impl Iterator<Item = (&'static str, &'static [&'static str])> {
     FORMAT_GROUPS.iter().copied()
 }
@@ -103,7 +106,10 @@ pub fn enumerate(archive_path: &Path) -> Result<Vec<MemberInfo>, ArchiveError> {
         members.push(MemberInfo {
             name,
             size,
-            modified: UNIX_EPOCH + Duration::from_secs(modified_seconds),
+            // checked_add: a crafted PAX/GNU mtime overflows SystemTime (verified).
+            modified: UNIX_EPOCH
+                .checked_add(Duration::from_secs(modified_seconds))
+                .unwrap_or(UNIX_EPOCH),
         });
     }
     Ok(members)
@@ -201,8 +207,11 @@ impl Reader<'_> {
         declared_size: Option<u64>,
         cancellation: &AtomicBool,
     ) -> Result<Vec<u8>, ArchiveError> {
-        let mut data =
-            Vec::with_capacity(declared_size.unwrap_or(0).min(MAXIMUM_MEMBER_BYTES) as usize);
+        let mut data = Vec::with_capacity(
+            declared_size
+                .unwrap_or(0)
+                .min(MEMBER_RESERVATION_CEILING_BYTES) as usize,
+        );
         let mut block = vec![0u8; READ_BLOCK_BYTES];
         loop {
             if cancellation.load(Ordering::Relaxed) {
@@ -320,5 +329,33 @@ mod fixture_tests {
             members.is_empty(),
             "data-encrypted members must not be listed"
         );
+    }
+}
+
+/// A crafted PAX mtime that overflows SystemTime must clamp, not panic (fixture: SECURITY_AUDIT.md).
+#[cfg(test)]
+mod mtime_tests {
+    use super::*;
+
+    #[test]
+    #[ignore = "needs archiveint.dll and test/fixture_mtime_overflow.tar"]
+    fn an_overflowing_member_mtime_clamps_instead_of_panicking() {
+        let members = enumerate(Path::new("test/fixture_mtime_overflow.tar"))
+            .unwrap_or_else(|error| panic!("{}", error.message));
+        assert_eq!(members.len(), 1);
+        assert_eq!(members[0].modified, UNIX_EPOCH); // clamped fallback, no panic
+    }
+
+    // libarchive returns the declared size verbatim; the cap must hold (fixture: SECURITY_AUDIT.md).
+    #[test]
+    #[ignore = "needs archiveint.dll and test/fixture_zip_declared_1gib.zip"]
+    fn a_member_declaring_a_huge_size_is_handled_gracefully() {
+        let cancellation = AtomicBool::new(false);
+        let result = read_member(
+            Path::new("test/fixture_zip_declared_1gib.zip"),
+            "huge.png",
+            &cancellation,
+        );
+        assert!(result.is_err()); // no crash/hang; reservation stayed bounded
     }
 }
