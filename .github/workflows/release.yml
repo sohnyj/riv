@@ -121,7 +121,7 @@ jobs:
             echo "## Changes"
             echo
             previous=$(git describe --tags --abbrev=0 "${RELEASE_TAG}^" 2>/dev/null || true)
-            git log --format='- %s' "${previous:+$previous..}$RELEASE_TAG"
+            git log --format='- %s ([%h](https://github.com/sohnyj/riv/commit/%H))' "${previous:+$previous..}$RELEASE_TAG"
           } > "$RUNNER_TEMP/notes.md"
           cat "$RUNNER_TEMP/notes.md"
 
