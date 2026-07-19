@@ -580,10 +580,6 @@ impl ImageCore {
         self.navigation_target(command)
     }
 
-    pub fn refresh_folder(&mut self) {
-        self.rescan_listing();
-    }
-
     /// Empty-window state for when a delete leaves nothing to show.
     pub fn clear_current_item(&mut self) {
         self.pending_display = None;
@@ -735,7 +731,7 @@ impl ImageCore {
     }
 
     /// Re-scans whatever the current listing came from (folder or archive).
-    fn rescan_listing(&mut self) {
+    pub fn rescan_listing(&mut self) {
         match &self.listing_scope {
             Some(ListingScope::Directory(directory)) => self.rescan_folder(&directory.clone()),
             Some(ListingScope::Archive(archive)) => {

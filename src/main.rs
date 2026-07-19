@@ -76,7 +76,7 @@ const WM_APP_SHOW_WINDOW: u32 = WM_APP + 2;
 
 const STATUS_TEXT_TIMER: usize = 2;
 const SLIDESHOW_TIMER: usize = 3;
-const RECENTS_SAVE_TIMER: usize = 4;
+const SETTINGS_SAVE_TIMER: usize = 4;
 const OPEN_WITH_TIMER: usize = 5;
 const ANIMATION_TIMER: usize = 6;
 
@@ -457,7 +457,7 @@ impl Application {
             if let Some(file) = location.containing_file()
                 && self.settings.add_recent_file(file)
             {
-                unsafe { SetTimer(Some(window), RECENTS_SAVE_TIMER, 500, None) };
+                unsafe { SetTimer(Some(window), SETTINGS_SAVE_TIMER, 500, None) };
             }
             self.open_with_list = None;
             if location.as_file().is_some() {
@@ -1015,7 +1015,7 @@ fn dispatch_action(application: &mut Application, window: HWND, action: Action) 
         }
         Action::ClearRecents => {
             if application.settings.clear_recent_files() {
-                unsafe { SetTimer(Some(window), RECENTS_SAVE_TIMER, 500, None) };
+                unsafe { SetTimer(Some(window), SETTINGS_SAVE_TIMER, 500, None) };
             }
         }
         Action::PanUp => application.pan_by(window, 0.0, PAN_STEP),
@@ -1092,7 +1092,7 @@ fn dispatch_action(application: &mut Application, window: HWND, action: Action) 
                     application
                         .settings
                         .set_last_file_dialog_directory(&parent.to_string_lossy());
-                    unsafe { SetTimer(Some(window), RECENTS_SAVE_TIMER, 500, None) };
+                    unsafe { SetTimer(Some(window), SETTINGS_SAVE_TIMER, 500, None) };
                 }
                 let first = first.clone();
                 open_external_path(application, window, &first);
@@ -1187,7 +1187,7 @@ fn delete_current_file(application: &mut Application, window: HWND, permanent: b
         }
         if !permanent && confirmation.do_not_ask_again {
             application.settings.set_option_boolean("askdelete", false);
-            unsafe { SetTimer(Some(window), RECENTS_SAVE_TIMER, 500, None) };
+            unsafe { SetTimer(Some(window), SETTINGS_SAVE_TIMER, 500, None) };
         }
     }
     let (command, opposite) = if application.settings.options.after_delete == 0 {
@@ -1208,7 +1208,7 @@ fn delete_current_file(application: &mut Application, window: HWND, permanent: b
         .and_then(|candidate| candidate.as_file().map(Path::to_path_buf));
     match file_ops::delete_file(&path, permanent) {
         Ok(()) => {
-            application.image_core.refresh_folder();
+            application.image_core.rescan_listing();
             match target {
                 Some(target) => open_external_path(application, window, &target),
                 None => {
@@ -1243,7 +1243,7 @@ fn rename_current_file(application: &mut Application, window: HWND) {
     };
     match file_ops::rename_file(&path, &new_name) {
         Ok(new_path) => {
-            application.image_core.refresh_folder();
+            application.image_core.rescan_listing();
             open_external_path(application, window, &new_path);
         }
         Err(error) => file_ops::show_rename_error(window, &error),
@@ -1712,8 +1712,8 @@ extern "system" fn window_procedure(
             }
             LRESULT(0)
         }
-        WM_TIMER if wparam.0 == RECENTS_SAVE_TIMER => {
-            let _ = unsafe { KillTimer(Some(window), RECENTS_SAVE_TIMER) };
+        WM_TIMER if wparam.0 == SETTINGS_SAVE_TIMER => {
+            let _ = unsafe { KillTimer(Some(window), SETTINGS_SAVE_TIMER) };
             if let Some(application) = application_from_window(window) {
                 let _ = application.settings.save();
             }
@@ -1903,7 +1903,7 @@ extern "system" fn window_procedure(
                     y = (bounds.top + bounds.bottom) / 2;
                 }
                 if application.settings.prune_recent_files() {
-                    unsafe { SetTimer(Some(window), RECENTS_SAVE_TIMER, 500, None) };
+                    unsafe { SetTimer(Some(window), SETTINGS_SAVE_TIMER, 500, None) };
                 }
                 let playlist = application
                     .image_core
