@@ -54,11 +54,13 @@ public:
         : Imf::IStream("riv-exr-memory"), data_(data), size_(size), position_(0) {}
 
     bool read(char buffer[], int count) override {
-        if (count < 0 || position_ + static_cast<size_t>(count) > size_) {
+        // Subtraction form: a crafted seekg can push position_ past size_.
+        const size_t requested = static_cast<size_t>(count);
+        if (count < 0 || position_ > size_ || requested > size_ - position_) {
             throw std::runtime_error("unexpected end of data");
         }
-        std::memcpy(buffer, data_ + position_, static_cast<size_t>(count));
-        position_ += static_cast<size_t>(count);
+        std::memcpy(buffer, data_ + position_, requested);
+        position_ += requested;
         return position_ < size_;
     }
 
