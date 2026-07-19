@@ -10,7 +10,7 @@ use windows::Win32::UI::WindowsAndMessaging::{
 
 use super::{DWLP_USER, IDCANCEL, IDOK};
 
-pub(crate) const EDIT_IDENTIFIER: i32 = 100;
+pub const EDIT_IDENTIFIER: i32 = 100;
 
 /// One edit line with OK/Cancel; width in dialog units.
 pub struct TextInputRequest<'a> {

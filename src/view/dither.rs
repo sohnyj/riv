@@ -99,7 +99,7 @@ float4 main(float4 clip_position : SV_POSITION,
 ";
 
 /// Fullscreen triangle from SV_VertexID, shared by the D3D11 passes.
-pub(crate) const FULLSCREEN_TRIANGLE_VERTEX_SHADER: &str = "\
+pub const FULLSCREEN_TRIANGLE_VERTEX_SHADER: &str = "\
 float4 main(uint vertex_id : SV_VertexID) : SV_POSITION
 {
     float2 position = float2((vertex_id << 1) & 2, vertex_id & 2);
@@ -107,7 +107,7 @@ float4 main(uint vertex_id : SV_VertexID) : SV_POSITION
 }
 ";
 
-pub(crate) fn compile_shader(source: &str, profile: PCSTR) -> Result<Vec<u8>> {
+pub fn compile_shader(source: &str, profile: PCSTR) -> Result<Vec<u8>> {
     let mut code = None;
     unsafe {
         D3DCompile(

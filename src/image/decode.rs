@@ -149,7 +149,7 @@ enum FrameSemantics {
 const MAXIMUM_TEXTURE_DIMENSION: u32 = 16384;
 
 /// 100 ns intervals from 1601-01-01 (FILETIME zero) to the UNIX epoch.
-pub(crate) const FILETIME_UNIX_EPOCH: u64 = 116_444_736_000_000_000;
+pub const FILETIME_UNIX_EPOCH: u64 = 116_444_736_000_000_000;
 
 type MagicSignature = &'static [(usize, &'static [u8])];
 
@@ -1075,7 +1075,7 @@ fn peak_histogram_bin_table() -> &'static [u16; 65536] {
 }
 
 /// Content peak of linear scRGB halves: 99.9th-percentile max channel, binned in PQ codes.
-pub(crate) fn peak_luminance_from_half_pixels(pixels: &[u8]) -> Option<f32> {
+pub fn peak_luminance_from_half_pixels(pixels: &[u8]) -> Option<f32> {
     if pixels.len() < 8 {
         return None;
     }
@@ -1345,7 +1345,7 @@ fn decode_animation(
 
 #[expect(clippy::too_many_arguments)]
 /// Premultiplied source-over blend, clipped to the canvas.
-pub(crate) fn blend_over(
+pub fn blend_over(
     canvas: &mut [u8],
     canvas_width: u32,
     canvas_height: u32,
@@ -1381,7 +1381,7 @@ pub(crate) fn blend_over(
     }
 }
 
-pub(crate) fn clear_rectangle(
+pub fn clear_rectangle(
     canvas: &mut [u8],
     canvas_width: u32,
     left: u32,
@@ -1537,7 +1537,7 @@ fn source_size(source: &IWICBitmapSource) -> WindowsResult<(u32, u32)> {
     Ok((width, height))
 }
 
-pub(crate) fn fallback_error(message: impl std::fmt::Display) -> DecodeError {
+pub fn fallback_error(message: impl std::fmt::Display) -> DecodeError {
     DecodeError {
         code: 0,
         message: message.to_string(),
@@ -1698,7 +1698,7 @@ fn pixels_to_premultiplied_bgra(
 }
 
 #[expect(clippy::too_many_arguments)]
-pub(crate) fn copy_rectangle(
+pub fn copy_rectangle(
     canvas: &mut [u8],
     canvas_width: u32,
     canvas_height: u32,

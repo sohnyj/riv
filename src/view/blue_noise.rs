@@ -2,7 +2,7 @@
 //! (originally from mpv, Copyright 2013 Wessel Dankers, LGPL-2.1-or-later):
 //! void-and-cluster construction over a toroidal gaussian energy field.
 
-pub const SIZE_BITS: usize = 6;
+const SIZE_BITS: usize = 6;
 pub const SIZE: usize = 1 << SIZE_BITS;
 const CELL_COUNT: usize = SIZE * SIZE;
 

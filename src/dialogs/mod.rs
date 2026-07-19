@@ -9,19 +9,19 @@ pub mod text_input;
 use windows::Win32::Foundation::HWND;
 use windows::Win32::UI::WindowsAndMessaging::{GetWindowLongPtrW, WINDOW_LONG_PTR_INDEX};
 
-pub(crate) const IDOK: usize = 1;
-pub(crate) const IDCANCEL: usize = 2;
+pub const IDOK: usize = 1;
+pub const IDCANCEL: usize = 2;
 /// DWLP_DLGPROC (8) + 8 on x64; windows-rs does not export it.
-pub(crate) const DWLP_USER: WINDOW_LONG_PTR_INDEX = WINDOW_LONG_PTR_INDEX(16);
+pub const DWLP_USER: WINDOW_LONG_PTR_INDEX = WINDOW_LONG_PTR_INDEX(16);
 
 /// Dialog state stored at DWLP_USER by WM_INITDIALOG.
-pub(crate) fn state_mut<State>(dialog: HWND) -> Option<&'static mut State> {
+pub fn state_mut<State>(dialog: HWND) -> Option<&'static mut State> {
     let pointer = unsafe { GetWindowLongPtrW(dialog, DWLP_USER) } as *mut State;
     unsafe { pointer.as_mut() }
 }
 
 /// Center a dialog within its owner window.
-pub(crate) fn center_on_owner(dialog: HWND) {
+pub fn center_on_owner(dialog: HWND) {
     use windows::Win32::UI::WindowsAndMessaging::{
         GetParent, GetWindowRect, SWP_NOACTIVATE, SWP_NOSIZE, SWP_NOZORDER, SetWindowPos,
     };
