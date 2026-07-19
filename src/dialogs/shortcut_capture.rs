@@ -307,6 +307,32 @@ fn remove_icon_bounds(item: &RECT) -> RECT {
     }
 }
 
+/// Reads a list item into a buffer sized from LB_GETTEXTLEN (LB_GETTEXT has no bound).
+fn listbox_item_text(listbox: HWND, item_index: u32) -> Vec<u16> {
+    const LB_GETTEXTLEN: u32 = 0x018A;
+    const LB_GETTEXT: u32 = 0x0189;
+    let length = unsafe {
+        SendMessageW(
+            listbox,
+            LB_GETTEXTLEN,
+            Some(WPARAM(item_index as usize)),
+            None,
+        )
+    };
+    let length = usize::try_from(length.0).unwrap_or(0);
+    let mut text = vec![0u16; length + 1]; // + 1 for the NUL
+    let copied = unsafe {
+        SendMessageW(
+            listbox,
+            LB_GETTEXT,
+            Some(WPARAM(item_index as usize)),
+            Some(LPARAM(text.as_mut_ptr() as isize)),
+        )
+    };
+    text.truncate(usize::try_from(copied.0).unwrap_or(0).min(length));
+    text
+}
+
 fn draw_sequence_item(draw: &DRAWITEMSTRUCT) {
     let selected = draw.itemState.0 & ODS_SELECTED.0 != 0;
     unsafe {
@@ -323,17 +349,7 @@ fn draw_sequence_item(draw: &DRAWITEMSTRUCT) {
     if draw.itemID == u32::MAX {
         return; // empty list: background only
     }
-    const LB_GETTEXT: u32 = 0x0189;
-    let mut text = [0u16; 128];
-    let length = unsafe {
-        SendMessageW(
-            draw.hwndItem,
-            LB_GETTEXT,
-            Some(WPARAM(draw.itemID as usize)),
-            Some(LPARAM(text.as_mut_ptr() as isize)),
-        )
-    };
-    let length = usize::try_from(length.0).unwrap_or(0).min(text.len());
+    let mut text = listbox_item_text(draw.hwndItem, draw.itemID);
     unsafe {
         SetBkMode(draw.hDC, TRANSPARENT);
         SetTextColor(
@@ -348,7 +364,7 @@ fn draw_sequence_item(draw: &DRAWITEMSTRUCT) {
         bounds.left += 4;
         DrawTextW(
             draw.hDC,
-            &mut text[..length],
+            &mut text,
             &raw mut bounds,
             DT_LEFT | DT_VCENTER | DT_SINGLELINE,
         );
@@ -639,5 +655,55 @@ unsafe extern "system" fn mouse_field_procedure(
             LRESULT(0)
         }
         _ => unsafe { DefWindowProcW(field, message, wparam, lparam) },
+    }
+}
+
+#[cfg(test)]
+mod listbox_item_text_tests {
+    use super::*;
+    use windows::Win32::UI::WindowsAndMessaging::{
+        CreateWindowExW, DestroyWindow, WINDOW_EX_STYLE, WINDOW_STYLE,
+    };
+
+    const LB_ADDSTRING: u32 = 0x0180;
+    const WS_POPUP: u32 = 0x8000_0000;
+    const LBS_HASSTRINGS: u32 = 0x0040;
+
+    #[test]
+    #[ignore = "creates a LISTBOX; runs under wine"]
+    fn an_item_longer_than_the_old_fixed_buffer_reads_back_fully() {
+        let item: Vec<u16> = "A"
+            .repeat(300) // > the old [u16; 128] buffer that overflowed
+            .encode_utf16()
+            .chain(std::iter::once(0))
+            .collect();
+        let listbox = unsafe {
+            CreateWindowExW(
+                WINDOW_EX_STYLE(0),
+                w!("LISTBOX"),
+                PCWSTR::null(),
+                WINDOW_STYLE(WS_POPUP | LBS_HASSTRINGS),
+                0,
+                0,
+                100,
+                100,
+                None,
+                None,
+                None,
+                None,
+            )
+        }
+        .expect("create listbox");
+        unsafe {
+            SendMessageW(
+                listbox,
+                LB_ADDSTRING,
+                Some(WPARAM(0)),
+                Some(LPARAM(item.as_ptr() as isize)),
+            )
+        };
+        let text = listbox_item_text(listbox, 0);
+        let _ = unsafe { DestroyWindow(listbox) };
+        assert_eq!(text.len(), 300);
     }
 }

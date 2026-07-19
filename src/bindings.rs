@@ -275,11 +275,18 @@ pub fn resolved_keyboard_sequences(
     overrides: Option<&Map<String, Value>>,
     action_name: &str,
 ) -> Vec<String> {
+    // Parser round-trip discards unparseable or unbounded riv.json strings.
     override_or_default(
         overrides,
         action_name,
         default_keyboard_sequences(action_name),
     )
+    .iter()
+    .filter_map(|sequence| {
+        let (modifiers, virtual_key) = parse_key_sequence(sequence)?;
+        format_key_sequence(modifiers, virtual_key)
+    })
+    .collect()
 }
 
 /// First keyboard sequence plus the mouse binding, comma-joined.
@@ -303,7 +310,14 @@ pub fn resolved_mouse_encodings(
     overrides: Option<&Map<String, Value>>,
     action_name: &str,
 ) -> Vec<String> {
+    // Parser round-trip discards unparseable or unbounded riv.json strings.
     override_or_default(overrides, action_name, default_mouse_encodings(action_name))
+        .iter()
+        .filter_map(|encoding| {
+            let (modifiers, double_click, base) = parse_mouse_encoding(encoding)?;
+            Some(format_mouse_encoding(modifiers, double_click, base))
+        })
+        .collect()
 }
 
 fn override_or_default(
@@ -467,4 +481,26 @@ fn key_name_from_virtual_key(virtual_key: u16) -> Option<String> {
         _ => return None,
     };
     Some(name.to_string())
+}
+
+#[cfg(test)]
+mod normalization_tests {
+    use super::*;
+
+    #[test]
+    fn resolved_bindings_round_trip_and_discard_junk() {
+        let overrides = serde_json::json!({
+            "nextfile": ["Right", "Ctrl+Ctrl+X", "A".repeat(300)],
+            "fullscreen": ["Middle", "Nope"],
+        });
+        let map = overrides.as_object().expect("object");
+        assert_eq!(
+            resolved_keyboard_sequences(Some(map), "nextfile"),
+            ["Right", "Ctrl+X"]
+        );
+        assert_eq!(
+            resolved_mouse_encodings(Some(map), "fullscreen"),
+            ["Middle"]
+        );
+    }
 }
