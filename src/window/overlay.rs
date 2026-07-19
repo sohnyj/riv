@@ -62,7 +62,7 @@ pub struct OverlayContent {
 
 pub struct Overlay {
     text_format: IDWriteTextFormat,
-    error_format: IDWriteTextFormat,
+    centered_format: IDWriteTextFormat,
     wordmark_format: IDWriteTextFormat,
     dwrite_factory: IDWriteFactory,
     scale: f32,
@@ -72,11 +72,11 @@ impl Overlay {
     pub fn new() -> Result<Self> {
         let dwrite_factory: IDWriteFactory =
             unsafe { DWriteCreateFactory(DWRITE_FACTORY_TYPE_SHARED)? };
-        let (text_format, error_format, wordmark_format) =
+        let (text_format, centered_format, wordmark_format) =
             create_text_formats(&dwrite_factory, 1.0)?;
         Ok(Self {
             text_format,
-            error_format,
+            centered_format,
             wordmark_format,
             dwrite_factory,
             scale: 1.0,
@@ -88,11 +88,11 @@ impl Overlay {
         if (scale - self.scale).abs() < f32::EPSILON {
             return;
         }
-        if let Ok((text_format, error_format, wordmark_format)) =
+        if let Ok((text_format, centered_format, wordmark_format)) =
             create_text_formats(&self.dwrite_factory, scale)
         {
             self.text_format = text_format;
-            self.error_format = error_format;
+            self.centered_format = centered_format;
             self.wordmark_format = wordmark_format;
             self.scale = scale;
         }
@@ -137,7 +137,7 @@ impl Overlay {
             self.draw_centered_text(
                 context,
                 centered_text,
-                &self.error_format,
+                &self.centered_format,
                 viewport_width,
                 viewport_height,
                 content,
@@ -276,10 +276,10 @@ fn create_text_formats(
         )
     };
     let text_format = create_format(14.0)?;
-    let error_format = create_format(16.0)?;
+    let centered_format = create_format(16.0)?;
     // The wordmark matches the About title: 40pt, size is the only variation.
     let wordmark_format = create_format(40.0 * 96.0 / 72.0)?;
-    for format in [&error_format, &wordmark_format] {
+    for format in [&centered_format, &wordmark_format] {
         unsafe {
             format.SetTextAlignment(DWRITE_TEXT_ALIGNMENT_CENTER)?;
             format.SetParagraphAlignment(DWRITE_PARAGRAPH_ALIGNMENT_CENTER)?;
@@ -292,8 +292,8 @@ fn create_text_formats(
         unsafe { format.SetLineSpacing(DWRITE_LINE_SPACING_METHOD_UNIFORM, line, baseline) }
     };
     set_line_spacing(&text_format, 14.0 * scale)?;
-    set_line_spacing(&error_format, 16.0 * scale)?;
-    Ok((text_format, error_format, wordmark_format))
+    set_line_spacing(&centered_format, 16.0 * scale)?;
+    Ok((text_format, centered_format, wordmark_format))
 }
 
 #[expect(clippy::too_many_arguments)]
