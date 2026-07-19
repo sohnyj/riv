@@ -10,7 +10,8 @@ pub enum ActivationGate {
     /// Image carried by some file on disk (the archive for members, never a URL).
     ContainingFile,
     Animation,
-    Folder,
+    /// Somewhere to go besides the anchor itself (single-entry folders stay inert).
+    NavigationTargets,
 }
 
 /// Variant and table order track the context menu, flattened.
@@ -102,22 +103,32 @@ const ACTION_TABLE: &[(Action, &str, &str, ActivationGate)] = &[
         Action::FirstFile,
         "firstfile",
         "First File",
-        ActivationGate::Folder,
+        ActivationGate::NavigationTargets,
     ),
     (
         Action::PreviousFile,
         "previousfile",
         "Previous",
-        ActivationGate::Folder,
+        ActivationGate::NavigationTargets,
     ),
-    (Action::NextFile, "nextfile", "Next", ActivationGate::Folder),
+    (
+        Action::NextFile,
+        "nextfile",
+        "Next",
+        ActivationGate::NavigationTargets,
+    ),
     (
         Action::LastFile,
         "lastfile",
         "Last File",
-        ActivationGate::Folder,
+        ActivationGate::NavigationTargets,
     ),
-    (Action::Loop, "loop", "Loop", ActivationGate::Folder),
+    (
+        Action::Loop,
+        "loop",
+        "Loop",
+        ActivationGate::NavigationTargets,
+    ),
     (Action::Pause, "pause", "Pause", ActivationGate::Animation),
     (
         Action::NextFrame,
@@ -224,7 +235,7 @@ const ACTION_TABLE: &[(Action, &str, &str, ActivationGate)] = &[
         Action::Slideshow,
         "slideshow",
         "Toggle Slideshow",
-        ActivationGate::Folder,
+        ActivationGate::NavigationTargets,
     ),
     (
         Action::Options,

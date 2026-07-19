@@ -26,7 +26,7 @@ pub struct MenuState {
     pub has_image: bool,
     pub has_file_on_disk: bool,
     pub has_containing_file: bool,
-    pub has_folder: bool,
+    pub has_navigation_targets: bool,
     pub has_animation: bool,
     pub file_info_shown: bool,
     pub loop_enabled: bool,
@@ -68,7 +68,7 @@ impl MenuBuilder {
             ActivationGate::FileOnDisk => self.state_snapshot.has_file_on_disk,
             ActivationGate::ContainingFile => self.state_snapshot.has_containing_file,
             ActivationGate::Animation => self.state_snapshot.has_animation,
-            ActivationGate::Folder => self.state_snapshot.has_folder,
+            ActivationGate::NavigationTargets => self.state_snapshot.has_navigation_targets,
         }
     }
 
@@ -218,7 +218,12 @@ impl MenuBuilder {
             }
         }
         // No folder listing means nothing to jump to.
-        self.append_submenu(menu, playlist, "Playlist", self.state_snapshot.has_folder)?;
+        self.append_submenu(
+            menu,
+            playlist,
+            "Playlist",
+            self.state_snapshot.has_navigation_targets,
+        )?;
         let playback = unsafe { CreatePopupMenu()? };
         let pause_label = if self.state_snapshot.animation_paused {
             "Resume"
@@ -326,7 +331,7 @@ mod menu_structure_tests {
             has_image: true,
             has_file_on_disk: true,
             has_containing_file: true,
-            has_folder: false,
+            has_navigation_targets: false,
             has_animation: true,
             file_info_shown: false,
             loop_enabled: true,
@@ -442,7 +447,7 @@ mod menu_structure_tests {
     #[test]
     fn ampersands_in_names_render_literally() {
         let mut with_names = state();
-        with_names.has_folder = true;
+        with_names.has_navigation_targets = true;
         with_names.playlist_names = vec!["a&b.png".to_string()];
         with_names.recent_names = vec!["c&d.png".to_string()];
         with_names.open_with_items = vec!["E & F".to_string()];
@@ -468,7 +473,7 @@ mod menu_structure_tests {
     fn playlist_follows_the_folder_listing() {
         assert!(submenu_is_grayed(state(), "Playlist")); // no listing to jump to
         let mut with_folder = state();
-        with_folder.has_folder = true;
+        with_folder.has_navigation_targets = true;
         with_folder.playlist_names = vec!["a.png".to_string()];
         assert!(!submenu_is_grayed(with_folder, "Playlist"));
     }
@@ -476,7 +481,7 @@ mod menu_structure_tests {
     #[test]
     fn playlist_lists_the_window_and_collapses_the_rest() {
         let mut with_folder = state();
-        with_folder.has_folder = true;
+        with_folder.has_navigation_targets = true;
         with_folder.playlist_names = (0..25).map(|index| format!("{index:03}.png")).collect();
         with_folder.playlist_first_index = 38;
         with_folder.playlist_current_slot = Some(12);

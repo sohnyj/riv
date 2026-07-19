@@ -758,7 +758,7 @@ impl Application {
                 .current
                 .as_ref()
                 .is_some_and(|current| current.image.frames.len() > 1),
-            ActivationGate::Folder => self.image_core.has_navigation_targets(),
+            ActivationGate::NavigationTargets => self.image_core.has_navigation_targets(),
         }
     }
 
@@ -1920,7 +1920,7 @@ extern "system" fn window_procedure(
                         .current
                         .as_ref()
                         .is_some_and(|current| current.location.containing_file().is_some()),
-                    has_folder: application.image_core.has_navigation_targets(),
+                    has_navigation_targets: application.image_core.has_navigation_targets(),
                     file_info_shown: application.show_file_info,
                     loop_enabled: application.settings.options.loop_folders_enabled,
                     open_url_available: curl::available(),
