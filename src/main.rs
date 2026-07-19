@@ -1444,7 +1444,12 @@ fn main() -> Result<()> {
     create_main_window(argument_path.as_deref())?;
 
     let mut message = MSG::default();
-    while unsafe { GetMessageW(&raw mut message, None, 0, 0) }.as_bool() {
+    loop {
+        // -1 is an error, not a message; as_bool would dispatch a stale MSG.
+        let result = unsafe { GetMessageW(&raw mut message, None, 0, 0) };
+        if result.0 <= 0 {
+            break;
+        }
         let _ = unsafe { TranslateMessage(&raw const message) };
         unsafe { DispatchMessageW(&raw const message) };
     }
@@ -1950,28 +1955,33 @@ extern "system" fn window_procedure(
                         })
                         .collect(),
                 };
-                match context_menu::show(window, state, x, y) {
-                    Some(MenuSelection::Action(action)) => {
-                        dispatch_action(application, window, action);
-                    }
-                    Some(MenuSelection::OpenWithEntry(index)) => {
-                        if let (Some(path), Some(list)) = (
-                            application
-                                .image_core
-                                .current
-                                .as_ref()
-                                .and_then(|current| current.location.as_file()),
-                            application.open_with_list.as_ref(),
-                        ) && let Some(item) = list.items.get(index)
-                        {
-                            let _ = open_with::invoke(path, &item.executable_path);
+                let selection = context_menu::show(window, state, x, y);
+                // The menu pumped messages; re-fetch in case the window was destroyed.
+                if let Some(selection) = selection
+                    && let Some(application) = application_from_window(window)
+                {
+                    match selection {
+                        MenuSelection::Action(action) => {
+                            dispatch_action(application, window, action);
+                        }
+                        MenuSelection::OpenWithEntry(index) => {
+                            if let (Some(path), Some(list)) = (
+                                application
+                                    .image_core
+                                    .current
+                                    .as_ref()
+                                    .and_then(|current| current.location.as_file()),
+                                application.open_with_list.as_ref(),
+                            ) && let Some(item) = list.items.get(index)
+                            {
+                                let _ = open_with::invoke(path, &item.executable_path);
+                            }
+                        }
+                        MenuSelection::PlaylistEntry(index) => {
+                            let result = application.image_core.navigate_to_entry(index);
+                            apply_navigation_result(application, window, result);
                         }
                     }
-                    Some(MenuSelection::PlaylistEntry(index)) => {
-                        let result = application.image_core.navigate_to_entry(index);
-                        apply_navigation_result(application, window, result);
-                    }
-                    None => {}
                 }
             }
             LRESULT(0)
@@ -2011,6 +2021,12 @@ extern "system" fn window_procedure(
             LRESULT(0)
         }
         WM_CLOSE => {
+            // A modal disables its owner; dropping WM_CLOSE avoids freeing it mid-pump.
+            if !unsafe { windows::Win32::UI::Input::KeyboardAndMouse::IsWindowEnabled(window) }
+                .as_bool()
+            {
+                return LRESULT(0);
+            }
             if let Some(application) = application_from_window(window) {
                 application.save_window_geometry(window);
             }
