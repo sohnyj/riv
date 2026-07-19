@@ -113,6 +113,8 @@ pub fn download(
             "--show-error",
             "--fail",
             "--location",
+            "--max-redirs",
+            "10",
             "--globoff",
             "--proto",
             "=http,https",
@@ -122,10 +124,11 @@ pub fn download(
             maximum_bytes.as_str(),
             "--connect-timeout",
             "5",
+            // A speed floor drops a stall without a total-time cap on slow-but-real fetches.
             "--speed-limit",
-            "1",
+            "1024",
             "--speed-time",
-            "5",
+            "10",
             "--output",
             "-",
         ])
