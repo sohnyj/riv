@@ -92,7 +92,7 @@ impl Options {
             title_bar_mode: bounded("titlebarmode", 2, default.title_bar_mode),
             control_drag_window: boolean("ctrldragwindow", default.control_drag_window),
             save_window_position: boolean("savewindowposition", default.save_window_position),
-            scaling_filter: bounded("filteringenabled", 4, default.scaling_filter),
+            scaling_filter: bounded("scaling", 4, default.scaling_filter),
             fit_mode: bounded("fitmode", 1, default.fit_mode),
             zoom_step_percent: unsigned("zoomstep", default.zoom_step_percent).clamp(1, 200),
             dither: bounded("dither", 2, default.dither),
@@ -239,7 +239,7 @@ impl SettingsFile {
                 Value::Bool(default.save_window_position),
             ),
             (
-                "filteringenabled",
+                "scaling",
                 Value::from(options.scaling_filter),
                 Value::from(default.scaling_filter),
             ),
@@ -576,7 +576,7 @@ mod option_bounds_tests {
     fn out_of_range_indexes_fall_back_to_defaults() {
         let document = serde_json::json!({ "options": {
             "titlebarmode": 9,
-            "filteringenabled": 9,
+            "scaling": 9,
             "fitmode": 9,
             "preloadingmode": 9,
             "dither": 9,
@@ -609,7 +609,7 @@ mod option_bounds_tests {
     fn in_range_values_are_kept() {
         let document = serde_json::json!({ "options": {
             "titlebarmode": 2,
-            "filteringenabled": 3,
+            "scaling": 3,
             "fitmode": 1,
             "preloadingmode": 2,
             "zoomstep": 200,
