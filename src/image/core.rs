@@ -190,7 +190,7 @@ pub enum NavigationCommand {
     Last,
 }
 
-pub struct FolderEntry {
+pub struct ListingEntry {
     pub location: ItemLocation,
     wide_name: Vec<u16>,
     file_size: u64,
@@ -242,7 +242,7 @@ pub struct ImageCore {
     pool: DecodePool,
     options: CoreOptions,
     listing_scope: Option<ListingScope>,
-    entries: Vec<FolderEntry>,
+    entries: Vec<ListingEntry>,
     /// Item awaiting display; replacing it invalidates the previous load.
     pending_display: Option<ItemLocation>,
     in_flight: HashMap<ItemLocation, Arc<AtomicBool>>,
@@ -281,7 +281,7 @@ impl ImageCore {
         self.preload_neighbors();
     }
 
-    pub fn folder_position(&self) -> Option<(usize, usize)> {
+    pub fn listing_position(&self) -> Option<(usize, usize)> {
         let current = self.current.as_ref()?;
         let index = self.position_of(&current.location)?;
         Some((index + 1, self.entries.len()))
@@ -458,7 +458,7 @@ impl ImageCore {
                 return false;
             }
         };
-        let mut entries: Vec<FolderEntry> = members
+        let mut entries: Vec<ListingEntry> = members
             .into_iter()
             .filter_map(|member| member_entry(archive, member))
             .collect();
@@ -736,7 +736,7 @@ impl ImageCore {
             Some(ListingScope::Directory(directory)) => self.rescan_folder(&directory.clone()),
             Some(ListingScope::Archive(archive)) => {
                 let archive = archive.clone();
-                let mut entries: Vec<FolderEntry> = archive_reader::enumerate(&archive)
+                let mut entries: Vec<ListingEntry> = archive_reader::enumerate(&archive)
                     .map(|members| {
                         members
                             .into_iter()
@@ -1053,7 +1053,7 @@ fn path_identity(path: &Path) -> String {
     path.as_os_str().to_string_lossy().to_ascii_lowercase()
 }
 
-fn scan_folder(directory: &Path, options: &CoreOptions) -> Vec<FolderEntry> {
+fn scan_folder(directory: &Path, options: &CoreOptions) -> Vec<ListingEntry> {
     let Ok(reader) = std::fs::read_dir(directory) else {
         return Vec::new();
     };
@@ -1083,7 +1083,7 @@ fn scan_folder(directory: &Path, options: &CoreOptions) -> Vec<FolderEntry> {
             continue;
         }
         let wide_name: Vec<u16> = file_name.encode_wide().chain(std::iter::once(0)).collect();
-        entries.push(FolderEntry {
+        entries.push(ListingEntry {
             location: ItemLocation::File(entry.path()),
             wide_name,
             file_size: metadata.len(),
@@ -1095,7 +1095,7 @@ fn scan_folder(directory: &Path, options: &CoreOptions) -> Vec<FolderEntry> {
 }
 
 /// Entry for an image member; other member types drop out of the listing.
-fn member_entry(archive: &Path, member: archive_reader::MemberInfo) -> Option<FolderEntry> {
+fn member_entry(archive: &Path, member: archive_reader::MemberInfo) -> Option<ListingEntry> {
     Path::new(&member.name)
         .extension()
         .map(|extension| extension.to_string_lossy().to_lowercase())
@@ -1105,7 +1105,7 @@ fn member_entry(archive: &Path, member: archive_reader::MemberInfo) -> Option<Fo
         .encode_utf16()
         .chain(std::iter::once(0))
         .collect();
-    Some(FolderEntry {
+    Some(ListingEntry {
         location: ItemLocation::ArchiveMember {
             archive: archive.to_path_buf(),
             member: member.name,
@@ -1117,7 +1117,7 @@ fn member_entry(archive: &Path, member: archive_reader::MemberInfo) -> Option<Fo
     })
 }
 
-fn sort_entries(entries: &mut [FolderEntry], options: &CoreOptions) {
+fn sort_entries(entries: &mut [ListingEntry], options: &CoreOptions) {
     match options.sort_mode {
         SortMode::Name => entries.sort_by(compare_natural_names),
         SortMode::Modified => {
@@ -1148,7 +1148,7 @@ fn sort_entries(entries: &mut [FolderEntry], options: &CoreOptions) {
     }
 }
 
-fn compare_natural_names(a: &FolderEntry, b: &FolderEntry) -> std::cmp::Ordering {
+fn compare_natural_names(a: &ListingEntry, b: &ListingEntry) -> std::cmp::Ordering {
     natural_order(&a.wide_name, &b.wide_name)
 }
 
@@ -1633,7 +1633,7 @@ mod url_session_state_tests {
         core.listing_scope = Some(ListingScope::Directory(
             path.parent().expect("parent").to_path_buf(),
         ));
-        core.entries = vec![FolderEntry {
+        core.entries = vec![ListingEntry {
             location: ItemLocation::File(path),
             wide_name: Vec::new(),
             file_size: 0,
@@ -1670,7 +1670,7 @@ mod url_session_state_tests {
         ));
         assert!(core.has_navigation_targets());
 
-        core.entries.push(FolderEntry {
+        core.entries.push(ListingEntry {
             location: ItemLocation::File(PathBuf::from("C:\\pictures\\b.png")),
             wide_name: Vec::new(),
             file_size: 0,
@@ -1805,7 +1805,7 @@ mod playlist_window_tests {
             },
         );
         core.entries = (0..count)
-            .map(|index| FolderEntry {
+            .map(|index| ListingEntry {
                 location: ItemLocation::File(PathBuf::from(format!(
                     "C:\\pictures\\{index:03}.png"
                 ))),

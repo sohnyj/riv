@@ -384,7 +384,7 @@ impl Application {
             .filter(|name| !name.is_empty());
         let title = match (self.settings.options.title_bar_mode, file_name) {
             (0, _) | (_, None) => "riv".to_string(),
-            (2, Some(name)) => match self.image_core.folder_position() {
+            (2, Some(name)) => match self.image_core.listing_position() {
                 Some((index, total)) => format!("{index}/{total} - {name}"),
                 None => name,
             },
