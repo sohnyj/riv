@@ -126,7 +126,8 @@ fn format_hex_color((red, green, blue): (u8, u8, u8)) -> String {
 
 fn parse_hex_color(text: &str) -> Option<(u8, u8, u8)> {
     let digits = text.strip_prefix('#')?;
-    if digits.len() != 6 {
+    // is_ascii keeps the byte slices on char boundaries (no panic).
+    if digits.len() != 6 || !digits.is_ascii() {
         return None;
     }
     let red = u8::from_str_radix(&digits[0..2], 16).ok()?;
@@ -566,6 +567,21 @@ fn read_document(path: &Path) -> Value {
         .and_then(|text| serde_json::from_str(&text).ok())
         .filter(Value::is_object)
         .unwrap_or_else(|| Value::Object(Map::new()))
+}
+
+#[cfg(test)]
+mod color_tests {
+    use super::*;
+
+    #[test]
+    fn hex_color_parses_and_rejects_without_panicking() {
+        assert_eq!(parse_hex_color("#21A0FF"), Some((0x21, 0xA0, 0xFF)));
+        assert_eq!(parse_hex_color("21A0FF"), None); // missing '#'
+        assert_eq!(parse_hex_color("#12345"), None); // too short
+        assert_eq!(parse_hex_color("#GGGGGG"), None); // non-hex
+        // Six bytes but a multibyte char crosses a slice boundary; must not panic.
+        assert_eq!(parse_hex_color("#a\u{20AC}ab"), None);
+    }
 }
 
 #[cfg(test)]

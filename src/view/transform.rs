@@ -67,9 +67,10 @@ impl ViewTransform {
 
     pub fn fit_scale(&self, viewport: Size, image: Size) -> f32 {
         let rotated = self.rotated_image_size(image);
+        // max(1.0): a zero-dimension frame would divide to Inf/NaN and poison the transform.
         match self.fit_mode {
-            FitMode::Width => viewport.width / rotated.width,
-            FitMode::Height => viewport.height / rotated.height,
+            FitMode::Width => viewport.width / rotated.width.max(1.0),
+            FitMode::Height => viewport.height / rotated.height.max(1.0),
         }
     }
 
@@ -291,5 +292,23 @@ mod zoom_limit_tests {
         assert_eq!(transform.scale, fit);
         transform.zoom(0.8, None, VIEWPORT, TINY_IMAGE);
         assert!(transform.scale < fit && transform.scale > MAXIMUM_ZOOM);
+    }
+}
+
+#[cfg(test)]
+mod fit_scale_tests {
+    use super::*;
+
+    #[test]
+    fn a_zero_dimension_image_yields_a_finite_scale() {
+        let viewport = Size {
+            width: 640.0,
+            height: 480.0,
+        };
+        let zero = Size {
+            width: 0.0,
+            height: 0.0,
+        };
+        assert!(ViewTransform::new().fit_scale(viewport, zero).is_finite());
     }
 }
