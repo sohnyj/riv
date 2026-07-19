@@ -268,11 +268,20 @@ fn decode_exr_with(
             });
         return Err(uncoded_error(text));
     }
-    let pixel_count = width as usize * height as usize;
+    let byte_count = width as usize * height as usize * 8;
+    // Fallible copy: to_vec aborts on OOM; a huge EXR should error, not crash.
     // The shim hands over associated-alpha linear RGBA halves - the FP16 storage layout.
-    let pixels =
-        unsafe { std::slice::from_raw_parts(half_pixels.cast::<u8>(), pixel_count * 8) }.to_vec();
+    let mut pixels = Vec::new();
+    let reserved = pixels.try_reserve_exact(byte_count).is_ok();
+    if reserved {
+        pixels.extend_from_slice(unsafe {
+            std::slice::from_raw_parts(half_pixels.cast::<u8>(), byte_count)
+        });
+    }
     unsafe { riv_exr_free(half_pixels) };
+    if !reserved {
+        return Err(uncoded_error("EXR is too large to fit in memory"));
+    }
     let peak_luminance_nits = peak_luminance_from_half_pixels(&pixels);
     Ok(DecodedImage {
         width: width as u32,
@@ -450,4 +459,25 @@ fn decode_heif_primary_image(
             delay_milliseconds: 0,
         }],
     })
+}
+
+/// A crafted near-SIZE_MAX scanline offset must error, not read out of bounds (fixtures: SECURITY_AUDIT.md).
+#[cfg(test)]
+mod exr_robustness_tests {
+    use super::*;
+
+    #[test]
+    #[ignore = "needs test/exr_base.exr"]
+    fn a_valid_exr_decodes() {
+        let data = std::fs::read("test/exr_base.exr").expect("fixture");
+        assert!(decode_exr_bytes(&data, "EXR").is_ok());
+    }
+
+    #[test]
+    #[ignore = "needs test/exr_bad_offset.exr"]
+    fn a_corrupt_offset_table_errors_without_reading_out_of_bounds() {
+        let data = std::fs::read("test/exr_bad_offset.exr").expect("fixture");
+        // The subtraction bound check must catch it, not wrap and read before the buffer.
+        assert!(decode_exr_bytes(&data, "EXR").is_err());
+    }
 }
