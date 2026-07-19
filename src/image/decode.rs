@@ -725,19 +725,16 @@ fn enforce_device_limit(
         PixelStorage::RgbaHalf => &GUID_WICPixelFormat64bppPRGBAHalf,
     };
     let bytes_per_pixel = decoded.storage.bytes_per_pixel();
+    // u64 stride: a native EXR/HEIF width near u32::MAX would overflow width*bpp.
+    let stride = u32::try_from(u64::from(width) * u64::from(bytes_per_pixel))
+        .map_err(|_| uncoded_error("image stride exceeds the addressable range"))?;
     let frame = decoded
         .frames
         .first_mut()
         .ok_or_else(|| uncoded_error("image has no frames"))?;
     let (pixels, scaled_width, scaled_height) = with_wic_factory(|factory| {
         let bitmap = unsafe {
-            factory.CreateBitmapFromMemory(
-                width,
-                height,
-                pixel_format,
-                width * bytes_per_pixel,
-                &frame.pixels,
-            )?
+            factory.CreateBitmapFromMemory(width, height, pixel_format, stride, &frame.pixels)?
         };
         let (source, scaled_width, scaled_height) =
             downscale_to_device_limit(factory, bitmap.cast()?, width, height)?;
@@ -1389,6 +1386,9 @@ pub fn clear_rectangle(
     width: u32,
     height: u32,
 ) {
+    if canvas_width == 0 {
+        return; // a zero-width canvas has nothing to clear and would divide by zero
+    }
     let canvas_height = canvas.len() / (canvas_width as usize * 4);
     let visible_width = width.min(canvas_width.saturating_sub(left)) as usize;
     let visible_height = (height as usize).min(canvas_height.saturating_sub(top as usize));
@@ -1581,7 +1581,8 @@ fn decode_apng<Input: BufRead + Seek>(
     }
 
     let mut canvas = vec![0u8; canvas_width as usize * canvas_height as usize * 4];
-    let mut frames = Vec::with_capacity(animation_frame_count as usize);
+    // The png crate accepts acTL num_frames up to i32::MAX; cap the reservation.
+    let mut frames = Vec::with_capacity((animation_frame_count as usize).min(4096));
     for index in 0..animation_frame_count {
         if cancellation.load(Ordering::Relaxed) {
             return Err(DecodeError::cancelled());
@@ -2031,5 +2032,32 @@ mod peak_scan_tests {
             let peak = peak_luminance_from_half_pixels(&pixels).unwrap();
             println!("peak={peak} elapsed={:?}", start.elapsed());
         }
+    }
+}
+
+#[cfg(test)]
+mod compositing_tests {
+    use super::*;
+
+    #[test]
+    fn clear_rectangle_ignores_a_zero_width_canvas() {
+        let mut canvas = Vec::new();
+        clear_rectangle(&mut canvas, 0, 0, 0, 4, 4); // must not divide by zero
+        assert!(canvas.is_empty());
+    }
+}
+
+/// A huge declared acTL num_frames must not drive the reservation (fixture: SECURITY_AUDIT.md).
+#[cfg(test)]
+mod apng_tests {
+    use super::*;
+
+    #[test]
+    #[ignore = "needs test/apng_huge_frames.png"]
+    fn a_huge_declared_frame_count_does_not_over_reserve() {
+        let data = std::fs::read("test/apng_huge_frames.png").expect("fixture");
+        let cancellation = AtomicBool::new(false);
+        // Frames run out after the first; decode errors without the huge reservation.
+        assert!(decode_bytes(&data, Some("png"), &cancellation).is_err());
     }
 }
