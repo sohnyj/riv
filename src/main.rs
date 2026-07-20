@@ -1212,9 +1212,6 @@ fn dispatch_action(application: &mut Application, window: HWND, action: Action) 
         Action::Options => {
             dialogs::options::show(window, &application.settings);
         }
-        Action::About => {
-            dialogs::about::show(window);
-        }
     }
 }
 

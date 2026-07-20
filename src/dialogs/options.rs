@@ -1,4 +1,4 @@
-//! Settings dialog: six tab pages editing a transient copy applied on OK/Apply.
+//! Settings dialog: seven tab pages editing a transient copy applied on OK/Apply.
 
 use windows::Win32::Foundation::{COLORREF, HWND, LPARAM, POINT, RECT, WPARAM};
 use windows::Win32::Graphics::Gdi::{
@@ -13,11 +13,11 @@ use windows::Win32::UI::Controls::{
     HTREEITEM, ILC_COLOR32, ILC_MASK, ImageList_Add, ImageList_Create, IsDlgButtonChecked,
     LVCF_TEXT, LVCF_WIDTH, LVCOLUMNW, LVIF_TEXT, LVITEMW, LVM_INSERTCOLUMNW, LVM_INSERTITEMW,
     LVM_SETEXTENDEDLISTVIEWSTYLE, LVM_SETITEMTEXTW, LVS_EX_FULLROWSELECT, NM_CLICK, NM_DBLCLK,
-    NMHDR, NMITEMACTIVATE, NMTVKEYDOWN, TCIF_TEXT, TCITEMW, TCM_ADJUSTRECT, TCM_GETCURSEL,
-    TCM_INSERTITEMW, TCN_SELCHANGE, TVGN_CARET, TVHITTESTINFO, TVHT_ONITEMSTATEICON, TVI_LAST,
-    TVI_ROOT, TVIF_PARAM, TVIF_STATE, TVIF_TEXT, TVINSERTSTRUCTW, TVIS_STATEIMAGEMASK, TVITEMEXW,
-    TVM_GETITEMW, TVM_GETNEXTITEM, TVM_HITTEST, TVM_INSERTITEMW, TVM_SETIMAGELIST, TVM_SETITEMW,
-    TVN_KEYDOWN, TVSIL_STATE, UDM_SETRANGE32,
+    NM_RETURN, NMHDR, NMITEMACTIVATE, NMTVKEYDOWN, TCIF_TEXT, TCITEMW, TCM_ADJUSTRECT,
+    TCM_GETCURSEL, TCM_INSERTITEMW, TCN_SELCHANGE, TVGN_CARET, TVHITTESTINFO, TVHT_ONITEMSTATEICON,
+    TVI_LAST, TVI_ROOT, TVIF_PARAM, TVIF_STATE, TVIF_TEXT, TVINSERTSTRUCTW, TVIS_STATEIMAGEMASK,
+    TVITEMEXW, TVM_GETITEMW, TVM_GETNEXTITEM, TVM_HITTEST, TVM_INSERTITEMW, TVM_SETIMAGELIST,
+    TVM_SETITEMW, TVN_KEYDOWN, TVSIL_STATE, UDM_SETRANGE32,
 };
 use windows::Win32::UI::Input::KeyboardAndMouse::{EnableWindow, VK_SPACE};
 use windows::Win32::UI::WindowsAndMessaging::{
@@ -32,6 +32,7 @@ use windows::core::PCWSTR;
 use crate::actions::Action;
 use crate::archive::reader as archive_reader;
 use crate::bindings;
+use crate::dialogs::about;
 use crate::dialogs::resource::*;
 use crate::dialogs::shortcut_capture;
 use crate::image::decode;
@@ -80,7 +81,7 @@ struct AssociationGroup {
 struct OptionsState {
     parent: HWND,
     dialog: HWND,
-    pages: [HWND; 6],
+    pages: [HWND; 7],
     saved_options: Options,
     transient_options: Options,
     saved_shortcuts: Vec<ShortcutRow>,
@@ -96,6 +97,8 @@ struct OptionsState {
     state_images: HIMAGELIST,
     custom_colors: [COLORREF; 16],
     initial_position: Option<(i32, i32)>,
+    /// Fonts owned by the About page, freed when the dialog closes.
+    about_fonts: about::AboutFonts,
 }
 
 impl OptionsState {
@@ -159,7 +162,7 @@ pub fn show(parent: HWND, settings: &SettingsFile) {
     let mut state = OptionsState {
         parent,
         dialog: HWND::default(),
-        pages: [HWND::default(); 6],
+        pages: [HWND::default(); 7],
         saved_options: settings.options.clone(),
         transient_options: settings.options.clone(),
         saved_shortcuts: shortcuts.clone(),
@@ -173,6 +176,7 @@ pub fn show(parent: HWND, settings: &SettingsFile) {
         state_images: HIMAGELIST::default(),
         custom_colors: [COLORREF(0x00FF_FFFF); 16],
         initial_position: settings.options_geometry(),
+        about_fonts: about::AboutFonts::default(),
     };
     let instance = unsafe { GetModuleHandleW(None) }.unwrap_or_default();
     unsafe {
@@ -287,6 +291,7 @@ unsafe extern "system" fn frame_procedure(
                         windows::Win32::UI::Controls::ImageList_Destroy(Some(state.state_images))
                     };
                 }
+                state.about_fonts.destroy();
             }
             0
         }
@@ -329,6 +334,7 @@ fn initialize_frame(state: &mut OptionsState) {
         "Shortcuts",
         "File Association",
         "Start Menu",
+        "About",
     ]
     .iter()
     .enumerate()
@@ -380,6 +386,7 @@ fn initialize_frame(state: &mut OptionsState) {
         IDD_PAGE_SHORTCUTS,
         IDD_PAGE_ASSOCIATION,
         IDD_PAGE_STARTMENU,
+        IDD_PAGE_ABOUT,
     ]
     .iter()
     .enumerate()
@@ -413,6 +420,7 @@ fn initialize_frame(state: &mut OptionsState) {
     initialize_misc_page(state);
     initialize_shortcuts_page(state);
     initialize_association_page(state);
+    state.about_fonts = about::initialize_page(state.pages[6]);
     sync_all_pages(state);
     update_buttons(state);
     let _ = unsafe { ShowWindow(state.pages[0], SW_SHOW) };
@@ -509,6 +517,10 @@ unsafe extern "system" fn page_procedure(
                 }
                 IDC_ASSOC_TREE if header.code == NM_CLICK => {
                     toggle_association_at_cursor(state, header.hwndFrom);
+                    1
+                }
+                IDC_ABOUT_LINK if header.code == NM_CLICK || header.code == NM_RETURN => {
+                    about::handle_link(lparam);
                     1
                 }
                 IDC_ASSOC_TREE if header.code == TVN_KEYDOWN => {

@@ -279,7 +279,6 @@ impl MenuBuilder {
         self.append_action_labeled(tools, Action::Slideshow, slideshow_label)?;
         self.append_separator(tools)?;
         self.append_action(tools, Action::Options)?;
-        self.append_action(tools, Action::About)?;
         self.append_submenu(menu, tools, "Tools", true)?;
 
         let window = unsafe { CreatePopupMenu()? };
@@ -591,7 +590,6 @@ mod menu_structure_tests {
                 "Start Slideshow",
                 "", // separator
                 "Settings...",
-                "About",
             ]
         );
         let _ = unsafe { DestroyMenu(menu) };

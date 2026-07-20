@@ -54,7 +54,6 @@ pub enum Action {
     DeletePermanent,
     Slideshow,
     Options,
-    About,
     AlwaysOnTop,
     Fullscreen,
     Quit,
@@ -243,7 +242,6 @@ const ACTION_TABLE: &[(Action, &str, &str, ActivationGate)] = &[
         "Settings...",
         ActivationGate::Window,
     ),
-    (Action::About, "about", "About", ActivationGate::Window),
     (
         Action::AlwaysOnTop,
         "alwaysontop",
@@ -279,7 +277,7 @@ impl Action {
         ACTION_TABLE
             .iter()
             .map(|(action, _, _, _)| *action)
-            .filter(|action| !matches!(action, Self::OpenWith | Self::About))
+            .filter(|action| !matches!(action, Self::OpenWith))
     }
 
     pub fn name(self) -> &'static str {

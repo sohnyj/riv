@@ -1,152 +1,160 @@
-//! About dialog: large title, version, build info, and a repository link.
+//! Settings About page: large title, version, build info, and a repository link.
 
 use windows::Win32::Foundation::{HWND, LPARAM, WPARAM};
 use windows::Win32::Graphics::Gdi::{
     CLEARTYPE_QUALITY, CLIP_DEFAULT_PRECIS, CreateFontW, DEFAULT_CHARSET, DeleteObject, FW_NORMAL,
     HFONT, OUT_DEFAULT_PRECIS,
 };
-use windows::Win32::System::LibraryLoader::GetModuleHandleW;
 use windows::Win32::UI::HiDpi::GetDpiForWindow;
 use windows::Win32::UI::WindowsAndMessaging::{
-    DialogBoxParamW, EndDialog, GetDlgItem, SendMessageW, SetDlgItemTextW, SetWindowLongPtrW,
-    WM_COMMAND, WM_DESTROY, WM_INITDIALOG, WM_NOTIFY, WM_SETFONT,
+    GetDlgItem, SendMessageW, SetDlgItemTextW, WM_SETFONT,
 };
 use windows::core::{PCWSTR, w};
 
-use super::{DWLP_USER, IDCANCEL, IDOK};
-use crate::dialogs::resource::{IDC_ABOUT_LINK, IDC_ABOUT_TITLE, IDC_ABOUT_VERSION, IDD_ABOUT};
+use crate::dialogs::resource::{
+    IDC_ABOUT_BUILD, IDC_ABOUT_LINK, IDC_ABOUT_TITLE, IDC_ABOUT_VERSION,
+};
 
 const TITLE_POINT_SIZE: i32 = 40;
 const VERSION_POINT_SIZE: i32 = 14;
 
-struct AboutState {
-    title_font: HFONT,
-    version_font: HFONT,
+/// The two fonts the page owns; the Settings dialog frees them when it closes.
+#[derive(Default)]
+pub struct AboutFonts {
+    title: HFONT,
+    version: HFONT,
 }
 
-pub fn show(window: HWND) {
-    let mut state = AboutState {
-        title_font: HFONT::default(),
-        version_font: HFONT::default(),
-    };
-    let instance = unsafe { GetModuleHandleW(None) }.unwrap_or_default();
-    unsafe {
-        DialogBoxParamW(
-            Some(instance.into()),
-            PCWSTR(IDD_ABOUT as usize as *const u16),
-            Some(window),
-            Some(dialog_procedure),
-            LPARAM(&raw mut state as isize),
-        )
-    };
-}
-
-extern "system" fn dialog_procedure(
-    dialog: HWND,
-    message: u32,
-    wparam: WPARAM,
-    lparam: LPARAM,
-) -> isize {
-    match message {
-        WM_INITDIALOG => {
-            unsafe { SetWindowLongPtrW(dialog, DWLP_USER, lparam.0) };
-            crate::dialogs::center_on_owner(dialog);
-            initialize(dialog, unsafe { &mut *(lparam.0 as *mut AboutState) });
-            1
-        }
-        WM_COMMAND => {
-            let command = wparam.0 & 0xFFFF;
-            if command == IDOK || command == IDCANCEL {
-                let _ = unsafe { EndDialog(dialog, command as isize) };
-                return 1;
+impl AboutFonts {
+    pub fn destroy(&self) {
+        for font in [self.title, self.version] {
+            if !font.is_invalid() {
+                let _ = unsafe { DeleteObject(font.into()) };
             }
-            0
         }
-        WM_NOTIFY => {
-            use windows::Win32::UI::Controls::{NM_CLICK, NM_RETURN, NMLINK};
-            let header = unsafe { &*(lparam.0 as *const windows::Win32::UI::Controls::NMHDR) };
-            if header.idFrom == IDC_ABOUT_LINK as usize
-                && (header.code == NM_CLICK || header.code == NM_RETURN)
-            {
-                let link = unsafe { &*(lparam.0 as *const NMLINK) };
-                open_link(&link.item.szUrl);
-                return 1;
-            }
-            0
-        }
-        WM_DESTROY => {
-            if let Some(state) = super::state_mut::<AboutState>(dialog) {
-                for font in [state.title_font, state.version_font] {
-                    if !font.is_invalid() {
-                        let _ = unsafe { DeleteObject(font.into()) };
-                    }
-                }
-            }
-            0
-        }
-        _ => 0,
     }
 }
 
-fn initialize(dialog: HWND, state: &mut AboutState) {
+/// Fill in the version text and the title/version fonts; returns the fonts to free.
+pub fn initialize_page(page: HWND) -> AboutFonts {
     set_text(
-        dialog,
+        page,
         IDC_ABOUT_VERSION,
         concat!("version ", env!("CARGO_PKG_VERSION")),
     );
-
-    let dpi = unsafe { GetDpiForWindow(dialog) }.max(96) as i32;
-    state.title_font = create_dialog_font(TITLE_POINT_SIZE, dpi);
-    state.version_font = create_dialog_font(VERSION_POINT_SIZE, dpi);
-    apply_font(dialog, IDC_ABOUT_TITLE, state.title_font);
-    apply_font(dialog, IDC_ABOUT_VERSION, state.version_font);
-    center_link(dialog);
+    let dpi = unsafe { GetDpiForWindow(page) }.max(96) as i32;
+    let fonts = AboutFonts {
+        title: create_font(TITLE_POINT_SIZE, dpi),
+        version: create_font(VERSION_POINT_SIZE, dpi),
+    };
+    apply_font(page, IDC_ABOUT_TITLE, fonts.title);
+    apply_font(page, IDC_ABOUT_VERSION, fonts.version);
+    layout_centered(page);
+    fonts
 }
 
-/// SysLink is left-aligned; shrink to its ideal size to center it.
-fn center_link(dialog: HWND) {
-    use windows::Win32::Foundation::SIZE;
-    use windows::Win32::UI::Controls::LM_GETIDEALSIZE;
+/// Open the repository URL carried by the link's notification.
+pub fn handle_link(lparam: LPARAM) {
+    use windows::Win32::UI::Controls::NMLINK;
+    let link = unsafe { &*(lparam.0 as *const NMLINK) };
+    open_link(&link.item.szUrl);
+}
+
+/// Center the rows as one block in the stretched page; the .rc rows only fix spacing.
+fn layout_centered(page: HWND) {
+    use windows::Win32::Foundation::{POINT, RECT};
+    use windows::Win32::Graphics::Gdi::MapWindowPoints;
     use windows::Win32::UI::WindowsAndMessaging::{
         GetClientRect, GetWindowRect, SWP_NOACTIVATE, SWP_NOZORDER, SetWindowPos,
     };
-    let Ok(link) = (unsafe { GetDlgItem(Some(dialog), IDC_ABOUT_LINK) }) else {
-        return;
-    };
-    let mut client = windows::Win32::Foundation::RECT::default();
-    if unsafe { GetClientRect(dialog, &raw mut client) }.is_err() {
+    let mut client = RECT::default();
+    if unsafe { GetClientRect(page, &raw mut client) }.is_err() {
         return;
     }
+    let width = client.right - client.left;
+    let height = client.bottom - client.top;
+
+    let rows = [
+        IDC_ABOUT_TITLE,
+        IDC_ABOUT_VERSION,
+        IDC_ABOUT_BUILD,
+        IDC_ABOUT_LINK,
+    ];
+    let mut placements = Vec::with_capacity(rows.len());
+    for id in rows {
+        let Ok(control) = (unsafe { GetDlgItem(Some(page), id) }) else {
+            return;
+        };
+        let mut bounds = RECT::default();
+        if unsafe { GetWindowRect(control, &raw mut bounds) }.is_err() {
+            return;
+        }
+        let mut corners = [
+            POINT {
+                x: bounds.left,
+                y: bounds.top,
+            },
+            POINT {
+                x: bounds.right,
+                y: bounds.bottom,
+            },
+        ];
+        unsafe { MapWindowPoints(None, Some(page), &mut corners) };
+        placements.push((id, control, corners[0].y, corners[1].y - corners[0].y));
+    }
+
+    let block_top = placements[0].2;
+    let block_bottom = placements.last().map_or(block_top, |row| row.2 + row.3);
+    let offset = (height - (block_bottom - block_top)) / 2 - block_top;
+
+    for (id, control, top, row_height) in placements {
+        let y = top + offset;
+        if id == IDC_ABOUT_LINK {
+            place_link(control, width, y, row_height);
+        } else {
+            let _ = unsafe {
+                SetWindowPos(
+                    control,
+                    None,
+                    0,
+                    y,
+                    width,
+                    row_height,
+                    SWP_NOACTIVATE | SWP_NOZORDER,
+                )
+            };
+        }
+    }
+}
+
+/// SysLink is left-aligned; shrink to its ideal size and center it horizontally.
+fn place_link(link: HWND, width: i32, top: i32, fallback_height: i32) {
+    use windows::Win32::Foundation::SIZE;
+    use windows::Win32::UI::Controls::LM_GETIDEALSIZE;
+    use windows::Win32::UI::WindowsAndMessaging::{SWP_NOACTIVATE, SWP_NOZORDER, SetWindowPos};
     let mut ideal = SIZE::default();
-    let height = unsafe {
+    let measured = unsafe {
         SendMessageW(
             link,
             LM_GETIDEALSIZE,
-            Some(WPARAM((client.right - client.left) as usize)),
+            Some(WPARAM(width as usize)),
             Some(LPARAM(&raw mut ideal as isize)),
         )
     }
     .0 as i32;
-    if ideal.cx <= 0 {
-        return;
-    }
-    let mut bounds = windows::Win32::Foundation::RECT::default();
-    if unsafe { GetWindowRect(link, &raw mut bounds) }.is_err() {
-        return;
-    }
-    let mut corner = [windows::Win32::Foundation::POINT {
-        x: bounds.left,
-        y: bounds.top,
-    }];
-    unsafe { windows::Win32::Graphics::Gdi::MapWindowPoints(None, Some(dialog), &mut corner) };
+    let (x, link_width, link_height) = if ideal.cx > 0 {
+        ((width - ideal.cx) / 2, ideal.cx, measured.max(ideal.cy))
+    } else {
+        (0, width, fallback_height)
+    };
     let _ = unsafe {
         SetWindowPos(
             link,
             None,
-            (client.right - client.left - ideal.cx) / 2,
-            corner[0].y,
-            ideal.cx,
-            height.max(ideal.cy),
+            x,
+            top,
+            link_width,
+            link_height,
             SWP_NOACTIVATE | SWP_NOZORDER,
         )
     };
@@ -179,16 +187,16 @@ fn open_link(url_wide: &[u16]) {
     };
 }
 
-fn set_text(dialog: HWND, control: i32, text: &str) {
+fn set_text(page: HWND, control: i32, text: &str) {
     let wide: Vec<u16> = text.encode_utf16().chain(std::iter::once(0)).collect();
-    let _ = unsafe { SetDlgItemTextW(dialog, control, PCWSTR(wide.as_ptr())) };
+    let _ = unsafe { SetDlgItemTextW(page, control, PCWSTR(wide.as_ptr())) };
 }
 
-fn apply_font(dialog: HWND, control: i32, font: HFONT) {
+fn apply_font(page: HWND, control: i32, font: HFONT) {
     if font.is_invalid() {
         return;
     }
-    if let Ok(label) = unsafe { GetDlgItem(Some(dialog), control) } {
+    if let Ok(label) = unsafe { GetDlgItem(Some(page), control) } {
         unsafe {
             SendMessageW(
                 label,
@@ -201,7 +209,7 @@ fn apply_font(dialog: HWND, control: i32, font: HFONT) {
 }
 
 /// Point size is the only variation; weight and style stay untouched.
-fn create_dialog_font(point_size: i32, dpi: i32) -> HFONT {
+fn create_font(point_size: i32, dpi: i32) -> HFONT {
     unsafe {
         CreateFontW(
             -(point_size * dpi / 72),

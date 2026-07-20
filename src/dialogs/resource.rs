@@ -7,9 +7,9 @@ pub const IDD_PAGE_MISC: u16 = 130;
 pub const IDD_PAGE_SHORTCUTS: u16 = 140;
 pub const IDD_PAGE_ASSOCIATION: u16 = 150;
 pub const IDD_PAGE_STARTMENU: u16 = 190;
+pub const IDD_PAGE_ABOUT: u16 = 200;
 pub const IDD_CAPTURE_KEYBOARD: u16 = 160;
 pub const IDD_CAPTURE_MOUSE: u16 = 170;
-pub const IDD_ABOUT: u16 = 180;
 
 pub const IDC_OPTIONS_TAB: i32 = 1001;
 pub const IDC_APPLY: i32 = 1002;
@@ -61,4 +61,5 @@ pub const IDC_CAPTURE_MOUSE_CLEAR: i32 = 1702;
 
 pub const IDC_ABOUT_TITLE: i32 = 1801;
 pub const IDC_ABOUT_VERSION: i32 = 1802;
+pub const IDC_ABOUT_BUILD: i32 = 1803;
 pub const IDC_ABOUT_LINK: i32 = 1804;

@@ -122,13 +122,12 @@ BEGIN
     PUSHBUTTON "Cancel", 2, 163, 51, 50, 14
 END
 
-IDD_ABOUT DIALOGEX 0, 0, 200, 100
-STYLE DS_MODALFRAME | WS_POPUP | WS_CAPTION | WS_SYSMENU
-CAPTION "About"
+IDD_PAGE_ABOUT DIALOGEX 0, 0, 292, 196
+STYLE DS_CONTROL | WS_CHILD
 FONT 9, "Lucida Console"
 BEGIN
-    CTEXT "riv", IDC_ABOUT_TITLE, 0, 4, 200, 38
-    CTEXT "", IDC_ABOUT_VERSION, 0, 46, 200, 14
-    CTEXT "Built with Rust (x86-64-v3)", -1, 0, 68, 200, 10
-    CONTROL "Source code available under GPLv3 on <a href=""https://github.com/sohnyj/riv"">GitHub</a>", IDC_ABOUT_LINK, "SysLink", WS_TABSTOP, 0, 82, 200, 10
+    CTEXT "riv", IDC_ABOUT_TITLE, 0, 48, 292, 38
+    CTEXT "", IDC_ABOUT_VERSION, 0, 90, 292, 14
+    CTEXT "Built with Rust (x86-64-v3)", IDC_ABOUT_BUILD, 0, 112, 292, 10
+    CONTROL "Source code available under GPLv3 on <a href=""https://github.com/sohnyj/riv"">GitHub</a>", IDC_ABOUT_LINK, "SysLink", WS_TABSTOP, 0, 126, 292, 10
 END
