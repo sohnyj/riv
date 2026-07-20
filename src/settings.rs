@@ -11,6 +11,7 @@ pub struct Options {
     pub title_bar_mode: u32,
     pub control_drag_window: bool,
     pub save_window_position: bool,
+    pub hide_cursor_fullscreen: bool,
     pub scaling_filter: u32,
     pub fit_mode: u32,
     pub zoom_step_percent: u32,
@@ -38,6 +39,7 @@ impl Default for Options {
             title_bar_mode: 1,
             control_drag_window: true,
             save_window_position: true,
+            hide_cursor_fullscreen: true,
             scaling_filter: 1,
             fit_mode: 0,
             zoom_step_percent: 25,
@@ -92,6 +94,7 @@ impl Options {
             title_bar_mode: bounded("titlebarmode", 2, default.title_bar_mode),
             control_drag_window: boolean("ctrldragwindow", default.control_drag_window),
             save_window_position: boolean("savewindowposition", default.save_window_position),
+            hide_cursor_fullscreen: boolean("hidecursorfullscreen", default.hide_cursor_fullscreen),
             scaling_filter: bounded("scaling", 4, default.scaling_filter),
             fit_mode: bounded("fitmode", 1, default.fit_mode),
             zoom_step_percent: unsigned("zoomstep", default.zoom_step_percent).clamp(1, 200),
@@ -213,7 +216,7 @@ impl SettingsFile {
 
     pub fn set_options(&mut self, options: &Options) {
         let default = Options::default();
-        let entries: [(&str, Value, Value); 22] = [
+        let entries: [(&str, Value, Value); 23] = [
             (
                 "bgcolorenabled",
                 Value::Bool(options.background_color_enabled),
@@ -238,6 +241,11 @@ impl SettingsFile {
                 "savewindowposition",
                 Value::Bool(options.save_window_position),
                 Value::Bool(default.save_window_position),
+            ),
+            (
+                "hidecursorfullscreen",
+                Value::Bool(options.hide_cursor_fullscreen),
+                Value::Bool(default.hide_cursor_fullscreen),
             ),
             (
                 "scaling",

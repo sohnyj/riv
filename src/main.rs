@@ -55,17 +55,17 @@ use windows::Win32::UI::Input::KeyboardAndMouse::{
 use windows::Win32::UI::WindowsAndMessaging::{
     CS_DBLCLKS, CS_HREDRAW, CS_VREDRAW, CW_USEDEFAULT, CreateWindowExW, DefWindowProcW,
     DispatchMessageW, GWL_STYLE, GWLP_USERDATA, GetClientRect, GetCursorPos, GetMessageW,
-    GetWindowLongPtrW, GetWindowPlacement, GetWindowRect, HCURSOR, HTCAPTION, HWND_NOTOPMOST,
-    HWND_TOP, HWND_TOPMOST, IDC_ARROW, IDC_SIZEALL, IsZoomed, KillTimer, LoadCursorW, LoadIconW,
-    MSG, PostMessageW, PostQuitMessage, RegisterClassExW, SW_HIDE, SW_SHOW, SW_SHOWMAXIMIZED,
-    SWP_FRAMECHANGED, SWP_NOACTIVATE, SWP_NOMOVE, SWP_NOSIZE, SWP_NOZORDER, SendMessageW,
-    SetCursor, SetTimer, SetWindowLongPtrW, SetWindowPlacement, SetWindowPos, SetWindowTextW,
-    ShowWindow, TranslateMessage, WINDOWPLACEMENT, WM_ACTIVATEAPP, WM_APP, WM_CLOSE,
-    WM_CONTEXTMENU, WM_DESTROY, WM_DISPLAYCHANGE, WM_DPICHANGED, WM_GESTURE, WM_KEYDOWN,
+    GetWindowLongPtrW, GetWindowPlacement, GetWindowRect, HCURSOR, HTCAPTION, HTCLIENT,
+    HWND_NOTOPMOST, HWND_TOP, HWND_TOPMOST, IDC_ARROW, IDC_SIZEALL, IsZoomed, KillTimer,
+    LoadCursorW, LoadIconW, MSG, PostMessageW, PostQuitMessage, RegisterClassExW, SW_HIDE, SW_SHOW,
+    SW_SHOWMAXIMIZED, SWP_FRAMECHANGED, SWP_NOACTIVATE, SWP_NOMOVE, SWP_NOSIZE, SWP_NOZORDER,
+    SendMessageW, SetCursor, SetTimer, SetWindowLongPtrW, SetWindowPlacement, SetWindowPos,
+    SetWindowTextW, ShowWindow, TranslateMessage, WINDOWPLACEMENT, WM_ACTIVATEAPP, WM_APP,
+    WM_CLOSE, WM_CONTEXTMENU, WM_DESTROY, WM_DISPLAYCHANGE, WM_DPICHANGED, WM_GESTURE, WM_KEYDOWN,
     WM_LBUTTONDBLCLK, WM_LBUTTONDOWN, WM_LBUTTONUP, WM_MBUTTONDOWN, WM_MOUSEHWHEEL, WM_MOUSEMOVE,
     WM_MOUSEWHEEL, WM_MOVE, WM_NCDESTROY, WM_NCLBUTTONDOWN, WM_PAINT, WM_SETCURSOR,
     WM_SETTINGCHANGE, WM_SIZE, WM_SYSCHAR, WM_SYSKEYDOWN, WM_TIMER, WM_XBUTTONDOWN, WNDCLASSEXW,
-    WS_OVERLAPPEDWINDOW,
+    WS_OVERLAPPEDWINDOW, WindowFromPoint,
 };
 use windows::core::{PCWSTR, Result, w};
 
@@ -79,6 +79,7 @@ const SLIDESHOW_TIMER: usize = 3;
 const SETTINGS_SAVE_TIMER: usize = 4;
 const OPEN_WITH_TIMER: usize = 5;
 const ANIMATION_TIMER: usize = 6;
+const CURSOR_HIDE_TIMER: usize = 7;
 
 const PAN_STEP: f32 = 64.0;
 
@@ -99,6 +100,10 @@ struct Application {
     sdr_white_boost: f32,
     pan_drag_position: Option<(i32, i32)>,
     pan_cursor: HCURSOR,
+    arrow_cursor: HCURSOR,
+    cursor_hidden: bool,
+    /// Last pointer position, to ignore synthetic non-moving WM_MOUSEMOVE.
+    last_pointer_position: Option<(i32, i32)>,
     wheel_notch_accumulator: i32,
     window_shown: bool,
     show_maximized: bool,
@@ -148,6 +153,9 @@ impl Application {
             sdr_white_boost: color::sdr_white_boost(window),
             pan_drag_position: None,
             pan_cursor: unsafe { LoadCursorW(None, IDC_SIZEALL)? },
+            arrow_cursor: unsafe { LoadCursorW(None, IDC_ARROW)? },
+            cursor_hidden: false,
+            last_pointer_position: None,
             wheel_notch_accumulator: 0,
             window_shown: false,
             show_maximized: false,
@@ -711,6 +719,7 @@ impl Application {
         }
         self.image_core
             .update_options(core_options(&self.settings.options));
+        self.update_cursor_autohide(window);
         self.update_window_title(window);
         self.render(window);
     }
@@ -792,6 +801,56 @@ impl Application {
             .pan_by(delta_x, delta_y, viewport, image);
         self.render(window);
     }
+
+    fn cursor_autohide_active(&self) -> bool {
+        self.settings.options.hide_cursor_fullscreen && self.fullscreen_restore.is_some()
+    }
+
+    /// Re-arm or tear down the idle timer after a fullscreen or option change.
+    fn update_cursor_autohide(&mut self, window: HWND) {
+        if self.cursor_autohide_active() {
+            self.last_pointer_position = None;
+            start_cursor_hide_timer(window);
+        } else {
+            let _ = unsafe { KillTimer(Some(window), CURSOR_HIDE_TIMER) };
+            self.reveal_cursor();
+        }
+    }
+
+    fn reveal_cursor(&mut self) {
+        if self.cursor_hidden {
+            self.cursor_hidden = false;
+            let cursor = if self.pan_drag_position.is_some() {
+                self.pan_cursor
+            } else {
+                self.arrow_cursor
+            };
+            unsafe { SetCursor(Some(cursor)) };
+        }
+    }
+
+    /// Real pointer motion reveals the cursor and restarts the idle countdown.
+    fn record_pointer_activity(&mut self, window: HWND, position: (i32, i32)) {
+        if !self.cursor_autohide_active() || self.last_pointer_position == Some(position) {
+            return;
+        }
+        self.last_pointer_position = Some(position);
+        self.reveal_cursor();
+        start_cursor_hide_timer(window);
+    }
+
+    fn hide_cursor_if_idle(&mut self, window: HWND) {
+        if !self.cursor_autohide_active() {
+            return;
+        }
+        // A held drag or a pointer over a menu or another window: re-arm, don't hide.
+        if self.pan_drag_position.is_some() || !cursor_over_window(window) {
+            start_cursor_hide_timer(window);
+            return;
+        }
+        self.cursor_hidden = true;
+        unsafe { SetCursor(None) };
+    }
 }
 
 fn core_options(options: &Options) -> CoreOptions {
@@ -836,6 +895,20 @@ fn cursor_from_center(window: HWND) -> Option<(f32, f32)> {
         point.x as f32 - width as f32 / 2.0,
         point.y as f32 - height as f32 / 2.0,
     ))
+}
+
+fn start_cursor_hide_timer(window: HWND) {
+    unsafe { SetTimer(Some(window), CURSOR_HIDE_TIMER, 1000, None) };
+}
+
+/// True when our window is the topmost one under the pointer.
+fn cursor_over_window(window: HWND) -> bool {
+    let mut point = POINT::default();
+    if unsafe { GetCursorPos(&raw mut point) }.is_err() {
+        return false;
+    }
+    let hovered = unsafe { WindowFromPoint(point) };
+    hovered == window
 }
 
 fn execute_navigation(
@@ -1270,6 +1343,7 @@ fn toggle_fullscreen(application: &mut Application, window: HWND) {
             );
         }
     }
+    application.update_cursor_autohide(window);
 }
 
 fn handle_key(application: &mut Application, window: HWND, virtual_key: u16) -> bool {
@@ -1671,6 +1745,13 @@ extern "system" fn window_procedure(
             }
             LRESULT(0)
         }
+        WM_TIMER if wparam.0 == CURSOR_HIDE_TIMER => {
+            let _ = unsafe { KillTimer(Some(window), CURSOR_HIDE_TIMER) };
+            if let Some(application) = application_from_window(window) {
+                application.hide_cursor_if_idle(window);
+            }
+            LRESULT(0)
+        }
         WM_TIMER if wparam.0 == STATUS_TEXT_TIMER => {
             let _ = unsafe { KillTimer(Some(window), STATUS_TEXT_TIMER) };
             if let Some(application) = application_from_window(window)
@@ -1796,7 +1877,9 @@ extern "system" fn window_procedure(
                     };
                 } else {
                     unsafe { SetCapture(window) };
-                    unsafe { SetCursor(Some(application.pan_cursor)) };
+                    if !application.cursor_hidden {
+                        unsafe { SetCursor(Some(application.pan_cursor)) };
+                    }
                     application.pan_drag_position = Some((
                         (lparam.0 & 0xFFFF) as u16 as i16 as i32,
                         ((lparam.0 >> 16) & 0xFFFF) as u16 as i16 as i32,
@@ -1806,13 +1889,14 @@ extern "system" fn window_procedure(
             LRESULT(0)
         }
         WM_MOUSEMOVE => {
-            if let Some(application) = application_from_window(window)
-                && let Some((last_x, last_y)) = application.pan_drag_position
-            {
+            if let Some(application) = application_from_window(window) {
                 let x = (lparam.0 & 0xFFFF) as u16 as i16 as i32;
                 let y = ((lparam.0 >> 16) & 0xFFFF) as u16 as i16 as i32;
-                application.pan_drag_position = Some((x, y));
-                application.pan_by(window, (x - last_x) as f32, (y - last_y) as f32);
+                application.record_pointer_activity(window, (x, y));
+                if let Some((last_x, last_y)) = application.pan_drag_position {
+                    application.pan_drag_position = Some((x, y));
+                    application.pan_by(window, (x - last_x) as f32, (y - last_y) as f32);
+                }
             }
             LRESULT(0)
         }
@@ -1825,14 +1909,18 @@ extern "system" fn window_procedure(
             LRESULT(0)
         }
         WM_SETCURSOR => {
-            if let Some(application) = application_from_window(window)
-                && application.pan_drag_position.is_some()
-            {
-                unsafe { SetCursor(Some(application.pan_cursor)) };
-                LRESULT(1)
-            } else {
-                unsafe { DefWindowProcW(window, message, wparam, lparam) }
+            if let Some(application) = application_from_window(window) {
+                let over_client = (lparam.0 & 0xFFFF) as u32 == HTCLIENT;
+                if application.pan_drag_position.is_some() {
+                    unsafe { SetCursor(Some(application.pan_cursor)) };
+                    return LRESULT(1);
+                }
+                if application.cursor_hidden && over_client {
+                    unsafe { SetCursor(None) };
+                    return LRESULT(1);
+                }
             }
+            unsafe { DefWindowProcW(window, message, wparam, lparam) }
         }
         WM_LBUTTONDBLCLK => {
             if let Some(application) = application_from_window(window)

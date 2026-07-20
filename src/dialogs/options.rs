@@ -588,6 +588,9 @@ fn handle_page_command(
         (IDC_WINDOW_CTRL_DRAG, BN_CLICKED) => {
             options.control_drag_window = is_checked(page, control);
         }
+        (IDC_WINDOW_HIDE_CURSOR_FULLSCREEN, BN_CLICKED) => {
+            options.hide_cursor_fullscreen = is_checked(page, control);
+        }
         (IDC_IMAGE_FILTERING, CBN_SELCHANGE) => {
             options.scaling_filter = combo_selection(page, control);
         }
@@ -728,6 +731,11 @@ fn sync_all_pages(state: &mut OptionsState) {
         window_page,
         IDC_WINDOW_CTRL_DRAG,
         options.control_drag_window,
+    );
+    set_check(
+        window_page,
+        IDC_WINDOW_HIDE_CURSOR_FULLSCREEN,
+        options.hide_cursor_fullscreen,
     );
     sync_bgcolor_button(state, window_page);
 
