@@ -31,6 +31,7 @@ use shell::open_with::{self, OpenWithList, WM_APP_OPEN_WITH_LIST};
 use shell::{clipboard, file_ops, open_dialog};
 use view::dither::DitherMode;
 use view::renderer::Renderer;
+use view::sampling::UpscaleKernel;
 use view::transform::{FitMode, Size, ViewTransform};
 use window::context_menu::{self, MenuSelection, MenuState};
 use window::dwm;
@@ -277,15 +278,19 @@ impl Application {
         match self.settings.options.scaling_filter {
             0 => D2D1_INTERPOLATION_MODE_NEAREST_NEIGHBOR,
             2 => D2D1_INTERPOLATION_MODE_CUBIC,
-            // 3 is High Quality Cubic; 4 falls back to it when the
-            // Lanczos/Hermite pass cannot run.
-            3 | 4 => D2D1_INTERPOLATION_MODE_HIGH_QUALITY_CUBIC,
+            // 3 is High Quality Cubic; 4 and 5 fall back to it when the
+            // custom scaling pass cannot run.
+            3..=5 => D2D1_INTERPOLATION_MODE_HIGH_QUALITY_CUBIC,
             _ => D2D1_INTERPOLATION_MODE_LINEAR,
         }
     }
 
-    fn custom_scaling(&self) -> bool {
-        self.settings.options.scaling_filter == 4
+    fn custom_scaling(&self) -> Option<UpscaleKernel> {
+        match self.settings.options.scaling_filter {
+            4 => Some(UpscaleKernel::Lanczos),
+            5 => Some(UpscaleKernel::EwaLanczos),
+            _ => None,
+        }
     }
 
     fn scaling_description(&self) -> &'static str {
@@ -297,6 +302,10 @@ impl Application {
                 .renderer
                 .as_ref()
                 .map_or("Lanczos / Hermite", Renderer::scaler_description),
+            5 => self
+                .renderer
+                .as_ref()
+                .map_or("EWA Lanczos / Hermite", Renderer::scaler_description),
             _ => "Bilinear",
         }
     }

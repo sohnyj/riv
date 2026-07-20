@@ -692,6 +692,7 @@ fn initialize_image_page(state: &OptionsState) {
             "Bicubic",
             "High Quality",
             "Lanczos / Hermite",
+            "EWA Lanczos / Hermite",
         ],
     );
     combo_fill(page, IDC_IMAGE_DITHER, &["None", "Ordered", "Fruit"]);

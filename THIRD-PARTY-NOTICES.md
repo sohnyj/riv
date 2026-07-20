@@ -132,9 +132,9 @@ Copyright (c) libplacebo contributors. The blue-noise generator is
 originally from mpv, Copyright 2013 Wessel Dankers.
 Source: <https://code.videolan.org/videolan/libplacebo>
 
-The output dither shaders, the blue-noise matrix generator and the Lanczos
-and Hermite scaling shaders are ported from libplacebo sources
-(`src/shaders/dithering.c`, `src/dither.c`, `src/filters.c`,
+The output dither shaders, the blue-noise matrix generator and the Lanczos,
+EWA Lanczos (Sharp) and Hermite scaling shaders are ported from libplacebo
+sources (`src/shaders/dithering.c`, `src/dither.c`, `src/filters.c`,
 `src/shaders/sampling.c`), distributed under the GNU Lesser General Public
 License v2.1 or later.
 riv takes the LGPL v3 option (see

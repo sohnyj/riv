@@ -7,7 +7,7 @@ A fast, precise, minimal image viewer for Windows.
 - HDR and native 10-bit output: scRGB FP16 render pipeline, content peak
   detection, and display-adaptive tone mapping
 - Color management: embedded ICC profiles, PQ/HLG sources, Windows Advanced Color
-- Lanczos / Hermite scaling shaders and Ordered or Fruit output dither
+- Lanczos, EWA Lanczos (Sharp), and Hermite scaling shaders and Ordered or Fruit output dither
 - Animation playback (GIF, APNG, animated WebP) with pause, frame stepping, and speed control
 - Browse images inside archives (via archiveint.dll, shipped with Windows)
 - Open http/https image URLs (via curl.exe, shipped with Windows)

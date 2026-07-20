@@ -52,7 +52,7 @@ use crate::image::color::SDR_REFERENCE_WHITE_NITS;
 use crate::image::decode::{DecodedImage, PixelStorage};
 use crate::view::dither::DitherMode;
 use crate::view::quantize::QuantizePass;
-use crate::view::sampling::{AxisMapping, SamplingPass};
+use crate::view::sampling::{AxisMapping, SamplingPass, UpscaleKernel};
 
 struct FlattenScene {
     shader_resource_view: ID3D11ShaderResourceView,
@@ -91,7 +91,7 @@ pub struct Renderer {
     d2d_context: ID2D1DeviceContext,
     /// Fullscreen quantizing copy for the 10-bit backbuffers D2D cannot target.
     quantize_pass: Option<QuantizePass>,
-    /// Separable Lanczos/Hermite scaling; None falls back to D2D interpolation.
+    /// Custom scaling passes; None falls back to D2D interpolation.
     sampling_pass: Option<SamplingPass>,
     flatten_scene: Option<FlattenScene>,
     scaled_scene: Option<ScaledScene>,
@@ -1091,7 +1091,7 @@ impl Renderer {
         &mut self,
         matrix: [f32; 6],
         interpolation: D2D1_INTERPOLATION_MODE,
-        custom_scaling: bool,
+        custom_scaling: Option<UpscaleKernel>,
         clear_color: D2D1_COLOR_F,
         draw_overlay: impl FnOnce(&ID2D1DeviceContext) -> Result<()>,
     ) -> Result<()> {
@@ -1133,16 +1133,16 @@ impl Renderer {
                 && (effective.M31 - effective.M31.round()).abs() < 1e-4
                 && (effective.M32 - effective.M32.round()).abs() < 1e-4
         });
-        let prescaled = if custom_scaling
+        let prescaled = if let Some(kernel) = custom_scaling
             && !identity_placement
             && self.image.is_some()
             && let Some((effective, rotated)) = &separable
         {
-            self.prepare_scaled_scene(effective, *rotated)
+            self.prepare_scaled_scene(effective, *rotated, kernel)
         } else {
             None
         };
-        if custom_scaling && self.image.is_some() && prescaled.is_none() {
+        if custom_scaling.is_some() && self.image.is_some() && prescaled.is_none() {
             self.scaler_description = if identity_placement {
                 "None (1:1)"
             } else {
@@ -1329,6 +1329,7 @@ impl Renderer {
         &mut self,
         transform: &Matrix3x2,
         rotated: bool,
+        kernel: UpscaleKernel,
     ) -> Option<ID2D1Bitmap1> {
         self.sampling_pass.as_ref()?;
         if transform.M11 == 0.0 || transform.M22 == 0.0 {
@@ -1462,6 +1463,22 @@ impl Renderer {
         let scaled = self.scaled_scene.as_ref()?;
         let render_target_view = scaled.render_target_view.clone();
         let bitmap = scaled.bitmap.clone();
+        if kernel == UpscaleKernel::EwaLanczos && horizontal.magnifies() && vertical.magnifies() {
+            self.sampling_pass
+                .as_ref()?
+                .scale_ewa_lanczos(
+                    &self.d3d_context,
+                    &source_view,
+                    flatten_size,
+                    &render_target_view,
+                    target_size,
+                    horizontal,
+                    vertical,
+                )
+                .ok()?;
+            self.scaler_description = "EWA Lanczos";
+            return Some(bitmap);
+        }
         self.sampling_pass
             .as_mut()?
             .scale(
