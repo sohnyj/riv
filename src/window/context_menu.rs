@@ -266,16 +266,6 @@ impl MenuBuilder {
         self.append_action(view, Action::Flip)?;
         self.append_submenu(menu, view, "View", true)?;
 
-        let window = unsafe { CreatePopupMenu()? };
-        self.append_action(window, Action::AlwaysOnTop)?;
-        let fullscreen_label = if self.state_snapshot.fullscreen {
-            "Exit Fullscreen"
-        } else {
-            "Enter Fullscreen"
-        };
-        self.append_action_labeled(window, Action::Fullscreen, fullscreen_label)?;
-        self.append_submenu(menu, window, "Window", true)?;
-
         let tools = unsafe { CreatePopupMenu()? };
         self.append_action(tools, Action::OpenContainingFolder)?;
         self.append_action(tools, Action::Rename)?;
@@ -291,6 +281,16 @@ impl MenuBuilder {
         self.append_action(tools, Action::Options)?;
         self.append_action(tools, Action::About)?;
         self.append_submenu(menu, tools, "Tools", true)?;
+
+        let window = unsafe { CreatePopupMenu()? };
+        self.append_action(window, Action::AlwaysOnTop)?;
+        let fullscreen_label = if self.state_snapshot.fullscreen {
+            "Exit Fullscreen"
+        } else {
+            "Enter Fullscreen"
+        };
+        self.append_action_labeled(window, Action::Fullscreen, fullscreen_label)?;
+        self.append_submenu(menu, window, "Window", true)?;
         self.append_separator(menu)?;
         self.append_action(menu, Action::Quit)?;
         Ok(menu)
@@ -559,8 +559,8 @@ mod menu_structure_tests {
             "Playback",
             "", // separator
             "View",
-            "Window",
             "Tools",
+            "Window",
             "", // separator
             "Exit",
         ];

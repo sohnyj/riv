@@ -86,14 +86,14 @@ const DEFAULT_KEYBOARD: &[(&str, &[&str])] = &[
     ("rotateright", &["Shift+Right"]),
     ("mirror", &["Shift+M"]),
     ("flip", &["Shift+F"]),
-    ("alwaysontop", &["T"]),
-    ("fullscreen", &["F", "F11"]),
     ("opencontainingfolder", &["Ctrl+E"]),
     ("rename", &["R", "F2"]),
     ("delete", &["Delete"]),
     ("deletepermanent", &["Shift+Delete"]),
     ("slideshow", &["S"]),
     ("options", &["Ctrl+,"]),
+    ("alwaysontop", &["T"]),
+    ("fullscreen", &["F", "F11"]),
     ("quit", &["Ctrl+W", "Escape"]),
 ];
 

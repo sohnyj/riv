@@ -48,8 +48,6 @@ pub enum Action {
     RotateRight,
     Mirror,
     Flip,
-    AlwaysOnTop,
-    Fullscreen,
     OpenContainingFolder,
     Rename,
     Delete,
@@ -57,6 +55,8 @@ pub enum Action {
     Slideshow,
     Options,
     About,
+    AlwaysOnTop,
+    Fullscreen,
     Quit,
 }
 
@@ -208,18 +208,6 @@ const ACTION_TABLE: &[(Action, &str, &str, ActivationGate)] = &[
     (Action::Mirror, "mirror", "Mirror", ActivationGate::Image),
     (Action::Flip, "flip", "Flip", ActivationGate::Image),
     (
-        Action::AlwaysOnTop,
-        "alwaysontop",
-        "Always on Top",
-        ActivationGate::Window,
-    ),
-    (
-        Action::Fullscreen,
-        "fullscreen",
-        "Enter Fullscreen",
-        ActivationGate::Window,
-    ),
-    (
         Action::OpenContainingFolder,
         "opencontainingfolder",
         "Show in Explorer",
@@ -256,6 +244,18 @@ const ACTION_TABLE: &[(Action, &str, &str, ActivationGate)] = &[
         ActivationGate::Window,
     ),
     (Action::About, "about", "About", ActivationGate::Window),
+    (
+        Action::AlwaysOnTop,
+        "alwaysontop",
+        "Always on Top",
+        ActivationGate::Window,
+    ),
+    (
+        Action::Fullscreen,
+        "fullscreen",
+        "Enter Fullscreen",
+        ActivationGate::Window,
+    ),
     (Action::Quit, "quit", "Exit", ActivationGate::Window),
 ];
 
