@@ -363,6 +363,36 @@ impl Renderer {
         }
     }
 
+    /// The backbuffer format the mode prefers before any swapchain refusal.
+    fn preferred_swap_chain_format(
+        hdr_mode: bool,
+        pq_output: bool,
+        ten_bit_target: bool,
+        bits_per_color: u32,
+    ) -> DXGI_FORMAT {
+        if hdr_mode {
+            if pq_output {
+                DXGI_FORMAT_R10G10B10A2_UNORM
+            } else {
+                DXGI_FORMAT_R16G16B16A16_FLOAT
+            }
+        } else if ten_bit_target && bits_per_color >= 10 {
+            // Only the format widens; no declaration, so DWM keeps the sRGB reading.
+            DXGI_FORMAT_R10G10B10A2_UNORM
+        } else {
+            DXGI_FORMAT_B8G8R8A8_UNORM
+        }
+    }
+
+    /// The format each mode is known to accept when a 10-bit swapchain is refused.
+    fn mode_fallback_format(hdr_mode: bool) -> DXGI_FORMAT {
+        if hdr_mode {
+            DXGI_FORMAT_R16G16B16A16_FLOAT
+        } else {
+            DXGI_FORMAT_B8G8R8A8_UNORM
+        }
+    }
+
     fn build(
         window: HWND,
         width: u32,
@@ -409,18 +439,12 @@ impl Renderer {
             .then(|| Self::create_pq_output_effect(&d2d_context, scrgb_color_context.as_ref()))
             .flatten();
 
-        let mut swap_chain_format = if hdr_mode {
-            if hdr_output_color_management_effect.is_some() {
-                DXGI_FORMAT_R10G10B10A2_UNORM
-            } else {
-                DXGI_FORMAT_R16G16B16A16_FLOAT
-            }
-        } else if ten_bit_target && bits_per_color >= 10 {
-            // Only the format widens; no declaration, so DWM keeps the sRGB reading.
-            DXGI_FORMAT_R10G10B10A2_UNORM
-        } else {
-            DXGI_FORMAT_B8G8R8A8_UNORM
-        };
+        let mut swap_chain_format = Self::preferred_swap_chain_format(
+            hdr_mode,
+            hdr_output_color_management_effect.is_some(),
+            ten_bit_target,
+            bits_per_color,
+        );
         let create_swap_chain = |format: DXGI_FORMAT| -> Result<IDXGISwapChain1> {
             unsafe {
                 let adapter = dxgi_device.GetAdapter()?;
@@ -454,11 +478,7 @@ impl Renderer {
             // A 10-bit refusal falls back to the mode's proven format.
             Err(_) if swap_chain_format == DXGI_FORMAT_R10G10B10A2_UNORM => {
                 hdr_output_color_management_effect = None;
-                swap_chain_format = if hdr_mode {
-                    DXGI_FORMAT_R16G16B16A16_FLOAT
-                } else {
-                    DXGI_FORMAT_B8G8R8A8_UNORM
-                };
+                swap_chain_format = Self::mode_fallback_format(hdr_mode);
                 create_swap_chain(swap_chain_format)?
             }
             Err(error) => return Err(error),
@@ -673,17 +693,12 @@ impl Renderer {
                 Self::create_pq_output_effect(&self.d2d_context, self.scrgb_color_context.as_ref())
             })
             .flatten();
-        let mut swap_chain_format = if hdr_mode {
-            if hdr_output_color_management_effect.is_some() {
-                DXGI_FORMAT_R10G10B10A2_UNORM
-            } else {
-                DXGI_FORMAT_R16G16B16A16_FLOAT
-            }
-        } else if ten_bit_target && bits_per_color >= 10 {
-            DXGI_FORMAT_R10G10B10A2_UNORM
-        } else {
-            DXGI_FORMAT_B8G8R8A8_UNORM
-        };
+        let mut swap_chain_format = Self::preferred_swap_chain_format(
+            hdr_mode,
+            hdr_output_color_management_effect.is_some(),
+            ten_bit_target,
+            bits_per_color,
+        );
         let resize_to = |swap_chain: &IDXGISwapChain1, format| unsafe {
             swap_chain.ResizeBuffers(0, 0, 0, format, DXGI_SWAP_CHAIN_FLAG(0))
         };
@@ -693,11 +708,7 @@ impl Renderer {
             }
             // A 10-bit refusal falls back to the mode's proven format.
             hdr_output_color_management_effect = None;
-            swap_chain_format = if hdr_mode {
-                DXGI_FORMAT_R16G16B16A16_FLOAT
-            } else {
-                DXGI_FORMAT_B8G8R8A8_UNORM
-            };
+            swap_chain_format = Self::mode_fallback_format(hdr_mode);
             resize_to(&self.swap_chain, swap_chain_format)?;
         }
         let swap_chain3 = self.swap_chain.cast::<IDXGISwapChain3>().ok();
