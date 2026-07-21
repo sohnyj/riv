@@ -647,26 +647,32 @@ fn reversed_ratio(display: &str) -> String {
     }
 }
 
-/// Folds a matched ratio to its label; portrait framings tag it "Vertical".
+/// The ratio's label: the name in parentheses and a "Vertical" tag when either applies.
+fn ratio_label(display: &str, name: Option<&str>, vertical: bool) -> String {
+    match (name, vertical) {
+        (Some(name), true) => format!("{display} ({name}, Vertical)"),
+        (Some(name), false) => format!("{display} ({name})"),
+        (None, true) => format!("{display} (Vertical)"),
+        (None, false) => display.to_string(),
+    }
+}
+
+/// Folds a matched ratio to its label; portrait framings reverse it and tag "Vertical".
 fn format_aspect_ratio(width: u32, height: u32) -> String {
     let width = width.max(1);
     let height = height.max(1);
-    if width >= height {
-        match matched_ratio(f64::from(width) / f64::from(height)) {
-            Some(entry) => match entry.name {
-                Some(name) => format!("{} ({})", entry.display, name),
-                None => entry.display.to_string(),
-            },
-            None => ratio_notation(width, height),
+    let vertical = width < height;
+    let (long, short) = (width.max(height), width.min(height));
+    match matched_ratio(f64::from(long) / f64::from(short)) {
+        Some(entry) => {
+            let display = if vertical {
+                reversed_ratio(entry.display)
+            } else {
+                entry.display.to_string()
+            };
+            ratio_label(&display, entry.name, vertical)
         }
-    } else {
-        match matched_ratio(f64::from(height) / f64::from(width)) {
-            Some(entry) => match entry.name {
-                Some(name) => format!("{} ({}, Vertical)", reversed_ratio(entry.display), name),
-                None => format!("{} (Vertical)", reversed_ratio(entry.display)),
-            },
-            None => format!("{} (Vertical)", ratio_notation(width, height)),
-        }
+        None => ratio_label(&ratio_notation(width, height), None, vertical),
     }
 }
 
