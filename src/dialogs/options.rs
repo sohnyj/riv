@@ -691,14 +691,7 @@ fn initialize_image_page(state: &OptionsState) {
     combo_fill(
         page,
         IDC_IMAGE_FILTERING,
-        &[
-            "Nearest",
-            "Bilinear",
-            "Bicubic",
-            "High Quality",
-            "Lanczos / Hermite",
-            "EWA Lanczos / Hermite",
-        ],
+        &["Nearest", "Bilinear", "Bicubic", "High Quality"],
     );
     combo_fill(page, IDC_IMAGE_DITHER, &["None", "Ordered", "Fruit"]);
     combo_fill(page, IDC_IMAGE_FITMODE, &["Width", "Height"]);

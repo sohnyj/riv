@@ -95,7 +95,7 @@ impl Options {
             control_drag_window: boolean("ctrldragwindow", default.control_drag_window),
             save_window_position: boolean("savewindowposition", default.save_window_position),
             hide_cursor_fullscreen: boolean("hidecursorfullscreen", default.hide_cursor_fullscreen),
-            scaling_filter: bounded("scaling", 5, default.scaling_filter),
+            scaling_filter: bounded("scaling", 3, default.scaling_filter),
             fit_mode: bounded("fitmode", 1, default.fit_mode),
             zoom_step_percent: unsigned("zoomstep", default.zoom_step_percent).clamp(1, 200),
             dither: bounded("dither", 2, default.dither),
@@ -633,14 +633,14 @@ mod option_bounds_tests {
     fn in_range_values_are_kept() {
         let document = serde_json::json!({ "options": {
             "titlebarmode": 2,
-            "scaling": 5,
+            "scaling": 3,
             "fitmode": 1,
             "preloadingmode": 2,
             "zoomstep": 200,
         }});
         let options = Options::from_document(&document);
         assert_eq!(options.title_bar_mode, 2);
-        assert_eq!(options.scaling_filter, 5);
+        assert_eq!(options.scaling_filter, 3);
         assert_eq!(options.fit_mode, 1);
         assert_eq!(options.preloading_mode, 2);
         assert_eq!(options.zoom_step_percent, 200);

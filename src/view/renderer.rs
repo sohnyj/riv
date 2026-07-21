@@ -15,10 +15,8 @@ use windows::Win32::Graphics::Direct2D::{
     D2D1_DEVICE_CONTEXT_OPTIONS_NONE, D2D1_FACTORY_TYPE_SINGLE_THREADED,
     D2D1_HDRTONEMAP_DISPLAY_MODE_HDR, D2D1_HDRTONEMAP_PROP_DISPLAY_MODE,
     D2D1_HDRTONEMAP_PROP_INPUT_MAX_LUMINANCE, D2D1_HDRTONEMAP_PROP_OUTPUT_MAX_LUMINANCE,
-    D2D1_INTERPOLATION_MODE, D2D1_INTERPOLATION_MODE_HIGH_QUALITY_CUBIC,
-    D2D1_INTERPOLATION_MODE_NEAREST_NEIGHBOR, D2D1_PROPERTY_TYPE_COLOR_CONTEXT,
-    D2D1_PROPERTY_TYPE_ENUM, D2D1_PROPERTY_TYPE_FLOAT,
-    D2D1_WHITELEVELADJUSTMENT_PROP_INPUT_WHITE_LEVEL,
+    D2D1_INTERPOLATION_MODE, D2D1_PROPERTY_TYPE_COLOR_CONTEXT, D2D1_PROPERTY_TYPE_ENUM,
+    D2D1_PROPERTY_TYPE_FLOAT, D2D1_WHITELEVELADJUSTMENT_PROP_INPUT_WHITE_LEVEL,
     D2D1_WHITELEVELADJUSTMENT_PROP_OUTPUT_WHITE_LEVEL, D2D1CreateFactory, ID2D1Bitmap1,
     ID2D1ColorContext, ID2D1DeviceContext, ID2D1DeviceContext5, ID2D1Effect, ID2D1Factory1,
     ID2D1Image,
@@ -52,22 +50,6 @@ use crate::image::color::SDR_REFERENCE_WHITE_NITS;
 use crate::image::decode::{DecodedImage, PixelStorage};
 use crate::view::dither::DitherMode;
 use crate::view::quantize::QuantizePass;
-use crate::view::sampling::{AxisMapping, SamplingPass, UpscaleKernel};
-
-struct FlattenScene {
-    shader_resource_view: ID3D11ShaderResourceView,
-    target: ID2D1Bitmap1,
-    size: (u32, u32),
-    /// Scene version and quadrant the held pixels were drawn from.
-    version: u64,
-    rotated: bool,
-}
-
-struct ScaledScene {
-    render_target_view: ID3D11RenderTargetView,
-    bitmap: ID2D1Bitmap1,
-    size: (u32, u32),
-}
 
 struct ModeEffects {
     color_management_effect: Option<ID2D1Effect>,
@@ -75,9 +57,6 @@ struct ModeEffects {
     tone_map_normalize_effect: Option<ID2D1Effect>,
     output_color_management_effect: Option<ID2D1Effect>,
     white_level_effect: Option<ID2D1Effect>,
-    /// SDR only: sRGB <-> scRGB pair so the scaler convolves linear light.
-    linearize_effect: Option<ID2D1Effect>,
-    delinearize_effect: Option<ID2D1Effect>,
 }
 
 pub struct Renderer {
@@ -91,18 +70,12 @@ pub struct Renderer {
     d2d_context: ID2D1DeviceContext,
     /// Fullscreen quantizing copy for the 10-bit backbuffers D2D cannot target.
     quantize_pass: Option<QuantizePass>,
-    /// Custom scaling passes; None falls back to D2D interpolation.
-    sampling_pass: Option<SamplingPass>,
-    flatten_scene: Option<FlattenScene>,
-    scaled_scene: Option<ScaledScene>,
     scene_shader_resource_view: Option<ID3D11ShaderResourceView>,
     backbuffer_render_target_view: Option<ID3D11RenderTargetView>,
     backbuffer_size: (u32, u32),
     target: Option<ID2D1Bitmap1>,
     image: Option<ID2D1Bitmap1>,
     effect_output: Option<ID2D1Image>,
-    /// scRGB scene ahead of the PQ output encode; present only when that encode is wired.
-    linear_scene_output: Option<ID2D1Image>,
     color_management_effect: Option<ID2D1Effect>,
     white_level_effect: Option<ID2D1Effect>,
     hdr_tone_map_effect: Option<ID2D1Effect>,
@@ -110,10 +83,6 @@ pub struct Renderer {
     output_color_management_effect: Option<ID2D1Effect>,
     /// scRGB -> PQ BT.2020 for the HDR10 backbuffer; None on the FP16 fallback.
     hdr_output_color_management_effect: Option<ID2D1Effect>,
-    /// Second scRGB -> PQ instance for the scaled scene; the primary stays on the 1:1 chain.
-    hdr_scaled_color_management_effect: Option<ID2D1Effect>,
-    linearize_effect: Option<ID2D1Effect>,
-    delinearize_effect: Option<ID2D1Effect>,
     dither_mode: DitherMode,
     image_storage: PixelStorage,
     image_source_bits_per_channel: u32,
@@ -123,25 +92,16 @@ pub struct Renderer {
     source_color_context: Option<ID2D1ColorContext>,
     image_display_size: (f32, f32),
     image_pixel_size: (f32, f32),
-    /// What the last frame actually scaled with, for the info panel.
-    scaler_description: &'static str,
     /// What the last frame actually dithered with, for the info panel.
     dither_description: &'static str,
-    /// Bumped on any change that alters the flattened scene content.
-    scene_version: u64,
-    /// Guaranteed per-resource size; the flatten reduces itself to fit.
-    maximum_resource_bytes: u64,
 }
 
 impl Drop for Renderer {
     fn drop(&mut self) {
         unsafe { self.d2d_context.SetTarget(None) };
         self.effect_output = None;
-        self.linear_scene_output = None;
         self.image = None;
         self.target = None;
-        self.flatten_scene = None;
-        self.scaled_scene = None;
         self.scene_shader_resource_view = None;
         self.backbuffer_render_target_view = None;
         self.color_management_effect = None;
@@ -150,9 +110,6 @@ impl Drop for Renderer {
         self.tone_map_normalize_effect = None;
         self.output_color_management_effect = None;
         self.hdr_output_color_management_effect = None;
-        self.hdr_scaled_color_management_effect = None;
-        self.linearize_effect = None;
-        self.delinearize_effect = None;
     }
 }
 
@@ -179,23 +136,6 @@ fn create_d3d_device(
         device.expect("D3D11CreateDevice succeeded without device"),
         context.expect("D3D11CreateDevice succeeded without context"),
     ))
-}
-
-/// D3D11 guaranteed per-resource limit: min(max(128 MiB, adapter memory / 4), 2 GiB - 1).
-fn maximum_resource_bytes(dxgi_device: &IDXGIDevice) -> u64 {
-    const FLOOR_BYTES: u64 = 128 << 20;
-    const CEILING_BYTES: u64 = (2 << 30) - 1;
-    let memory = unsafe {
-        dxgi_device
-            .GetAdapter()
-            .and_then(|adapter| adapter.GetDesc())
-    }
-    .map(|description| {
-        // UMA adapters under-report dedicated memory; take the larger pool.
-        (description.DedicatedVideoMemory as u64).max(description.SharedSystemMemory as u64)
-    })
-    .unwrap_or(0);
-    (memory / 4).clamp(FLOOR_BYTES, CEILING_BYTES)
 }
 
 /// Declares only with reported PRESENT support; an undeclared surface stays sRGB.
@@ -383,16 +323,6 @@ impl Renderer {
             .and_then(|_| {
                 Self::create_transfer_effect(d2d_context, scrgb_color_context, srgb_color_context)
             });
-        let linearize_effect = (!hdr_mode)
-            .then(|| {
-                Self::create_transfer_effect(d2d_context, srgb_color_context, scrgb_color_context)
-            })
-            .flatten();
-        let delinearize_effect = (!hdr_mode)
-            .then(|| {
-                Self::create_transfer_effect(d2d_context, scrgb_color_context, srgb_color_context)
-            })
-            .flatten();
         let white_level_effect = hdr_mode
             .then_some(())
             .and(color_management_effect.as_ref())
@@ -416,8 +346,6 @@ impl Renderer {
             tone_map_normalize_effect,
             output_color_management_effect,
             white_level_effect,
-            linearize_effect,
-            delinearize_effect,
         }
     }
 
@@ -446,7 +374,6 @@ impl Renderer {
             create_d3d_device(D3D_DRIVER_TYPE_HARDWARE, &[D3D_FEATURE_LEVEL_12_0])
                 .or_else(|_| create_d3d_device(D3D_DRIVER_TYPE_WARP, &[D3D_FEATURE_LEVEL_11_0]))?;
         let dxgi_device: IDXGIDevice = d3d_device.cast()?;
-        let maximum_resource_bytes = maximum_resource_bytes(&dxgi_device);
 
         // D2D precedes the swapchain: the PQ pipeline decides the backbuffer format.
         let d2d_factory: ID2D1Factory1 =
@@ -565,11 +492,6 @@ impl Renderer {
         if swap_chain_format == DXGI_FORMAT_R16G16B16A16_FLOAT {
             quantize_pass = None;
         }
-        let hdr_scaled_color_management_effect = hdr_output_color_management_effect
-            .is_some()
-            .then(|| Self::create_pq_output_effect(&d2d_context, scrgb_color_context.as_ref()))
-            .flatten();
-
         let mode_effects = Self::create_mode_effects(
             &d2d_context,
             hdr_mode,
@@ -577,7 +499,6 @@ impl Renderer {
             scrgb_color_context.as_ref(),
             srgb_color_context.as_ref(),
         );
-        let sampling_pass = SamplingPass::new(&d3d_device).ok();
         let mut renderer = Self {
             hdr_mode,
             bits_per_color,
@@ -588,25 +509,18 @@ impl Renderer {
             d3d_context,
             d2d_context,
             quantize_pass,
-            sampling_pass,
-            flatten_scene: None,
-            scaled_scene: None,
             scene_shader_resource_view: None,
             backbuffer_render_target_view: None,
             backbuffer_size: (0, 0),
             target: None,
             image: None,
             effect_output: None,
-            linear_scene_output: None,
             color_management_effect: mode_effects.color_management_effect,
             white_level_effect: mode_effects.white_level_effect,
             hdr_tone_map_effect: mode_effects.hdr_tone_map_effect,
             tone_map_normalize_effect: mode_effects.tone_map_normalize_effect,
             output_color_management_effect: mode_effects.output_color_management_effect,
             hdr_output_color_management_effect,
-            hdr_scaled_color_management_effect,
-            linearize_effect: mode_effects.linearize_effect,
-            delinearize_effect: mode_effects.delinearize_effect,
             dither_mode: DitherMode::None,
             image_storage: PixelStorage::Bgra8,
             image_source_bits_per_channel: 8,
@@ -616,10 +530,7 @@ impl Renderer {
             source_color_context: None,
             image_display_size: (0.0, 0.0),
             image_pixel_size: (0.0, 0.0),
-            scaler_description: "Lanczos / Hermite",
             dither_description: "None",
-            scene_version: 0,
-            maximum_resource_bytes,
         };
         renderer.create_target()?;
         Ok(renderer)
@@ -712,10 +623,6 @@ impl Renderer {
         unsafe {
             self.d2d_context.SetTarget(None);
             self.target = None;
-            self.scaled_scene = None;
-            if let Some(sampling_pass) = &mut self.sampling_pass {
-                sampling_pass.invalidate();
-            }
             self.scene_shader_resource_view = None;
             self.backbuffer_render_target_view = None;
             self.swap_chain.ResizeBuffers(
@@ -745,12 +652,6 @@ impl Renderer {
         unsafe { self.d2d_context.SetTarget(None) };
         self.target = None;
         self.effect_output = None;
-        self.linear_scene_output = None;
-        self.flatten_scene = None;
-        self.scaled_scene = None;
-        if let Some(sampling_pass) = &mut self.sampling_pass {
-            sampling_pass.invalidate();
-        }
         self.scene_shader_resource_view = None;
         self.backbuffer_render_target_view = None;
 
@@ -833,29 +734,14 @@ impl Renderer {
         self.hdr_tone_map_effect = mode_effects.hdr_tone_map_effect;
         self.tone_map_normalize_effect = mode_effects.tone_map_normalize_effect;
         self.output_color_management_effect = mode_effects.output_color_management_effect;
-        self.linearize_effect = mode_effects.linearize_effect;
-        self.delinearize_effect = mode_effects.delinearize_effect;
-        self.hdr_scaled_color_management_effect = hdr_output_color_management_effect
-            .is_some()
-            .then(|| {
-                Self::create_pq_output_effect(&self.d2d_context, self.scrgb_color_context.as_ref())
-            })
-            .flatten();
         self.hdr_output_color_management_effect = hdr_output_color_management_effect;
         self.swap_chain_format = swap_chain_format;
-        self.bump_scene_version();
         self.create_target()
-    }
-
-    /// Any change that alters the flattened scene content.
-    fn bump_scene_version(&mut self) {
-        self.scene_version = self.scene_version.wrapping_add(1);
     }
 
     pub fn set_sdr_white_boost(&mut self, boost: f32) {
         if let Some(effect) = &self.white_level_effect {
             let _ = set_white_level_input(effect, SDR_REFERENCE_WHITE_NITS * boost.max(0.01));
-            self.bump_scene_version();
         }
     }
 
@@ -874,7 +760,6 @@ impl Renderer {
                 )
             };
         }
-        self.bump_scene_version();
         true
     }
 
@@ -908,7 +793,6 @@ impl Renderer {
             image.peak_luminance_nits,
         );
         self.image = Some(bitmap);
-        self.bump_scene_version();
         Ok(())
     }
 
@@ -923,7 +807,6 @@ impl Renderer {
         };
         let pitch = self.image_pixel_size.0 as u32 * self.image_storage.bytes_per_pixel();
         unsafe { bitmap.CopyFromMemory(None, pixels.as_ptr().cast(), pitch) }?;
-        self.bump_scene_version();
         Ok(())
     }
 
@@ -935,7 +818,6 @@ impl Renderer {
         peak_luminance_nits: Option<f32>,
     ) {
         self.effect_output = None;
-        self.linear_scene_output = None;
         let Some(color_management) = &self.color_management_effect else {
             return;
         };
@@ -1069,12 +951,7 @@ impl Renderer {
         self.effect_output = match (&self.hdr_output_color_management_effect, scene) {
             (Some(output_encoding), Some(scene)) => {
                 unsafe { output_encoding.SetInput(0, &scene, true) };
-                let encoded = unsafe { output_encoding.GetOutput() }.ok();
-                if encoded.is_some() {
-                    // Kept so the scaler convolves linear light and encodes after.
-                    self.linear_scene_output = Some(scene);
-                }
-                encoded
+                unsafe { output_encoding.GetOutput() }.ok()
             }
             (None, scene) => scene,
             (Some(_), None) => None,
@@ -1084,14 +961,12 @@ impl Renderer {
     pub fn clear_image(&mut self) {
         self.image = None;
         self.effect_output = None;
-        self.linear_scene_output = None;
     }
 
     pub fn render(
         &mut self,
         matrix: [f32; 6],
         interpolation: D2D1_INTERPOLATION_MODE,
-        custom_scaling: Option<UpscaleKernel>,
         clear_color: D2D1_COLOR_F,
         draw_overlay: impl FnOnce(&ID2D1DeviceContext) -> Result<()>,
     ) -> Result<()> {
@@ -1106,49 +981,29 @@ impl Renderer {
             M31: matrix[4],
             M32: matrix[5],
         };
-        // 90/270 fold into the flatten as a lossless permutation; the pass then
-        // sees the axis-aligned remainder in rotated-image space.
-        let separable = if matrix[1] == 0.0 && matrix[2] == 0.0 {
-            Some((transform, false))
+        // Fold a 90/270 rotation into an axis-aligned placement to spot a 1:1 draw.
+        let axis_aligned_placement = if matrix[1] == 0.0 && matrix[2] == 0.0 {
+            Some(transform)
         } else if matrix[0] == 0.0 && matrix[3] == 0.0 {
             let source_height = self.image_pixel_size.1.round();
-            Some((
-                Matrix3x2 {
-                    M11: -transform.M21,
-                    M12: 0.0,
-                    M21: 0.0,
-                    M22: transform.M12,
-                    M31: source_height * transform.M21 + transform.M31,
-                    M32: transform.M32,
-                },
-                true,
-            ))
+            Some(Matrix3x2 {
+                M11: -transform.M21,
+                M12: 0.0,
+                M21: 0.0,
+                M22: transform.M12,
+                M31: source_height * transform.M21 + transform.M31,
+                M32: transform.M32,
+            })
         } else {
             None
         };
         // 1:1 on whole pixels resamples nothing; leave the pixels untouched.
-        let identity_placement = separable.as_ref().is_some_and(|(effective, _)| {
+        let identity_placement = axis_aligned_placement.as_ref().is_some_and(|effective| {
             (effective.M11.abs() - 1.0).abs() < 1e-6
                 && (effective.M22.abs() - 1.0).abs() < 1e-6
                 && (effective.M31 - effective.M31.round()).abs() < 1e-4
                 && (effective.M32 - effective.M32.round()).abs() < 1e-4
         });
-        let prescaled = if let Some(kernel) = custom_scaling
-            && !identity_placement
-            && self.image.is_some()
-            && let Some((effective, rotated)) = &separable
-        {
-            self.prepare_scaled_scene(effective, *rotated, kernel)
-        } else {
-            None
-        };
-        if custom_scaling.is_some() && self.image.is_some() && prescaled.is_none() {
-            self.scaler_description = if identity_placement {
-                "None (1:1)"
-            } else {
-                "High Quality (fallback)"
-            };
-        }
         // An active effect chain leaves fractional pixels even at 1:1.
         let pixels_transformed = !identity_placement || self.effect_output.is_some();
         let quantization_steps = Self::quantization_steps_for(self.swap_chain_format)
@@ -1166,19 +1021,8 @@ impl Renderer {
             self.d2d_context.BeginDraw();
             self.d2d_context.Clear(Some(&raw const clear_color));
             if self.image.is_some() {
-                match (&prescaled, &self.effect_output, &self.image) {
-                    (Some(scaled), _, _) => {
-                        if let Some(composite) = self.prescaled_composite_image(scaled) {
-                            self.d2d_context.DrawImage(
-                                &composite,
-                                None,
-                                None,
-                                D2D1_INTERPOLATION_MODE_NEAREST_NEIGHBOR,
-                                D2D1_COMPOSITE_MODE_SOURCE_OVER,
-                            );
-                        }
-                    }
-                    (None, Some(output), _) => {
+                match (&self.effect_output, &self.image) {
+                    (Some(output), _) => {
                         self.d2d_context.SetTransform(&raw const transform);
                         self.d2d_context.DrawImage(
                             output,
@@ -1190,7 +1034,7 @@ impl Renderer {
                         self.d2d_context.SetTransform(&Matrix3x2::identity());
                     }
                     // Untouched pixels, or no effect support.
-                    (None, None, Some(image)) => {
+                    (None, Some(image)) => {
                         let destination = D2D_RECT_F {
                             left: 0.0,
                             top: 0.0,
@@ -1234,276 +1078,6 @@ impl Renderer {
         }
     }
 
-    fn ensure_flatten_scene(&mut self, size: (u32, u32)) -> Result<()> {
-        if self
-            .flatten_scene
-            .as_ref()
-            .is_some_and(|held| held.size == size)
-        {
-            return Ok(());
-        }
-        self.flatten_scene = None;
-        let properties = D2D1_BITMAP_PROPERTIES1 {
-            pixelFormat: D2D1_PIXEL_FORMAT {
-                format: DXGI_FORMAT_R16G16B16A16_FLOAT,
-                alphaMode: D2D1_ALPHA_MODE_PREMULTIPLIED,
-            },
-            dpiX: 96.0,
-            dpiY: 96.0,
-            bitmapOptions: D2D1_BITMAP_OPTIONS_TARGET | D2D1_BITMAP_OPTIONS_CANNOT_DRAW,
-            ..Default::default()
-        };
-        let texture = crate::view::create_scene_texture(
-            &self.d3d_device,
-            size,
-            DXGI_FORMAT_R16G16B16A16_FLOAT,
-        )?;
-        unsafe {
-            let mut shader_resource_view = None;
-            self.d3d_device.CreateShaderResourceView(
-                &texture,
-                None,
-                Some(&raw mut shader_resource_view),
-            )?;
-            let surface: IDXGISurface = texture.cast()?;
-            let target = self
-                .d2d_context
-                .CreateBitmapFromDxgiSurface(&surface, Some(&raw const properties))?;
-            self.flatten_scene = Some(FlattenScene {
-                shader_resource_view: shader_resource_view
-                    .ok_or_else(windows::core::Error::empty)?,
-                target,
-                size,
-                version: self.scene_version.wrapping_sub(1),
-                rotated: false,
-            });
-        }
-        Ok(())
-    }
-
-    fn ensure_scaled_scene(&mut self, size: (u32, u32)) -> Result<()> {
-        if self
-            .scaled_scene
-            .as_ref()
-            .is_some_and(|held| held.size == size)
-        {
-            return Ok(());
-        }
-        self.scaled_scene = None;
-        let properties = D2D1_BITMAP_PROPERTIES1 {
-            pixelFormat: D2D1_PIXEL_FORMAT {
-                format: DXGI_FORMAT_R16G16B16A16_FLOAT,
-                alphaMode: D2D1_ALPHA_MODE_PREMULTIPLIED,
-            },
-            dpiX: 96.0,
-            dpiY: 96.0,
-            ..Default::default()
-        };
-        let texture = crate::view::create_scene_texture(
-            &self.d3d_device,
-            size,
-            DXGI_FORMAT_R16G16B16A16_FLOAT,
-        )?;
-        unsafe {
-            let mut render_target_view = None;
-            self.d3d_device.CreateRenderTargetView(
-                &texture,
-                None,
-                Some(&raw mut render_target_view),
-            )?;
-            let surface: IDXGISurface = texture.cast()?;
-            let bitmap = self
-                .d2d_context
-                .CreateBitmapFromDxgiSurface(&surface, Some(&raw const properties))?;
-            self.scaled_scene = Some(ScaledScene {
-                render_target_view: render_target_view.ok_or_else(windows::core::Error::empty)?,
-                bitmap,
-                size,
-            });
-        }
-        Ok(())
-    }
-
-    /// Flattens the effect chain within the budget, then convolves it to backbuffer space.
-    fn prepare_scaled_scene(
-        &mut self,
-        transform: &Matrix3x2,
-        rotated: bool,
-        kernel: UpscaleKernel,
-    ) -> Option<ID2D1Bitmap1> {
-        self.sampling_pass.as_ref()?;
-        if transform.M11 == 0.0 || transform.M22 == 0.0 {
-            return None;
-        }
-        let pixel_size = (
-            self.image_pixel_size.0.round() as u32,
-            self.image_pixel_size.1.round() as u32,
-        );
-        let source_size = if rotated {
-            (pixel_size.1, pixel_size.0)
-        } else {
-            pixel_size
-        };
-        let target_size = self.backbuffer_size;
-        if source_size.0 == 0 || source_size.1 == 0 || target_size.0 == 0 || target_size.1 == 0 {
-            return None;
-        }
-        // Sources past the budget flatten reduced; the convolution restores them.
-        const FLATTEN_BYTES_PER_PIXEL: u64 = 8;
-        let budget_pixels = self.maximum_resource_bytes / FLATTEN_BYTES_PER_PIXEL;
-        let source_pixels = u64::from(source_size.0) * u64::from(source_size.1);
-        let flatten_size = if source_pixels <= budget_pixels {
-            source_size
-        } else {
-            let ratio = (budget_pixels as f64 / source_pixels as f64).sqrt();
-            (
-                ((f64::from(source_size.0) * ratio) as u32).max(1),
-                ((f64::from(source_size.1) * ratio) as u32).max(1),
-            )
-        };
-        let reduction = (
-            flatten_size.0 as f32 / source_size.0 as f32,
-            flatten_size.1 as f32 / source_size.1 as f32,
-        );
-        let reduced = flatten_size != source_size;
-        self.ensure_flatten_scene(flatten_size).ok()?;
-        self.ensure_scaled_scene(target_size).ok()?;
-        // The flatten only depends on scene content and quadrant; pan and zoom reuse it.
-        let flatten_current = self.flatten_scene.as_ref().is_some_and(|flatten| {
-            flatten.version == self.scene_version && flatten.rotated == rotated
-        });
-        if !flatten_current {
-            let flatten = self.flatten_scene.as_ref()?;
-            unsafe {
-                self.d2d_context.SetTarget(&flatten.target);
-                self.d2d_context.BeginDraw();
-                self.d2d_context.Clear(None);
-                if rotated || reduced {
-                    let placement = if rotated {
-                        Matrix3x2 {
-                            M11: 0.0,
-                            M12: reduction.1,
-                            M21: -reduction.0,
-                            M22: 0.0,
-                            M31: flatten_size.0 as f32,
-                            M32: 0.0,
-                        }
-                    } else {
-                        Matrix3x2 {
-                            M11: reduction.0,
-                            M12: 0.0,
-                            M21: 0.0,
-                            M22: reduction.1,
-                            M31: 0.0,
-                            M32: 0.0,
-                        }
-                    };
-                    self.d2d_context.SetTransform(&raw const placement);
-                }
-                // The HDR10 chain ends in PQ; flatten the linear scene, encode after scaling.
-                let scene: Option<ID2D1Image> = if self.hdr_scaled_color_management_effect.is_some()
-                    && let Some(linear_scene) = &self.linear_scene_output
-                {
-                    Some(linear_scene.clone())
-                } else {
-                    match (&self.effect_output, &self.image) {
-                        (Some(output), _) => Some(output.clone()),
-                        (None, Some(image)) => image.cast().ok(),
-                        _ => None,
-                    }
-                };
-                if let Some(scene) = scene {
-                    // SDR scenes linearize so the convolution runs in linear light.
-                    let source = if !self.hdr_mode
-                        && self.delinearize_effect.is_some()
-                        && let Some(linearize) = &self.linearize_effect
-                    {
-                        linearize.SetInput(0, &scene, true);
-                        linearize.GetOutput().ok().unwrap_or(scene)
-                    } else {
-                        scene
-                    };
-                    self.d2d_context.DrawImage(
-                        &source,
-                        None,
-                        None,
-                        if reduced {
-                            D2D1_INTERPOLATION_MODE_HIGH_QUALITY_CUBIC
-                        } else {
-                            D2D1_INTERPOLATION_MODE_NEAREST_NEIGHBOR
-                        },
-                        D2D1_COMPOSITE_MODE_SOURCE_OVER,
-                    );
-                }
-                if rotated || reduced {
-                    self.d2d_context.SetTransform(&Matrix3x2::identity());
-                }
-                let finished = self.d2d_context.EndDraw(None, None);
-                match &self.target {
-                    Some(target) => self.d2d_context.SetTarget(target),
-                    None => self.d2d_context.SetTarget(None),
-                }
-                finished.ok()?;
-            }
-            if let Some(flatten) = &mut self.flatten_scene {
-                flatten.version = self.scene_version;
-                flatten.rotated = rotated;
-            }
-        }
-        // Output pixel -> flatten texel; the reduction folds into the mapping.
-        let horizontal = AxisMapping {
-            position_scale: reduction.0 / transform.M11,
-            position_offset: -transform.M31 * reduction.0 / transform.M11,
-        };
-        let vertical = AxisMapping {
-            position_scale: reduction.1 / transform.M22,
-            position_offset: -transform.M32 * reduction.1 / transform.M22,
-        };
-        let source_view = self.flatten_scene.as_ref()?.shader_resource_view.clone();
-        let scaled = self.scaled_scene.as_ref()?;
-        let render_target_view = scaled.render_target_view.clone();
-        let bitmap = scaled.bitmap.clone();
-        if kernel == UpscaleKernel::EwaLanczos && horizontal.magnifies() && vertical.magnifies() {
-            self.sampling_pass
-                .as_ref()?
-                .scale_ewa_lanczos(
-                    &self.d3d_context,
-                    &source_view,
-                    flatten_size,
-                    &render_target_view,
-                    target_size,
-                    horizontal,
-                    vertical,
-                )
-                .ok()?;
-            self.scaler_description = "EWA Lanczos";
-            return Some(bitmap);
-        }
-        self.sampling_pass
-            .as_mut()?
-            .scale(
-                &self.d3d_device,
-                &self.d3d_context,
-                &source_view,
-                flatten_size,
-                &render_target_view,
-                target_size,
-                horizontal,
-                vertical,
-            )
-            .ok()?;
-        self.scaler_description = if horizontal.filter_name() == vertical.filter_name() {
-            horizontal.filter_name()
-        } else {
-            "Lanczos + Hermite"
-        };
-        Some(bitmap)
-    }
-
-    pub fn scaler_description(&self) -> &'static str {
-        self.scaler_description
-    }
-
     /// What dithering the last frame actually got, for the info panel.
     pub fn dither_description(&self) -> &'static str {
         self.dither_description
@@ -1520,27 +1094,5 @@ impl Renderer {
             return DitherMode::None;
         }
         self.dither_mode
-    }
-
-    /// Applies the deferred PQ encode or the SDR delinearization before compositing.
-    fn prescaled_composite_image(&self, scaled: &ID2D1Bitmap1) -> Option<ID2D1Image> {
-        if self.linear_scene_output.is_some()
-            && let Some(output_encoding) = &self.hdr_scaled_color_management_effect
-        {
-            unsafe { output_encoding.SetInput(0, scaled, true) };
-            if let Ok(output) = unsafe { output_encoding.GetOutput() } {
-                return Some(output);
-            }
-        }
-        if !self.hdr_mode
-            && self.linearize_effect.is_some()
-            && let Some(delinearize) = &self.delinearize_effect
-        {
-            unsafe { delinearize.SetInput(0, scaled, true) };
-            if let Ok(output) = unsafe { delinearize.GetOutput() } {
-                return Some(output);
-            }
-        }
-        scaled.cast().ok()
     }
 }

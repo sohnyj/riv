@@ -31,7 +31,6 @@ use shell::open_with::{self, OpenWithList, WM_APP_OPEN_WITH_LIST};
 use shell::{clipboard, file_ops, open_dialog};
 use view::dither::DitherMode;
 use view::renderer::Renderer;
-use view::sampling::UpscaleKernel;
 use view::transform::{FitMode, Size, ViewTransform};
 use window::context_menu::{self, MenuSelection, MenuState};
 use window::dwm;
@@ -281,18 +280,8 @@ impl Application {
         match self.settings.options.scaling_filter {
             0 => D2D1_INTERPOLATION_MODE_NEAREST_NEIGHBOR,
             2 => D2D1_INTERPOLATION_MODE_CUBIC,
-            // 3 is High Quality Cubic; 4 and 5 fall back to it when the
-            // custom scaling pass cannot run.
-            3..=5 => D2D1_INTERPOLATION_MODE_HIGH_QUALITY_CUBIC,
+            3 => D2D1_INTERPOLATION_MODE_HIGH_QUALITY_CUBIC,
             _ => D2D1_INTERPOLATION_MODE_LINEAR,
-        }
-    }
-
-    fn custom_scaling(&self) -> Option<UpscaleKernel> {
-        match self.settings.options.scaling_filter {
-            4 => Some(UpscaleKernel::Lanczos),
-            5 => Some(UpscaleKernel::EwaLanczos),
-            _ => None,
         }
     }
 
@@ -301,14 +290,6 @@ impl Application {
             0 => "Nearest",
             2 => "Bicubic",
             3 => "High Quality",
-            4 => self
-                .renderer
-                .as_ref()
-                .map_or("Lanczos / Hermite", Renderer::scaler_description),
-            5 => self
-                .renderer
-                .as_ref()
-                .map_or("EWA Lanczos / Hermite", Renderer::scaler_description),
             _ => "Bilinear",
         }
     }
@@ -736,14 +717,13 @@ impl Application {
         let background = self.background_color();
         let content = self.overlay_content(background);
         let clear_color = color::output_color(background, self.output_color_target());
-        let custom_scaling = self.custom_scaling();
         let overlay = &self.overlay;
         let draw = |context: &_| overlay.draw(context, viewport.width, viewport.height, &content);
         let Some(renderer) = &mut self.renderer else {
             return;
         };
         if renderer
-            .render(matrix, interpolation, custom_scaling, clear_color, draw)
+            .render(matrix, interpolation, clear_color, draw)
             .is_err()
         {
             // Device lost: drop the swapchain, rebuild once and retry.
@@ -752,13 +732,9 @@ impl Application {
                 && let Some(renderer) = &mut self.renderer
             {
                 let overlay = &self.overlay;
-                let _ = renderer.render(
-                    matrix,
-                    interpolation,
-                    custom_scaling,
-                    clear_color,
-                    |context| overlay.draw(context, viewport.width, viewport.height, &content),
-                );
+                let _ = renderer.render(matrix, interpolation, clear_color, |context| {
+                    overlay.draw(context, viewport.width, viewport.height, &content)
+                });
             }
         }
     }
