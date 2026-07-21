@@ -114,12 +114,26 @@ struct Application {
     status_text: Option<String>,
     /// True while status_text holds the frame-step counter, which has no timeout.
     frame_counter_shown: bool,
+    /// Memoized info panel text, rebuilt only when a display input changes.
+    info_text_cache: Option<InfoTextCache>,
     /// Received bytes of the pending URL download the view reports on.
     download_progress: Option<(ItemLocation, u64)>,
     slideshow_active: bool,
     animation: Option<Animation>,
     drop_target: Option<IDropTarget>,
     open_with_list: Option<Box<OpenWithList>>,
+}
+
+/// Memoized info panel text and the display inputs it was built from.
+struct InfoTextCache {
+    location: ItemLocation,
+    image: usize,
+    file_size: u64,
+    modified: Option<std::time::SystemTime>,
+    output_description: &'static str,
+    scaling_description: &'static str,
+    dither_description: &'static str,
+    text: String,
 }
 
 impl Application {
@@ -167,6 +181,7 @@ impl Application {
             show_file_info: false,
             status_text: None,
             frame_counter_shown: false,
+            info_text_cache: None,
             download_progress: None,
             slideshow_active: false,
             animation: None,
@@ -648,7 +663,7 @@ impl Application {
         Ok(())
     }
 
-    fn overlay_content(&self, background: D2D1_COLOR_F) -> OverlayContent {
+    fn overlay_content(&mut self, background: D2D1_COLOR_F) -> OverlayContent {
         let error_text = self
             .image_core
             .load_error
@@ -663,24 +678,7 @@ impl Application {
             });
         // The pill borrows the top edge: the info panel yields while one shows.
         let info_text = if self.show_file_info && self.status_text.is_none() {
-            self.image_core.current.as_ref().map(|current| {
-                let (file_size, modified) =
-                    self.image_core.current_item_metadata().unwrap_or((0, None));
-                overlay::build_info_text(
-                    &current.location.display_name(),
-                    &current.location.display_text(),
-                    &current.image,
-                    file_size,
-                    modified,
-                    self.renderer
-                        .as_ref()
-                        .map_or("", |renderer| renderer.output_description()),
-                    self.scaling_description(),
-                    self.renderer
-                        .as_ref()
-                        .map_or("None", |renderer| renderer.dither_description()),
-                )
-            })
+            self.cached_info_text()
         } else {
             None
         };
@@ -707,6 +705,57 @@ impl Application {
             background_is_bright: brightness > 0.5,
             output_color_target: self.output_color_target(),
         }
+    }
+
+    /// Info panel text, rebuilt only when a display input changes (else the cached copy).
+    fn cached_info_text(&mut self) -> Option<String> {
+        let output_description = self
+            .renderer
+            .as_ref()
+            .map_or("", |renderer| renderer.output_description());
+        let scaling_description = self.scaling_description();
+        let dither_description = self
+            .renderer
+            .as_ref()
+            .map_or("None", |renderer| renderer.dither_description());
+        let (file_size, modified) = self.image_core.current_item_metadata().unwrap_or((0, None));
+        let current = self.image_core.current.as_ref()?;
+        let image_id = Arc::as_ptr(&current.image) as usize;
+        let reuse = self.info_text_cache.as_ref().is_some_and(|cache| {
+            cache.location == current.location
+                && cache.image == image_id
+                && cache.file_size == file_size
+                && cache.modified == modified
+                && cache.output_description == output_description
+                && cache.scaling_description == scaling_description
+                && cache.dither_description == dither_description
+        });
+        if !reuse {
+            let text = overlay::build_info_text(
+                &current.location.display_name(),
+                &current.location.display_text(),
+                &current.image,
+                file_size,
+                modified,
+                output_description,
+                scaling_description,
+                dither_description,
+            );
+            let location = current.location.clone();
+            self.info_text_cache = Some(InfoTextCache {
+                location,
+                image: image_id,
+                file_size,
+                modified,
+                output_description,
+                scaling_description,
+                dither_description,
+                text,
+            });
+        }
+        self.info_text_cache
+            .as_ref()
+            .map(|cache| cache.text.clone())
     }
 
     fn render(&mut self, window: HWND) {
