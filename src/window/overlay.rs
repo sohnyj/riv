@@ -377,7 +377,10 @@ pub fn build_info_text(
     lines.push(format!("Dither: {dither_description}"));
     lines.push(format!("Size: {}", format_file_size(file_size)));
     if let Some(modified) = modified {
-        lines.push(format!("Modified: {}", format_local_datetime(modified)));
+        lines.push(format!(
+            "Date modified: {}",
+            format_local_datetime(modified)
+        ));
     }
     lines.push(format!("Path: {location_text}"));
     if let Some(exif) = &image.exif {
