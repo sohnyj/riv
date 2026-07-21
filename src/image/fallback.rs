@@ -426,7 +426,7 @@ fn decode_heif_primary_image(
     let mut stride: c_int = 0;
     let plane =
         unsafe { heif_image_get_plane_readonly(image, HEIF_CHANNEL_INTERLEAVED, &raw mut stride) };
-    if plane.is_null() || width <= 0 || height <= 0 || stride < width * 4 {
+    if plane.is_null() || width <= 0 || height <= 0 || i64::from(stride) < i64::from(width) * 4 {
         unsafe { heif_image_release(image) };
         return Err(uncoded_error("HEIF image plane unavailable"));
     }
