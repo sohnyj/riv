@@ -31,7 +31,7 @@ public:
     bool valid() const { return file_ != nullptr; }
 
     bool read(char buffer[], int count) override {
-        if (std::fread(buffer, 1, count, file_) != static_cast<size_t>(count)) {
+        if (count < 0 || std::fread(buffer, 1, count, file_) != static_cast<size_t>(count)) {
             throw std::runtime_error("unexpected end of file");
         }
         return std::feof(file_) == 0;
