@@ -111,9 +111,7 @@ struct Application {
     gesture_pan_point: Option<(i32, i32)>,
     overlay: Overlay,
     show_file_info: bool,
-    status_text: Option<String>,
-    /// True while status_text holds the frame-step counter, which has no timeout.
-    frame_counter_shown: bool,
+    status_text: Option<StatusText>,
     /// Memoized info panel text, rebuilt only when a display input changes.
     info_text_cache: Option<InfoTextCache>,
     /// Received bytes of the pending URL download the view reports on.
@@ -122,6 +120,20 @@ struct Application {
     animation: Option<Animation>,
     drop_target: Option<IDropTarget>,
     open_with_list: Option<Box<OpenWithList>>,
+}
+
+/// A status pill: Timed auto-expires, Sticky holds until the image or playback changes.
+enum StatusText {
+    Timed(String),
+    Sticky(String),
+}
+
+impl StatusText {
+    fn text(&self) -> &str {
+        match self {
+            StatusText::Timed(text) | StatusText::Sticky(text) => text,
+        }
+    }
 }
 
 /// Memoized info panel text and the display inputs it was built from.
@@ -180,7 +192,6 @@ impl Application {
             overlay: Overlay::new()?,
             show_file_info: false,
             status_text: None,
-            frame_counter_shown: false,
             info_text_cache: None,
             download_progress: None,
             slideshow_active: false,
@@ -572,8 +583,11 @@ impl Application {
         let _ = unsafe { KillTimer(Some(window), ANIMATION_TIMER) };
         // The frame-step pill holds until resume or an image change, so no timer.
         let _ = unsafe { KillTimer(Some(window), STATUS_TEXT_TIMER) };
-        self.status_text = Some(format!("Frame: {} / {}", frame_index + 1, frame_count));
-        self.frame_counter_shown = true;
+        self.status_text = Some(StatusText::Sticky(format!(
+            "Frame: {} / {}",
+            frame_index + 1,
+            frame_count
+        )));
         self.render_animation_frame(window, frame_index);
     }
 
@@ -591,17 +605,15 @@ impl Application {
     }
 
     fn show_status_text(&mut self, window: HWND, text: String) {
-        self.status_text = Some(text);
-        self.frame_counter_shown = false;
+        self.status_text = Some(StatusText::Timed(text));
         unsafe { SetTimer(Some(window), STATUS_TEXT_TIMER, 1000, None) };
     }
 
     /// Drops the frame-step pill; returns whether one was showing.
     fn dismiss_frame_counter(&mut self) -> bool {
-        let showing = self.frame_counter_shown;
+        let showing = matches!(self.status_text, Some(StatusText::Sticky(_)));
         if showing {
             self.status_text = None;
-            self.frame_counter_shown = false;
         }
         showing
     }
@@ -700,7 +712,10 @@ impl Application {
             error_text,
             download_text,
             info_text,
-            status_text: self.status_text.clone(),
+            status_text: self
+                .status_text
+                .as_ref()
+                .map(|status| status.text().to_owned()),
             show_wordmark,
             background_is_bright: brightness > 0.5,
             output_color_target: self.output_color_target(),
@@ -1136,7 +1151,6 @@ fn dispatch_action(application: &mut Application, window: HWND, action: Action) 
         Action::ShowFileInfo => {
             // Any pill masks the panel; one press reveals it rather than toggling off unseen.
             if application.status_text.take().is_some() {
-                application.frame_counter_shown = false;
                 application.show_file_info = true;
             } else {
                 application.show_file_info = !application.show_file_info;
@@ -1861,8 +1875,9 @@ extern "system" fn window_procedure(
         WM_TIMER if wparam.0 == STATUS_TEXT_TIMER => {
             let _ = unsafe { KillTimer(Some(window), STATUS_TEXT_TIMER) };
             if let Some(application) = application_from_window(window)
-                && application.status_text.take().is_some()
+                && matches!(application.status_text, Some(StatusText::Timed(_)))
             {
+                application.status_text = None;
                 application.render(window);
             }
             LRESULT(0)
