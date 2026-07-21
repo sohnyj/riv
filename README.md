@@ -7,7 +7,7 @@ A fast, precise, minimal image viewer for Windows.
 - HDR and native 10-bit output: scRGB FP16 render pipeline, content peak
   detection, and display-adaptive tone mapping
 - Color management: embedded ICC profiles, PQ/HLG sources, Windows Advanced Color
-- Lanczos, EWA Lanczos (Sharp), and Hermite scaling shaders and Ordered or Fruit output dither
+- Ordered or Fruit output dither shader
 - Animation playback (GIF, APNG, animated WebP) with pause, frame stepping, and speed control
 - Browse images inside archives (via archiveint.dll, shipped with Windows)
 - Open http/https image URLs (via curl.exe, shipped with Windows)
@@ -61,7 +61,7 @@ zip, 7z, rar, tar, and cbz / cbr / cb7 / cbt.
 ## Requirements
 
 - Windows 11 23H2+, x86-64
-- DirectX 12 capable GPU with 4 GB+ VRAM
+- Direct3D 12 capable GPU
 
 ## Building
 
@@ -100,7 +100,7 @@ cargo build --release
 Inspired by [qView](https://github.com/jurplel/qView).
 [mpv](https://github.com/mpv-player/mpv) and
 [libplacebo](https://code.videolan.org/videolan/libplacebo) served as references
-for context menu, shaders, aspect ratio table, and HDR pipeline.
+for context menu, dither, aspect ratio table, and HDR pipeline.
 
 ## License
 
