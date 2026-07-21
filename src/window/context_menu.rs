@@ -231,6 +231,7 @@ impl MenuBuilder {
             "Pause"
         };
         self.append_action_labeled(playback, Action::Pause, pause_label)?;
+        self.append_action(playback, Action::PreviousFrame)?;
         self.append_action(playback, Action::NextFrame)?;
         self.append_separator(playback)?;
         self.append_action(playback, Action::DecreaseSpeed)?;

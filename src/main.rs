@@ -515,14 +515,36 @@ impl Application {
         }
     }
 
-    fn advance_animation_frame(&mut self, window: HWND) {
+    fn play_animation_frame(&mut self, window: HWND) {
         let Some(animation) = self.animation.as_mut() else {
             let _ = unsafe { KillTimer(Some(window), ANIMATION_TIMER) };
             return;
         };
-        let frame_index = animation.advance();
+        let frame_index = animation.next_frame();
         let delay = animation.current_delay_milliseconds();
         let paused = animation.paused;
+        self.render_animation_frame(window, frame_index);
+        if !paused {
+            unsafe { SetTimer(Some(window), ANIMATION_TIMER, delay, None) };
+        }
+    }
+
+    /// A manual step pauses playback; resume is left to the user.
+    fn step_animation_frame(&mut self, window: HWND, forward: bool) {
+        let Some(animation) = self.animation.as_mut() else {
+            return;
+        };
+        animation.paused = true;
+        let frame_index = if forward {
+            animation.next_frame()
+        } else {
+            animation.previous_frame()
+        };
+        let _ = unsafe { KillTimer(Some(window), ANIMATION_TIMER) };
+        self.render_animation_frame(window, frame_index);
+    }
+
+    fn render_animation_frame(&mut self, window: HWND, frame_index: usize) {
         let Some(image) = self.display.clone() else {
             return;
         };
@@ -531,9 +553,6 @@ impl Application {
             && renderer.update_frame_pixels(&frame.pixels).is_err()
         {
             let _ = renderer.set_image(&frame.pixels, &image);
-        }
-        if !paused {
-            unsafe { SetTimer(Some(window), ANIMATION_TIMER, delay, None) };
         }
         self.render(window);
     }
@@ -1201,7 +1220,8 @@ fn dispatch_action(application: &mut Application, window: HWND, action: Action) 
                 }
             }
         }
-        Action::NextFrame => application.advance_animation_frame(window),
+        Action::PreviousFrame => application.step_animation_frame(window, false),
+        Action::NextFrame => application.step_animation_frame(window, true),
         Action::DecreaseSpeed | Action::IncreaseSpeed => {
             if let Some(animation) = application.animation.as_mut() {
                 animation.adjust_speed(action == Action::IncreaseSpeed);
@@ -1747,7 +1767,7 @@ extern "system" fn window_procedure(
         }
         WM_TIMER if wparam.0 == ANIMATION_TIMER => {
             if let Some(application) = application_from_window(window) {
-                application.advance_animation_frame(window);
+                application.play_animation_frame(window);
             }
             LRESULT(0)
         }

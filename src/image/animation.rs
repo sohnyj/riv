@@ -33,8 +33,14 @@ impl Animation {
         (delay * 100 / self.speed_percent).max(1)
     }
 
-    pub fn advance(&mut self) -> usize {
+    pub fn next_frame(&mut self) -> usize {
         self.frame_index = (self.frame_index + 1) % self.frame_delays_milliseconds.len();
+        self.frame_index
+    }
+
+    pub fn previous_frame(&mut self) -> usize {
+        let count = self.frame_delays_milliseconds.len();
+        self.frame_index = (self.frame_index + count - 1) % count;
         self.frame_index
     }
 

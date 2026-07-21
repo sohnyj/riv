@@ -69,6 +69,7 @@ const DEFAULT_KEYBOARD: &[(&str, &[&str])] = &[
     ("lastfile", &["End"]),
     ("loop", &["L"]),
     ("pause", &["Space"]),
+    ("previousframe", &["B"]),
     ("nextframe", &["N"]),
     ("decreasespeed", &["["]),
     ("increasespeed", &["]"]),

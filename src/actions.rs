@@ -31,6 +31,7 @@ pub enum Action {
     LastFile,
     Loop,
     Pause,
+    PreviousFrame,
     NextFrame,
     DecreaseSpeed,
     IncreaseSpeed,
@@ -124,6 +125,12 @@ const ACTION_TABLE: &[(Action, &str, &str, ActivationGate)] = &[
         ActivationGate::NavigationTargets,
     ),
     (Action::Pause, "pause", "Pause", ActivationGate::Animation),
+    (
+        Action::PreviousFrame,
+        "previousframe",
+        "Previous Frame",
+        ActivationGate::Animation,
+    ),
     (
         Action::NextFrame,
         "nextframe",
