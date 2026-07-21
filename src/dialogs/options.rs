@@ -731,7 +731,7 @@ fn sync_all_pages(state: &mut OptionsState) {
     combo_select(
         window_page,
         IDC_WINDOW_TITLEBAR_MODE,
-        options.title_bar_mode.min(3),
+        options.title_bar_mode,
     );
     set_check(
         window_page,
