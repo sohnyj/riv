@@ -115,6 +115,8 @@ struct Application {
     status_text: Option<StatusText>,
     /// Memoized info panel text, rebuilt only when a display input changes.
     info_text_cache: Option<InfoTextCache>,
+    /// File size and modified time, snapshotted when the item is drawn (never re-statted).
+    metadata_snapshot: Option<(u64, Option<std::time::SystemTime>)>,
     /// Received bytes of the pending URL download the view reports on.
     download_progress: Option<(ItemLocation, u64)>,
     slideshow_active: bool,
@@ -141,8 +143,6 @@ impl StatusText {
 struct InfoTextCache {
     location: ItemLocation,
     image: usize,
-    file_size: u64,
-    modified: Option<std::time::SystemTime>,
     output_description: &'static str,
     scaling_description: &'static str,
     dither_description: &'static str,
@@ -194,6 +194,7 @@ impl Application {
             show_file_info: false,
             status_text: None,
             info_text_cache: None,
+            metadata_snapshot: None,
             download_progress: None,
             slideshow_active: false,
             animation: None,
@@ -511,6 +512,8 @@ impl Application {
                 unsafe { SetTimer(Some(window), OPEN_WITH_TIMER, 250, None) };
             }
         }
+        // Snapshot file metadata once, now that this (possibly preloaded) item is displayed.
+        self.metadata_snapshot = self.image_core.current_item_metadata();
         self.update_window_title(window);
         self.render(window);
     }
@@ -734,14 +737,13 @@ impl Application {
             .renderer
             .as_ref()
             .map_or("None", |renderer| renderer.dither_description());
-        let (file_size, modified) = self.image_core.current_item_metadata().unwrap_or((0, None));
+        // Size and modified time are snapshotted at load (never re-statted here).
+        let (file_size, modified) = self.metadata_snapshot.unwrap_or((0, None));
         let current = self.image_core.current.as_ref()?;
         let image_id = Arc::as_ptr(&current.image) as usize;
         let reuse = self.info_text_cache.as_ref().is_some_and(|cache| {
             cache.location == current.location
                 && cache.image == image_id
-                && cache.file_size == file_size
-                && cache.modified == modified
                 && cache.output_description == output_description
                 && cache.scaling_description == scaling_description
                 && cache.dither_description == dither_description
@@ -761,8 +763,6 @@ impl Application {
             self.info_text_cache = Some(InfoTextCache {
                 location,
                 image: image_id,
-                file_size,
-                modified,
                 output_description,
                 scaling_description,
                 dither_description,
