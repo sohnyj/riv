@@ -15,8 +15,9 @@ use windows::Win32::Graphics::Direct2D::{
     D2D1_DEVICE_CONTEXT_OPTIONS_NONE, D2D1_FACTORY_TYPE_SINGLE_THREADED,
     D2D1_HDRTONEMAP_DISPLAY_MODE_HDR, D2D1_HDRTONEMAP_PROP_DISPLAY_MODE,
     D2D1_HDRTONEMAP_PROP_INPUT_MAX_LUMINANCE, D2D1_HDRTONEMAP_PROP_OUTPUT_MAX_LUMINANCE,
-    D2D1_INTERPOLATION_MODE, D2D1_PROPERTY_TYPE_COLOR_CONTEXT, D2D1_PROPERTY_TYPE_ENUM,
-    D2D1_PROPERTY_TYPE_FLOAT, D2D1_WHITELEVELADJUSTMENT_PROP_INPUT_WHITE_LEVEL,
+    D2D1_INTERPOLATION_MODE, D2D1_INTERPOLATION_MODE_NEAREST_NEIGHBOR,
+    D2D1_PROPERTY_TYPE_COLOR_CONTEXT, D2D1_PROPERTY_TYPE_ENUM, D2D1_PROPERTY_TYPE_FLOAT,
+    D2D1_WHITELEVELADJUSTMENT_PROP_INPUT_WHITE_LEVEL,
     D2D1_WHITELEVELADJUSTMENT_PROP_OUTPUT_WHITE_LEVEL, D2D1CreateFactory, ID2D1Bitmap1,
     ID2D1ColorContext, ID2D1DeviceContext, ID2D1DeviceContext5, ID2D1Effect, ID2D1Factory1,
     ID2D1Image,
@@ -94,6 +95,8 @@ pub struct Renderer {
     image_pixel_size: (f32, f32),
     /// What the last frame actually dithered with, for the info panel.
     dither_description: &'static str,
+    /// The last frame drew at a 1:1 placement (no resampling), for the info panel.
+    identity_draw: bool,
 }
 
 impl Drop for Renderer {
@@ -531,6 +534,7 @@ impl Renderer {
             image_display_size: (0.0, 0.0),
             image_pixel_size: (0.0, 0.0),
             dither_description: "None",
+            identity_draw: false,
         };
         renderer.create_target()?;
         Ok(renderer)
@@ -1017,6 +1021,13 @@ impl Renderer {
             DitherMode::Ordered => "Ordered",
             DitherMode::Fruit => "Fruit",
         };
+        self.identity_draw = identity_placement;
+        // Force NEAREST so a 1:1 placement stays pixel-exact, whatever the filter.
+        let draw_interpolation = if identity_placement {
+            D2D1_INTERPOLATION_MODE_NEAREST_NEIGHBOR
+        } else {
+            interpolation
+        };
         unsafe {
             self.d2d_context.BeginDraw();
             self.d2d_context.Clear(Some(&raw const clear_color));
@@ -1028,7 +1039,7 @@ impl Renderer {
                             output,
                             None,
                             None,
-                            interpolation,
+                            draw_interpolation,
                             D2D1_COMPOSITE_MODE_SOURCE_OVER,
                         );
                         self.d2d_context.SetTransform(&Matrix3x2::identity());
@@ -1046,7 +1057,7 @@ impl Renderer {
                             image,
                             Some(&raw const destination),
                             1.0,
-                            interpolation,
+                            draw_interpolation,
                             None,
                             None,
                         );
@@ -1076,6 +1087,11 @@ impl Renderer {
             self.swap_chain.Present(1, DXGI_PRESENT(0)).ok()?;
             overlay_result
         }
+    }
+
+    /// Whether the last frame drew at a 1:1 placement, for the info panel.
+    pub fn is_identity_draw(&self) -> bool {
+        self.identity_draw
     }
 
     /// What dithering the last frame actually got, for the info panel.

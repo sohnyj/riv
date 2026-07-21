@@ -296,6 +296,34 @@ mod zoom_limit_tests {
 }
 
 #[cfg(test)]
+mod pixel_snap_tests {
+    use super::*;
+
+    #[test]
+    fn unit_scale_snaps_the_image_origin_to_whole_pixels() {
+        // At 1:1 the origin must snap to a whole device pixel so nothing resamples, at any DPI.
+        let odd_viewport = Size {
+            width: 801.0,
+            height: 601.0,
+        };
+        let image = Size {
+            width: 800.0,
+            height: 600.0,
+        };
+        let mut transform = ViewTransform::new();
+        transform.scale = 1.0;
+        transform.fit_tracking = false;
+        transform.pan_offset_x = 12.3;
+        transform.pan_offset_y = -4.7;
+        let matrix = transform.matrix(odd_viewport, image);
+        assert_eq!(matrix[0], 1.0); // unit scale on X
+        assert_eq!(matrix[3], 1.0); // unit scale on Y
+        assert_eq!(matrix[4], matrix[4].round()); // origin on a whole pixel
+        assert_eq!(matrix[5], matrix[5].round());
+    }
+}
+
+#[cfg(test)]
 mod fit_scale_tests {
     use super::*;
 

@@ -286,6 +286,14 @@ impl Application {
     }
 
     fn scaling_description(&self) -> &'static str {
+        // A 1:1 placement resamples nothing, whatever the filter.
+        if self
+            .renderer
+            .as_ref()
+            .is_some_and(Renderer::is_identity_draw)
+        {
+            return "None (1:1)";
+        }
         match self.settings.options.scaling_filter {
             0 => "Nearest",
             2 => "Bicubic",
