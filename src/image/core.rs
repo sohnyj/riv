@@ -1342,6 +1342,34 @@ impl DecodePool {
     }
 }
 
+impl From<archive_reader::ArchiveError> for DecodeError {
+    fn from(error: archive_reader::ArchiveError) -> Self {
+        if error.cancelled {
+            Self::cancelled()
+        } else {
+            Self {
+                code: error.code,
+                message: error.message,
+                store_extension: None,
+            }
+        }
+    }
+}
+
+impl From<curl::NetworkError> for DecodeError {
+    fn from(error: curl::NetworkError) -> Self {
+        if error.cancelled {
+            Self::cancelled()
+        } else {
+            Self {
+                code: error.code,
+                message: error.message,
+                store_extension: None,
+            }
+        }
+    }
+}
+
 fn worker_loop(shared: &PoolShared, window: isize) {
     unsafe { CoInitializeEx(None, COINIT_MULTITHREADED) }
         .ok()
@@ -1391,12 +1419,7 @@ fn worker_loop(shared: &PoolShared, window: isize) {
                             .map(|extension| extension.to_string_lossy().to_lowercase());
                         decode::decode_bytes(&data, extension.as_deref(), &job.cancellation)
                     }
-                    Err(error) if error.cancelled => Err(DecodeError::cancelled()),
-                    Err(error) => Err(DecodeError {
-                        code: error.code,
-                        message: error.message,
-                        store_extension: None,
-                    }),
+                    Err(error) => Err(error.into()),
                 }
             }
             ItemLocation::Url(url) => {
@@ -1421,12 +1444,7 @@ fn worker_loop(shared: &PoolShared, window: isize) {
                         decode::decode_bytes(&data, extension.as_deref(), &job.cancellation)
                             .map_err(url_decode_error)
                     }
-                    Err(error) if error.cancelled => Err(DecodeError::cancelled()),
-                    Err(error) => Err(DecodeError {
-                        code: error.code,
-                        message: error.message,
-                        store_extension: None,
-                    }),
+                    Err(error) => Err(error.into()),
                 }
             }
         }
