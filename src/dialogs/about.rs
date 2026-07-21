@@ -188,7 +188,7 @@ fn open_link(url_wide: &[u16]) {
 }
 
 fn set_text(page: HWND, control: i32, text: &str) {
-    let wide: Vec<u16> = text.encode_utf16().chain(std::iter::once(0)).collect();
+    let wide = crate::text::wide(text);
     let _ = unsafe { SetDlgItemTextW(page, control, PCWSTR(wide.as_ptr())) };
 }
 

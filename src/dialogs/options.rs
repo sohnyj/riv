@@ -38,6 +38,7 @@ use crate::dialogs::shortcut_capture;
 use crate::image::decode;
 use crate::settings::{Options, SettingsFile};
 use crate::shell::{file_association, start_menu};
+use crate::text::wide;
 
 pub const WM_APP_OPTIONS_APPLIED: u32 = WM_APP + 5;
 pub const WM_APP_OPTIONS_GEOMETRY: u32 = WM_APP + 6;
@@ -192,10 +193,6 @@ pub fn show(parent: HWND, settings: &SettingsFile) {
 
 fn state_mut(dialog: HWND) -> Option<&'static mut OptionsState> {
     super::state_mut(dialog)
-}
-
-fn wide(text: &str) -> Vec<u16> {
-    text.encode_utf16().chain(std::iter::once(0)).collect()
 }
 
 unsafe extern "system" fn frame_procedure(

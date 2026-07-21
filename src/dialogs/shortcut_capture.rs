@@ -99,10 +99,9 @@ fn show_capture_dialog(
 }
 
 fn warn_conflict(dialog: HWND, encoding: &str, owner_label: &str) {
-    let content: Vec<u16> = format!("\"{encoding}\" is already bound to \"{owner_label}\"")
-        .encode_utf16()
-        .chain(std::iter::once(0))
-        .collect();
+    let content = crate::text::wide(&format!(
+        "\"{encoding}\" is already bound to \"{owner_label}\""
+    ));
     let configuration = TASKDIALOGCONFIG {
         cbSize: size_of::<TASKDIALOGCONFIG>() as u32,
         hwndParent: dialog,
@@ -287,11 +286,7 @@ unsafe extern "system" fn mouse_procedure(
 
 fn set_mouse_field_text(dialog: HWND, binding: Option<&str>) {
     if let Ok(field) = unsafe { GetDlgItem(Some(dialog), IDC_CAPTURE_MOUSE_FIELD) } {
-        let text: Vec<u16> = binding
-            .unwrap_or("None")
-            .encode_utf16()
-            .chain(std::iter::once(0))
-            .collect();
+        let text = crate::text::wide(binding.unwrap_or("None"));
         let _ = unsafe { SetWindowTextW(field, PCWSTR(text.as_ptr())) };
         let _ = unsafe { InvalidateRect(Some(field), None, false) };
     }
@@ -434,7 +429,7 @@ unsafe extern "system" fn key_list_procedure(
 fn listbox_add(dialog: HWND, control: i32, text: &str) {
     const LB_ADDSTRING: u32 = 0x0180;
     if let Ok(listbox) = unsafe { GetDlgItem(Some(dialog), control) } {
-        let wide: Vec<u16> = text.encode_utf16().chain(std::iter::once(0)).collect();
+        let wide = crate::text::wide(text);
         unsafe {
             SendMessageW(
                 listbox,

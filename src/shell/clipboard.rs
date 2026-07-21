@@ -43,7 +43,7 @@ mod round_trip_tests {
     use windows::Win32::System::Memory::{GMEM_MOVEABLE, GlobalAlloc};
 
     fn write_text(text: &str) {
-        let wide: Vec<u16> = text.encode_utf16().chain(std::iter::once(0)).collect();
+        let wide = crate::text::wide(text);
         unsafe {
             OpenClipboard(None).expect("open clipboard");
             EmptyClipboard().expect("empty clipboard");

@@ -18,9 +18,7 @@ const REGISTERED_APPLICATIONS_KEY: &str = "Software\\RegisteredApplications";
 const EXPLORER_FILE_EXTS_KEY: &str =
     "Software\\Microsoft\\Windows\\CurrentVersion\\Explorer\\FileExts";
 
-fn wide(text: &str) -> Vec<u16> {
-    text.encode_utf16().chain(std::iter::once(0)).collect()
-}
+use crate::text::wide;
 
 fn registry_set_string(subkey: &str, value_name: Option<&str>, data: &str) {
     let subkey_wide = wide(subkey);

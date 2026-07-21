@@ -179,7 +179,7 @@ fn default_executable_for(path: &Path) -> Option<String> {
 }
 
 fn natural_compare(a: &str, b: &str) -> std::cmp::Ordering {
-    let a_wide: Vec<u16> = a.encode_utf16().chain(std::iter::once(0)).collect();
-    let b_wide: Vec<u16> = b.encode_utf16().chain(std::iter::once(0)).collect();
+    let a_wide = crate::text::wide(a);
+    let b_wide = crate::text::wide(b);
     crate::image::core::natural_order(&a_wide, &b_wide)
 }

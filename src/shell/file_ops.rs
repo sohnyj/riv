@@ -41,16 +41,13 @@ pub fn confirm_delete(window: HWND, path: &Path, permanent: bool) -> DeleteConfi
     let file_name = path
         .file_name()
         .map_or_else(String::new, |name| name.to_string_lossy().into_owned());
-    let instruction: Vec<u16> = if permanent {
+    let instruction = crate::text::wide(if permanent {
         "Permanently delete this file?"
     } else {
         "Move this file to the Recycle Bin?"
-    }
-    .encode_utf16()
-    .chain(std::iter::once(0))
-    .collect();
-    let content: Vec<u16> = file_name.encode_utf16().chain(std::iter::once(0)).collect();
-    let delete_label: Vec<u16> = "Delete".encode_utf16().chain(std::iter::once(0)).collect();
+    });
+    let content = crate::text::wide(&file_name);
+    let delete_label = crate::text::wide("Delete");
     let delete_button = TASKDIALOG_BUTTON {
         nButtonID: IDYES.0,
         pszButtonText: PCWSTR(delete_label.as_ptr()),
@@ -154,11 +151,7 @@ pub fn rename_file(path: &Path, new_name: &str) -> std::io::Result<PathBuf> {
 }
 
 pub fn show_rename_error(window: HWND, error: &std::io::Error) {
-    let content: Vec<u16> = error
-        .to_string()
-        .encode_utf16()
-        .chain(std::iter::once(0))
-        .collect();
+    let content = crate::text::wide(&error.to_string());
     let configuration = TASKDIALOGCONFIG {
         cbSize: size_of::<TASKDIALOGCONFIG>() as u32,
         hwndParent: window,

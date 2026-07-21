@@ -8,6 +8,7 @@ mod image;
 mod network;
 mod settings;
 mod shell;
+mod text;
 mod view;
 mod window;
 
@@ -436,7 +437,7 @@ impl Application {
             }
             (_, Some(name)) => name,
         };
-        let wide: Vec<u16> = title.encode_utf16().chain(std::iter::once(0)).collect();
+        let wide = crate::text::wide(&title);
         let _ = unsafe { SetWindowTextW(window, PCWSTR(wide.as_ptr())) };
     }
 
@@ -1750,11 +1751,8 @@ fn process_is_elevated() -> bool {
 fn fail_fast_dialog(instruction: &str, content: &str) {
     use windows::Win32::UI::Controls::{TASKDIALOGCONFIG, TDCBF_CLOSE_BUTTON, TaskDialogIndirect};
 
-    let instruction_wide: Vec<u16> = instruction
-        .encode_utf16()
-        .chain(std::iter::once(0))
-        .collect();
-    let content_wide: Vec<u16> = content.encode_utf16().chain(std::iter::once(0)).collect();
+    let instruction_wide = crate::text::wide(instruction);
+    let content_wide = crate::text::wide(content);
     let configuration = TASKDIALOGCONFIG {
         cbSize: size_of::<TASKDIALOGCONFIG>() as u32,
         pszWindowTitle: w!("riv"),
