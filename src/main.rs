@@ -1600,15 +1600,15 @@ fn main() -> Result<()> {
     if process_is_elevated() {
         fail_fast_dialog(
             "riv does not run elevated",
-            "Running as administrator is not supported. Start riv from a normal user session.",
+            "Start riv from a normal user session instead.",
         );
         return Ok(());
     }
     if !settings::probe_writable() {
         fail_fast_dialog(
             "Settings cannot be saved here",
-            "riv stores riv.json next to the executable, but this folder is not writable \
-             (for example Program Files). Move riv to a writable folder and run it again.",
+            "riv stores riv.json next to the executable, but this folder is not writable. \
+             Move riv to a writable folder and run it again.",
         );
         return Ok(());
     }
