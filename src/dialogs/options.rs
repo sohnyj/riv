@@ -677,7 +677,12 @@ fn initialize_window_page(state: &OptionsState) {
     combo_fill(
         page,
         IDC_WINDOW_TITLEBAR_MODE,
-        &["App Name", "File Name", "[N/N] File Name"],
+        &[
+            "App Name",
+            "File Name",
+            "[N/N] File Name",
+            "[N/N] Folder\\File Name",
+        ],
     );
 }
 
@@ -733,7 +738,7 @@ fn sync_all_pages(state: &mut OptionsState) {
     combo_select(
         window_page,
         IDC_WINDOW_TITLEBAR_MODE,
-        options.title_bar_mode.min(2),
+        options.title_bar_mode.min(3),
     );
     set_check(
         window_page,

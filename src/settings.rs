@@ -91,7 +91,7 @@ impl Options {
                 .and_then(Value::as_str)
                 .and_then(parse_hex_color)
                 .unwrap_or(default.background_color),
-            title_bar_mode: bounded("titlebarmode", 2, default.title_bar_mode),
+            title_bar_mode: bounded("titlebarmode", 3, default.title_bar_mode),
             control_drag_window: boolean("ctrldragwindow", default.control_drag_window),
             save_window_position: boolean("savewindowposition", default.save_window_position),
             hide_cursor_fullscreen: boolean("hidecursorfullscreen", default.hide_cursor_fullscreen),

@@ -104,6 +104,30 @@ impl ItemLocation {
         }
     }
 
+    /// Parent folder leaf for "folder\file" titles (a member's folder inside its archive).
+    pub fn folder_name(&self) -> Option<String> {
+        match self {
+            Self::File(path) => path
+                .parent()
+                .and_then(Path::file_name)
+                .map(|name| name.to_string_lossy().into_owned()),
+            Self::ArchiveMember { archive, member } => {
+                // The member's immediate parent within the archive, else the archive file.
+                let segments: Vec<&str> = member
+                    .split(['/', '\\'])
+                    .filter(|part| !part.is_empty())
+                    .collect();
+                match segments.len() {
+                    count if count >= 2 => Some(segments[count - 2].to_string()),
+                    _ => archive
+                        .file_name()
+                        .map(|name| name.to_string_lossy().into_owned()),
+                }
+            }
+            Self::Url(_) => None,
+        }
+    }
+
     /// The file that carries this item on disk (the archive for members).
     pub fn containing_file(&self) -> Option<&Path> {
         match self {
@@ -1594,6 +1618,26 @@ mod item_location_tests {
             member("C:\\a.cbz", "art/01.png").display_text(),
             "C:\\a.cbz \u{203a} art/01.png"
         );
+    }
+
+    #[test]
+    fn folder_name_takes_the_parent_folder_leaf() {
+        let file = |path: &str| ItemLocation::File(PathBuf::from(path));
+        let folder = file("C:\\photos\\vacation\\img.png").folder_name();
+        assert_eq!(folder.as_deref(), Some("vacation"));
+        // A file at the drive root has no folder to show; URLs never do.
+        assert_eq!(file("C:\\img.png").folder_name(), None);
+        let url = ItemLocation::Url("https://example.com/img.png".to_string());
+        assert_eq!(url.folder_name(), None);
+    }
+
+    #[test]
+    fn member_folder_name_is_the_parent_inside_the_archive() {
+        let folder = |member_path: &str| member("C:\\a.cbz", member_path).folder_name();
+        assert_eq!(folder("albums/2024/img.png").as_deref(), Some("2024"));
+        assert_eq!(folder("albums\\img.png").as_deref(), Some("albums"));
+        // A root member falls back to the archive's own name.
+        assert_eq!(folder("img.png").as_deref(), Some("a.cbz"));
     }
 
     #[test]

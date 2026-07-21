@@ -404,14 +404,28 @@ impl Application {
             .filter(|name| !name.is_empty());
         let title = match (self.settings.options.title_bar_mode, file_name) {
             (0, _) | (_, None) => "riv".to_string(),
-            (2, Some(name)) => match self.image_core.listing_position() {
-                Some((index, total)) => format!("[{index}/{total}] {name}"),
-                None => name,
-            },
+            (2, Some(name)) => self.prefix_with_position(name),
+            (3, Some(name)) => {
+                let body = self
+                    .image_core
+                    .current
+                    .as_ref()
+                    .and_then(|current| current.location.folder_name())
+                    .map_or_else(|| name.clone(), |folder| format!("{folder}\\{name}"));
+                self.prefix_with_position(body)
+            }
             (_, Some(name)) => name,
         };
         let wide: Vec<u16> = title.encode_utf16().chain(std::iter::once(0)).collect();
         let _ = unsafe { SetWindowTextW(window, PCWSTR(wide.as_ptr())) };
+    }
+
+    /// Prefixes "[index/total]" when the folder listing gives a position.
+    fn prefix_with_position(&self, body: String) -> String {
+        match self.image_core.listing_position() {
+            Some((index, total)) => format!("[{index}/{total}] {body}"),
+            None => body,
+        }
     }
 
     fn apply_current_image(&mut self, window: HWND) {
