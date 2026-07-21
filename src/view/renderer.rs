@@ -1008,12 +1008,10 @@ impl Renderer {
                 && (effective.M31 - effective.M31.round()).abs() < 1e-4
                 && (effective.M32 - effective.M32.round()).abs() < 1e-4
         });
-        // An active effect chain leaves fractional pixels even at 1:1.
-        let pixels_transformed = !identity_placement || self.effect_output.is_some();
         let quantization_steps = Self::quantization_steps_for(self.swap_chain_format)
             .filter(|_| self.quantize_pass.is_some());
         let pass_dither = match quantization_steps {
-            Some(_) if self.image.is_some() => self.active_dither_mode(pixels_transformed),
+            Some(_) if self.image.is_some() => self.active_dither_mode(identity_placement),
             _ => DitherMode::None,
         };
         self.dither_description = match pass_dither {
@@ -1099,14 +1097,21 @@ impl Renderer {
         self.dither_description
     }
 
-    /// The frame's output dither; untouched 1:1 draws within the backbuffer depth skip it.
-    fn active_dither_mode(&self, pixels_transformed: bool) -> DitherMode {
+    /// The frame's output dither; a 1:1 draw skips it while the source fits the backbuffer depth.
+    fn active_dither_mode(&self, identity_placement: bool) -> DitherMode {
         let backbuffer_bits = if self.swap_chain_format == DXGI_FORMAT_R10G10B10A2_UNORM {
             10
         } else {
             8
         };
-        if !pixels_transformed && self.image_source_bits_per_channel <= backbuffer_bits {
+        let source_bits = self.image_source_bits_per_channel;
+        // Pass-through is exact at equal depth; a color transform can band there.
+        let within_depth = if self.effect_output.is_none() {
+            source_bits <= backbuffer_bits
+        } else {
+            source_bits < backbuffer_bits
+        };
+        if identity_placement && within_depth {
             return DitherMode::None;
         }
         self.dither_mode
