@@ -125,14 +125,14 @@ struct Application {
 impl Application {
     fn new(window: HWND, initial_path: Option<&Path>) -> Result<Self> {
         let (width, height) = client_size(window);
-        let hdr_mode = color::monitor_is_hdr(window);
+        let capabilities = color::display_capabilities(window);
         let renderer = Renderer::new(
             window,
             width.max(1),
             height.max(1),
-            hdr_mode,
-            color::display_bits_per_color(window),
-            tone_map_target_luminance(window, hdr_mode),
+            capabilities.hdr,
+            capabilities.bits_per_color,
+            tone_map_target_luminance(capabilities.hdr, capabilities.max_luminance),
         )?;
         let device_pixel_ratio = unsafe { GetDpiForWindow(window) } as f32 / 96.0;
         let settings = SettingsFile::load();
@@ -152,7 +152,7 @@ impl Application {
             preserve_zoom: false,
             always_on_top: false,
             fullscreen_restore: None,
-            sdr_white_boost: color::sdr_white_boost(window),
+            sdr_white_boost: color::sdr_white_boost_for(window, capabilities.hdr),
             pan_drag_position: None,
             pan_cursor: unsafe { LoadCursorW(None, IDC_SIZEALL)? },
             arrow_cursor: unsafe { LoadCursorW(None, IDC_ARROW)? },
@@ -193,7 +193,8 @@ impl Application {
             return;
         }
         let mut stale = false;
-        let boost = color::sdr_white_boost(window);
+        let hdr_mode = self.renderer.as_ref().is_some_and(Renderer::hdr_mode);
+        let boost = color::sdr_white_boost_for(window, hdr_mode);
         if (boost - self.sdr_white_boost).abs() > f32::EPSILON {
             self.sdr_white_boost = boost;
             if let Some(renderer) = &mut self.renderer {
@@ -201,8 +202,12 @@ impl Application {
             }
             stale = true;
         }
-        let hdr_mode = self.renderer.as_ref().is_some_and(Renderer::hdr_mode);
-        let target_nits = tone_map_target_luminance(window, hdr_mode);
+        let max_luminance = if hdr_mode {
+            color::display_maximum_luminance(window)
+        } else {
+            None
+        };
+        let target_nits = tone_map_target_luminance(hdr_mode, max_luminance);
         if self
             .renderer
             .as_mut()
@@ -217,19 +222,19 @@ impl Application {
 
     /// True when the output mode changed (repaint due); arms the retry on failure.
     fn reconfigure_display_output(&mut self, window: HWND, force: bool) -> bool {
-        let hdr_mode = color::monitor_is_hdr(window);
-        let bits_per_color = color::display_bits_per_color(window);
+        let capabilities = color::display_capabilities(window);
         let mismatch = self.renderer.as_ref().is_some_and(|renderer| {
-            hdr_mode != renderer.hdr_mode() || bits_per_color != renderer.bits_per_color()
+            capabilities.hdr != renderer.hdr_mode()
+                || capabilities.bits_per_color != renderer.bits_per_color()
         });
         if !mismatch && !force {
             return false;
         }
-        self.sdr_white_boost = color::sdr_white_boost(window);
-        let target_nits = tone_map_target_luminance(window, hdr_mode);
+        self.sdr_white_boost = color::sdr_white_boost_for(window, capabilities.hdr);
+        let target_nits = tone_map_target_luminance(capabilities.hdr, capabilities.max_luminance);
         let reconfigured = self.renderer.as_mut().is_some_and(|renderer| {
             renderer
-                .reconfigure_output(hdr_mode, bits_per_color, target_nits)
+                .reconfigure_output(capabilities.hdr, capabilities.bits_per_color, target_nits)
                 .is_ok()
         });
         self.output_reconfigure_pending = !reconfigured;
@@ -614,14 +619,14 @@ impl Application {
         // The old swapchain must release the window first: DXGI allows one per window.
         self.renderer = None;
         let (width, height) = client_size(window);
-        let hdr_mode = color::monitor_is_hdr(window);
+        let capabilities = color::display_capabilities(window);
         self.renderer = Some(Renderer::new(
             window,
             width.max(1),
             height.max(1),
-            hdr_mode,
-            color::display_bits_per_color(window),
-            tone_map_target_luminance(window, hdr_mode),
+            capabilities.hdr,
+            capabilities.bits_per_color,
+            tone_map_target_luminance(capabilities.hdr, capabilities.max_luminance),
         )?);
         self.apply_renderer_state()
     }
@@ -921,9 +926,9 @@ fn client_size(window: HWND) -> (u32, u32) {
 }
 
 /// HDR: monitor peak (600 fallback); SDR: the 203-nit BT.2100 reference white.
-fn tone_map_target_luminance(window: HWND, hdr_mode: bool) -> f32 {
+fn tone_map_target_luminance(hdr_mode: bool, max_luminance: Option<f32>) -> f32 {
     if hdr_mode {
-        color::display_maximum_luminance(window).unwrap_or(600.0)
+        max_luminance.unwrap_or(600.0)
     } else {
         203.0
     }

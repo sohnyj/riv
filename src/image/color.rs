@@ -100,25 +100,37 @@ fn scrgb_color_to_pq(color: D2D1_COLOR_F) -> D2D1_COLOR_F {
     }
 }
 
-/// SDR white boost for HDR mode; 1.0 elsewhere (ACM output is display-referred).
-pub fn sdr_white_boost(window: HWND) -> f32 {
-    if !monitor_is_hdr(window) {
+/// Output capabilities from a single enumeration; unknown output falls back to SDR 8-bit.
+#[derive(Clone, Copy)]
+pub struct DisplayCapabilities {
+    pub hdr: bool,
+    pub bits_per_color: u32,
+    pub max_luminance: Option<f32>,
+}
+
+/// The window output's HDR mode, bit depth and peak luminance in one query.
+pub fn display_capabilities(window: HWND) -> DisplayCapabilities {
+    use windows::Win32::Graphics::Dxgi::Common::DXGI_COLOR_SPACE_RGB_FULL_G2084_NONE_P2020;
+    let Some(description) = window_output_description(window) else {
+        return DisplayCapabilities {
+            hdr: false,
+            bits_per_color: 8,
+            max_luminance: None,
+        };
+    };
+    DisplayCapabilities {
+        hdr: description.ColorSpace == DXGI_COLOR_SPACE_RGB_FULL_G2084_NONE_P2020,
+        bits_per_color: description.BitsPerColor,
+        max_luminance: (description.MaxLuminance > 0.0).then_some(description.MaxLuminance),
+    }
+}
+
+/// SDR white boost given the known HDR state; 1.0 outside HDR (ACM output is display-referred).
+pub fn sdr_white_boost_for(window: HWND, hdr: bool) -> f32 {
+    if !hdr {
         return 1.0;
     }
     query_sdr_white_boost(window).unwrap_or(1.0)
-}
-
-/// True when the window's output reports the G2084 (HDR) color space.
-pub fn monitor_is_hdr(window: HWND) -> bool {
-    use windows::Win32::Graphics::Dxgi::Common::DXGI_COLOR_SPACE_RGB_FULL_G2084_NONE_P2020;
-    window_output_description(window).is_some_and(|description| {
-        description.ColorSpace == DXGI_COLOR_SPACE_RGB_FULL_G2084_NONE_P2020
-    })
-}
-
-/// Bits per color channel of the window's output; 8 when unknown.
-pub fn display_bits_per_color(window: HWND) -> u32 {
-    window_output_description(window).map_or(8, |description| description.BitsPerColor)
 }
 
 /// Maximum luminance (nits) of the window's output, when reported.
