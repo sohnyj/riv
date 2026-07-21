@@ -113,6 +113,8 @@ struct Application {
     overlay: Overlay,
     show_file_info: bool,
     status_text: Option<String>,
+    /// True while status_text holds the frame-step counter, which has no timeout.
+    frame_counter_shown: bool,
     /// Received bytes of the pending URL download the view reports on.
     download_progress: Option<(ItemLocation, u64)>,
     slideshow_active: bool,
@@ -165,6 +167,7 @@ impl Application {
             overlay: Overlay::new()?,
             show_file_info: false,
             status_text: None,
+            frame_counter_shown: false,
             download_progress: None,
             slideshow_active: false,
             animation: None,
@@ -413,6 +416,7 @@ impl Application {
 
     fn apply_current_image(&mut self, window: HWND) {
         self.download_progress = None;
+        self.dismiss_frame_counter();
         let Some(current) = &self.image_core.current else {
             return;
         };
@@ -484,6 +488,7 @@ impl Application {
     /// Drop the image so only centered overlay text (error, download) shows.
     fn clear_displayed_image(&mut self, window: HWND) {
         let _ = unsafe { KillTimer(Some(window), ANIMATION_TIMER) };
+        self.dismiss_frame_counter();
         self.animation = None;
         self.display = None;
         self.displayed_location = None;
@@ -540,7 +545,12 @@ impl Application {
         } else {
             animation.previous_frame()
         };
+        let frame_count = animation.frame_count();
         let _ = unsafe { KillTimer(Some(window), ANIMATION_TIMER) };
+        // The frame-step pill holds until resume or an image change, so no timer.
+        let _ = unsafe { KillTimer(Some(window), STATUS_TEXT_TIMER) };
+        self.status_text = Some(format!("Frame: {} / {}", frame_index + 1, frame_count));
+        self.frame_counter_shown = true;
         self.render_animation_frame(window, frame_index);
     }
 
@@ -559,7 +569,18 @@ impl Application {
 
     fn show_status_text(&mut self, window: HWND, text: String) {
         self.status_text = Some(text);
+        self.frame_counter_shown = false;
         unsafe { SetTimer(Some(window), STATUS_TEXT_TIMER, 1000, None) };
+    }
+
+    /// Drops the frame-step pill; returns whether one was showing.
+    fn dismiss_frame_counter(&mut self) -> bool {
+        let showing = self.frame_counter_shown;
+        if showing {
+            self.status_text = None;
+            self.frame_counter_shown = false;
+        }
+        showing
     }
 
     fn toggle_slideshow(&mut self, window: HWND) {
@@ -1061,10 +1082,16 @@ fn dispatch_action(application: &mut Application, window: HWND, action: Action) 
             application.render(window);
         }
         Action::ShowFileInfo => {
-            application.show_file_info = !application.show_file_info;
-            // Calling up the panel dismisses a lingering pill at once.
-            if application.show_file_info && application.status_text.take().is_some() {
-                let _ = unsafe { KillTimer(Some(window), STATUS_TEXT_TIMER) };
+            // The frame pill masks the panel with no timeout: reveal it, do not toggle off.
+            if application.frame_counter_shown {
+                application.dismiss_frame_counter();
+                application.show_file_info = true;
+            } else {
+                application.show_file_info = !application.show_file_info;
+                // Calling up the panel dismisses a lingering pill at once.
+                if application.show_file_info && application.status_text.take().is_some() {
+                    let _ = unsafe { KillTimer(Some(window), STATUS_TEXT_TIMER) };
+                }
             }
             application.render(window);
         }
@@ -1212,11 +1239,16 @@ fn dispatch_action(application: &mut Application, window: HWND, action: Action) 
         Action::Pause => {
             if let Some(animation) = application.animation.as_mut() {
                 animation.paused = !animation.paused;
-                if animation.paused {
+                let paused = animation.paused;
+                if paused {
                     let _ = unsafe { KillTimer(Some(window), ANIMATION_TIMER) };
                 } else {
                     let delay = animation.current_delay_milliseconds();
                     unsafe { SetTimer(Some(window), ANIMATION_TIMER, delay, None) };
+                }
+                // Resuming drops the frame-step pill left by a manual step.
+                if !paused && application.dismiss_frame_counter() {
+                    application.render(window);
                 }
             }
         }

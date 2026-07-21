@@ -44,6 +44,10 @@ impl Animation {
         self.frame_index
     }
 
+    pub fn frame_count(&self) -> usize {
+        self.frame_delays_milliseconds.len()
+    }
+
     pub fn adjust_speed(&mut self, increase: bool) {
         self.speed_percent = if increase {
             (self.speed_percent + SPEED_STEP_PERCENT).min(SPEED_MAXIMUM_PERCENT)
