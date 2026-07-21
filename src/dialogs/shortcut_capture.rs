@@ -105,7 +105,8 @@ fn warn_conflict(dialog: HWND, encoding: &str, owner_label: &str) {
     let configuration = TASKDIALOGCONFIG {
         cbSize: size_of::<TASKDIALOGCONFIG>() as u32,
         hwndParent: dialog,
-        pszWindowTitle: w!("Shortcut Already Used"),
+        pszWindowTitle: w!("riv"),
+        pszMainInstruction: w!("Shortcut already used"),
         pszContent: PCWSTR(content.as_ptr()),
         ..Default::default()
     };
