@@ -985,29 +985,20 @@ impl Renderer {
             M31: matrix[4],
             M32: matrix[5],
         };
-        // Fold a 90/270 rotation into an axis-aligned placement to spot a 1:1 draw.
-        let axis_aligned_placement = if matrix[1] == 0.0 && matrix[2] == 0.0 {
-            Some(transform)
+        // Fold a 90/270 rotation onto the axes; a 1:1 placement on whole pixels resamples nothing.
+        let identity_placement = if matrix[1] == 0.0 && matrix[2] == 0.0 {
+            Self::is_pixel_identity(transform.M11, transform.M22, transform.M31, transform.M32)
         } else if matrix[0] == 0.0 && matrix[3] == 0.0 {
             let source_height = self.image_pixel_size.1.round();
-            Some(Matrix3x2 {
-                M11: -transform.M21,
-                M12: 0.0,
-                M21: 0.0,
-                M22: transform.M12,
-                M31: source_height * transform.M21 + transform.M31,
-                M32: transform.M32,
-            })
+            Self::is_pixel_identity(
+                -transform.M21,
+                transform.M12,
+                source_height * transform.M21 + transform.M31,
+                transform.M32,
+            )
         } else {
-            None
+            false
         };
-        // 1:1 on whole pixels resamples nothing; leave the pixels untouched.
-        let identity_placement = axis_aligned_placement.as_ref().is_some_and(|effective| {
-            (effective.M11.abs() - 1.0).abs() < 1e-6
-                && (effective.M22.abs() - 1.0).abs() < 1e-6
-                && (effective.M31 - effective.M31.round()).abs() < 1e-4
-                && (effective.M32 - effective.M32.round()).abs() < 1e-4
-        });
         let quantization_steps = Self::quantization_steps_for(self.swap_chain_format)
             .filter(|_| self.quantize_pass.is_some());
         let pass_dither = match quantization_steps {
@@ -1085,6 +1076,14 @@ impl Renderer {
             self.swap_chain.Present(1, DXGI_PRESENT(0)).ok()?;
             overlay_result
         }
+    }
+
+    /// A whole-pixel 1:1 placement (unit scale, integer offset) that resamples nothing.
+    fn is_pixel_identity(scale_x: f32, scale_y: f32, offset_x: f32, offset_y: f32) -> bool {
+        (scale_x.abs() - 1.0).abs() < 1e-6
+            && (scale_y.abs() - 1.0).abs() < 1e-6
+            && (offset_x - offset_x.round()).abs() < 1e-4
+            && (offset_y - offset_y.round()).abs() < 1e-4
     }
 
     /// Whether the last frame drew at a 1:1 placement, for the info panel.
