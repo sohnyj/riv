@@ -580,7 +580,7 @@ fn handle_page_command(
     match (control, notification) {
         (IDC_WINDOW_BGCOLOR_ENABLED, BN_CLICKED) => {
             options.background_color_enabled = is_checked(page, control);
-            sync_bgcolor_button(state, page);
+            sync_background_color_button(state, page);
         }
         (IDC_WINDOW_BGCOLOR_BUTTON, BN_CLICKED) => {
             choose_background_color(state, page);
@@ -745,7 +745,7 @@ fn sync_all_pages(state: &mut OptionsState) {
         IDC_WINDOW_HIDE_CURSOR_FULLSCREEN,
         options.hide_cursor_fullscreen,
     );
-    sync_bgcolor_button(state, window_page);
+    sync_background_color_button(state, window_page);
 
     let image_page = state.pages[1];
     combo_select(image_page, IDC_IMAGE_FILTERING, options.scaling_filter);
@@ -816,7 +816,7 @@ fn sync_all_pages(state: &mut OptionsState) {
     refresh_shortcut_rows(state);
 }
 
-fn sync_bgcolor_button(state: &OptionsState, page: HWND) {
+fn sync_background_color_button(state: &OptionsState, page: HWND) {
     if let Ok(button) = unsafe { GetDlgItem(Some(page), IDC_WINDOW_BGCOLOR_BUTTON) } {
         let _ = unsafe { EnableWindow(button, state.transient_options.background_color_enabled) };
         let _ = unsafe { windows::Win32::Graphics::Gdi::InvalidateRect(Some(button), None, true) };
@@ -840,7 +840,7 @@ fn choose_background_color(state: &mut OptionsState, page: HWND) {
             ((chosen >> 8) & 0xFF) as u8,
             ((chosen >> 16) & 0xFF) as u8,
         );
-        sync_bgcolor_button(state, page);
+        sync_background_color_button(state, page);
     }
 }
 
