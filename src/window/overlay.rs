@@ -350,6 +350,10 @@ pub fn build_info_text(
             image.width, image.height
         ),
     ];
+    lines.push(format!(
+        "Ratio: {}",
+        format_aspect_ratio(image.width, image.height)
+    ));
     if image.frames.len() > 1 {
         lines.push(format!("Frames: {}", image.frames.len()));
     }
@@ -517,6 +521,153 @@ fn scaled_size(bytes: u64) -> String {
         || format!("{bytes} B"),
         |(name, unit)| format!("{:.1} {name}", bytes as f64 / *unit as f64),
     )
+}
+
+/// A recognized aspect ratio; the name is present when it adds to the display form.
+struct NamedRatio {
+    value: f64,
+    display: &'static str,
+    name: Option<&'static str>,
+}
+
+/// Absolute match window for a ratio value.
+const RATIO_MATCH_THRESHOLD: f64 = 0.025;
+
+const NAMED_RATIOS: &[NamedRatio] = &[
+    NamedRatio {
+        value: 1.0,
+        display: "1:1",
+        name: Some("Square"),
+    },
+    NamedRatio {
+        value: 5.0 / 4.0,
+        display: "5:4",
+        name: None,
+    },
+    NamedRatio {
+        value: 4.0 / 3.0,
+        display: "4:3",
+        name: None,
+    },
+    NamedRatio {
+        value: 11.0 / 8.0,
+        display: "11:8",
+        name: Some("Academy"),
+    },
+    NamedRatio {
+        value: 1.43,
+        display: "1.43:1",
+        name: Some("IMAX"),
+    },
+    NamedRatio {
+        value: 3.0 / 2.0,
+        display: "3:2",
+        name: Some("35mm"),
+    },
+    NamedRatio {
+        value: 16.0 / 10.0,
+        display: "16:10",
+        name: None,
+    },
+    NamedRatio {
+        value: 5.0 / 3.0,
+        display: "5:3",
+        name: Some("35mm Widescreen"),
+    },
+    NamedRatio {
+        value: 16.0 / 9.0,
+        display: "16:9",
+        name: None,
+    },
+    NamedRatio {
+        value: 1.85,
+        display: "1.85:1",
+        name: Some("Academy Flat"),
+    },
+    NamedRatio {
+        value: 256.0 / 135.0,
+        display: "1.90:1",
+        name: Some("SMPTE/DCI"),
+    },
+    NamedRatio {
+        value: 2.0,
+        display: "2:1",
+        name: Some("Univisium"),
+    },
+    NamedRatio {
+        value: 2.208,
+        display: "2.20:1",
+        name: Some("70mm"),
+    },
+    NamedRatio {
+        value: 2.35,
+        display: "2.35:1",
+        name: Some("Scope"),
+    },
+    NamedRatio {
+        value: 2.39,
+        display: "2.39:1",
+        name: Some("Panavision"),
+    },
+];
+
+/// Reduced ratio terms up to this stay an integer ratio; larger reductions become a decimal.
+const RATIO_INTEGER_LIMIT: u32 = 32;
+
+fn matched_ratio(value: f64) -> Option<&'static NamedRatio> {
+    NAMED_RATIOS
+        .iter()
+        .find(|entry| (value - entry.value).abs() < RATIO_MATCH_THRESHOLD)
+}
+
+fn greatest_common_divisor(mut first: u32, mut second: u32) -> u32 {
+    while second != 0 {
+        (first, second) = (second, first % second);
+    }
+    first.max(1)
+}
+
+/// The image's own ratio: an integer "width:height" when small, else a cinema-style decimal.
+fn ratio_notation(width: u32, height: u32) -> String {
+    let divisor = greatest_common_divisor(width, height);
+    let (reduced_width, reduced_height) = (width / divisor, height / divisor);
+    if reduced_width <= RATIO_INTEGER_LIMIT && reduced_height <= RATIO_INTEGER_LIMIT {
+        format!("{reduced_width}:{reduced_height}")
+    } else if width >= height {
+        format!("{:.2}:1", f64::from(width) / f64::from(height))
+    } else {
+        format!("1:{:.2}", f64::from(height) / f64::from(width))
+    }
+}
+
+fn reversed_ratio(display: &str) -> String {
+    match display.split_once(':') {
+        Some((width, height)) => format!("{height}:{width}"),
+        None => display.to_string(),
+    }
+}
+
+/// Folds a matched ratio to its label; portrait framings tag it "Vertical".
+fn format_aspect_ratio(width: u32, height: u32) -> String {
+    let width = width.max(1);
+    let height = height.max(1);
+    if width >= height {
+        match matched_ratio(f64::from(width) / f64::from(height)) {
+            Some(entry) => match entry.name {
+                Some(name) => format!("{} ({})", entry.display, name),
+                None => entry.display.to_string(),
+            },
+            None => ratio_notation(width, height),
+        }
+    } else {
+        match matched_ratio(f64::from(height) / f64::from(width)) {
+            Some(entry) => match entry.name {
+                Some(name) => format!("{} ({}, Vertical)", reversed_ratio(entry.display), name),
+                None => format!("{} (Vertical)", reversed_ratio(entry.display)),
+            },
+            None => format!("{} (Vertical)", ratio_notation(width, height)),
+        }
+    }
 }
 
 fn format_file_size(bytes: u64) -> String {
@@ -699,6 +850,60 @@ mod exif_line_tests {
         let mut lines = Vec::new();
         append_exif_lines(&mut lines, &exif);
         assert_eq!(lines, vec!["Exposure time: 2s", "Exposure bias: +0.7 EV"]);
+    }
+}
+
+#[cfg(test)]
+mod aspect_ratio_tests {
+    use super::*;
+
+    #[test]
+    fn named_ratios_label_unless_it_repeats_the_ratio() {
+        assert_eq!(format_aspect_ratio(6000, 4000), "3:2 (35mm)");
+        assert_eq!(format_aspect_ratio(1024, 1024), "1:1 (Square)");
+        // The name repeats the ratio for these, so it is omitted.
+        assert_eq!(format_aspect_ratio(1920, 1080), "16:9");
+        assert_eq!(format_aspect_ratio(4032, 3024), "4:3");
+        assert_eq!(format_aspect_ratio(2000, 1600), "5:4");
+    }
+
+    #[test]
+    fn a_named_ratio_folds_to_its_canonical_label() {
+        // 2467:1648 = 1.4969, within the match window, so it reads as 3:2 (not 1.50:1).
+        assert_eq!(format_aspect_ratio(2467, 1648), "3:2 (35mm)");
+    }
+
+    #[test]
+    fn cinema_ratios_read_as_decimals_with_their_name() {
+        assert_eq!(format_aspect_ratio(1998, 1080), "1.85:1 (Academy Flat)");
+        assert_eq!(format_aspect_ratio(2048, 858), "2.39:1 (Panavision)");
+        assert_eq!(format_aspect_ratio(2048, 931), "2.20:1 (70mm)");
+        // 21:9 has no entry; 2.370 folds to Scope by the table's first-match order.
+        assert_eq!(format_aspect_ratio(2560, 1080), "2.35:1 (Scope)");
+    }
+
+    #[test]
+    fn portrait_shows_the_reversed_ratio_tagged_vertical() {
+        // A distinct landscape name rides along inside the tag.
+        assert_eq!(format_aspect_ratio(4000, 6000), "2:3 (35mm, Vertical)");
+        // When the name just repeats the ratio, only Vertical shows.
+        assert_eq!(format_aspect_ratio(1080, 1920), "9:16 (Vertical)");
+        assert_eq!(format_aspect_ratio(3000, 4000), "3:4 (Vertical)");
+        // An unnamed portrait still carries the Vertical tag on its true ratio.
+        assert_eq!(format_aspect_ratio(1000, 1301), "1:1.30 (Vertical)");
+    }
+
+    #[test]
+    fn an_unnamed_ratio_shows_its_true_value() {
+        // 1301:1000 = 1.301, outside every match window.
+        assert_eq!(format_aspect_ratio(1301, 1000), "1.30:1");
+        // 32:9 was trimmed from the table; it still reads as its reduced integer ratio.
+        assert_eq!(format_aspect_ratio(3840, 1080), "32:9");
+    }
+
+    #[test]
+    fn a_zero_dimension_stays_finite() {
+        assert_eq!(format_aspect_ratio(0, 0), "1:1 (Square)");
     }
 }
 
