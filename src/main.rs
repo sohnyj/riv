@@ -1134,16 +1134,12 @@ fn dispatch_action(application: &mut Application, window: HWND, action: Action) 
             application.render(window);
         }
         Action::ShowFileInfo => {
-            // The frame pill masks the panel with no timeout: reveal it, do not toggle off.
-            if application.frame_counter_shown {
-                application.dismiss_frame_counter();
+            // Any pill masks the panel; one press reveals it rather than toggling off unseen.
+            if application.status_text.take().is_some() {
+                application.frame_counter_shown = false;
                 application.show_file_info = true;
             } else {
                 application.show_file_info = !application.show_file_info;
-                // Calling up the panel dismisses a lingering pill at once.
-                if application.show_file_info && application.status_text.take().is_some() {
-                    let _ = unsafe { KillTimer(Some(window), STATUS_TEXT_TIMER) };
-                }
             }
             application.render(window);
         }
