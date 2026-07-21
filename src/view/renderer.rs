@@ -39,7 +39,7 @@ use windows::Win32::Graphics::Dxgi::Common::{
     DXGI_SAMPLE_DESC,
 };
 use windows::Win32::Graphics::Dxgi::{
-    DXGI_PRESENT, DXGI_SCALING_NONE, DXGI_SWAP_CHAIN_COLOR_SPACE_SUPPORT_FLAG_PRESENT,
+    DXGI_PRESENT, DXGI_SCALING_STRETCH, DXGI_SWAP_CHAIN_COLOR_SPACE_SUPPORT_FLAG_PRESENT,
     DXGI_SWAP_CHAIN_DESC1, DXGI_SWAP_CHAIN_FLAG, DXGI_SWAP_EFFECT_FLIP_DISCARD,
     DXGI_USAGE_RENDER_TARGET_OUTPUT, IDXGIDevice, IDXGIFactory2, IDXGISurface, IDXGISwapChain1,
     IDXGISwapChain3,
@@ -459,7 +459,7 @@ impl Renderer {
                     },
                     BufferUsage: DXGI_USAGE_RENDER_TARGET_OUTPUT,
                     BufferCount: 2,
-                    Scaling: DXGI_SCALING_NONE,
+                    Scaling: DXGI_SCALING_STRETCH,
                     SwapEffect: DXGI_SWAP_EFFECT_FLIP_DISCARD,
                     AlphaMode: DXGI_ALPHA_MODE_IGNORE,
                     ..Default::default()

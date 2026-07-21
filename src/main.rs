@@ -44,8 +44,8 @@ use windows::Win32::Graphics::Direct2D::{
     D2D1_INTERPOLATION_MODE_LINEAR, D2D1_INTERPOLATION_MODE_NEAREST_NEIGHBOR,
 };
 use windows::Win32::Graphics::Gdi::{
-    COLOR_WINDOW, GetMonitorInfoW, GetSysColor, GetSysColorBrush, MONITOR_DEFAULTTONEAREST,
-    MONITORINFO, MonitorFromWindow, ScreenToClient, ValidateRect,
+    COLOR_WINDOW, GetMonitorInfoW, GetSysColor, HBRUSH, MONITOR_DEFAULTTONEAREST, MONITORINFO,
+    MonitorFromWindow, ScreenToClient, ValidateRect,
 };
 use windows::Win32::System::LibraryLoader::GetModuleHandleW;
 use windows::Win32::System::Ole::{IDropTarget, OleInitialize, RevokeDragDrop};
@@ -1629,7 +1629,8 @@ fn main() -> Result<()> {
         hIcon: application_icon,
         hIconSm: application_icon,
         hCursor: unsafe { LoadCursorW(None, IDC_ARROW)? },
-        hbrBackground: unsafe { GetSysColorBrush(COLOR_WINDOW) },
+        // No class brush: the swapchain owns the client area, so a system erase would flash on resize.
+        hbrBackground: HBRUSH::default(),
         lpszClassName: class_name,
         ..Default::default()
     };
