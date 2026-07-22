@@ -26,6 +26,9 @@ const FONT_ASCENT_RATIO: f32 = 1616.0 / 2048.0;
 /// Roomier than the font's tight single-em natural line.
 const LINE_SPACING_RATIO: f32 = 1.3;
 
+/// Separates the info panel's sections; sized to the longest field label ("Advanced color:").
+const SECTION_DIVIDER: &str = "───────────────";
+
 const PANEL_MARGIN: f32 = 12.0;
 const PANEL_PADDING_X: f32 = 12.0;
 const PANEL_PADDING_Y: f32 = 8.0;
@@ -345,68 +348,94 @@ pub fn build_info_text(
     display_gamut: &str,
 ) -> String {
     let megapixels = f64::from(image.width) * f64::from(image.height) / 1_000_000.0;
-    // Grouped: image, then color/HDR, then render, then file (Date modified last, by EXIF Date taken).
-    let mut lines = vec![
-        file_name.to_string(),
-        format!("Format: {}", image.format_name),
-        format!(
-            "Resolution: {} x {} ({megapixels:.1} MP)",
-            image.width, image.height
-        ),
-    ];
-    lines.push(format!(
-        "Ratio: {}",
-        format_aspect_ratio(image.width, image.height)
-    ));
-    if image.frames.len() > 1 {
-        lines.push(format!("Frames: {}", image.frames.len()));
-    }
     let color_profile = match &image.icc_profile {
         Some(profile) => crate::image::decode::icc_profile_description(profile)
             .unwrap_or_else(|| "Embedded".to_string()),
         None => "None".to_string(),
     };
-    lines.push(format!("Color profile: {color_profile}"));
-    match image.storage {
-        PixelStorage::RgbaHalf => lines.push("Bit depth: FP16 linear".to_string()),
-        PixelStorage::Bgra8 => {
-            lines.push(format!("Bit depth: {}-bit", image.source_bits_per_channel));
-        }
-    }
-    if let Some(peak) = image.peak_luminance_nits {
-        lines.push(format!("Content peak: {peak:.0} nits"));
-        if let Some(tone_map) = tone_map {
-            if tone_map.hdr_display {
-                lines.push(format!(
-                    "Display peak: {:.0} nits",
-                    tone_map.display_peak_nits
-                ));
-                lines.push(format!(
-                    "Display full: {:.0} nits",
-                    tone_map.display_full_frame_nits
-                ));
-            }
-            // Tone mapping runs only on an SDR display.
-            if !tone_map.hdr_display && peak > color::SDR_REFERENCE_WHITE_NITS {
-                lines.push(format!("Tone map: {:.0} nits", tone_map.output_target_nits));
-            }
-        }
-    }
-    lines.push(format!("Scaling: {scaling_description}"));
-    lines.push(format!("Output: {output_description}"));
-    lines.push(format!("Advanced color: {color_mode}"));
-    lines.push(format!("Display: {display_gamut}"));
-    lines.push(format!("Dither: {dither_description}"));
-    lines.push(format!("Size: {}", format_file_size(file_size)));
-    lines.push(format!("Path: {location_text}"));
+    let bit_depth = match image.storage {
+        PixelStorage::RgbaHalf => "FP16 linear".to_string(),
+        PixelStorage::Bgra8 => format!("{}-bit", image.source_bits_per_channel),
+    };
+
+    // File: the file's own identity, always present so navigation stays steady.
+    let mut file = vec![
+        format!("Name: {file_name}"),
+        format!("Format: {}", image.format_name),
+        format!(
+            "Resolution: {} x {} ({megapixels:.1} MP)",
+            image.width, image.height
+        ),
+        format!("Ratio: {}", format_aspect_ratio(image.width, image.height)),
+        format!("Bit depth: {bit_depth}"),
+        format!("Color profile: {color_profile}"),
+        format!("Path: {location_text}"),
+        format!("Size: {}", format_file_size(file_size)),
+    ];
     if let Some(modified) = modified {
-        lines.push(format!(
+        file.push(format!(
             "Date modified: {}",
             format_local_datetime(modified)
         ));
     }
-    if let Some(exif) = &image.exif {
-        append_exif_lines(&mut lines, exif);
+
+    // Display: the output state.
+    let display = vec![
+        format!("Advanced color: {color_mode}"),
+        format!("Display: {display_gamut}"),
+        format!("Output: {output_description}"),
+    ];
+
+    // Metrics: frame count and luminance figures, shown only when they apply.
+    let mut metrics = Vec::new();
+    if image.frames.len() > 1 {
+        metrics.push(format!("Frames: {}", image.frames.len()));
+    }
+    if let Some(peak) = image.peak_luminance_nits {
+        metrics.push(format!("Content peak: {peak:.0} nits"));
+    }
+    if image.peak_luminance_nits.is_some()
+        && let Some(tone_map) = tone_map
+        && tone_map.hdr_display
+    {
+        metrics.push(format!(
+            "Display peak: {:.0} nits",
+            tone_map.display_peak_nits
+        ));
+        metrics.push(format!(
+            "Display full: {:.0} nits",
+            tone_map.display_full_frame_nits
+        ));
+    }
+    if let Some(peak) = image.peak_luminance_nits
+        && let Some(tone_map) = tone_map
+        && !tone_map.hdr_display
+        && peak > color::SDR_REFERENCE_WHITE_NITS
+    {
+        metrics.push(format!("Tone map: {:.0} nits", tone_map.output_target_nits));
+    }
+
+    // Render: what the app applied.
+    let render = vec![
+        format!("Scaling: {scaling_description}"),
+        format!("Dither: {dither_description}"),
+    ];
+
+    let mut exif = Vec::new();
+    if let Some(info) = &image.exif {
+        append_exif_lines(&mut exif, info);
+    }
+
+    let sections: Vec<Vec<String>> = [file, display, render, metrics, exif]
+        .into_iter()
+        .filter(|section| !section.is_empty())
+        .collect();
+    let mut lines = Vec::new();
+    for (index, section) in sections.into_iter().enumerate() {
+        if index > 0 {
+            lines.push(SECTION_DIVIDER.to_string());
+        }
+        lines.extend(section);
     }
     lines.join("\n")
 }
