@@ -107,6 +107,8 @@ pub struct DisplayCapabilities {
     pub bits_per_color: u32,
     pub max_luminance: Option<f32>,
     pub max_full_frame_luminance: Option<f32>,
+    /// Advanced color (HDR or SDR auto color management) is on for this output.
+    pub advanced_color: bool,
 }
 
 /// The window output's HDR mode, bit depth and peak luminance in one query.
@@ -118,6 +120,7 @@ pub fn display_capabilities(window: HWND) -> DisplayCapabilities {
             bits_per_color: 8,
             max_luminance: None,
             max_full_frame_luminance: None,
+            advanced_color: false,
         };
     };
     DisplayCapabilities {
@@ -126,6 +129,7 @@ pub fn display_capabilities(window: HWND) -> DisplayCapabilities {
         max_luminance: (description.MaxLuminance > 0.0).then_some(description.MaxLuminance),
         max_full_frame_luminance: (description.MaxFullFrameLuminance > 0.0)
             .then_some(description.MaxFullFrameLuminance),
+        advanced_color: advanced_color_enabled(window),
     }
 }
 
@@ -176,7 +180,11 @@ fn window_output_description(
     None
 }
 
-fn query_sdr_white_boost(window: HWND) -> Option<f32> {
+/// Applies `read` to the active display path driving `window`'s monitor.
+fn for_window_display_path<T>(
+    window: HWND,
+    read: impl Fn(&DISPLAYCONFIG_PATH_INFO) -> Option<T>,
+) -> Option<T> {
     let monitor = unsafe { MonitorFromWindow(window, MONITOR_DEFAULTTONEAREST) };
     let mut monitor_information = MONITORINFOEXW::default();
     monitor_information.monitorInfo.cbSize = size_of::<MONITORINFOEXW>() as u32;
@@ -228,20 +236,35 @@ fn query_sdr_white_boost(window: HWND) -> Option<f32> {
         {
             continue;
         }
-        let mut advanced_color = DISPLAYCONFIG_GET_ADVANCED_COLOR_INFO {
-            header: DISPLAYCONFIG_DEVICE_INFO_HEADER {
-                r#type: DISPLAYCONFIG_DEVICE_INFO_GET_ADVANCED_COLOR_INFO,
-                size: size_of::<DISPLAYCONFIG_GET_ADVANCED_COLOR_INFO>() as u32,
-                adapterId: path.targetInfo.adapterId,
-                id: path.targetInfo.id,
-            },
-            ..Default::default()
-        };
-        if unsafe { DisplayConfigGetDeviceInfo(&raw mut advanced_color.header) } != 0 {
-            return None;
-        }
-        // Bit 0x2 = advancedColorEnabled.
-        if unsafe { advanced_color.Anonymous.value } & 0x2 == 0 {
+        return read(path);
+    }
+    None
+}
+
+/// The advanced-color flags for `path`'s target (bit 0x2 = advancedColorEnabled).
+fn advanced_color_flags(path: &DISPLAYCONFIG_PATH_INFO) -> Option<u32> {
+    let mut advanced_color = DISPLAYCONFIG_GET_ADVANCED_COLOR_INFO {
+        header: DISPLAYCONFIG_DEVICE_INFO_HEADER {
+            r#type: DISPLAYCONFIG_DEVICE_INFO_GET_ADVANCED_COLOR_INFO,
+            size: size_of::<DISPLAYCONFIG_GET_ADVANCED_COLOR_INFO>() as u32,
+            adapterId: path.targetInfo.adapterId,
+            id: path.targetInfo.id,
+        },
+        ..Default::default()
+    };
+    (unsafe { DisplayConfigGetDeviceInfo(&raw mut advanced_color.header) } == 0)
+        .then_some(unsafe { advanced_color.Anonymous.value })
+}
+
+/// True when advanced color (HDR, or SDR auto color management) is on for the window's display.
+pub fn advanced_color_enabled(window: HWND) -> bool {
+    for_window_display_path(window, advanced_color_flags).is_some_and(|flags| flags & 0x2 != 0)
+}
+
+fn query_sdr_white_boost(window: HWND) -> Option<f32> {
+    for_window_display_path(window, |path| {
+        // Bit 0x2 = advancedColorEnabled; the SDR white level is meaningful only then.
+        if advanced_color_flags(path)? & 0x2 == 0 {
             return None;
         }
         let mut white_level = DISPLAYCONFIG_SDR_WHITE_LEVEL {
@@ -258,9 +281,8 @@ fn query_sdr_white_boost(window: HWND) -> Option<f32> {
         {
             return None;
         }
-        return Some(white_level.SDRWhiteLevel as f32 / 1000.0);
-    }
-    None
+        Some(white_level.SDRWhiteLevel as f32 / 1000.0)
+    })
 }
 
 #[cfg(test)]

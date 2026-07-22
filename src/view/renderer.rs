@@ -70,6 +70,14 @@ struct ToneMapTarget {
     full_frame_nits: f32,
 }
 
+/// The output-affecting display state: HDR, wire depth, and advanced-color.
+#[derive(Clone, Copy)]
+pub struct OutputMode {
+    pub hdr: bool,
+    pub bits_per_color: u32,
+    pub advanced_color: bool,
+}
+
 /// Tone-map luminances for the info overlay (nits).
 #[derive(Clone, Copy, PartialEq)]
 pub struct ToneMapInfo {
@@ -81,6 +89,8 @@ pub struct ToneMapInfo {
 
 pub struct Renderer {
     hdr_mode: bool,
+    /// Advanced-color SDR: FP16 scRGB output so DWM color-manages the wide gamut.
+    sdr_wide: bool,
     bits_per_color: u32,
     swap_chain_format: DXGI_FORMAT,
     tone_map_target_nits: f32,
@@ -226,8 +236,7 @@ impl Renderer {
         window: HWND,
         width: u32,
         height: u32,
-        hdr_mode: bool,
-        bits_per_color: u32,
+        mode: OutputMode,
         tone_map_target_nits: f32,
         full_frame_nits: f32,
     ) -> Result<Self> {
@@ -236,26 +245,8 @@ impl Renderer {
             full_frame_nits,
         };
         // A deep-color failure downgrades to the proven formats, never blocks launch.
-        Self::build(
-            window,
-            width,
-            height,
-            hdr_mode,
-            bits_per_color,
-            target,
-            true,
-        )
-        .or_else(|_| {
-            Self::build(
-                window,
-                width,
-                height,
-                hdr_mode,
-                bits_per_color,
-                target,
-                false,
-            )
-        })
+        Self::build(window, width, height, mode, target, true)
+            .or_else(|_| Self::build(window, width, height, mode, target, false))
     }
 
     fn create_color_management_effect(d2d_context: &ID2D1DeviceContext) -> Option<ID2D1Effect> {
@@ -404,6 +395,7 @@ impl Renderer {
     fn preferred_swap_chain_format(
         hdr_mode: bool,
         pq_output: bool,
+        sdr_wide: bool,
         ten_bit_target: bool,
         bits_per_color: u32,
     ) -> DXGI_FORMAT {
@@ -413,6 +405,9 @@ impl Renderer {
             } else {
                 DXGI_FORMAT_R16G16B16A16_FLOAT
             }
+        } else if sdr_wide {
+            // Advanced color is on: hand wide-gamut scRGB to DWM's composition.
+            DXGI_FORMAT_R16G16B16A16_FLOAT
         } else if ten_bit_target && bits_per_color >= 10 {
             // Only the format widens; no declaration, so DWM keeps the sRGB reading.
             DXGI_FORMAT_R10G10B10A2_UNORM
@@ -434,11 +429,16 @@ impl Renderer {
         window: HWND,
         width: u32,
         height: u32,
-        hdr_mode: bool,
-        bits_per_color: u32,
+        mode: OutputMode,
         target: ToneMapTarget,
         deep_color: bool,
     ) -> Result<Self> {
+        let OutputMode {
+            hdr: hdr_mode,
+            bits_per_color,
+            advanced_color,
+        } = mode;
+        let sdr_wide = !hdr_mode && advanced_color;
         let tone_map_target_nits = target.peak_nits;
         let full_frame_nits = target.full_frame_nits;
         // D3D11 WARP is documented only through 11_1; shader model 5.0 needs no more.
@@ -481,6 +481,7 @@ impl Renderer {
         let mut swap_chain_format = Self::preferred_swap_chain_format(
             hdr_mode,
             hdr_output_color_management_effect.is_some(),
+            sdr_wide,
             ten_bit_target,
             bits_per_color,
         );
@@ -549,6 +550,9 @@ impl Renderer {
                         declare_color_space(swap_chain3, DXGI_COLOR_SPACE_RGB_FULL_G10_NONE_P709);
                 }
             }
+        } else if sdr_wide && let Ok(swap_chain3) = swap_chain.cast::<IDXGISwapChain3>() {
+            // The FP16 default is already scRGB; declare it so the intent is explicit.
+            let _ = declare_color_space(&swap_chain3, DXGI_COLOR_SPACE_RGB_FULL_G10_NONE_P709);
         }
         // FP16 leaves quantization to DWM; the UNORM backbuffers keep the pass.
         if swap_chain_format == DXGI_FORMAT_R16G16B16A16_FLOAT {
@@ -563,6 +567,7 @@ impl Renderer {
         );
         let mut renderer = Self {
             hdr_mode,
+            sdr_wide,
             bits_per_color,
             swap_chain_format,
             tone_map_target_nits,
@@ -623,16 +628,21 @@ impl Renderer {
         self.hdr_output_color_management_effect.is_some()
     }
 
+    /// True when the SDR output is advanced-color FP16 scRGB (wide gamut handed to DWM).
+    pub fn sdr_wide(&self) -> bool {
+        self.sdr_wide
+    }
+
     /// Active backbuffer, for the info overlay.
     pub fn output_description(&self) -> &'static str {
-        if self.swap_chain_format == DXGI_FORMAT_R10G10B10A2_UNORM {
+        if self.swap_chain_format == DXGI_FORMAT_R16G16B16A16_FLOAT {
+            "FP16 scRGB"
+        } else if self.swap_chain_format == DXGI_FORMAT_R10G10B10A2_UNORM {
             if self.hdr_mode {
                 "10-bit HDR10 (PQ)"
             } else {
                 "10-bit sRGB"
             }
-        } else if self.hdr_mode {
-            "FP16 scRGB"
         } else {
             "8-bit sRGB"
         }
@@ -715,11 +725,14 @@ impl Renderer {
         &mut self,
         hdr_mode: bool,
         bits_per_color: u32,
+        advanced_color: bool,
         tone_map_target_nits: f32,
         full_frame_nits: f32,
     ) -> Result<()> {
+        let sdr_wide = !hdr_mode && advanced_color;
         // Adopt the target state first so a partial failure cannot retry every WM_MOVE.
         self.hdr_mode = hdr_mode;
+        self.sdr_wide = sdr_wide;
         self.bits_per_color = bits_per_color;
         self.tone_map_target_nits = tone_map_target_nits;
         self.display_full_frame_nits = full_frame_nits;
@@ -751,6 +764,7 @@ impl Renderer {
         let mut swap_chain_format = Self::preferred_swap_chain_format(
             hdr_mode,
             hdr_output_color_management_effect.is_some(),
+            sdr_wide,
             ten_bit_target,
             bits_per_color,
         );
@@ -785,8 +799,13 @@ impl Renderer {
                 }
             }
         } else if let Some(swap_chain3) = &swap_chain3 {
-            // Undo any HDR declaration; SDR composition reads sRGB.
-            let _ = declare_color_space(swap_chain3, DXGI_COLOR_SPACE_RGB_FULL_G22_NONE_P709);
+            if sdr_wide {
+                // Advanced-color SDR: extended-range scRGB for DWM's composition.
+                let _ = declare_color_space(swap_chain3, DXGI_COLOR_SPACE_RGB_FULL_G10_NONE_P709);
+            } else {
+                // Undo any HDR declaration; SDR composition reads sRGB.
+                let _ = declare_color_space(swap_chain3, DXGI_COLOR_SPACE_RGB_FULL_G22_NONE_P709);
+            }
         }
         if swap_chain_format == DXGI_FORMAT_R16G16B16A16_FLOAT {
             self.quantize_pass = None;
@@ -890,8 +909,8 @@ impl Renderer {
             .hdr_tone_map_effect
             .as_ref()
             .zip(peak_luminance_nits.filter(|peak| *peak > SDR_REFERENCE_WHITE_NITS));
-        let scrgb_destination = self.hdr_mode || tone_map.is_some();
-        // Untagged SDR already matches the undeclared sRGB swapchain.
+        let scrgb_destination = self.hdr_mode || self.sdr_wide || tone_map.is_some();
+        // Untagged SDR already matches the undeclared sRGB swapchain; scRGB output needs the transfer.
         if storage == PixelStorage::Bgra8 && icc_profile.is_none() && !scrgb_destination {
             // Unwire the previous bitmap so the effect does not keep it alive.
             unsafe { color_management.SetInput(0, None, true) };
@@ -974,7 +993,6 @@ impl Renderer {
                 // Reinterpret scene-referred white as display-referred, then re-encode to sRGB.
                 tone_mapped.and_then(|tone_mapped| {
                     let normalize = self.tone_map_normalize_effect.as_ref()?;
-                    let output_encoding = self.output_color_management_effect.as_ref()?;
                     let display_white = self.tone_map_target_nits.min(input_maximum);
                     unsafe {
                         normalize.SetValue(
@@ -986,6 +1004,11 @@ impl Renderer {
                     .ok()?;
                     unsafe { normalize.SetInput(0, &tone_mapped, true) };
                     let normalized = unsafe { normalize.GetOutput() }.ok()?;
+                    if self.sdr_wide {
+                        // FP16 scRGB backbuffer: keep the tone-mapped scRGB, no sRGB re-encode.
+                        return Some(normalized);
+                    }
+                    let output_encoding = self.output_color_management_effect.as_ref()?;
                     unsafe { output_encoding.SetInput(0, &normalized, true) };
                     unsafe { output_encoding.GetOutput() }.ok()
                 })

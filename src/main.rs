@@ -31,7 +31,7 @@ use shell::drag_drop::{self, WM_APP_DROP_PATHS};
 use shell::open_with::{self, OpenWithList, WM_APP_OPEN_WITH_LIST};
 use shell::{clipboard, file_ops, open_dialog};
 use view::dither::DitherMode;
-use view::renderer::{Renderer, ToneMapInfo};
+use view::renderer::{OutputMode, Renderer, ToneMapInfo};
 use view::transform::{FitMode, Size, ViewTransform};
 use window::context_menu::{self, MenuSelection, MenuState};
 use window::dwm;
@@ -163,8 +163,11 @@ impl Application {
             window,
             width.max(1),
             height.max(1),
-            capabilities.hdr,
-            capabilities.bits_per_color,
+            OutputMode {
+                hdr: capabilities.hdr,
+                bits_per_color: capabilities.bits_per_color,
+                advanced_color: capabilities.advanced_color,
+            },
             target_nits,
             full_frame_nits,
         )?;
@@ -263,6 +266,7 @@ impl Application {
         let mismatch = self.renderer.as_ref().is_some_and(|renderer| {
             capabilities.hdr != renderer.hdr_mode()
                 || capabilities.bits_per_color != renderer.bits_per_color()
+                || (!capabilities.hdr && capabilities.advanced_color) != renderer.sdr_wide()
         });
         if !mismatch && !force {
             return false;
@@ -274,6 +278,7 @@ impl Application {
                 .reconfigure_output(
                     capabilities.hdr,
                     capabilities.bits_per_color,
+                    capabilities.advanced_color,
                     target_nits,
                     full_frame_nits,
                 )
@@ -291,6 +296,12 @@ impl Application {
             return color::OutputColorTarget::Srgb;
         };
         if !renderer.hdr_mode() {
+            if renderer.sdr_wide() {
+                // Advanced-color SDR: overlay and clear colors go out as linear scRGB too.
+                return color::OutputColorTarget::ScrgbLinear {
+                    sdr_white_boost: self.sdr_white_boost,
+                };
+            }
             return color::OutputColorTarget::Srgb;
         }
         if renderer.pq_output() {
@@ -682,8 +693,11 @@ impl Application {
             window,
             width.max(1),
             height.max(1),
-            capabilities.hdr,
-            capabilities.bits_per_color,
+            OutputMode {
+                hdr: capabilities.hdr,
+                bits_per_color: capabilities.bits_per_color,
+                advanced_color: capabilities.advanced_color,
+            },
             target_nits,
             full_frame_nits,
         )?);
