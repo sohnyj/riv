@@ -2,10 +2,16 @@
 
 A fast, precise, minimal image viewer for Windows.
 
+<p align="center">
+  <img src="screenshots/screenshot1.png" alt="Context menu" height="400">
+  &nbsp;
+  <img src="screenshots/screenshot2.png" alt="Info panel: EXR with HDR tone-map readout" height="400">
+</p>
+
 ## Features
 
-- HDR and native 10-bit output: scRGB FP16 render pipeline, content peak
-  detection, and display-adaptive tone mapping
+- HDR and native 10-bit output: scRGB FP16 render pipeline
+- Display-adaptive HDR tone mapping: content peak, display peak, sustained full-frame luminance
 - Color management: embedded ICC profiles, PQ/HLG sources, Windows Advanced Color
 - Ordered or Fruit output dither shader
 - Animation playback (GIF, APNG, animated WebP) with pause, frame stepping, and speed control
@@ -53,14 +59,14 @@ Decoded by Windows Imaging Component codecs:
 | Format | Notes |
 |---|---|
 | PNG, JPEG, GIF, BMP, ICO, TIFF | |
-| DDS | BC1–BC3 (DXT1–5) only |
+| DDS | BC1–BC3 |
 
 Archives browsable as image folders:
 zip, 7z, rar, tar, and cbz / cbr / cb7 / cbt.
 
 ## Requirements
 
-- Windows 11 23H2+, x86-64
+- Windows 11, x86-64
 - Direct3D 12 capable GPU
 
 ## Building
