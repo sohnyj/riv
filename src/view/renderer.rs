@@ -813,7 +813,7 @@ impl Renderer {
         }
     }
 
-    /// Updates the tone map target in place; true when it changed (monitor move).
+    /// Updates the stored display luminances (overlay, next rewire); true when they changed.
     pub fn set_tone_map_target(&mut self, nits: f32, full_frame_nits: f32) -> bool {
         if (nits - self.tone_map_target_nits).abs() < f32::EPSILON
             && (full_frame_nits - self.display_full_frame_nits).abs() < f32::EPSILON
@@ -822,15 +822,6 @@ impl Renderer {
         }
         self.tone_map_target_nits = nits;
         self.display_full_frame_nits = full_frame_nits;
-        if let Some(effect) = &self.hdr_tone_map_effect {
-            let _ = unsafe {
-                effect.SetValue(
-                    D2D1_HDRTONEMAP_PROP_OUTPUT_MAX_LUMINANCE.0 as u32,
-                    D2D1_PROPERTY_TYPE_FLOAT,
-                    &nits.to_ne_bytes(),
-                )
-            };
-        }
         true
     }
 
