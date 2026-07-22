@@ -5,7 +5,7 @@ use std::time::{SystemTime, UNIX_EPOCH};
 use windows::Win32::Foundation::{FILETIME, SYSTEMTIME};
 use windows::Win32::Graphics::Direct2D::Common::{D2D_RECT_F, D2D1_COLOR_F};
 use windows::Win32::Graphics::Direct2D::{
-    D2D1_DRAW_TEXT_OPTIONS_NONE, D2D1_ROUNDED_RECT, ID2D1DeviceContext,
+    D2D1_DRAW_TEXT_OPTIONS_NONE, D2D1_ROUNDED_RECT, ID2D1DeviceContext, ID2D1SolidColorBrush,
 };
 use windows::Win32::Graphics::DirectWrite::{
     DWRITE_FACTORY_TYPE_SHARED, DWRITE_FONT_STRETCH_NORMAL, DWRITE_FONT_STYLE_NORMAL,
@@ -65,6 +65,15 @@ pub struct OverlayContent {
 enum PanelPlacement {
     TopLeft,
     TopCenter,
+}
+
+/// A solid brush for `color` mapped to the output color target.
+fn solid_brush(
+    context: &ID2D1DeviceContext,
+    color: D2D1_COLOR_F,
+    target: color::OutputColorTarget,
+) -> Result<ID2D1SolidColorBrush> {
+    unsafe { context.CreateSolidColorBrush(&color::output_color(color, target), None) }
 }
 
 pub struct Overlay {
@@ -199,13 +208,9 @@ impl Overlay {
             radiusY: PANEL_CORNER_RADIUS * self.scale,
         };
         unsafe {
-            let background = context.CreateSolidColorBrush(
-                &color::output_color(PANEL_BACKGROUND, output_color_target),
-                None,
-            )?;
+            let background = solid_brush(context, PANEL_BACKGROUND, output_color_target)?;
             context.FillRoundedRectangle(&raw const panel, &background);
-            let foreground = context
-                .CreateSolidColorBrush(&color::output_color(WHITE, output_color_target), None)?;
+            let foreground = solid_brush(context, WHITE, output_color_target)?;
             context.DrawTextLayout(
                 Vector2 {
                     X: left + padding_x,
@@ -255,10 +260,8 @@ impl Overlay {
                     radiusX: PANEL_CORNER_RADIUS * self.scale,
                     radiusY: PANEL_CORNER_RADIUS * self.scale,
                 };
-                let background = context.CreateSolidColorBrush(
-                    &color::output_color(PANEL_BACKGROUND, content.output_color_target),
-                    None,
-                )?;
+                let background =
+                    solid_brush(context, PANEL_BACKGROUND, content.output_color_target)?;
                 context.FillRoundedRectangle(&raw const panel, &background);
             }
             let text_color = if boxed || !content.background_is_bright {
@@ -266,10 +269,7 @@ impl Overlay {
             } else {
                 BLACK
             };
-            let brush = context.CreateSolidColorBrush(
-                &color::output_color(text_color, content.output_color_target),
-                None,
-            )?;
+            let brush = solid_brush(context, text_color, content.output_color_target)?;
             context.DrawTextLayout(
                 Vector2 { X: inset, Y: 0.0 },
                 &layout,
