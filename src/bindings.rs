@@ -112,77 +112,23 @@ impl Bindings {
         keyboard_overrides: Option<&Map<String, Value>>,
         mouse_overrides: Option<&Map<String, Value>>,
     ) -> Self {
-        let mut keyboard = Vec::new();
-        for (name, default_sequences) in DEFAULT_KEYBOARD {
-            let Some(action) = Action::from_name(name) else {
-                continue;
-            };
-            for sequence in override_or_default(keyboard_overrides, name, default_sequences) {
-                if let Some((modifiers, virtual_key)) = parse_key_sequence(&sequence) {
-                    keyboard.push(KeyBinding {
-                        modifiers,
-                        virtual_key,
-                        action,
-                    });
-                }
-            }
-        }
-        if let Some(overrides) = keyboard_overrides {
-            for (name, sequences) in overrides {
-                if DEFAULT_KEYBOARD.iter().any(|(default, _)| default == name) {
-                    continue;
-                }
-                let Some(action) = Action::from_name(name) else {
-                    continue;
-                };
-                for sequence in string_list(sequences) {
-                    if let Some((modifiers, virtual_key)) = parse_key_sequence(&sequence) {
-                        keyboard.push(KeyBinding {
-                            modifiers,
-                            virtual_key,
-                            action,
-                        });
-                    }
-                }
-            }
-        }
-
-        let mut mouse = Vec::new();
-        for (name, default_sequences) in DEFAULT_MOUSE {
-            let Some(action) = Action::from_name(name) else {
-                continue;
-            };
-            for encoding in override_or_default(mouse_overrides, name, default_sequences) {
-                if let Some((modifiers, double_click, base)) = parse_mouse_encoding(&encoding) {
-                    mouse.push(MouseBinding {
-                        modifiers,
-                        double_click,
-                        base,
-                        action,
-                    });
-                }
-            }
-        }
-        if let Some(overrides) = mouse_overrides {
-            for (name, encodings) in overrides {
-                if DEFAULT_MOUSE.iter().any(|(default, _)| default == name) {
-                    continue;
-                }
-                let Some(action) = Action::from_name(name) else {
-                    continue;
-                };
-                for encoding in string_list(encodings) {
-                    if let Some((modifiers, double_click, base)) = parse_mouse_encoding(&encoding) {
-                        mouse.push(MouseBinding {
-                            modifiers,
-                            double_click,
-                            base,
-                            action,
-                        });
-                    }
-                }
-            }
-        }
+        let keyboard = collect_bindings(DEFAULT_KEYBOARD, keyboard_overrides, parse_key_sequence)
+            .into_iter()
+            .map(|((modifiers, virtual_key), action)| KeyBinding {
+                modifiers,
+                virtual_key,
+                action,
+            })
+            .collect();
+        let mouse = collect_bindings(DEFAULT_MOUSE, mouse_overrides, parse_mouse_encoding)
+            .into_iter()
+            .map(|((modifiers, double_click, base), action)| MouseBinding {
+                modifiers,
+                double_click,
+                base,
+                action,
+            })
+            .collect();
         Self { keyboard, mouse }
     }
 
@@ -319,6 +265,39 @@ pub fn resolved_mouse_encodings(
             Some(format_mouse_encoding(modifiers, double_click, base))
         })
         .collect()
+}
+
+/// Parsed bindings for one input kind: defaults (overridable) then override-only actions.
+fn collect_bindings<T>(
+    defaults: &[(&str, &[&str])],
+    overrides: Option<&Map<String, Value>>,
+    mut parse: impl FnMut(&str) -> Option<T>,
+) -> Vec<(T, Action)> {
+    let mut collected = Vec::new();
+    for (name, default_sequences) in defaults {
+        if let Some(action) = Action::from_name(name) {
+            for sequence in override_or_default(overrides, name, default_sequences) {
+                if let Some(parsed) = parse(&sequence) {
+                    collected.push((parsed, action));
+                }
+            }
+        }
+    }
+    if let Some(overrides) = overrides {
+        for (name, sequences) in overrides {
+            if defaults.iter().any(|(default, _)| default == name) {
+                continue;
+            }
+            if let Some(action) = Action::from_name(name) {
+                for sequence in string_list(sequences) {
+                    if let Some(parsed) = parse(&sequence) {
+                        collected.push((parsed, action));
+                    }
+                }
+            }
+        }
+    }
+    collected
 }
 
 fn override_or_default(
