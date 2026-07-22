@@ -341,7 +341,7 @@ pub fn build_info_text(
     dither_description: &str,
 ) -> String {
     let megapixels = f64::from(image.width) * f64::from(image.height) / 1_000_000.0;
-    // Content and render facts first, file-system facts second; Path wraps, so it closes the block.
+    // File facts follow the render facts; Date modified goes last, next to EXIF Date taken.
     let mut lines = vec![
         file_name.to_string(),
         format!("Format: {}", image.format_name),
@@ -376,13 +376,13 @@ pub fn build_info_text(
     lines.push(format!("Output: {output_description}"));
     lines.push(format!("Dither: {dither_description}"));
     lines.push(format!("Size: {}", format_file_size(file_size)));
+    lines.push(format!("Path: {location_text}"));
     if let Some(modified) = modified {
         lines.push(format!(
             "Date modified: {}",
             format_local_datetime(modified)
         ));
     }
-    lines.push(format!("Path: {location_text}"));
     if let Some(exif) = &image.exif {
         append_exif_lines(&mut lines, exif);
     }
