@@ -118,6 +118,8 @@ struct Application {
     status_text: Option<StatusText>,
     /// Memoized info panel text, rebuilt only when a display input changes.
     info_text_cache: Option<InfoTextCache>,
+    /// Advanced-color state and EDID gamut for the info overlay; refreshed on display change.
+    display_description: DisplayDescription,
     /// The window's current monitor; a WM_MOVE re-evaluates color only when it changes.
     current_monitor: HMONITOR,
     /// File size and modified time, snapshotted when the item is drawn (never re-statted).
@@ -154,7 +156,29 @@ struct InfoTextCache {
     scaling_description: &'static str,
     dither_description: &'static str,
     tone_map: Option<ToneMapInfo>,
+    display_description: DisplayDescription,
     text: String,
+}
+
+/// Advanced-color mode and EDID gamut label of the window's display, for the info overlay.
+#[derive(Clone, Copy, PartialEq)]
+struct DisplayDescription {
+    color_mode: &'static str,
+    gamut: &'static str,
+}
+
+fn display_description(window: HWND) -> DisplayDescription {
+    let capabilities = color::display_capabilities(window);
+    // Matches DISPLAYCONFIG_ADVANCED_COLOR_MODE (SDR/WCG/HDR) from the existing signals.
+    let color_mode = if capabilities.hdr {
+        "HDR"
+    } else if capabilities.advanced_color {
+        "WCG"
+    } else {
+        "SDR"
+    };
+    let gamut = color::display_gamut(window).map_or("unknown", |gamut| gamut.label());
+    DisplayDescription { color_mode, gamut }
 }
 
 impl Application {
@@ -207,6 +231,7 @@ impl Application {
             show_file_info: false,
             status_text: None,
             info_text_cache: None,
+            display_description: display_description(window),
             current_monitor: unsafe { MonitorFromWindow(window, MONITOR_DEFAULTTONEAREST) },
             metadata_snapshot: None,
             download_progress: None,
@@ -229,6 +254,7 @@ impl Application {
         Ok(application)
     }
 
+    /// Reconfigure the output on HDR mode or bit depth change; else refresh boost and tone map target.
     /// Updates the tracked monitor; true when the window moved to a different display.
     fn monitor_changed(&mut self, window: HWND) -> bool {
         let monitor = unsafe { MonitorFromWindow(window, MONITOR_DEFAULTTONEAREST) };
@@ -237,8 +263,8 @@ impl Application {
         changed
     }
 
-    /// Reconfigure the output on HDR mode or bit depth change; else refresh boost and tone map target.
     fn refresh_display_state(&mut self, window: HWND) {
+        self.display_description = display_description(window);
         if self.reconfigure_display_output(window, false) {
             self.request_render(window);
             return;
@@ -803,6 +829,7 @@ impl Application {
                 && cache.scaling_description == scaling_description
                 && cache.dither_description == dither_description
                 && cache.tone_map == tone_map
+                && cache.display_description == self.display_description
         });
         if !reuse {
             let text = overlay::build_info_text(
@@ -815,6 +842,8 @@ impl Application {
                 scaling_description,
                 dither_description,
                 tone_map,
+                self.display_description.color_mode,
+                self.display_description.gamut,
             );
             let location = current.location.clone();
             self.info_text_cache = Some(InfoTextCache {
@@ -824,6 +853,7 @@ impl Application {
                 scaling_description,
                 dither_description,
                 tone_map,
+                display_description: self.display_description,
                 text,
             });
         }

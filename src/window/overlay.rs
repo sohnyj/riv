@@ -341,6 +341,8 @@ pub fn build_info_text(
     scaling_description: &str,
     dither_description: &str,
     tone_map: Option<ToneMapInfo>,
+    color_mode: &str,
+    display_gamut: &str,
 ) -> String {
     let megapixels = f64::from(image.width) * f64::from(image.height) / 1_000_000.0;
     // Grouped: image, then color/HDR, then render, then file (Date modified last, by EXIF Date taken).
@@ -392,6 +394,8 @@ pub fn build_info_text(
     }
     lines.push(format!("Scaling: {scaling_description}"));
     lines.push(format!("Output: {output_description}"));
+    lines.push(format!("Advanced color: {color_mode}"));
+    lines.push(format!("Display: {display_gamut}"));
     lines.push(format!("Dither: {dither_description}"));
     lines.push(format!("Size: {}", format_file_size(file_size)));
     lines.push(format!("Path: {location_text}"));
@@ -770,6 +774,8 @@ mod info_text_tests {
             "Bilinear",
             "None",
             None,
+            "SDR",
+            "sRGB",
         );
         assert!(text.contains("Bit depth: 8-bit"));
     }
@@ -802,6 +808,8 @@ mod info_text_tests {
             "Bilinear",
             "None",
             None,
+            "SDR",
+            "sRGB",
         );
         assert!(untagged.contains("Color profile: None"));
         image.icc_profile = Some(vec![0; 4]);
@@ -815,6 +823,8 @@ mod info_text_tests {
             "Bilinear",
             "None",
             None,
+            "SDR",
+            "sRGB",
         );
         assert!(unparsable.contains("Color profile: Embedded"));
     }
@@ -853,6 +863,8 @@ mod info_text_tests {
             "Bilinear",
             "None",
             Some(tone_map),
+            "SDR",
+            "sRGB",
         );
         assert!(text.contains("Content peak: 1000 nits"), "{text}");
         assert!(text.contains("Display peak: 600 nits"));
@@ -895,6 +907,8 @@ mod info_text_tests {
             "Bilinear",
             "None",
             Some(tone_map),
+            "SDR",
+            "sRGB",
         );
         // SDR display: tone-map target shown, HDR-only caps hidden.
         assert!(text.contains("Tone map: 203 nits"), "{text}");

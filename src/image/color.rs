@@ -133,6 +133,66 @@ pub fn display_capabilities(window: HWND) -> DisplayCapabilities {
     }
 }
 
+/// The display's color primaries (CIE xy), from EDID; for the WCG diagnostic overlay.
+#[derive(Clone, Copy)]
+pub struct DisplayGamut {
+    pub red: [f32; 2],
+    pub green: [f32; 2],
+    pub blue: [f32; 2],
+    pub white: [f32; 2],
+}
+
+impl DisplayGamut {
+    /// Nearest known gamut by primary distance; the tell is whether it is wider than sRGB.
+    pub fn label(&self) -> &'static str {
+        // R, G, B primaries (xy) of the reference gamuts.
+        const REFERENCES: [(&str, [[f32; 2]; 3]); 4] = [
+            ("sRGB", [[0.640, 0.330], [0.300, 0.600], [0.150, 0.060]]),
+            (
+                "Adobe RGB",
+                [[0.640, 0.330], [0.210, 0.710], [0.150, 0.060]],
+            ),
+            ("DCI-P3", [[0.680, 0.320], [0.265, 0.690], [0.150, 0.060]]),
+            ("BT.2020", [[0.708, 0.292], [0.170, 0.797], [0.131, 0.046]]),
+        ];
+        let measured = [self.red, self.green, self.blue];
+        let mut best = ("unknown", f32::MAX);
+        for (name, reference) in REFERENCES {
+            let distance: f32 = reference
+                .iter()
+                .zip(measured)
+                .map(|(target, actual)| {
+                    (target[0] - actual[0]).powi(2) + (target[1] - actual[1]).powi(2)
+                })
+                .sum();
+            if distance < best.1 {
+                best = (name, distance);
+            }
+        }
+        best.0
+    }
+
+    /// True when EDID carried real chromaticities rather than zeros.
+    pub fn is_known(&self) -> bool {
+        [self.red, self.green, self.blue, self.white]
+            .iter()
+            .flatten()
+            .any(|coordinate| *coordinate > 0.0)
+    }
+}
+
+/// The window output's EDID primaries, when the driver reports them.
+pub fn display_gamut(window: HWND) -> Option<DisplayGamut> {
+    let description = window_output_description(window)?;
+    let gamut = DisplayGamut {
+        red: description.RedPrimary,
+        green: description.GreenPrimary,
+        blue: description.BluePrimary,
+        white: description.WhitePoint,
+    };
+    gamut.is_known().then_some(gamut)
+}
+
 /// SDR white boost given the known HDR state; 1.0 outside HDR (ACM output is display-referred).
 pub fn sdr_white_boost_for(window: HWND, hdr: bool) -> f32 {
     if !hdr {
