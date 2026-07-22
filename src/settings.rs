@@ -218,6 +218,12 @@ impl SettingsFile {
         self.options = Options::from_document(&self.document);
     }
 
+    /// Writes the in-memory options into the settings document (persisted at exit/Apply).
+    pub fn sync_options(&mut self) {
+        let options = std::mem::take(&mut self.options);
+        self.set_options(&options);
+    }
+
     pub fn set_options(&mut self, options: &Options) {
         let default = Options::default();
         let entries: [(&str, Value, Value); 23] = [

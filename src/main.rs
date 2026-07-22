@@ -853,11 +853,9 @@ impl Application {
         let _ = unsafe { InvalidateRect(Some(window), None, false) };
     }
 
-    /// Writes the current options back to disk and rebroadcasts them.
-    /// Records a toggled option in the in-memory document (written at exit) and applies it.
+    /// Records the current options in the in-memory document (written at exit) and applies them.
     fn commit_options(&mut self, window: HWND) {
-        let options = self.settings.options.clone();
-        self.settings.set_options(&options);
+        self.settings.sync_options();
         self.apply_options(window);
     }
 
