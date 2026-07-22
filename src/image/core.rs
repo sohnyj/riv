@@ -376,7 +376,6 @@ impl ImageCore {
             // A single listed entry is a real target only for an unlisted anchor.
             1 => self
                 .navigation_anchor()
-                .as_ref()
                 .and_then(|anchor| self.position_of(anchor))
                 .is_none(),
             _ => true,
@@ -387,7 +386,6 @@ impl ImageCore {
     pub fn playlist_window(&self, capacity: usize) -> PlaylistWindow {
         let anchor_index = self
             .navigation_anchor()
-            .as_ref()
             .and_then(|location| self.position_of(location));
         let total = self.entries.len();
         let first_index = playlist_window_start(total, anchor_index, capacity);
@@ -441,7 +439,7 @@ impl ImageCore {
 
     pub fn reload_current(&mut self) -> bool {
         // Reload retries the position baseline, so an errored item reloads itself.
-        let Some(location) = self.navigation_anchor() else {
+        let Some(location) = self.navigation_anchor().cloned() else {
             return false;
         };
         self.cache.remove(&location);
@@ -642,7 +640,7 @@ impl ImageCore {
         self.refresh_listing_if_current_missing();
         let anchor = self.navigation_anchor();
         let target = self.navigation_target(command)?;
-        if anchor.is_some_and(|anchor| anchor == target) {
+        if anchor.is_some_and(|anchor| anchor == &target) {
             return None; // same item, nothing to do
         }
         self.note_navigation(command);
@@ -654,7 +652,7 @@ impl ImageCore {
         let target = self.entries.get(index)?.location.clone();
         if self
             .navigation_anchor()
-            .is_some_and(|anchor| anchor == target)
+            .is_some_and(|anchor| anchor == &target)
         {
             return None; // same item, nothing to do
         }
@@ -678,19 +676,11 @@ impl ImageCore {
         self.pending_display.is_some()
     }
 
-    fn navigation_anchor(&self) -> Option<ItemLocation> {
+    fn navigation_anchor(&self) -> Option<&ItemLocation> {
         self.pending_display
-            .clone()
-            .or_else(|| {
-                self.load_error
-                    .as_ref()
-                    .map(|(location, _)| location.clone())
-            })
-            .or_else(|| {
-                self.current
-                    .as_ref()
-                    .map(|current| current.location.clone())
-            })
+            .as_ref()
+            .or_else(|| self.load_error.as_ref().map(|(location, _)| location))
+            .or_else(|| self.current.as_ref().map(|current| &current.location))
     }
 
     fn navigation_target(&self, command: NavigationCommand) -> Option<ItemLocation> {
@@ -699,7 +689,6 @@ impl ImageCore {
         }
         let anchor_index = self
             .navigation_anchor()
-            .as_ref()
             .and_then(|location| self.position_of(location));
         match command {
             NavigationCommand::First => self.first_existing_entry(),
@@ -888,7 +877,6 @@ impl ImageCore {
             self.cache.clear(); // preloading off: drop the cache
         } else if let Some(anchor_index) = self
             .navigation_anchor()
-            .as_ref()
             .and_then(|location| self.position_of(location))
         {
             let length = self.entries.len();
@@ -951,7 +939,6 @@ impl ImageCore {
         let (backward, forward, _) = self.preload_distances();
         let anchor_index = self
             .navigation_anchor()
-            .as_ref()
             .and_then(|location| self.position_of(location));
         if let Some(anchor_index) = anchor_index {
             let length = self.entries.len();
@@ -988,9 +975,7 @@ impl ImageCore {
             return;
         }
         let anchor = self.navigation_anchor();
-        let anchor_index = anchor
-            .as_ref()
-            .and_then(|location| self.position_of(location));
+        let anchor_index = anchor.and_then(|location| self.position_of(location));
         let length = self.entries.len();
         let loop_enabled = self.options.loop_within_folder;
         let priorities = anchor_index.map_or_else(HashMap::new, |anchor| {
@@ -1001,7 +986,7 @@ impl ImageCore {
             .iter()
             .map(|(location, entry)| {
                 // The baseline item goes last even when unlisted (URL items).
-                let key = if anchor.as_ref() == Some(location) {
+                let key = if anchor == Some(location) {
                     (0, 0)
                 } else {
                     self.position_of(location).zip(anchor_index).map_or(
