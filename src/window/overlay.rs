@@ -385,13 +385,8 @@ pub fn build_info_text(
                 ));
             }
             if peak > color::SDR_REFERENCE_WHITE_NITS {
-                let clip = if peak > tone_map.output_target_nits {
-                    " (clipping)"
-                } else {
-                    ""
-                };
                 lines.push(format!(
-                    "Tone map: {:.0} nits{clip}",
+                    "Tone map: {:.0} nits",
                     tone_map.output_target_nits
                 ));
             }
@@ -867,8 +862,9 @@ mod info_text_tests {
         assert!(text.contains("Content peak: 1000 nits"), "{text}");
         assert!(text.contains("Display peak: 600 nits"));
         assert!(text.contains("Display full: 400 nits"));
-        // Content peak (1000) exceeds the target (500), so the map clips.
-        assert!(text.contains("Tone map: 500 nits (clipping)"));
+        // Content peak (1000) exceeds the target (500): tone mapping is active.
+        assert!(text.contains("Tone map: 500 nits"), "{text}");
+        assert!(!text.contains("clipping"), "{text}");
     }
 }
 
