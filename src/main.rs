@@ -123,6 +123,8 @@ struct Application {
     /// Received bytes of the pending URL download the view reports on.
     download_progress: Option<(ItemLocation, u64)>,
     slideshow_active: bool,
+    /// When the current slideshow item began showing, for the animation-aware interval.
+    slideshow_item_shown_at: Option<std::time::Instant>,
     animation: Option<Animation>,
     drop_target: Option<IDropTarget>,
     open_with_list: Option<Box<OpenWithList>>,
@@ -200,6 +202,7 @@ impl Application {
             metadata_snapshot: None,
             download_progress: None,
             slideshow_active: false,
+            slideshow_item_shown_at: None,
             animation: None,
             drop_target: None,
             open_with_list: None,
@@ -251,7 +254,7 @@ impl Application {
         }
     }
 
-    /// True when the output mode changed (repaint due); arms the retry on failure.
+    /// True when the output mode changed (repaint due); marks the retry pending on failure.
     fn reconfigure_display_output(&mut self, window: HWND, force: bool) -> bool {
         let capabilities = color::display_capabilities(window);
         let mismatch = self.renderer.as_ref().is_some_and(|renderer| {
@@ -503,6 +506,9 @@ impl Application {
                 )
             };
         }
+        if self.slideshow_active {
+            self.slideshow_item_shown_at = Some(std::time::Instant::now());
+        }
         if !same_view {
             // Members list the archive itself; URL items stay out of recents.
             if let Some(file) = location.containing_file()
@@ -625,16 +631,22 @@ impl Application {
         showing
     }
 
+    /// Restarts the slideshow interval; navigation resets it so each item gets a full turn.
+    fn restart_slideshow_timer(&self, window: HWND) {
+        let interval = self.settings.options.slideshow_interval_seconds * 1000;
+        unsafe { SetTimer(Some(window), SLIDESHOW_TIMER, interval, None) };
+    }
+
     fn toggle_slideshow(&mut self, window: HWND) {
         if self.slideshow_active {
             self.cancel_slideshow(window);
         } else {
-            let interval = self.settings.options.slideshow_interval_seconds * 1000;
-            unsafe { SetTimer(Some(window), SLIDESHOW_TIMER, interval, None) };
+            self.restart_slideshow_timer(window);
             // The declared direction aims the preload before the first tick.
             self.image_core
                 .set_travel_direction(self.settings.options.slideshow_reversed);
             self.slideshow_active = true;
+            self.slideshow_item_shown_at = Some(std::time::Instant::now());
             keep_system_awake(true);
             self.show_status_text(window, "Slideshow: Start".to_string());
             self.request_render(window);
@@ -932,7 +944,7 @@ impl Application {
         self.settings.options.hide_cursor_fullscreen && self.fullscreen_restore.is_some()
     }
 
-    /// Re-arm or tear down the idle timer after a fullscreen or option change.
+    /// Start or stop the cursor idle timer after a fullscreen or option change.
     fn update_cursor_autohide(&mut self, window: HWND) {
         if self.cursor_autohide_active() {
             self.last_pointer_position = None;
@@ -969,7 +981,7 @@ impl Application {
         if !self.cursor_autohide_active() {
             return;
         }
-        // A held drag or a pointer over a menu or another window: re-arm, don't hide.
+        // A held drag or a pointer over a menu or another window: restart the countdown, don't hide.
         if self.pan_drag_position.is_some() || !cursor_over_window(window) {
             start_cursor_hide_timer(window);
             return;
@@ -1043,7 +1055,12 @@ fn execute_navigation(
     command: NavigationCommand,
 ) -> bool {
     let result = application.image_core.navigate(command);
-    apply_navigation_result(application, window, result)
+    let navigated = apply_navigation_result(application, window, result);
+    if navigated && application.slideshow_active {
+        // A manual or auto move restarts the interval so the new item gets a full turn.
+        application.restart_slideshow_timer(window);
+    }
+    navigated
 }
 
 fn apply_navigation_result(
@@ -1907,13 +1924,27 @@ extern "system" fn window_procedure(
         }
         WM_TIMER if wparam.0 == SLIDESHOW_TIMER => {
             if let Some(application) = application_from_window(window) {
-                let command = if application.settings.options.slideshow_reversed {
-                    NavigationCommand::Previous
+                // Hold an animated frame until it finishes one loop; the interval is the floor.
+                let hold = application
+                    .animation
+                    .as_ref()
+                    .map_or(0, Animation::loop_duration_milliseconds);
+                let elapsed = application
+                    .slideshow_item_shown_at
+                    .map_or(u32::MAX, |shown| {
+                        shown.elapsed().as_millis().min(u128::from(u32::MAX)) as u32
+                    });
+                if hold > elapsed {
+                    unsafe { SetTimer(Some(window), SLIDESHOW_TIMER, hold - elapsed, None) };
                 } else {
-                    NavigationCommand::Next
-                };
-                if !execute_navigation(application, window, command) {
-                    application.cancel_slideshow(window);
+                    let command = if application.settings.options.slideshow_reversed {
+                        NavigationCommand::Previous
+                    } else {
+                        NavigationCommand::Next
+                    };
+                    if !execute_navigation(application, window, command) {
+                        application.cancel_slideshow(window);
+                    }
                 }
             }
             LRESULT(0)

@@ -448,7 +448,7 @@ fn apply(state: &mut OptionsState) {
         } else {
             start_menu::remove_shortcut();
         }
-        // Re-probe so a failed create keeps Apply armed instead of lying.
+        // Re-probe so a failed create keeps Apply enabled instead of lying.
         state.start_menu_saved = start_menu::shortcut_exists();
     }
     let payload = AppliedOptions {

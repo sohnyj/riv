@@ -33,6 +33,14 @@ impl Animation {
         (delay * 100 / self.speed_percent).max(1)
     }
 
+    /// Time for one pass through every frame at the current speed.
+    pub fn loop_duration_milliseconds(&self) -> u32 {
+        self.frame_delays_milliseconds
+            .iter()
+            .map(|&delay| (delay.max(1) * 100 / self.speed_percent).max(1))
+            .fold(0u32, u32::saturating_add)
+    }
+
     pub fn next_frame(&mut self) -> usize {
         self.frame_index = (self.frame_index + 1) % self.frame_delays_milliseconds.len();
         self.frame_index
