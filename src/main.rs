@@ -45,10 +45,13 @@ use windows::Win32::Graphics::Direct2D::{
 };
 use windows::Win32::Graphics::Gdi::{
     COLOR_WINDOW, GetMonitorInfoW, GetSysColor, HBRUSH, InvalidateRect, MONITOR_DEFAULTTONEAREST,
-    MONITORINFO, MonitorFromWindow, ScreenToClient, ValidateRect,
+    MONITORINFO, MonitorFromWindow, SC_SCREENSAVE, ScreenToClient, ValidateRect,
 };
 use windows::Win32::System::LibraryLoader::GetModuleHandleW;
 use windows::Win32::System::Ole::{IDropTarget, OleInitialize, RevokeDragDrop};
+use windows::Win32::System::Power::{
+    ES_CONTINUOUS, ES_DISPLAY_REQUIRED, ES_SYSTEM_REQUIRED, SetThreadExecutionState,
+};
 use windows::Win32::UI::HiDpi::GetDpiForWindow;
 use windows::Win32::UI::Input::KeyboardAndMouse::{
     ReleaseCapture, SetCapture, VK_CONTROL, VK_ESCAPE, VK_LWIN, VK_MENU, VK_RWIN, VK_SHIFT,
@@ -58,15 +61,15 @@ use windows::Win32::UI::WindowsAndMessaging::{
     DispatchMessageW, GWL_STYLE, GWLP_USERDATA, GetClientRect, GetCursorPos, GetMessageW,
     GetWindowLongPtrW, GetWindowPlacement, GetWindowRect, HCURSOR, HTCAPTION, HTCLIENT,
     HWND_NOTOPMOST, HWND_TOP, HWND_TOPMOST, IDC_ARROW, IDC_SIZEALL, IsZoomed, KillTimer,
-    LoadCursorW, LoadIconW, MSG, PostMessageW, PostQuitMessage, RegisterClassExW, SW_HIDE, SW_SHOW,
-    SW_SHOWMAXIMIZED, SWP_FRAMECHANGED, SWP_NOACTIVATE, SWP_NOMOVE, SWP_NOSIZE, SWP_NOZORDER,
-    SendMessageW, SetCursor, SetTimer, SetWindowLongPtrW, SetWindowPlacement, SetWindowPos,
-    SetWindowTextW, ShowWindow, TranslateMessage, WINDOWPLACEMENT, WM_ACTIVATEAPP, WM_APP,
-    WM_CLOSE, WM_CONTEXTMENU, WM_DESTROY, WM_DISPLAYCHANGE, WM_DPICHANGED, WM_GESTURE, WM_KEYDOWN,
-    WM_LBUTTONDBLCLK, WM_LBUTTONDOWN, WM_LBUTTONUP, WM_MBUTTONDOWN, WM_MOUSEHWHEEL, WM_MOUSEMOVE,
-    WM_MOUSEWHEEL, WM_MOVE, WM_NCDESTROY, WM_NCLBUTTONDOWN, WM_PAINT, WM_SETCURSOR,
-    WM_SETTINGCHANGE, WM_SIZE, WM_SYSCHAR, WM_SYSKEYDOWN, WM_TIMER, WM_XBUTTONDOWN, WNDCLASSEXW,
-    WS_OVERLAPPEDWINDOW, WindowFromPoint,
+    LoadCursorW, LoadIconW, MSG, PostMessageW, PostQuitMessage, RegisterClassExW, SC_MONITORPOWER,
+    SW_HIDE, SW_SHOW, SW_SHOWMAXIMIZED, SWP_FRAMECHANGED, SWP_NOACTIVATE, SWP_NOMOVE, SWP_NOSIZE,
+    SWP_NOZORDER, SendMessageW, SetCursor, SetTimer, SetWindowLongPtrW, SetWindowPlacement,
+    SetWindowPos, SetWindowTextW, ShowWindow, TranslateMessage, WINDOWPLACEMENT, WM_ACTIVATEAPP,
+    WM_APP, WM_CLOSE, WM_CONTEXTMENU, WM_DESTROY, WM_DISPLAYCHANGE, WM_DPICHANGED, WM_GESTURE,
+    WM_KEYDOWN, WM_LBUTTONDBLCLK, WM_LBUTTONDOWN, WM_LBUTTONUP, WM_MBUTTONDOWN, WM_MOUSEHWHEEL,
+    WM_MOUSEMOVE, WM_MOUSEWHEEL, WM_MOVE, WM_NCDESTROY, WM_NCLBUTTONDOWN, WM_PAINT, WM_SETCURSOR,
+    WM_SETTINGCHANGE, WM_SIZE, WM_SYSCHAR, WM_SYSCOMMAND, WM_SYSKEYDOWN, WM_TIMER, WM_XBUTTONDOWN,
+    WNDCLASSEXW, WS_OVERLAPPEDWINDOW, WindowFromPoint,
 };
 use windows::core::{PCWSTR, Result, w};
 
@@ -632,6 +635,7 @@ impl Application {
             self.image_core
                 .set_travel_direction(self.settings.options.slideshow_reversed);
             self.slideshow_active = true;
+            keep_system_awake(true);
             self.show_status_text(window, "Slideshow: Start".to_string());
             self.request_render(window);
         }
@@ -641,6 +645,7 @@ impl Application {
         if self.slideshow_active {
             let _ = unsafe { KillTimer(Some(window), SLIDESHOW_TIMER) };
             self.slideshow_active = false;
+            keep_system_awake(false);
             self.show_status_text(window, "Slideshow: Stop".to_string());
             self.request_render(window);
         }
@@ -1422,6 +1427,16 @@ fn rename_current_file(application: &mut Application, window: HWND) {
         }
         Err(error) => file_ops::show_rename_error(window, &error),
     }
+}
+
+/// Blocks system sleep and display power-off; the screen saver is blocked in WM_SYSCOMMAND.
+fn keep_system_awake(active: bool) {
+    let flags = if active {
+        ES_CONTINUOUS | ES_SYSTEM_REQUIRED | ES_DISPLAY_REQUIRED
+    } else {
+        ES_CONTINUOUS
+    };
+    unsafe { SetThreadExecutionState(flags) };
 }
 
 fn toggle_fullscreen(application: &mut Application, window: HWND) {
@@ -2261,6 +2276,18 @@ extern "system" fn window_procedure(
                 drop(unsafe { Box::from_raw(pointer) });
             }
             unsafe { DefWindowProcW(window, message, wparam, lparam) }
+        }
+        WM_SYSCOMMAND => {
+            // SetThreadExecutionState does not cover the screen saver; block it here.
+            let command = wparam.0 as u32 & 0xFFF0;
+            let blocked = (command == SC_SCREENSAVE || command == SC_MONITORPOWER)
+                && application_from_window(window)
+                    .is_some_and(|application| application.slideshow_active);
+            if blocked {
+                LRESULT(0)
+            } else {
+                unsafe { DefWindowProcW(window, message, wparam, lparam) }
+            }
         }
         WM_DESTROY => {
             unsafe { PostQuitMessage(0) };
