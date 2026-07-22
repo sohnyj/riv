@@ -44,8 +44,8 @@ use windows::Win32::Graphics::Direct2D::{
     D2D1_INTERPOLATION_MODE_LINEAR, D2D1_INTERPOLATION_MODE_NEAREST_NEIGHBOR,
 };
 use windows::Win32::Graphics::Gdi::{
-    COLOR_WINDOW, GetMonitorInfoW, GetSysColor, HBRUSH, MONITOR_DEFAULTTONEAREST, MONITORINFO,
-    MonitorFromWindow, ScreenToClient, ValidateRect,
+    COLOR_WINDOW, GetMonitorInfoW, GetSysColor, HBRUSH, InvalidateRect, MONITOR_DEFAULTTONEAREST,
+    MONITORINFO, MonitorFromWindow, ScreenToClient, ValidateRect,
 };
 use windows::Win32::System::LibraryLoader::GetModuleHandleW;
 use windows::Win32::System::Ole::{IDropTarget, OleInitialize, RevokeDragDrop};
@@ -217,7 +217,7 @@ impl Application {
     /// Reconfigure the output on HDR mode or bit depth change; else refresh boost and tone map target.
     fn refresh_display_color_state(&mut self, window: HWND) {
         if self.reconfigure_display_output(window, false) {
-            self.render(window);
+            self.request_render(window);
             return;
         }
         let mut stale = false;
@@ -244,7 +244,7 @@ impl Application {
             stale = true;
         }
         if stale {
-            self.render(window);
+            self.request_render(window);
         }
     }
 
@@ -515,7 +515,7 @@ impl Application {
         // Snapshot file metadata once, now that this (possibly preloaded) item is displayed.
         self.metadata_snapshot = self.image_core.current_item_metadata();
         self.update_window_title(window);
-        self.render(window);
+        self.request_render(window);
     }
 
     fn apply_load_error(&mut self, window: HWND) {
@@ -534,7 +534,7 @@ impl Application {
             renderer.clear_image();
         }
         self.update_window_title(window);
-        self.render(window);
+        self.request_render(window);
     }
 
     fn apply_download_progress(&mut self, window: HWND, progress: DownloadProgress) {
@@ -547,7 +547,7 @@ impl Application {
             // The download screen stands alone; the previous image goes away.
             self.clear_displayed_image(window);
         } else {
-            self.render(window);
+            self.request_render(window);
         }
     }
 
@@ -605,7 +605,7 @@ impl Application {
         {
             let _ = renderer.set_image(&frame.pixels, &image);
         }
-        self.render(window);
+        self.request_render(window);
     }
 
     fn show_status_text(&mut self, window: HWND, text: String) {
@@ -633,7 +633,7 @@ impl Application {
                 .set_travel_direction(self.settings.options.slideshow_reversed);
             self.slideshow_active = true;
             self.show_status_text(window, "Slideshow: Start".to_string());
-            self.render(window);
+            self.request_render(window);
         }
     }
 
@@ -642,7 +642,7 @@ impl Application {
             let _ = unsafe { KillTimer(Some(window), SLIDESHOW_TIMER) };
             self.slideshow_active = false;
             self.show_status_text(window, "Slideshow: Stop".to_string());
-            self.render(window);
+            self.request_render(window);
         }
     }
 
@@ -817,6 +817,10 @@ impl Application {
         }
     }
 
+    fn request_render(&self, window: HWND) {
+        let _ = unsafe { InvalidateRect(Some(window), None, false) };
+    }
+
     /// Writes the current options back to disk and rebroadcasts them.
     fn persist_options(&mut self, window: HWND) {
         let options = self.settings.options.clone();
@@ -838,7 +842,7 @@ impl Application {
             .update_options(core_options(&self.settings.options));
         self.update_cursor_autohide(window);
         self.update_window_title(window);
-        self.render(window);
+        self.request_render(window);
     }
 
     fn gate_satisfied(&self, gate: ActivationGate) -> bool {
@@ -887,7 +891,7 @@ impl Application {
             let percent = (self.view_transform.scale * 100.0).round();
             self.show_status_text(window, format!("Zoom: {percent}%"));
         }
-        self.render(window);
+        self.request_render(window);
     }
 
     fn wheel_zoom(&mut self, window: HWND, wheel_delta: i16) {
@@ -916,7 +920,7 @@ impl Application {
         let image = self.image_size();
         self.view_transform
             .pan_by(delta_x, delta_y, viewport, image);
-        self.render(window);
+        self.request_render(window);
     }
 
     fn cursor_autohide_active(&self) -> bool {
@@ -1127,7 +1131,7 @@ fn dispatch_action(application: &mut Application, window: HWND, action: Action) 
                 "1:1"
             };
             application.show_status_text(window, text.to_string());
-            application.render(window);
+            application.request_render(window);
         }
         Action::FitMode => {
             application.settings.options.fit_mode ^= 1;
@@ -1147,7 +1151,7 @@ fn dispatch_action(application: &mut Application, window: HWND, action: Action) 
                 "Off"
             };
             application.show_status_text(window, format!("Preserve Zoom: {state}"));
-            application.render(window);
+            application.request_render(window);
         }
         Action::ShowFileInfo => {
             // Any pill masks the panel; one press reveals it rather than toggling off unseen.
@@ -1156,7 +1160,7 @@ fn dispatch_action(application: &mut Application, window: HWND, action: Action) 
             } else {
                 application.show_file_info = !application.show_file_info;
             }
-            application.render(window);
+            application.request_render(window);
         }
         Action::Loop => {
             application.settings.options.loop_within_folder ^= true;
@@ -1201,7 +1205,7 @@ fn dispatch_action(application: &mut Application, window: HWND, action: Action) 
                 _ => "Rotate: 0\u{b0}",
             };
             application.show_status_text(window, text.to_string());
-            application.render(window);
+            application.request_render(window);
         }
         Action::Mirror => {
             application.view_transform.mirror();
@@ -1211,7 +1215,7 @@ fn dispatch_action(application: &mut Application, window: HWND, action: Action) 
                 "Mirror: Off"
             };
             application.show_status_text(window, text.to_string());
-            application.render(window);
+            application.request_render(window);
         }
         Action::Flip => {
             application.view_transform.flip();
@@ -1221,7 +1225,7 @@ fn dispatch_action(application: &mut Application, window: HWND, action: Action) 
                 "Flip: Off"
             };
             application.show_status_text(window, text.to_string());
-            application.render(window);
+            application.request_render(window);
         }
         Action::AlwaysOnTop => {
             application.always_on_top = !application.always_on_top;
@@ -1242,11 +1246,11 @@ fn dispatch_action(application: &mut Application, window: HWND, action: Action) 
                 )
             };
             application.show_status_text(window, format!("Always on Top: {state}"));
-            application.render(window);
+            application.request_render(window);
         }
         Action::Fullscreen => {
             toggle_fullscreen(application, window);
-            application.render(window);
+            application.request_render(window);
         }
         Action::Open => {
             let last_directory = application.settings.last_file_dialog_directory();
@@ -1311,7 +1315,7 @@ fn dispatch_action(application: &mut Application, window: HWND, action: Action) 
                 }
                 // Resuming drops the frame-step pill left by a manual step.
                 if !paused && application.dismiss_frame_counter() {
-                    application.render(window);
+                    application.request_render(window);
                 }
             }
         }
@@ -1322,7 +1326,7 @@ fn dispatch_action(application: &mut Application, window: HWND, action: Action) 
                 animation.adjust_speed(action == Action::IncreaseSpeed);
                 let text = format!("Speed: {}%", animation.speed_percent());
                 application.show_status_text(window, text);
-                application.render(window);
+                application.request_render(window);
             }
         }
         Action::ResetSpeed => {
@@ -1330,7 +1334,7 @@ fn dispatch_action(application: &mut Application, window: HWND, action: Action) 
                 animation.reset_speed();
                 let text = format!("Speed: {}%", animation.speed_percent());
                 application.show_status_text(window, text);
-                application.render(window);
+                application.request_render(window);
             }
         }
         Action::Options => {
@@ -1484,7 +1488,7 @@ fn handle_key(application: &mut Application, window: HWND, virtual_key: u16) -> 
         && application.fullscreen_restore.is_some()
     {
         toggle_fullscreen(application, window);
-        application.render(window);
+        application.request_render(window);
         return true;
     }
     // Fixed paste-to-open key; user bindings on Ctrl+V take precedence above.
@@ -1789,12 +1793,17 @@ extern "system" fn window_procedure(
                     if !resized {
                         let _ = application.rebuild_renderer(window);
                     }
+                    // Rendered synchronously here; validate so the WM_PAINT skips it.
                     application.render(window);
+                    let _ = unsafe { ValidateRect(Some(window), None) };
                 }
             }
             LRESULT(0)
         }
         WM_PAINT => {
+            if let Some(application) = application_from_window(window) {
+                application.render(window);
+            }
             let _ = unsafe { ValidateRect(Some(window), None) };
             LRESULT(0)
         }
@@ -1839,7 +1848,7 @@ extern "system" fn window_procedure(
                     .set_binding_overrides(&payload.keyboard, &payload.mouse);
                 let _ = application.settings.save();
                 application.apply_options(window);
-                application.render(window);
+                application.request_render(window);
             }
             LRESULT(0)
         }
@@ -1877,7 +1886,7 @@ extern "system" fn window_procedure(
                 && matches!(application.status_text, Some(StatusText::Timed(_)))
             {
                 application.status_text = None;
-                application.render(window);
+                application.request_render(window);
             }
             LRESULT(0)
         }
