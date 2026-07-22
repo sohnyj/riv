@@ -60,8 +60,7 @@ struct ModeEffects {
     white_level_effect: Option<ID2D1Effect>,
 }
 
-/// Display luminances the tone-map output blends between (peak for small highlights,
-/// full-frame for bright frames).
+/// Display luminances: the tone-map peak, and the full-frame limit shown in the overlay.
 #[derive(Clone, Copy)]
 struct ToneMapTarget {
     peak_nits: f32,
@@ -82,10 +81,8 @@ pub struct Renderer {
     bits_per_color: u32,
     swap_chain_format: DXGI_FORMAT,
     tone_map_target_nits: f32,
-    /// Display's sustained full-frame luminance; the tone-map output blends toward it.
+    /// Display's sustained full-frame luminance, shown in the overlay diagnostics.
     display_full_frame_nits: f32,
-    /// Fraction of the current image above SDR white, driving that blend.
-    content_bright_coverage: f32,
     swap_chain: IDXGISwapChain1,
     d3d_device: ID3D11Device,
     d3d_context: ID3D11DeviceContext,
@@ -210,13 +207,6 @@ fn wire_color_management(
     Ok(())
 }
 
-/// Tone-map output target: the display peak pulled toward the sustained full-frame limit as
-/// more of the frame is bright, so the display's own power limit does not re-crush it.
-fn blended_tone_map_output(peak_nits: f32, full_frame_nits: f32, bright_coverage: f32) -> f32 {
-    let full_frame = full_frame_nits.min(peak_nits);
-    full_frame + (peak_nits - full_frame) * (1.0 - bright_coverage.clamp(0.0, 1.0))
-}
-
 /// WhiteLevelAdjustment multiplies by input/output white level.
 fn set_white_level_input(effect: &ID2D1Effect, input_white_nits: f32) -> Result<()> {
     unsafe {
@@ -314,27 +304,31 @@ impl Renderer {
         srgb_color_context: Option<&ID2D1ColorContext>,
     ) -> ModeEffects {
         let color_management_effect = Self::create_color_management_effect(d2d_context);
-        let hdr_tone_map_effect = color_management_effect.as_ref().and_then(|_| {
-            let effect = unsafe { d2d_context.CreateEffect(&CLSID_D2D1HdrToneMap) }.ok()?;
-            unsafe {
-                effect.SetValue(
-                    D2D1_HDRTONEMAP_PROP_OUTPUT_MAX_LUMINANCE.0 as u32,
-                    D2D1_PROPERTY_TYPE_FLOAT,
-                    &tone_map_target_nits.to_ne_bytes(),
-                )
-            }
-            .ok()?;
-            // The SDR curve mode raises midtones; always use the HDR curve.
-            unsafe {
-                effect.SetValue(
-                    D2D1_HDRTONEMAP_PROP_DISPLAY_MODE.0 as u32,
-                    D2D1_PROPERTY_TYPE_ENUM,
-                    &D2D1_HDRTONEMAP_DISPLAY_MODE_HDR.0.to_ne_bytes(),
-                )
-            }
-            .ok()?;
-            Some(effect)
-        });
+        // SDR only: HDR displays pass content through with no tone map.
+        let hdr_tone_map_effect = (!hdr_mode)
+            .then_some(())
+            .and(color_management_effect.as_ref())
+            .and_then(|_| {
+                let effect = unsafe { d2d_context.CreateEffect(&CLSID_D2D1HdrToneMap) }.ok()?;
+                unsafe {
+                    effect.SetValue(
+                        D2D1_HDRTONEMAP_PROP_OUTPUT_MAX_LUMINANCE.0 as u32,
+                        D2D1_PROPERTY_TYPE_FLOAT,
+                        &tone_map_target_nits.to_ne_bytes(),
+                    )
+                }
+                .ok()?;
+                // The SDR curve mode raises midtones; always use the HDR curve.
+                unsafe {
+                    effect.SetValue(
+                        D2D1_HDRTONEMAP_PROP_DISPLAY_MODE.0 as u32,
+                        D2D1_PROPERTY_TYPE_ENUM,
+                        &D2D1_HDRTONEMAP_DISPLAY_MODE_HDR.0.to_ne_bytes(),
+                    )
+                }
+                .ok()?;
+                Some(effect)
+            });
         let tone_map_normalize_effect = (!hdr_mode)
             .then_some(())
             .and(hdr_tone_map_effect.as_ref())
@@ -554,7 +548,6 @@ impl Renderer {
             swap_chain_format,
             tone_map_target_nits,
             display_full_frame_nits: full_frame_nits,
-            content_bright_coverage: 0.0,
             swap_chain,
             d3d_device,
             d3d_context,
@@ -592,17 +585,13 @@ impl Renderer {
         self.hdr_mode
     }
 
-    /// Tone-map luminances for the info overlay: display caps and the blended output target.
+    /// Tone-map luminances for the info overlay: display caps and the output target.
     pub fn tone_map_info(&self) -> ToneMapInfo {
         ToneMapInfo {
             hdr_display: self.hdr_mode,
             display_peak_nits: self.tone_map_target_nits,
             display_full_frame_nits: self.display_full_frame_nits,
-            output_target_nits: blended_tone_map_output(
-                self.tone_map_target_nits,
-                self.display_full_frame_nits,
-                self.content_bright_coverage,
-            ),
+            output_target_nits: self.tone_map_target_nits,
         }
     }
 
@@ -817,13 +806,11 @@ impl Renderer {
         self.tone_map_target_nits = nits;
         self.display_full_frame_nits = full_frame_nits;
         if let Some(effect) = &self.hdr_tone_map_effect {
-            let output =
-                blended_tone_map_output(nits, full_frame_nits, self.content_bright_coverage);
             let _ = unsafe {
                 effect.SetValue(
                     D2D1_HDRTONEMAP_PROP_OUTPUT_MAX_LUMINANCE.0 as u32,
                     D2D1_PROPERTY_TYPE_FLOAT,
-                    &output.to_ne_bytes(),
+                    &nits.to_ne_bytes(),
                 )
             };
         }
@@ -853,7 +840,6 @@ impl Renderer {
         self.image_pixel_size = (image.pixel_width as f32, image.pixel_height as f32);
         self.image_storage = image.storage;
         self.image_source_bits_per_channel = image.source_bits_per_channel;
-        self.content_bright_coverage = image.bright_coverage.unwrap_or(0.0);
         self.rewire_effect_chain(
             &bitmap,
             image.icc_profile.as_deref(),
@@ -889,7 +875,7 @@ impl Renderer {
         let Some(color_management) = &self.color_management_effect else {
             return;
         };
-        // Content within SDR white skips the tone map but keeps the white boost.
+        // HDR passes through; SDR maps content above SDR white to the target.
         let tone_map = self
             .hdr_tone_map_effect
             .as_ref()
@@ -965,11 +951,7 @@ impl Renderer {
                 if !input_set {
                     return;
                 }
-                let output_maximum = blended_tone_map_output(
-                    self.tone_map_target_nits,
-                    self.display_full_frame_nits,
-                    self.content_bright_coverage,
-                );
+                let output_maximum = self.tone_map_target_nits;
                 let _ = unsafe {
                     tone_map_effect.SetValue(
                         D2D1_HDRTONEMAP_PROP_OUTPUT_MAX_LUMINANCE.0 as u32,
@@ -979,37 +961,37 @@ impl Renderer {
                 };
                 unsafe { tone_map_effect.SetInput(0, &converted, true) };
                 let tone_mapped = unsafe { tone_map_effect.GetOutput() }.ok();
-                if self.hdr_mode {
-                    // Absolute luminance: no SDR white boost after tone mapping.
-                    tone_mapped
-                } else {
-                    tone_mapped.and_then(|tone_mapped| {
-                        let normalize = self.tone_map_normalize_effect.as_ref()?;
-                        let output_encoding = self.output_color_management_effect.as_ref()?;
-                        // Reinterpret scene-referred (80 nits) as display-referred white.
-                        let display_white = self.tone_map_target_nits.min(input_maximum);
-                        unsafe {
-                            normalize.SetValue(
-                                D2D1_WHITELEVELADJUSTMENT_PROP_OUTPUT_WHITE_LEVEL.0 as u32,
-                                D2D1_PROPERTY_TYPE_FLOAT,
-                                &display_white.to_ne_bytes(),
-                            )
-                        }
-                        .ok()?;
-                        unsafe { normalize.SetInput(0, &tone_mapped, true) };
-                        let normalized = unsafe { normalize.GetOutput() }.ok()?;
-                        unsafe { output_encoding.SetInput(0, &normalized, true) };
-                        unsafe { output_encoding.GetOutput() }.ok()
-                    })
+                // Reinterpret scene-referred white as display-referred, then re-encode to sRGB.
+                tone_mapped.and_then(|tone_mapped| {
+                    let normalize = self.tone_map_normalize_effect.as_ref()?;
+                    let output_encoding = self.output_color_management_effect.as_ref()?;
+                    let display_white = self.tone_map_target_nits.min(input_maximum);
+                    unsafe {
+                        normalize.SetValue(
+                            D2D1_WHITELEVELADJUSTMENT_PROP_OUTPUT_WHITE_LEVEL.0 as u32,
+                            D2D1_PROPERTY_TYPE_FLOAT,
+                            &display_white.to_ne_bytes(),
+                        )
+                    }
+                    .ok()?;
+                    unsafe { normalize.SetInput(0, &tone_mapped, true) };
+                    let normalized = unsafe { normalize.GetOutput() }.ok()?;
+                    unsafe { output_encoding.SetInput(0, &normalized, true) };
+                    unsafe { output_encoding.GetOutput() }.ok()
+                })
+            }
+            None => {
+                // SDR content takes the white-level boost; HDR content passes through.
+                let hdr_content =
+                    peak_luminance_nits.is_some_and(|peak| peak > SDR_REFERENCE_WHITE_NITS);
+                match &self.white_level_effect {
+                    Some(white_level) if !hdr_content => {
+                        unsafe { white_level.SetInput(0, &converted, true) };
+                        unsafe { white_level.GetOutput() }.ok()
+                    }
+                    _ => Some(converted),
                 }
             }
-            None => match &self.white_level_effect {
-                Some(white_level) => {
-                    unsafe { white_level.SetInput(0, &converted, true) };
-                    unsafe { white_level.GetOutput() }.ok()
-                }
-                None => Some(converted),
-            },
         };
         // The HDR10 backbuffer quantizes PQ; encode after every linear stage.
         self.effect_output = match (&self.hdr_output_color_management_effect, scene) {
@@ -1177,27 +1159,3 @@ impl Renderer {
     }
 }
 
-#[cfg(test)]
-mod tone_map_blend_tests {
-    use super::blended_tone_map_output;
-
-    #[test]
-    fn full_coverage_targets_the_full_frame_limit() {
-        assert!((blended_tone_map_output(1000.0, 400.0, 1.0) - 400.0).abs() < 0.01);
-    }
-
-    #[test]
-    fn no_coverage_targets_the_peak() {
-        assert!((blended_tone_map_output(1000.0, 400.0, 0.0) - 1000.0).abs() < 0.01);
-    }
-
-    #[test]
-    fn half_coverage_lands_midway() {
-        assert!((blended_tone_map_output(1000.0, 400.0, 0.5) - 700.0).abs() < 0.01);
-    }
-
-    #[test]
-    fn a_full_frame_above_peak_clamps_to_peak() {
-        assert!((blended_tone_map_output(500.0, 800.0, 0.0) - 500.0).abs() < 0.01);
-    }
-}

@@ -1029,7 +1029,7 @@ fn tone_map_target_luminance(hdr_mode: bool, max_luminance: Option<f32>) -> f32 
     }
 }
 
-/// Full-frame limit paired with the tone-map target; falls back to the target so no blend applies.
+/// Full-frame limit paired with the tone-map target, for the overlay diagnostics.
 fn tone_map_full_frame_luminance(hdr_mode: bool, max_full_frame: Option<f32>, target: f32) -> f32 {
     if hdr_mode {
         max_full_frame.unwrap_or(target)

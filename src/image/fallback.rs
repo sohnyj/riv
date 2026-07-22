@@ -178,7 +178,6 @@ fn compose_webp_frames(
         storage: PixelStorage::Bgra8,
         source_bits_per_channel: 8,
         peak_luminance_nits: None,
-        bright_coverage: None,
         frames,
     })
 }
@@ -283,9 +282,7 @@ fn decode_exr_with(
     if !reserved {
         return Err(uncoded_error("EXR is too large to fit in memory"));
     }
-    let peak_stats = peak_luminance_from_half_pixels(&pixels);
-    let peak_luminance_nits = peak_stats.as_ref().map(|stats| stats.peak_nits);
-    let bright_coverage = peak_stats.as_ref().map(|stats| stats.bright_coverage);
+    let peak_luminance_nits = peak_luminance_from_half_pixels(&pixels);
     Ok(DecodedImage {
         width: width as u32,
         height: height as u32,
@@ -297,7 +294,6 @@ fn decode_exr_with(
         storage: PixelStorage::RgbaHalf,
         source_bits_per_channel: 16,
         peak_luminance_nits,
-        bright_coverage,
         frames: vec![Frame {
             pixels,
             delay_milliseconds: 0,
@@ -458,7 +454,6 @@ fn decode_heif_primary_image(
         storage: PixelStorage::Bgra8,
         source_bits_per_channel: 8,
         peak_luminance_nits: None,
-        bright_coverage: None,
         frames: vec![Frame {
             pixels,
             delay_milliseconds: 0,

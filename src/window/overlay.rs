@@ -757,7 +757,6 @@ mod info_text_tests {
             storage: PixelStorage::Bgra8,
             source_bits_per_channel: 8,
             peak_luminance_nits: None,
-            bright_coverage: None,
             frames: vec![Frame {
                 pixels: vec![0; 8],
                 delay_milliseconds: 0,
@@ -790,7 +789,6 @@ mod info_text_tests {
             storage: PixelStorage::Bgra8,
             source_bits_per_channel: 8,
             peak_luminance_nits: None,
-            bright_coverage: None,
             frames: vec![Frame {
                 pixels: vec![0; 8],
                 delay_milliseconds: 0,
@@ -836,7 +834,6 @@ mod info_text_tests {
             storage: PixelStorage::RgbaHalf,
             source_bits_per_channel: 16,
             peak_luminance_nits: Some(1000.0),
-            bright_coverage: Some(0.5),
             frames: vec![Frame {
                 pixels: vec![0; 16],
                 delay_milliseconds: 0,
