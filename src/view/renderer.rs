@@ -723,13 +723,16 @@ impl Renderer {
         self.scene_shader_resource_view = None;
         self.backbuffer_render_target_view = None;
 
-        self.quantize_pass = unsafe {
-            self.d2d_context
-                .IsDxgiFormatSupported(DXGI_FORMAT_R16G16B16A16_UNORM)
+        // The pass depends only on the (unchanged) device, so keep it across reconfigures.
+        if self.quantize_pass.is_none()
+            && unsafe {
+                self.d2d_context
+                    .IsDxgiFormatSupported(DXGI_FORMAT_R16G16B16A16_UNORM)
+            }
+            .as_bool()
+        {
+            self.quantize_pass = QuantizePass::new(&self.d3d_device).ok();
         }
-        .as_bool()
-        .then(|| QuantizePass::new(&self.d3d_device).ok())
-        .flatten();
         let ten_bit_target = self.quantize_pass.is_some();
 
         let mut hdr_output_color_management_effect = (hdr_mode && ten_bit_target)
