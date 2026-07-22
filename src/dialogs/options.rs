@@ -546,11 +546,8 @@ unsafe extern "system" fn page_procedure(
             };
             let draw = unsafe { &*(lparam.0 as *const DRAWITEMSTRUCT) };
             if draw.CtlID == IDC_WINDOW_BGCOLOR_BUTTON as u32 {
-                let (red, green, blue) = state.transient_options.background_color;
                 let brush = unsafe {
-                    CreateSolidBrush(COLORREF(
-                        u32::from(red) | (u32::from(green) << 8) | (u32::from(blue) << 16),
-                    ))
+                    CreateSolidBrush(rgb_to_colorref(state.transient_options.background_color))
                 };
                 unsafe {
                     FillRect(draw.hDC, &raw const draw.rcItem, brush);
@@ -823,23 +820,31 @@ fn sync_background_color_button(state: &OptionsState, page: HWND) {
     }
 }
 
+/// Packs an (R, G, B) triple into a Win32 COLORREF (0x00BBGGRR).
+fn rgb_to_colorref((red, green, blue): (u8, u8, u8)) -> COLORREF {
+    COLORREF(u32::from(red) | (u32::from(green) << 8) | (u32::from(blue) << 16))
+}
+
+/// Unpacks a Win32 COLORREF into an (R, G, B) triple.
+fn colorref_to_rgb(color: COLORREF) -> (u8, u8, u8) {
+    (
+        (color.0 & 0xFF) as u8,
+        ((color.0 >> 8) & 0xFF) as u8,
+        ((color.0 >> 16) & 0xFF) as u8,
+    )
+}
+
 fn choose_background_color(state: &mut OptionsState, page: HWND) {
-    let (red, green, blue) = state.transient_options.background_color;
     let mut configuration = CHOOSECOLORW {
         lStructSize: size_of::<CHOOSECOLORW>() as u32,
         hwndOwner: state.dialog,
-        rgbResult: COLORREF(u32::from(red) | (u32::from(green) << 8) | (u32::from(blue) << 16)),
+        rgbResult: rgb_to_colorref(state.transient_options.background_color),
         lpCustColors: state.custom_colors.as_mut_ptr(),
         Flags: CC_RGBINIT | CC_FULLOPEN,
         ..Default::default()
     };
     if unsafe { ChooseColorW(&raw mut configuration) }.as_bool() {
-        let chosen = configuration.rgbResult.0;
-        state.transient_options.background_color = (
-            (chosen & 0xFF) as u8,
-            ((chosen >> 8) & 0xFF) as u8,
-            ((chosen >> 16) & 0xFF) as u8,
-        );
+        state.transient_options.background_color = colorref_to_rgb(configuration.rgbResult);
         sync_background_color_button(state, page);
     }
 }
