@@ -243,15 +243,10 @@ impl Application {
             }
             stale = true;
         }
-        let max_luminance = if hdr_mode {
-            color::display_maximum_luminance(window)
+        let (max_luminance, max_full_frame) = if hdr_mode {
+            color::display_luminance_limits(window)
         } else {
-            None
-        };
-        let max_full_frame = if hdr_mode {
-            color::display_full_frame_luminance(window)
-        } else {
-            None
+            (None, None)
         };
         let target_nits = tone_map_target_luminance(hdr_mode, max_luminance);
         let full_frame_nits = tone_map_full_frame_luminance(hdr_mode, max_full_frame, target_nits);

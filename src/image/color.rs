@@ -137,18 +137,14 @@ pub fn sdr_white_boost_for(window: HWND, hdr: bool) -> f32 {
     query_sdr_white_boost(window).unwrap_or(1.0)
 }
 
-/// Maximum luminance (nits) of the window's output, when reported.
-pub fn display_maximum_luminance(window: HWND) -> Option<f32> {
-    window_output_description(window)
-        .map(|description| description.MaxLuminance)
-        .filter(|luminance| *luminance > 0.0)
-}
-
-/// Sustained full-frame luminance (nits) of the window's output, when reported.
-pub fn display_full_frame_luminance(window: HWND) -> Option<f32> {
-    window_output_description(window)
-        .map(|description| description.MaxFullFrameLuminance)
-        .filter(|luminance| *luminance > 0.0)
+/// Peak and sustained full-frame luminance (nits) of the window's output, from one enumeration.
+pub fn display_luminance_limits(window: HWND) -> (Option<f32>, Option<f32>) {
+    window_output_description(window).map_or((None, None), |description| {
+        (
+            (description.MaxLuminance > 0.0).then_some(description.MaxLuminance),
+            (description.MaxFullFrameLuminance > 0.0).then_some(description.MaxFullFrameLuminance),
+        )
+    })
 }
 
 fn window_output_description(
