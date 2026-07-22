@@ -44,8 +44,9 @@ use windows::Win32::Graphics::Direct2D::{
     D2D1_INTERPOLATION_MODE_LINEAR, D2D1_INTERPOLATION_MODE_NEAREST_NEIGHBOR,
 };
 use windows::Win32::Graphics::Gdi::{
-    COLOR_WINDOW, GetMonitorInfoW, GetSysColor, HBRUSH, InvalidateRect, MONITOR_DEFAULTTONEAREST,
-    MONITORINFO, MonitorFromWindow, SC_SCREENSAVE, ScreenToClient, ValidateRect,
+    COLOR_WINDOW, GetMonitorInfoW, GetSysColor, HBRUSH, HMONITOR, InvalidateRect,
+    MONITOR_DEFAULTTONEAREST, MONITORINFO, MonitorFromWindow, SC_SCREENSAVE, ScreenToClient,
+    ValidateRect,
 };
 use windows::Win32::System::LibraryLoader::GetModuleHandleW;
 use windows::Win32::System::Ole::{IDropTarget, OleInitialize, RevokeDragDrop};
@@ -117,6 +118,8 @@ struct Application {
     status_text: Option<StatusText>,
     /// Memoized info panel text, rebuilt only when a display input changes.
     info_text_cache: Option<InfoTextCache>,
+    /// The window's current monitor; a WM_MOVE re-evaluates color only when it changes.
+    current_monitor: HMONITOR,
     /// File size and modified time, snapshotted when the item is drawn (never re-statted).
     metadata_snapshot: Option<(u64, Option<std::time::SystemTime>)>,
     /// Received bytes of the pending URL download the view reports on.
@@ -204,6 +207,7 @@ impl Application {
             show_file_info: false,
             status_text: None,
             info_text_cache: None,
+            current_monitor: unsafe { MonitorFromWindow(window, MONITOR_DEFAULTTONEAREST) },
             metadata_snapshot: None,
             download_progress: None,
             slideshow_active: false,
@@ -225,8 +229,16 @@ impl Application {
         Ok(application)
     }
 
+    /// Updates the tracked monitor; true when the window moved to a different display.
+    fn monitor_changed(&mut self, window: HWND) -> bool {
+        let monitor = unsafe { MonitorFromWindow(window, MONITOR_DEFAULTTONEAREST) };
+        let changed = monitor != self.current_monitor;
+        self.current_monitor = monitor;
+        changed
+    }
+
     /// Reconfigure the output on HDR mode or bit depth change; else refresh boost and tone map target.
-    fn refresh_display_color_state(&mut self, window: HWND) {
+    fn refresh_display_state(&mut self, window: HWND) {
         if self.reconfigure_display_output(window, false) {
             self.request_render(window);
             return;
@@ -2238,9 +2250,20 @@ extern "system" fn window_procedure(
             }
             LRESULT(0)
         }
-        WM_MOVE | WM_DISPLAYCHANGE => {
+        WM_MOVE => {
+            // Display-bound state re-evaluates only on a monitor change, not on every drag move.
+            if let Some(application) = application_from_window(window)
+                && application.monitor_changed(window)
+            {
+                application.refresh_display_state(window);
+            }
+            LRESULT(0)
+        }
+        WM_DISPLAYCHANGE => {
+            // HDR/ACM toggle, bit depth, or monitor reconfigure: re-evaluate once.
             if let Some(application) = application_from_window(window) {
-                application.refresh_display_color_state(window);
+                let _ = application.monitor_changed(window);
+                application.refresh_display_state(window);
             }
             LRESULT(0)
         }
