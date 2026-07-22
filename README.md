@@ -5,13 +5,13 @@ A fast, precise, minimal image viewer for Windows.
 <p align="center">
   <img src="screenshots/screenshot1.png" alt="Context menu" height="400">
   &nbsp;
-  <img src="screenshots/screenshot2.png" alt="Info panel: EXR with HDR tone-map readout" height="400">
+  <img src="screenshots/screenshot2.png" alt="Info panel: EXR with HDR luminance readout" height="400">
 </p>
 
 ## Features
 
 - HDR and native 10-bit output: scRGB FP16 render pipeline
-- Display-adaptive HDR tone mapping: content peak, display peak, sustained full-frame luminance
+- Display-adaptive HDR: passthrough on HDR displays, tone-mapped to SDR
 - Color management: embedded ICC profiles, PQ/HLG sources, Windows Advanced Color
 - Ordered or Fruit output dither shader
 - Animation playback (GIF, APNG, animated WebP) with pause, frame stepping, and speed control
