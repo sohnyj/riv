@@ -4,8 +4,8 @@ use windows::Win32::Foundation::{COLORREF, HWND, LPARAM, LRESULT, RECT, WPARAM};
 use windows::Win32::Graphics::Gdi::{
     BeginPaint, COLOR_GRAYTEXT, COLOR_HIGHLIGHT, COLOR_HIGHLIGHTTEXT, COLOR_WINDOW,
     COLOR_WINDOWTEXT, CreatePen, DT_LEFT, DT_SINGLELINE, DT_VCENTER, DeleteObject, DrawTextW,
-    EndPaint, FillRect, GetSysColor, GetSysColorBrush, HFONT, InvalidateRect, LineTo, MoveToEx,
-    PAINTSTRUCT, PS_SOLID, SelectObject, SetBkMode, SetTextColor, TRANSPARENT,
+    EndPaint, FillRect, GetSysColor, GetSysColorBrush, HDC, HFONT, InvalidateRect, LineTo,
+    MoveToEx, PAINTSTRUCT, PS_SOLID, SelectObject, SetBkMode, SetTextColor, TRANSPARENT,
 };
 use windows::Win32::System::LibraryLoader::GetModuleHandleW;
 use windows::Win32::UI::Controls::{DRAWITEMSTRUCT, ODS_SELECTED, TASKDIALOGCONFIG};
@@ -329,6 +329,22 @@ fn listbox_item_text(listbox: HWND, item_index: u32) -> Vec<u16> {
     text
 }
 
+/// Left-aligned, vertically-centered text one field indent in from `rect`.
+fn draw_field_text(device: HDC, rect: RECT, text: &mut [u16], color: COLORREF) {
+    unsafe {
+        SetBkMode(device, TRANSPARENT);
+        SetTextColor(device, color);
+        let mut bounds = rect;
+        bounds.left += 4;
+        DrawTextW(
+            device,
+            text,
+            &raw mut bounds,
+            DT_LEFT | DT_VCENTER | DT_SINGLELINE,
+        );
+    }
+}
+
 fn draw_sequence_item(draw: &DRAWITEMSTRUCT) {
     let selected = draw.itemState.0 & ODS_SELECTED.0 != 0;
     unsafe {
@@ -346,25 +362,14 @@ fn draw_sequence_item(draw: &DRAWITEMSTRUCT) {
         return; // empty list: background only
     }
     let mut text = listbox_item_text(draw.hwndItem, draw.itemID);
-    unsafe {
-        SetBkMode(draw.hDC, TRANSPARENT);
-        SetTextColor(
-            draw.hDC,
-            COLORREF(GetSysColor(if selected {
-                COLOR_HIGHLIGHTTEXT
-            } else {
-                COLOR_WINDOWTEXT
-            })),
-        );
-        let mut bounds = draw.rcItem;
-        bounds.left += 4;
-        DrawTextW(
-            draw.hDC,
-            &mut text,
-            &raw mut bounds,
-            DT_LEFT | DT_VCENTER | DT_SINGLELINE,
-        );
-    }
+    let color = COLORREF(unsafe {
+        GetSysColor(if selected {
+            COLOR_HIGHLIGHTTEXT
+        } else {
+            COLOR_WINDOWTEXT
+        })
+    });
+    draw_field_text(draw.hDC, draw.rcItem, &mut text, color);
     if selected {
         let zone = remove_icon_bounds(&draw.rcItem);
         let side = zone.bottom - zone.top;
@@ -500,24 +505,13 @@ fn field_paint(field: HWND, text: &str, hint: bool) {
         if !font.is_invalid() {
             SelectObject(device, font.into());
         }
-        SetBkMode(device, TRANSPARENT);
-        SetTextColor(
-            device,
-            COLORREF(GetSysColor(if hint {
-                COLOR_GRAYTEXT
-            } else {
-                COLOR_WINDOWTEXT
-            })),
-        );
+        let color = COLORREF(GetSysColor(if hint {
+            COLOR_GRAYTEXT
+        } else {
+            COLOR_WINDOWTEXT
+        }));
         let mut wide: Vec<u16> = text.encode_utf16().collect();
-        let mut bounds = paint.rcPaint;
-        bounds.left += 4;
-        DrawTextW(
-            device,
-            &mut wide,
-            &raw mut bounds,
-            DT_LEFT | DT_VCENTER | DT_SINGLELINE,
-        );
+        draw_field_text(device, paint.rcPaint, &mut wide, color);
         let _ = EndPaint(field, &raw const paint);
     }
 }
