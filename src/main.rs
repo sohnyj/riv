@@ -158,12 +158,7 @@ impl Application {
     fn new(window: HWND, initial_path: Option<&Path>) -> Result<Self> {
         let (width, height) = client_size(window);
         let capabilities = color::display_capabilities(window);
-        let target_nits = tone_map_target_luminance(capabilities.hdr, capabilities.max_luminance);
-        let full_frame_nits = tone_map_full_frame_luminance(
-            capabilities.hdr,
-            capabilities.max_full_frame_luminance,
-            target_nits,
-        );
+        let (target_nits, full_frame_nits) = tone_map_targets(&capabilities);
         let renderer = Renderer::new(
             window,
             width.max(1),
@@ -273,12 +268,7 @@ impl Application {
             return false;
         }
         self.sdr_white_boost = color::sdr_white_boost_for(window, capabilities.hdr);
-        let target_nits = tone_map_target_luminance(capabilities.hdr, capabilities.max_luminance);
-        let full_frame_nits = tone_map_full_frame_luminance(
-            capabilities.hdr,
-            capabilities.max_full_frame_luminance,
-            target_nits,
-        );
+        let (target_nits, full_frame_nits) = tone_map_targets(&capabilities);
         let reconfigured = self.renderer.as_mut().is_some_and(|renderer| {
             renderer
                 .reconfigure_output(
@@ -687,12 +677,7 @@ impl Application {
         self.renderer = None;
         let (width, height) = client_size(window);
         let capabilities = color::display_capabilities(window);
-        let target_nits = tone_map_target_luminance(capabilities.hdr, capabilities.max_luminance);
-        let full_frame_nits = tone_map_full_frame_luminance(
-            capabilities.hdr,
-            capabilities.max_full_frame_luminance,
-            target_nits,
-        );
+        let (target_nits, full_frame_nits) = tone_map_targets(&capabilities);
         self.renderer = Some(Renderer::new(
             window,
             width.max(1),
@@ -1061,6 +1046,17 @@ fn tone_map_full_frame_luminance(hdr_mode: bool, max_full_frame: Option<f32>, ta
     } else {
         target
     }
+}
+
+/// The tone-map target and paired full-frame limit for a display's capabilities.
+fn tone_map_targets(capabilities: &color::DisplayCapabilities) -> (f32, f32) {
+    let target = tone_map_target_luminance(capabilities.hdr, capabilities.max_luminance);
+    let full_frame = tone_map_full_frame_luminance(
+        capabilities.hdr,
+        capabilities.max_full_frame_luminance,
+        target,
+    );
+    (target, full_frame)
 }
 
 /// Cursor offset from the client center while over the client area.
