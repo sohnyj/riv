@@ -384,11 +384,9 @@ pub fn build_info_text(
                     tone_map.display_full_frame_nits
                 ));
             }
-            if peak > color::SDR_REFERENCE_WHITE_NITS {
-                lines.push(format!(
-                    "Tone map: {:.0} nits",
-                    tone_map.output_target_nits
-                ));
+            // Tone mapping runs only on an SDR display.
+            if !tone_map.hdr_display && peak > color::SDR_REFERENCE_WHITE_NITS {
+                lines.push(format!("Tone map: {:.0} nits", tone_map.output_target_nits));
             }
         }
     }
@@ -859,9 +857,41 @@ mod info_text_tests {
         assert!(text.contains("Content peak: 1000 nits"), "{text}");
         assert!(text.contains("Display peak: 600 nits"));
         assert!(text.contains("Display full: 400 nits"));
-        // Content peak (1000) exceeds the target (500): tone mapping is active.
-        assert!(text.contains("Tone map: 500 nits"), "{text}");
-        assert!(!text.contains("clipping"), "{text}");
+        // HDR display: no tone-map line.
+        assert!(!text.contains("Tone map"), "{text}");
+    }
+
+    #[test]
+    fn an_sdr_display_shows_the_tone_map_target() {
+        let image = DecodedImage {
+            width: 2,
+            height: 1,
+            pixel_width: 2,
+            pixel_height: 1,
+            format_name: "EXR",
+            icc_profile: None,
+            exif: None,
+            storage: PixelStorage::RgbaHalf,
+            source_bits_per_channel: 16,
+            peak_luminance_nits: Some(1000.0),
+            frames: vec![Frame {
+                pixels: vec![0; 16],
+                delay_milliseconds: 0,
+            }],
+        };
+        let tone_map = ToneMapInfo {
+            hdr_display: false,
+            display_peak_nits: 203.0,
+            display_full_frame_nits: 203.0,
+            output_target_nits: 203.0,
+        };
+        let text = build_info_text(
+            "a.exr", "C:\\a.exr", &image, 100, None, "8-bit sRGB", "Bilinear", "None",
+            Some(tone_map),
+        );
+        // SDR display: tone-map target shown, HDR-only caps hidden.
+        assert!(text.contains("Tone map: 203 nits"), "{text}");
+        assert!(!text.contains("Display peak"), "{text}");
     }
 }
 
