@@ -61,6 +61,12 @@ pub struct OverlayContent {
     pub output_color_target: color::OutputColorTarget,
 }
 
+/// Horizontal placement of a top overlay panel.
+enum PanelPlacement {
+    TopLeft,
+    TopCenter,
+}
+
 pub struct Overlay {
     text_format: IDWriteTextFormat,
     centered_format: IDWriteTextFormat,
@@ -107,25 +113,20 @@ impl Overlay {
         content: &OverlayContent,
     ) -> Result<()> {
         let output_color_target = content.output_color_target;
-        let margin = PANEL_MARGIN * self.scale;
         if let Some(info_text) = &content.info_text {
             self.draw_panel(
                 context,
                 info_text,
-                margin,
-                margin,
+                PanelPlacement::TopLeft,
                 viewport_width,
                 output_color_target,
             )?;
         }
         if let Some(status_text) = &content.status_text {
-            let status_width = self.measure_panel_width(status_text, viewport_width)?;
-            let centered_left = ((viewport_width - status_width) / 2.0).max(margin);
             self.draw_panel(
                 context,
                 status_text,
-                centered_left,
-                margin,
+                PanelPlacement::TopCenter,
                 viewport_width,
                 output_color_target,
             )?;
@@ -167,19 +168,11 @@ impl Overlay {
         )
     }
 
-    fn measure_panel_width(&self, text: &str, viewport_width: f32) -> Result<f32> {
-        let layout = self.panel_layout(text, viewport_width)?;
-        let mut metrics = DWRITE_TEXT_METRICS::default();
-        unsafe { layout.GetMetrics(&raw mut metrics)? };
-        Ok(metrics.width + PANEL_PADDING_X * 2.0 * self.scale)
-    }
-
     fn draw_panel(
         &self,
         context: &ID2D1DeviceContext,
         text: &str,
-        left: f32,
-        top: f32,
+        placement: PanelPlacement,
         viewport_width: f32,
         output_color_target: color::OutputColorTarget,
     ) -> Result<()> {
@@ -188,11 +181,18 @@ impl Overlay {
         unsafe { layout.GetMetrics(&raw mut metrics)? };
         let padding_x = PANEL_PADDING_X * self.scale;
         let padding_y = PANEL_PADDING_Y * self.scale;
+        let margin = PANEL_MARGIN * self.scale;
+        let width = metrics.width + padding_x * 2.0;
+        let left = match placement {
+            PanelPlacement::TopLeft => margin,
+            PanelPlacement::TopCenter => ((viewport_width - width) / 2.0).max(margin),
+        };
+        let top = margin;
         let panel = D2D1_ROUNDED_RECT {
             rect: D2D_RECT_F {
                 left,
                 top,
-                right: left + metrics.width + padding_x * 2.0,
+                right: left + width,
                 bottom: top + metrics.height + padding_y * 2.0,
             },
             radiusX: PANEL_CORNER_RADIUS * self.scale,
