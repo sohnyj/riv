@@ -112,7 +112,10 @@ fn new_name_is_invalid(name: &str) -> bool {
         return true;
     }
     // Reserved device names resolve regardless of directory (MS file-naming rules).
-    let name_before_first_dot = name.split('.').next().unwrap_or(name).to_ascii_uppercase();
+    let name_before_first_dot = name
+        .split_once('.')
+        .map_or(name, |(before, _)| before)
+        .to_ascii_uppercase();
     const RESERVED: &[&str] = &[
         "CON", "PRN", "AUX", "NUL", "COM0", "COM1", "COM2", "COM3", "COM4", "COM5", "COM6", "COM7",
         "COM8", "COM9", "COM¹", "COM²", "COM³", "LPT0", "LPT1", "LPT2", "LPT3", "LPT4", "LPT5",

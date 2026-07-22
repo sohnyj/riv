@@ -88,9 +88,8 @@ pub fn extension_lowercase(url: &str) -> Option<String> {
 fn path_segment(url: &str) -> Option<&str> {
     let after_scheme = url.split_once("://").map_or(url, |(_, rest)| rest);
     let path = after_scheme
-        .split(['?', '#'])
-        .next()
-        .unwrap_or(after_scheme);
+        .split_once(['?', '#'])
+        .map_or(after_scheme, |(before, _)| before);
     let (_, segments) = path.split_once('/')?;
     Some(segments.rsplit('/').next().unwrap_or(segments))
 }
