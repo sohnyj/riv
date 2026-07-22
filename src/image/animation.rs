@@ -28,16 +28,20 @@ impl Animation {
         })
     }
 
+    /// A frame delay at the current speed, floored at 1ms.
+    fn scaled_delay(&self, delay: u32) -> u32 {
+        (delay.max(1) * 100 / self.speed_percent).max(1)
+    }
+
     pub fn current_delay_milliseconds(&self) -> u32 {
-        let delay = self.frame_delays_milliseconds[self.frame_index].max(1);
-        (delay * 100 / self.speed_percent).max(1)
+        self.scaled_delay(self.frame_delays_milliseconds[self.frame_index])
     }
 
     /// Time for one pass through every frame at the current speed.
     pub fn loop_duration_milliseconds(&self) -> u32 {
         self.frame_delays_milliseconds
             .iter()
-            .map(|&delay| (delay.max(1) * 100 / self.speed_percent).max(1))
+            .map(|&delay| self.scaled_delay(delay))
             .fold(0u32, u32::saturating_add)
     }
 
