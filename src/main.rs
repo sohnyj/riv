@@ -1046,12 +1046,16 @@ fn client_size(window: HWND) -> (u32, u32) {
     )
 }
 
-/// HDR: monitor peak (600 fallback); SDR: the 203-nit BT.2100 reference white.
+/// SDR tone-map target: the BT.2100 reference white.
+const SDR_TONE_MAP_TARGET_NITS: f32 = 203.0;
+/// HDR tone-map target when the monitor reports no peak luminance.
+const HDR_PEAK_FALLBACK_NITS: f32 = 600.0;
+
 fn tone_map_target_luminance(hdr_mode: bool, max_luminance: Option<f32>) -> f32 {
     if hdr_mode {
-        max_luminance.unwrap_or(600.0)
+        max_luminance.unwrap_or(HDR_PEAK_FALLBACK_NITS)
     } else {
-        203.0
+        SDR_TONE_MAP_TARGET_NITS
     }
 }
 
