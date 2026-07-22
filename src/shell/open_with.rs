@@ -75,14 +75,16 @@ fn enumerate(path: &Path) -> OpenWithList {
         });
     }
     items.sort_by(|a, b| natural_compare(&a.display_name, &b.display_name));
-    let default_index = (!default_executable.is_empty()).then(|| {
-        items.iter().position(|item| {
-            item.executable_path
-                .eq_ignore_ascii_case(&default_executable)
+    let default_index = (!default_executable.is_empty())
+        .then(|| {
+            items.iter().position(|item| {
+                item.executable_path
+                    .eq_ignore_ascii_case(&default_executable)
+            })
         })
-    });
+        .flatten();
     let mut has_default = false;
-    if let Some(Some(index)) = default_index {
+    if let Some(index) = default_index {
         let default_item = items.remove(index);
         items.insert(0, default_item);
         has_default = true;
