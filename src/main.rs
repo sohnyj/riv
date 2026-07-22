@@ -1051,6 +1051,14 @@ fn tone_map_targets(capabilities: &color::DisplayCapabilities) -> (f32, f32) {
     (target, full_frame)
 }
 
+/// Signed coordinates packed into a mouse-message LPARAM (GET_X_LPARAM / GET_Y_LPARAM).
+fn point_from_lparam(lparam: LPARAM) -> (i32, i32) {
+    (
+        (lparam.0 & 0xFFFF) as u16 as i16 as i32,
+        ((lparam.0 >> 16) & 0xFFFF) as u16 as i16 as i32,
+    )
+}
+
 /// Cursor offset from the client center while over the client area.
 fn cursor_from_center(window: HWND) -> Option<(f32, f32)> {
     let mut point = POINT::default();
@@ -2043,18 +2051,14 @@ extern "system" fn window_procedure(
                     if !application.cursor_hidden {
                         unsafe { SetCursor(Some(application.pan_cursor)) };
                     }
-                    application.pan_drag_position = Some((
-                        (lparam.0 & 0xFFFF) as u16 as i16 as i32,
-                        ((lparam.0 >> 16) & 0xFFFF) as u16 as i16 as i32,
-                    ));
+                    application.pan_drag_position = Some(point_from_lparam(lparam));
                 }
             }
             LRESULT(0)
         }
         WM_MOUSEMOVE => {
             if let Some(application) = application_from_window(window) {
-                let x = (lparam.0 & 0xFFFF) as u16 as i16 as i32;
-                let y = ((lparam.0 >> 16) & 0xFFFF) as u16 as i16 as i32;
+                let (x, y) = point_from_lparam(lparam);
                 application.record_pointer_activity(window, (x, y));
                 if let Some((last_x, last_y)) = application.pan_drag_position {
                     application.pan_drag_position = Some((x, y));
@@ -2126,8 +2130,7 @@ extern "system" fn window_procedure(
         }
         WM_CONTEXTMENU => {
             if let Some(application) = application_from_window(window) {
-                let mut x = (lparam.0 & 0xFFFF) as u16 as i16 as i32;
-                let mut y = ((lparam.0 >> 16) & 0xFFFF) as u16 as i16 as i32;
+                let (mut x, mut y) = point_from_lparam(lparam);
                 if x == -1 && y == -1 {
                     let mut bounds = RECT::default();
                     let _ = unsafe { GetWindowRect(window, &raw mut bounds) };
