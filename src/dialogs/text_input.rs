@@ -110,6 +110,12 @@ extern "system" fn dialog_procedure(
     }
 }
 
+/// Appends a u32 to a DLGTEMPLATE buffer as two little-endian u16 words.
+fn push_u32(buffer: &mut Vec<u16>, value: u32) {
+    buffer.push((value & 0xFFFF) as u16);
+    buffer.push((value >> 16) as u16);
+}
+
 fn build_template(title: &str, width: i16) -> Vec<u16> {
     const DS_SETFONT: u32 = 0x40;
     const DS_MODALFRAME: u32 = 0x80;
@@ -123,10 +129,6 @@ fn build_template(title: &str, width: i16) -> Vec<u16> {
     const BS_DEFPUSHBUTTON: u32 = 0x1;
 
     let mut template: Vec<u16> = Vec::new();
-    let push_u32 = |buffer: &mut Vec<u16>, value: u32| {
-        buffer.push((value & 0xFFFF) as u16);
-        buffer.push((value >> 16) as u16);
-    };
 
     push_u32(
         &mut template,
@@ -150,12 +152,8 @@ fn build_template(title: &str, width: i16) -> Vec<u16> {
         if !buffer.len().is_multiple_of(2) {
             buffer.push(0);
         }
-        let push_u32_inner = |buffer: &mut Vec<u16>, value: u32| {
-            buffer.push((value & 0xFFFF) as u16);
-            buffer.push((value >> 16) as u16);
-        };
-        push_u32_inner(buffer, style);
-        push_u32_inner(buffer, 0); // exstyle
+        push_u32(buffer, style);
+        push_u32(buffer, 0); // exstyle
         buffer.extend(bounds.iter().map(|value| *value as u16));
         buffer.push(identifier);
         buffer.extend_from_slice(&[0xFFFF, class_atom]);
