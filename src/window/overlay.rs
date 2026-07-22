@@ -886,7 +886,14 @@ mod info_text_tests {
             output_target_nits: 203.0,
         };
         let text = build_info_text(
-            "a.exr", "C:\\a.exr", &image, 100, None, "8-bit sRGB", "Bilinear", "None",
+            "a.exr",
+            "C:\\a.exr",
+            &image,
+            100,
+            None,
+            "8-bit sRGB",
+            "Bilinear",
+            "None",
             Some(tone_map),
         );
         // SDR display: tone-map target shown, HDR-only caps hidden.
