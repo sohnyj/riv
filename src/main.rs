@@ -881,16 +881,8 @@ impl Application {
         match gate {
             ActivationGate::Window => true,
             ActivationGate::Image => self.image_core.current.is_some(),
-            ActivationGate::FileOnDisk => self
-                .image_core
-                .current
-                .as_ref()
-                .is_some_and(|current| current.location.as_file().is_some()),
-            ActivationGate::ContainingFile => self
-                .image_core
-                .current
-                .as_ref()
-                .is_some_and(|current| current.location.containing_file().is_some()),
+            ActivationGate::FileOnDisk => self.image_core.current_file().is_some(),
+            ActivationGate::ContainingFile => self.image_core.current_containing_file().is_some(),
             ActivationGate::Animation => self
                 .image_core
                 .current
@@ -1334,12 +1326,7 @@ fn dispatch_action(application: &mut Application, window: HWND, action: Action) 
         }
         Action::OpenContainingFolder => {
             // The ContainingFile gate keeps URL items out of here.
-            if let Some(file) = application
-                .image_core
-                .current
-                .as_ref()
-                .and_then(|current| current.location.containing_file())
-            {
+            if let Some(file) = application.image_core.current_containing_file() {
                 file_ops::show_in_explorer(file);
             }
         }
@@ -1350,12 +1337,7 @@ fn dispatch_action(application: &mut Application, window: HWND, action: Action) 
             rename_current_file(application, window);
         }
         Action::OpenWithOther => {
-            if let Some(path) = application
-                .image_core
-                .current
-                .as_ref()
-                .and_then(|current| current.location.as_file())
-            {
+            if let Some(path) = application.image_core.current_file() {
                 let path = path.to_path_buf();
                 open_with::show_open_with_dialog(window, &path);
             }
@@ -1403,13 +1385,7 @@ fn dispatch_action(application: &mut Application, window: HWND, action: Action) 
 
 fn delete_current_file(application: &mut Application, window: HWND, permanent: bool) {
     // The FileOnDisk gate keeps archive members out of here.
-    let Some(path) = application
-        .image_core
-        .current
-        .as_ref()
-        .and_then(|current| current.location.as_file())
-        .map(Path::to_path_buf)
-    else {
+    let Some(path) = application.image_core.current_file().map(Path::to_path_buf) else {
         return;
     };
     if permanent || application.settings.options.ask_delete {
@@ -1457,13 +1433,7 @@ fn delete_current_file(application: &mut Application, window: HWND, permanent: b
 }
 
 fn rename_current_file(application: &mut Application, window: HWND) {
-    let Some(path) = application
-        .image_core
-        .current
-        .as_ref()
-        .and_then(|current| current.location.as_file())
-        .map(Path::to_path_buf)
-    else {
+    let Some(path) = application.image_core.current_file().map(Path::to_path_buf) else {
         return;
     };
     let current_name = path
@@ -1986,11 +1956,7 @@ extern "system" fn window_procedure(
         WM_TIMER if wparam.0 == OPEN_WITH_TIMER => {
             let _ = unsafe { KillTimer(Some(window), OPEN_WITH_TIMER) };
             if let Some(application) = application_from_window(window)
-                && let Some(path) = application
-                    .image_core
-                    .current
-                    .as_ref()
-                    .and_then(|current| current.location.as_file())
+                && let Some(path) = application.image_core.current_file()
             {
                 open_with::enumerate_in_background(window, path.to_path_buf());
             }
@@ -1999,15 +1965,10 @@ extern "system" fn window_procedure(
         WM_APP_OPEN_WITH_LIST => {
             let list = unsafe { Box::from_raw(lparam.0 as *mut OpenWithList) };
             if let Some(application) = application_from_window(window) {
-                let is_current = application
-                    .image_core
-                    .current
-                    .as_ref()
-                    .and_then(|current| current.location.as_file())
-                    .is_some_and(|path| {
-                        path.to_string_lossy()
-                            .eq_ignore_ascii_case(&list.path.to_string_lossy())
-                    });
+                let is_current = application.image_core.current_file().is_some_and(|path| {
+                    path.to_string_lossy()
+                        .eq_ignore_ascii_case(&list.path.to_string_lossy())
+                });
                 if is_current {
                     application.open_with_list = Some(list);
                 }
@@ -2179,16 +2140,8 @@ extern "system" fn window_procedure(
                     .playlist_window(context_menu::PLAYLIST_CAPACITY);
                 let state = MenuState {
                     has_image: application.image_core.current.is_some(),
-                    has_file_on_disk: application
-                        .image_core
-                        .current
-                        .as_ref()
-                        .is_some_and(|current| current.location.as_file().is_some()),
-                    has_containing_file: application
-                        .image_core
-                        .current
-                        .as_ref()
-                        .is_some_and(|current| current.location.containing_file().is_some()),
+                    has_file_on_disk: application.image_core.current_file().is_some(),
+                    has_containing_file: application.image_core.current_containing_file().is_some(),
                     has_navigation_targets: application.image_core.has_navigation_targets(),
                     file_info_shown: application.show_file_info,
                     loop_enabled: application.settings.options.loop_within_folder,
@@ -2254,11 +2207,7 @@ extern "system" fn window_procedure(
                         }
                         MenuSelection::OpenWithEntry(index) => {
                             if let (Some(path), Some(list)) = (
-                                application
-                                    .image_core
-                                    .current
-                                    .as_ref()
-                                    .and_then(|current| current.location.as_file()),
+                                application.image_core.current_file(),
                                 application.open_with_list.as_ref(),
                             ) && let Some(item) = list.items.get(index)
                             {

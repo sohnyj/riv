@@ -676,6 +676,20 @@ impl ImageCore {
         self.pending_display.is_some()
     }
 
+    /// The current item's path when it is a local file (not an archive member or URL).
+    pub fn current_file(&self) -> Option<&Path> {
+        self.current
+            .as_ref()
+            .and_then(|current| current.location.as_file())
+    }
+
+    /// The file backing the current item: the file itself, or the archive holding a member.
+    pub fn current_containing_file(&self) -> Option<&Path> {
+        self.current
+            .as_ref()
+            .and_then(|current| current.location.containing_file())
+    }
+
     fn navigation_anchor(&self) -> Option<&ItemLocation> {
         self.pending_display
             .as_ref()
