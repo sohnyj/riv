@@ -1,8 +1,11 @@
 //! JSON settings in riv.json next to the exe; defaults are never written.
 
+use std::collections::HashSet;
 use std::path::{Path, PathBuf};
 
 use serde_json::{Map, Value};
+
+const RECENT_FILES_LIMIT: usize = 10;
 
 #[derive(Clone, PartialEq)]
 pub struct Options {
@@ -156,6 +159,24 @@ pub struct SettingsFile {
     pub options: Options,
 }
 
+fn recent_files_of(document: &Value) -> Vec<(String, String)> {
+    document
+        .get("recents")
+        .and_then(|recents| recents.get("recentFiles"))
+        .and_then(Value::as_array)
+        .map(|list| {
+            list.iter()
+                .filter_map(|entry| {
+                    Some((
+                        entry.get("name")?.as_str()?.to_string(),
+                        entry.get("path")?.as_str()?.to_string(),
+                    ))
+                })
+                .collect()
+        })
+        .unwrap_or_default()
+}
+
 impl SettingsFile {
     pub fn load() -> Self {
         let path = settings_path();
@@ -166,23 +187,6 @@ impl SettingsFile {
             document,
             options,
         }
-    }
-
-    pub fn reload(&mut self) -> bool {
-        let mut document = read_document(&self.path);
-        if let Some(recents) = self.document.get("recents").cloned()
-            && let Some(object) = document.as_object_mut()
-        {
-            object.insert("recents".to_string(), recents);
-        }
-        let options = Options::from_document(&document);
-        let options_changed = options != self.options;
-        let bindings_changed = document.get("keyboardbindings")
-            != self.document.get("keyboardbindings")
-            || document.get("mousebindings") != self.document.get("mousebindings");
-        self.document = document;
-        self.options = options;
-        options_changed || bindings_changed
     }
 
     /// Atomic save: write a temp file, then rename over.
@@ -481,21 +485,27 @@ impl SettingsFile {
     }
 
     pub fn recent_files(&self) -> Vec<(String, String)> {
-        self.document
-            .get("recents")
-            .and_then(|recents| recents.get("recentFiles"))
-            .and_then(Value::as_array)
-            .map(|list| {
-                list.iter()
-                    .filter_map(|entry| {
-                        Some((
-                            entry.get("name")?.as_str()?.to_string(),
-                            entry.get("path")?.as_str()?.to_string(),
-                        ))
-                    })
-                    .collect()
-            })
-            .unwrap_or_default()
+        recent_files_of(&self.document)
+    }
+
+    /// Exit save: fold other instances' recents back in (union, this session first) before writing.
+    pub fn save_merging_recents(&mut self) -> std::io::Result<()> {
+        if self.options.remember_recents {
+            let disk = read_document(&self.path);
+            let mut files = self.recent_files();
+            let mut seen: HashSet<String> = files
+                .iter()
+                .map(|(_, path)| path.to_ascii_lowercase())
+                .collect();
+            for (name, path) in recent_files_of(&disk) {
+                if seen.insert(path.to_ascii_lowercase()) {
+                    files.push((name, path));
+                }
+            }
+            files.truncate(RECENT_FILES_LIMIT);
+            self.set_recent_files(&files);
+        }
+        self.save()
     }
 
     fn set_recent_files(&mut self, files: &[(String, String)]) {
@@ -533,7 +543,7 @@ impl SettingsFile {
         }
         files.retain(|(_, existing)| !existing.eq_ignore_ascii_case(&path_text));
         files.insert(0, (name, path_text));
-        files.truncate(10);
+        files.truncate(RECENT_FILES_LIMIT);
         self.set_recent_files(&files);
         true
     }

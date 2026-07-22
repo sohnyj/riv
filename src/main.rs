@@ -64,10 +64,10 @@ use windows::Win32::UI::WindowsAndMessaging::{
     LoadCursorW, LoadIconW, MSG, PostMessageW, PostQuitMessage, RegisterClassExW, SC_MONITORPOWER,
     SW_HIDE, SW_SHOW, SW_SHOWMAXIMIZED, SWP_FRAMECHANGED, SWP_NOACTIVATE, SWP_NOMOVE, SWP_NOSIZE,
     SWP_NOZORDER, SendMessageW, SetCursor, SetTimer, SetWindowLongPtrW, SetWindowPlacement,
-    SetWindowPos, SetWindowTextW, ShowWindow, TranslateMessage, WINDOWPLACEMENT, WM_ACTIVATEAPP,
-    WM_APP, WM_CLOSE, WM_CONTEXTMENU, WM_DESTROY, WM_DISPLAYCHANGE, WM_DPICHANGED, WM_GESTURE,
-    WM_KEYDOWN, WM_LBUTTONDBLCLK, WM_LBUTTONDOWN, WM_LBUTTONUP, WM_MBUTTONDOWN, WM_MOUSEHWHEEL,
-    WM_MOUSEMOVE, WM_MOUSEWHEEL, WM_MOVE, WM_NCDESTROY, WM_NCLBUTTONDOWN, WM_PAINT, WM_SETCURSOR,
+    SetWindowPos, SetWindowTextW, ShowWindow, TranslateMessage, WINDOWPLACEMENT, WM_APP, WM_CLOSE,
+    WM_CONTEXTMENU, WM_DESTROY, WM_DISPLAYCHANGE, WM_DPICHANGED, WM_GESTURE, WM_KEYDOWN,
+    WM_LBUTTONDBLCLK, WM_LBUTTONDOWN, WM_LBUTTONUP, WM_MBUTTONDOWN, WM_MOUSEHWHEEL, WM_MOUSEMOVE,
+    WM_MOUSEWHEEL, WM_MOVE, WM_NCDESTROY, WM_NCLBUTTONDOWN, WM_PAINT, WM_SETCURSOR,
     WM_SETTINGCHANGE, WM_SIZE, WM_SYSCHAR, WM_SYSCOMMAND, WM_SYSKEYDOWN, WM_TIMER, WM_XBUTTONDOWN,
     WNDCLASSEXW, WS_OVERLAPPEDWINDOW, WindowFromPoint,
 };
@@ -80,7 +80,6 @@ const WM_APP_SHOW_WINDOW: u32 = WM_APP + 2;
 
 const STATUS_TEXT_TIMER: usize = 2;
 const SLIDESHOW_TIMER: usize = 3;
-const SETTINGS_SAVE_TIMER: usize = 4;
 const OPEN_WITH_TIMER: usize = 5;
 const ANIMATION_TIMER: usize = 6;
 const CURSOR_HIDE_TIMER: usize = 7;
@@ -423,28 +422,31 @@ impl Application {
         let _ = unsafe { SetWindowPlacement(window, &raw const placement) };
     }
 
-    fn save_window_geometry(&mut self, window: HWND) {
-        if !self.settings.options.save_window_position {
-            return;
+    /// The one persistence point during a session: geometry (when enabled), then the merged save.
+    fn save_on_exit(&mut self, window: HWND) {
+        if self.settings.options.save_window_position {
+            let mut placement = WINDOWPLACEMENT {
+                length: size_of::<WINDOWPLACEMENT>() as u32,
+                ..Default::default()
+            };
+            let captured = if let Some(saved) = &self.fullscreen_restore {
+                placement = *saved;
+                true
+            } else {
+                unsafe { GetWindowPlacement(window, &raw mut placement) }.is_ok()
+            };
+            if captured {
+                let bounds = placement.rcNormalPosition;
+                self.settings.set_window_geometry(
+                    bounds.left,
+                    bounds.top,
+                    bounds.right - bounds.left,
+                    bounds.bottom - bounds.top,
+                    placement.showCmd == SW_SHOWMAXIMIZED.0 as u32,
+                );
+            }
         }
-        let mut placement = WINDOWPLACEMENT {
-            length: size_of::<WINDOWPLACEMENT>() as u32,
-            ..Default::default()
-        };
-        if let Some(saved) = &self.fullscreen_restore {
-            placement = *saved;
-        } else if unsafe { GetWindowPlacement(window, &raw mut placement) }.is_err() {
-            return;
-        }
-        let bounds = placement.rcNormalPosition;
-        self.settings.set_window_geometry(
-            bounds.left,
-            bounds.top,
-            bounds.right - bounds.left,
-            bounds.bottom - bounds.top,
-            placement.showCmd == SW_SHOWMAXIMIZED.0 as u32,
-        );
-        let _ = self.settings.save();
+        let _ = self.settings.save_merging_recents();
     }
 
     fn update_window_title(&self, window: HWND) {
@@ -535,10 +537,8 @@ impl Application {
         }
         if !same_view {
             // Members list the archive itself; URL items stay out of recents.
-            if let Some(file) = location.containing_file()
-                && self.settings.add_recent_file(file)
-            {
-                unsafe { SetTimer(Some(window), SETTINGS_SAVE_TIMER, 500, None) };
+            if let Some(file) = location.containing_file() {
+                self.settings.add_recent_file(file);
             }
             self.open_with_list = None;
             if location.as_file().is_some() {
@@ -874,10 +874,10 @@ impl Application {
     }
 
     /// Writes the current options back to disk and rebroadcasts them.
-    fn persist_options(&mut self, window: HWND) {
+    /// Records a toggled option in the in-memory document (written at exit) and applies it.
+    fn commit_options(&mut self, window: HWND) {
         let options = self.settings.options.clone();
         self.settings.set_options(&options);
-        let _ = self.settings.save();
         self.apply_options(window);
     }
 
@@ -1207,7 +1207,7 @@ fn dispatch_action(application: &mut Application, window: HWND, action: Action) 
                 "Width"
             };
             application.show_status_text(window, format!("Fit: {axis}"));
-            application.persist_options(window);
+            application.commit_options(window);
         }
         Action::PreserveZoom => {
             application.preserve_zoom = !application.preserve_zoom;
@@ -1237,7 +1237,7 @@ fn dispatch_action(application: &mut Application, window: HWND, action: Action) 
             };
             // The pill spells out the full option name the short menu label elides.
             application.show_status_text(window, format!("Loop within Folder: {state}"));
-            application.persist_options(window);
+            application.commit_options(window);
         }
         Action::Slideshow => application.toggle_slideshow(window),
         Action::Recent(index) => {
@@ -1251,9 +1251,7 @@ fn dispatch_action(application: &mut Application, window: HWND, action: Action) 
             }
         }
         Action::ClearRecents => {
-            if application.settings.clear_recent_files() {
-                unsafe { SetTimer(Some(window), SETTINGS_SAVE_TIMER, 500, None) };
-            }
+            application.settings.clear_recent_files();
         }
         Action::PanUp => application.pan_by(window, 0.0, PAN_STEP),
         Action::PanDown => application.pan_by(window, 0.0, -PAN_STEP),
@@ -1329,7 +1327,6 @@ fn dispatch_action(application: &mut Application, window: HWND, action: Action) 
                     application
                         .settings
                         .set_last_file_dialog_directory(&parent.to_string_lossy());
-                    unsafe { SetTimer(Some(window), SETTINGS_SAVE_TIMER, 500, None) };
                 }
                 let first = first.clone();
                 open_external_path(application, window, &first);
@@ -1427,7 +1424,6 @@ fn delete_current_file(application: &mut Application, window: HWND, permanent: b
         }
         if !permanent && confirmation.do_not_ask_again {
             application.settings.set_option_boolean("askdelete", false);
-            unsafe { SetTimer(Some(window), SETTINGS_SAVE_TIMER, 500, None) };
         }
     }
     let (command, opposite) = if application.settings.options.after_delete == 0 {
@@ -1922,7 +1918,7 @@ extern "system" fn window_procedure(
                 application
                     .settings
                     .set_binding_overrides(&payload.keyboard, &payload.mouse);
-                let _ = application.settings.save();
+                let _ = application.settings.save_merging_recents();
                 application.apply_options(window);
                 application.request_render(window);
             }
@@ -1933,7 +1929,6 @@ extern "system" fn window_procedure(
                 let x = (lparam.0 & 0xFFFF_FFFF) as u32 as i32;
                 let y = (lparam.0 >> 32) as i32;
                 application.settings.set_options_geometry(x, y);
-                let _ = application.settings.save();
             }
             LRESULT(0)
         }
@@ -1990,13 +1985,6 @@ extern "system" fn window_procedure(
                         application.cancel_slideshow(window);
                     }
                 }
-            }
-            LRESULT(0)
-        }
-        WM_TIMER if wparam.0 == SETTINGS_SAVE_TIMER => {
-            let _ = unsafe { KillTimer(Some(window), SETTINGS_SAVE_TIMER) };
-            if let Some(application) = application_from_window(window) {
-                let _ = application.settings.save();
             }
             LRESULT(0)
         }
@@ -2190,9 +2178,7 @@ extern "system" fn window_procedure(
                     x = (bounds.left + bounds.right) / 2;
                     y = (bounds.top + bounds.bottom) / 2;
                 }
-                if application.settings.prune_recent_files() {
-                    unsafe { SetTimer(Some(window), SETTINGS_SAVE_TIMER, 500, None) };
-                }
+                application.settings.prune_recent_files();
                 let playlist = application
                     .image_core
                     .playlist_window(context_menu::PLAYLIST_CAPACITY);
@@ -2293,15 +2279,6 @@ extern "system" fn window_procedure(
             }
             LRESULT(0)
         }
-        WM_ACTIVATEAPP => {
-            if wparam.0 != 0
-                && let Some(application) = application_from_window(window)
-                && application.settings.reload()
-            {
-                application.apply_options(window);
-            }
-            LRESULT(0)
-        }
         WM_MOVE | WM_DISPLAYCHANGE => {
             if let Some(application) = application_from_window(window) {
                 application.refresh_display_color_state(window);
@@ -2335,7 +2312,7 @@ extern "system" fn window_procedure(
                 return LRESULT(0);
             }
             if let Some(application) = application_from_window(window) {
-                application.save_window_geometry(window);
+                application.save_on_exit(window);
             }
             unsafe { DefWindowProcW(window, message, wparam, lparam) }
         }
