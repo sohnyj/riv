@@ -62,6 +62,8 @@ pub struct DecodedImage {
     pub source_bits_per_channel: u32,
     /// Content peak (nits) of FP16 sources; pixels are linear scRGB (1.0 = 80 nits).
     pub peak_luminance_nits: Option<f32>,
+    /// Fraction of FP16 pixels above SDR white, for the tone-map output blend.
+    pub bright_coverage: Option<f32>,
     pub frames: Vec<Frame>,
 }
 
@@ -579,6 +581,7 @@ pub fn decode_raw_preview(path: &Path, cancellation: &AtomicBool) -> Option<Deco
             storage: PixelStorage::Bgra8,
             source_bits_per_channel: 8,
             peak_luminance_nits: None,
+            bright_coverage: None,
             frames: vec![Frame {
                 pixels,
                 delay_milliseconds: 0,
@@ -617,6 +620,7 @@ struct DecodedFrames {
     storage: PixelStorage,
     source_bits_per_channel: u32,
     peak_luminance_nits: Option<f32>,
+    bright_coverage: Option<f32>,
     frames: Vec<Frame>,
 }
 
@@ -633,6 +637,7 @@ impl DecodedFrames {
             storage: self.storage,
             source_bits_per_channel: self.source_bits_per_channel,
             peak_luminance_nits: self.peak_luminance_nits,
+            bright_coverage: self.bright_coverage,
             frames: self.frames,
         }
     }
@@ -823,9 +828,11 @@ fn decode_single_frame(
         linearize_hdr_pixels(&mut pixels, encoding);
     }
     // Half-stored pixels are linear scRGB regardless of the conversion route.
-    let peak_luminance_nits = (storage == PixelStorage::RgbaHalf)
+    let peak_stats = (storage == PixelStorage::RgbaHalf)
         .then(|| peak_luminance_from_half_pixels(&pixels))
         .flatten();
+    let peak_luminance_nits = peak_stats.as_ref().map(|stats| stats.peak_nits);
+    let bright_coverage = peak_stats.as_ref().map(|stats| stats.bright_coverage);
     // The 8bpc fallback conversion truncates whatever the native format held.
     let source_bits_per_channel = if storage == PixelStorage::RgbaHalf {
         native_bits_per_channel
@@ -842,6 +849,7 @@ fn decode_single_frame(
         storage,
         source_bits_per_channel,
         peak_luminance_nits,
+        bright_coverage,
         frames: vec![Frame {
             pixels,
             delay_milliseconds: 0,
@@ -1071,8 +1079,17 @@ fn peak_histogram_bin_table() -> &'static [u16; 65536] {
     })
 }
 
+/// Content peak and the fraction of pixels above SDR white, for HDR tone mapping.
+pub struct PeakStats {
+    pub peak_nits: f32,
+    pub bright_coverage: f32,
+}
+
+/// half(1.0): a max channel above this exceeds SDR white; bits stay monotonic for positive normals.
+const SDR_WHITE_HALF_BITS: u16 = 0x3C00;
+
 /// Content peak of linear scRGB halves: 99.9th-percentile max channel, binned in PQ codes.
-pub fn peak_luminance_from_half_pixels(pixels: &[u8]) -> Option<f32> {
+pub fn peak_luminance_from_half_pixels(pixels: &[u8]) -> Option<PeakStats> {
     if pixels.len() < 8 {
         return None;
     }
@@ -1091,7 +1108,11 @@ pub fn peak_luminance_from_half_pixels(pixels: &[u8]) -> Option<f32> {
             .max(channel_maxima[2]),
     );
     if maximum_linear <= 1.0 {
-        return Some(maximum_linear * SDR_REFERENCE_WHITE_NITS);
+        // Entirely within SDR white: no bright coverage, and the tone map is skipped anyway.
+        return Some(PeakStats {
+            peak_nits: maximum_linear * SDR_REFERENCE_WHITE_NITS,
+            bright_coverage: 0.0,
+        });
     }
     // Jittered subsampling: a fixed stride aliases with periodic image structure.
     const SUBSAMPLE_MINIMUM_PIXELS: usize = 4_000_000;
@@ -1100,6 +1121,7 @@ pub fn peak_luminance_from_half_pixels(pixels: &[u8]) -> Option<f32> {
     let subsample = pixel_count >= SUBSAMPLE_MINIMUM_PIXELS;
     let mut histogram = [0u32; PEAK_HISTOGRAM_BINS];
     let mut sample_count = 0u32;
+    let mut bright_count = 0u32;
     let mut jitter_state = 0x9E37_79B9u32;
     let mut index = 0usize;
     while index < pixel_count {
@@ -1111,6 +1133,9 @@ pub fn peak_luminance_from_half_pixels(pixels: &[u8]) -> Option<f32> {
         }
         histogram[usize::from(bin_table[usize::from(maximum_bits)])] += 1;
         sample_count += 1;
+        if maximum_bits > SDR_WHITE_HALF_BITS {
+            bright_count += 1;
+        }
         if subsample {
             jitter_state = jitter_state
                 .wrapping_mul(1_664_525)
@@ -1131,7 +1156,10 @@ pub fn peak_luminance_from_half_pixels(pixels: &[u8]) -> Option<f32> {
         }
     }
     let code = (percentile_bin as f32 + 1.0) / PEAK_HISTOGRAM_BINS as f32;
-    Some(perceptual_quantizer_nits(code.min(1.0)))
+    Some(PeakStats {
+        peak_nits: perceptual_quantizer_nits(code.min(1.0)),
+        bright_coverage: bright_count as f32 / sample_count.max(1) as f32,
+    })
 }
 
 /// Bits of a positive normal half (others map to 0); valid bits order like their values.
@@ -1336,6 +1364,7 @@ fn decode_animation(
         storage: PixelStorage::Bgra8,
         source_bits_per_channel: 8,
         peak_luminance_nits: None,
+        bright_coverage: None,
         frames,
     })
 }
@@ -1663,6 +1692,7 @@ fn decode_apng<Input: BufRead + Seek>(
         storage: PixelStorage::Bgra8,
         source_bits_per_channel: 8,
         peak_luminance_nits: None,
+        bright_coverage: None,
         frames,
     })
 }
@@ -1756,6 +1786,7 @@ fn decode_svg(data: &[u8], format_name: &'static str) -> Result<DecodedImage, De
         storage: PixelStorage::Bgra8,
         source_bits_per_channel: 8,
         peak_luminance_nits: None,
+        bright_coverage: None,
         frames: vec![Frame {
             pixels,
             delay_milliseconds: 0,
@@ -1984,7 +2015,7 @@ mod peak_scan_tests {
     #[test]
     fn sdr_content_short_circuits_to_maximum() {
         let pixels = half_pixels(&[(0.25, 0.5, 0.125); 64]);
-        let peak = peak_luminance_from_half_pixels(&pixels).unwrap();
+        let peak = peak_luminance_from_half_pixels(&pixels).unwrap().peak_nits;
         assert!(
             (peak - 0.5 * SDR_REFERENCE_WHITE_NITS).abs() < 0.1,
             "peak={peak}"
@@ -1998,7 +2029,7 @@ mod peak_scan_tests {
         values[100] = (60.0, 60.0, 60.0);
         values[2000] = (60.0, 60.0, 60.0);
         let pixels = half_pixels(&values);
-        let peak = peak_luminance_from_half_pixels(&pixels).unwrap();
+        let peak = peak_luminance_from_half_pixels(&pixels).unwrap().peak_nits;
         assert!((peak - 200.0).abs() < 5.0, "peak={peak}");
     }
 
@@ -2010,7 +2041,7 @@ mod peak_scan_tests {
             values[index] = (60.0, 60.0, 60.0);
         }
         let pixels = half_pixels(&values);
-        let peak = peak_luminance_from_half_pixels(&pixels).unwrap();
+        let peak = peak_luminance_from_half_pixels(&pixels).unwrap().peak_nits;
         assert!((peak - 200.0).abs() < 5.0, "peak={peak}");
     }
 
@@ -2029,7 +2060,7 @@ mod peak_scan_tests {
         let pixels = half_pixels(&values);
         for _ in 0..3 {
             let start = std::time::Instant::now();
-            let peak = peak_luminance_from_half_pixels(&pixels).unwrap();
+            let peak = peak_luminance_from_half_pixels(&pixels).unwrap().peak_nits;
             println!("peak={peak} elapsed={:?}", start.elapsed());
         }
     }

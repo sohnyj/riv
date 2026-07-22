@@ -106,6 +106,7 @@ pub struct DisplayCapabilities {
     pub hdr: bool,
     pub bits_per_color: u32,
     pub max_luminance: Option<f32>,
+    pub max_full_frame_luminance: Option<f32>,
 }
 
 /// The window output's HDR mode, bit depth and peak luminance in one query.
@@ -116,12 +117,15 @@ pub fn display_capabilities(window: HWND) -> DisplayCapabilities {
             hdr: false,
             bits_per_color: 8,
             max_luminance: None,
+            max_full_frame_luminance: None,
         };
     };
     DisplayCapabilities {
         hdr: description.ColorSpace == DXGI_COLOR_SPACE_RGB_FULL_G2084_NONE_P2020,
         bits_per_color: description.BitsPerColor,
         max_luminance: (description.MaxLuminance > 0.0).then_some(description.MaxLuminance),
+        max_full_frame_luminance: (description.MaxFullFrameLuminance > 0.0)
+            .then_some(description.MaxFullFrameLuminance),
     }
 }
 
@@ -137,6 +141,13 @@ pub fn sdr_white_boost_for(window: HWND, hdr: bool) -> f32 {
 pub fn display_maximum_luminance(window: HWND) -> Option<f32> {
     window_output_description(window)
         .map(|description| description.MaxLuminance)
+        .filter(|luminance| *luminance > 0.0)
+}
+
+/// Sustained full-frame luminance (nits) of the window's output, when reported.
+pub fn display_full_frame_luminance(window: HWND) -> Option<f32> {
+    window_output_description(window)
+        .map(|description| description.MaxFullFrameLuminance)
         .filter(|luminance| *luminance > 0.0)
 }
 

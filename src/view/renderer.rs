@@ -60,11 +60,23 @@ struct ModeEffects {
     white_level_effect: Option<ID2D1Effect>,
 }
 
+/// Display luminances the tone-map output blends between (peak for small highlights,
+/// full-frame for bright frames).
+#[derive(Clone, Copy)]
+struct ToneMapTarget {
+    peak_nits: f32,
+    full_frame_nits: f32,
+}
+
 pub struct Renderer {
     hdr_mode: bool,
     bits_per_color: u32,
     swap_chain_format: DXGI_FORMAT,
     tone_map_target_nits: f32,
+    /// Display's sustained full-frame luminance; the tone-map output blends toward it.
+    display_full_frame_nits: f32,
+    /// Fraction of the current image above SDR white, driving that blend.
+    content_bright_coverage: f32,
     swap_chain: IDXGISwapChain1,
     d3d_device: ID3D11Device,
     d3d_context: ID3D11DeviceContext,
@@ -168,6 +180,13 @@ fn interface_property_bytes<T: Interface>(interface: &T) -> [u8; size_of::<usize
     (interface.as_raw() as usize).to_ne_bytes()
 }
 
+/// Tone-map output target: the display peak pulled toward the sustained full-frame limit as
+/// more of the frame is bright, so the display's own power limit does not re-crush it.
+fn blended_tone_map_output(peak_nits: f32, full_frame_nits: f32, bright_coverage: f32) -> f32 {
+    let full_frame = full_frame_nits.min(peak_nits);
+    full_frame + (peak_nits - full_frame) * (1.0 - bright_coverage.clamp(0.0, 1.0))
+}
+
 /// WhiteLevelAdjustment multiplies by input/output white level.
 fn set_white_level_input(effect: &ID2D1Effect, input_white_nits: f32) -> Result<()> {
     unsafe {
@@ -187,7 +206,12 @@ impl Renderer {
         hdr_mode: bool,
         bits_per_color: u32,
         tone_map_target_nits: f32,
+        full_frame_nits: f32,
     ) -> Result<Self> {
+        let target = ToneMapTarget {
+            peak_nits: tone_map_target_nits,
+            full_frame_nits,
+        };
         // A deep-color failure downgrades to the proven formats, never blocks launch.
         Self::build(
             window,
@@ -195,7 +219,7 @@ impl Renderer {
             height,
             hdr_mode,
             bits_per_color,
-            tone_map_target_nits,
+            target,
             true,
         )
         .or_else(|_| {
@@ -205,7 +229,7 @@ impl Renderer {
                 height,
                 hdr_mode,
                 bits_per_color,
-                tone_map_target_nits,
+                target,
                 false,
             )
         })
@@ -399,9 +423,11 @@ impl Renderer {
         height: u32,
         hdr_mode: bool,
         bits_per_color: u32,
-        tone_map_target_nits: f32,
+        target: ToneMapTarget,
         deep_color: bool,
     ) -> Result<Self> {
+        let tone_map_target_nits = target.peak_nits;
+        let full_frame_nits = target.full_frame_nits;
         // D3D11 WARP is documented only through 11_1; shader model 5.0 needs no more.
         let (d3d_device, d3d_context) =
             create_d3d_device(D3D_DRIVER_TYPE_HARDWARE, &[D3D_FEATURE_LEVEL_12_0])
@@ -527,6 +553,8 @@ impl Renderer {
             bits_per_color,
             swap_chain_format,
             tone_map_target_nits,
+            display_full_frame_nits: full_frame_nits,
+            content_bright_coverage: 0.0,
             swap_chain,
             d3d_device,
             d3d_context,
@@ -666,11 +694,13 @@ impl Renderer {
         hdr_mode: bool,
         bits_per_color: u32,
         tone_map_target_nits: f32,
+        full_frame_nits: f32,
     ) -> Result<()> {
         // Adopt the target state first so a partial failure cannot retry every WM_MOVE.
         self.hdr_mode = hdr_mode;
         self.bits_per_color = bits_per_color;
         self.tone_map_target_nits = tone_map_target_nits;
+        self.display_full_frame_nits = full_frame_nits;
 
         // Release every backbuffer reference ahead of ResizeBuffers.
         unsafe { self.d2d_context.SetTarget(None) };
@@ -761,17 +791,22 @@ impl Renderer {
     }
 
     /// Updates the tone map target in place; true when it changed (monitor move).
-    pub fn set_tone_map_target_nits(&mut self, nits: f32) -> bool {
-        if (nits - self.tone_map_target_nits).abs() < f32::EPSILON {
+    pub fn set_tone_map_target(&mut self, nits: f32, full_frame_nits: f32) -> bool {
+        if (nits - self.tone_map_target_nits).abs() < f32::EPSILON
+            && (full_frame_nits - self.display_full_frame_nits).abs() < f32::EPSILON
+        {
             return false;
         }
         self.tone_map_target_nits = nits;
+        self.display_full_frame_nits = full_frame_nits;
         if let Some(effect) = &self.hdr_tone_map_effect {
+            let output =
+                blended_tone_map_output(nits, full_frame_nits, self.content_bright_coverage);
             let _ = unsafe {
                 effect.SetValue(
                     D2D1_HDRTONEMAP_PROP_OUTPUT_MAX_LUMINANCE.0 as u32,
                     D2D1_PROPERTY_TYPE_FLOAT,
-                    &nits.to_ne_bytes(),
+                    &output.to_ne_bytes(),
                 )
             };
         }
@@ -801,6 +836,7 @@ impl Renderer {
         self.image_pixel_size = (image.pixel_width as f32, image.pixel_height as f32);
         self.image_storage = image.storage;
         self.image_source_bits_per_channel = image.source_bits_per_channel;
+        self.content_bright_coverage = image.bright_coverage.unwrap_or(0.0);
         self.rewire_effect_chain(
             &bitmap,
             image.icc_profile.as_deref(),
@@ -928,6 +964,18 @@ impl Renderer {
                 if !input_set {
                     return;
                 }
+                let output_maximum = blended_tone_map_output(
+                    self.tone_map_target_nits,
+                    self.display_full_frame_nits,
+                    self.content_bright_coverage,
+                );
+                let _ = unsafe {
+                    tone_map_effect.SetValue(
+                        D2D1_HDRTONEMAP_PROP_OUTPUT_MAX_LUMINANCE.0 as u32,
+                        D2D1_PROPERTY_TYPE_FLOAT,
+                        &output_maximum.to_ne_bytes(),
+                    )
+                };
                 unsafe { tone_map_effect.SetInput(0, &converted, true) };
                 let tone_mapped = unsafe { tone_map_effect.GetOutput() }.ok();
                 if self.hdr_mode {
@@ -1125,5 +1173,30 @@ impl Renderer {
             return DitherMode::None;
         }
         self.dither_mode
+    }
+}
+
+#[cfg(test)]
+mod tone_map_blend_tests {
+    use super::blended_tone_map_output;
+
+    #[test]
+    fn full_coverage_targets_the_full_frame_limit() {
+        assert!((blended_tone_map_output(1000.0, 400.0, 1.0) - 400.0).abs() < 0.01);
+    }
+
+    #[test]
+    fn no_coverage_targets_the_peak() {
+        assert!((blended_tone_map_output(1000.0, 400.0, 0.0) - 1000.0).abs() < 0.01);
+    }
+
+    #[test]
+    fn half_coverage_lands_midway() {
+        assert!((blended_tone_map_output(1000.0, 400.0, 0.5) - 700.0).abs() < 0.01);
+    }
+
+    #[test]
+    fn a_full_frame_above_peak_clamps_to_peak() {
+        assert!((blended_tone_map_output(500.0, 800.0, 0.0) - 500.0).abs() < 0.01);
     }
 }

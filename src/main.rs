@@ -158,13 +158,20 @@ impl Application {
     fn new(window: HWND, initial_path: Option<&Path>) -> Result<Self> {
         let (width, height) = client_size(window);
         let capabilities = color::display_capabilities(window);
+        let target_nits = tone_map_target_luminance(capabilities.hdr, capabilities.max_luminance);
+        let full_frame_nits = tone_map_full_frame_luminance(
+            capabilities.hdr,
+            capabilities.max_full_frame_luminance,
+            target_nits,
+        );
         let renderer = Renderer::new(
             window,
             width.max(1),
             height.max(1),
             capabilities.hdr,
             capabilities.bits_per_color,
-            tone_map_target_luminance(capabilities.hdr, capabilities.max_luminance),
+            target_nits,
+            full_frame_nits,
         )?;
         let device_pixel_ratio = unsafe { GetDpiForWindow(window) } as f32 / 96.0;
         let settings = SettingsFile::load();
@@ -241,11 +248,17 @@ impl Application {
         } else {
             None
         };
+        let max_full_frame = if hdr_mode {
+            color::display_full_frame_luminance(window)
+        } else {
+            None
+        };
         let target_nits = tone_map_target_luminance(hdr_mode, max_luminance);
+        let full_frame_nits = tone_map_full_frame_luminance(hdr_mode, max_full_frame, target_nits);
         if self
             .renderer
             .as_mut()
-            .is_some_and(|renderer| renderer.set_tone_map_target_nits(target_nits))
+            .is_some_and(|renderer| renderer.set_tone_map_target(target_nits, full_frame_nits))
         {
             stale = true;
         }
@@ -266,9 +279,19 @@ impl Application {
         }
         self.sdr_white_boost = color::sdr_white_boost_for(window, capabilities.hdr);
         let target_nits = tone_map_target_luminance(capabilities.hdr, capabilities.max_luminance);
+        let full_frame_nits = tone_map_full_frame_luminance(
+            capabilities.hdr,
+            capabilities.max_full_frame_luminance,
+            target_nits,
+        );
         let reconfigured = self.renderer.as_mut().is_some_and(|renderer| {
             renderer
-                .reconfigure_output(capabilities.hdr, capabilities.bits_per_color, target_nits)
+                .reconfigure_output(
+                    capabilities.hdr,
+                    capabilities.bits_per_color,
+                    target_nits,
+                    full_frame_nits,
+                )
                 .is_ok()
         });
         self.output_reconfigure_pending = !reconfigured;
@@ -668,13 +691,20 @@ impl Application {
         self.renderer = None;
         let (width, height) = client_size(window);
         let capabilities = color::display_capabilities(window);
+        let target_nits = tone_map_target_luminance(capabilities.hdr, capabilities.max_luminance);
+        let full_frame_nits = tone_map_full_frame_luminance(
+            capabilities.hdr,
+            capabilities.max_full_frame_luminance,
+            target_nits,
+        );
         self.renderer = Some(Renderer::new(
             window,
             width.max(1),
             height.max(1),
             capabilities.hdr,
             capabilities.bits_per_color,
-            tone_map_target_luminance(capabilities.hdr, capabilities.max_luminance),
+            target_nits,
+            full_frame_nits,
         )?);
         self.apply_renderer_state()
     }
@@ -1017,6 +1047,15 @@ fn tone_map_target_luminance(hdr_mode: bool, max_luminance: Option<f32>) -> f32 
         max_luminance.unwrap_or(600.0)
     } else {
         203.0
+    }
+}
+
+/// Full-frame limit paired with the tone-map target; falls back to the target so no blend applies.
+fn tone_map_full_frame_luminance(hdr_mode: bool, max_full_frame: Option<f32>, target: f32) -> f32 {
+    if hdr_mode {
+        max_full_frame.unwrap_or(target)
+    } else {
+        target
     }
 }
 
