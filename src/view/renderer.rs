@@ -189,6 +189,27 @@ fn interface_property_bytes<T: Interface>(interface: &T) -> [u8; size_of::<usize
     (interface.as_raw() as usize).to_ne_bytes()
 }
 
+/// Points a ColorManagement effect at its source and destination color contexts.
+fn wire_color_management(
+    effect: &ID2D1Effect,
+    source: &ID2D1ColorContext,
+    destination: &ID2D1ColorContext,
+) -> Result<()> {
+    unsafe {
+        effect.SetValue(
+            D2D1_COLORMANAGEMENT_PROP_SOURCE_COLOR_CONTEXT.0 as u32,
+            D2D1_PROPERTY_TYPE_COLOR_CONTEXT,
+            &interface_property_bytes(source),
+        )?;
+        effect.SetValue(
+            D2D1_COLORMANAGEMENT_PROP_DESTINATION_COLOR_CONTEXT.0 as u32,
+            D2D1_PROPERTY_TYPE_COLOR_CONTEXT,
+            &interface_property_bytes(destination),
+        )?;
+    }
+    Ok(())
+}
+
 /// Tone-map output target: the display peak pulled toward the sustained full-frame limit as
 /// more of the frame is bright, so the display's own power limit does not re-crush it.
 fn blended_tone_map_output(peak_nits: f32, full_frame_nits: f32, bright_coverage: f32) -> f32 {
@@ -271,22 +292,7 @@ impl Renderer {
                 .ok()?
         };
         let effect = Self::create_color_management_effect(d2d_context)?;
-        unsafe {
-            effect.SetValue(
-                D2D1_COLORMANAGEMENT_PROP_SOURCE_COLOR_CONTEXT.0 as u32,
-                D2D1_PROPERTY_TYPE_COLOR_CONTEXT,
-                &interface_property_bytes(scrgb_color_context?),
-            )
-        }
-        .ok()?;
-        unsafe {
-            effect.SetValue(
-                D2D1_COLORMANAGEMENT_PROP_DESTINATION_COLOR_CONTEXT.0 as u32,
-                D2D1_PROPERTY_TYPE_COLOR_CONTEXT,
-                &interface_property_bytes(&pq_color_context),
-            )
-        }
-        .ok()?;
+        wire_color_management(&effect, scrgb_color_context?, &pq_color_context).ok()?;
         Some(effect)
     }
 
@@ -296,22 +302,7 @@ impl Renderer {
         destination: Option<&ID2D1ColorContext>,
     ) -> Option<ID2D1Effect> {
         let effect = Self::create_color_management_effect(d2d_context)?;
-        unsafe {
-            effect.SetValue(
-                D2D1_COLORMANAGEMENT_PROP_SOURCE_COLOR_CONTEXT.0 as u32,
-                D2D1_PROPERTY_TYPE_COLOR_CONTEXT,
-                &interface_property_bytes(source?),
-            )
-        }
-        .ok()?;
-        unsafe {
-            effect.SetValue(
-                D2D1_COLORMANAGEMENT_PROP_DESTINATION_COLOR_CONTEXT.0 as u32,
-                D2D1_PROPERTY_TYPE_COLOR_CONTEXT,
-                &interface_property_bytes(destination?),
-            )
-        }
-        .ok()?;
+        wire_color_management(&effect, source?, destination?).ok()?;
         Some(effect)
     }
 
@@ -949,23 +940,7 @@ impl Renderer {
         let Some(destination_context) = destination_context else {
             return;
         };
-        let wired = unsafe {
-            color_management.SetValue(
-                D2D1_COLORMANAGEMENT_PROP_SOURCE_COLOR_CONTEXT.0 as u32,
-                D2D1_PROPERTY_TYPE_COLOR_CONTEXT,
-                &interface_property_bytes(source_context),
-            )
-        }
-        .is_ok()
-            && unsafe {
-                color_management.SetValue(
-                    D2D1_COLORMANAGEMENT_PROP_DESTINATION_COLOR_CONTEXT.0 as u32,
-                    D2D1_PROPERTY_TYPE_COLOR_CONTEXT,
-                    &interface_property_bytes(destination_context),
-                )
-            }
-            .is_ok();
-        if !wired {
+        if wire_color_management(color_management, source_context, destination_context).is_err() {
             return;
         }
         unsafe { color_management.SetInput(0, bitmap, true) };
