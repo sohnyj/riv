@@ -19,6 +19,7 @@ use windows_numerics::Vector2;
 
 use crate::image::color;
 use crate::image::decode::{DecodedImage, PixelStorage};
+use crate::view::renderer::ToneMapInfo;
 
 /// Lucida Console design metrics: ascent 1616/2048 em, natural line exactly 1 em (R12).
 const FONT_ASCENT_RATIO: f32 = 1616.0 / 2048.0;
@@ -339,9 +340,10 @@ pub fn build_info_text(
     output_description: &str,
     scaling_description: &str,
     dither_description: &str,
+    tone_map: Option<ToneMapInfo>,
 ) -> String {
     let megapixels = f64::from(image.width) * f64::from(image.height) / 1_000_000.0;
-    // File facts follow the render facts; Date modified goes last, next to EXIF Date taken.
+    // Grouped: image, then color/HDR, then render, then file (Date modified last, by EXIF Date taken).
     let mut lines = vec![
         file_name.to_string(),
         format!("Format: {}", image.format_name),
@@ -357,7 +359,6 @@ pub fn build_info_text(
     if image.frames.len() > 1 {
         lines.push(format!("Frames: {}", image.frames.len()));
     }
-    lines.push(format!("Scaling: {scaling_description}"));
     let color_profile = match &image.icc_profile {
         Some(profile) => crate::image::decode::icc_profile_description(profile)
             .unwrap_or_else(|| "Embedded".to_string()),
@@ -365,14 +366,38 @@ pub fn build_info_text(
     };
     lines.push(format!("Color profile: {color_profile}"));
     match image.storage {
-        PixelStorage::RgbaHalf => match image.peak_luminance_nits {
-            Some(peak) => lines.push(format!("Bit depth: FP16 linear, peak {peak:.0} nits")),
-            None => lines.push("Bit depth: high (FP16)".to_string()),
-        },
+        PixelStorage::RgbaHalf => lines.push("Bit depth: FP16 linear".to_string()),
         PixelStorage::Bgra8 => {
             lines.push(format!("Bit depth: {}-bit", image.source_bits_per_channel));
         }
     }
+    if let Some(peak) = image.peak_luminance_nits {
+        lines.push(format!("Content peak: {peak:.0} nits"));
+        if let Some(tone_map) = tone_map {
+            if tone_map.hdr_display {
+                lines.push(format!(
+                    "Display peak: {:.0} nits",
+                    tone_map.display_peak_nits
+                ));
+                lines.push(format!(
+                    "Display full: {:.0} nits",
+                    tone_map.display_full_frame_nits
+                ));
+            }
+            if peak > color::SDR_REFERENCE_WHITE_NITS {
+                let clip = if peak > tone_map.output_target_nits {
+                    " (clipping)"
+                } else {
+                    ""
+                };
+                lines.push(format!(
+                    "Tone map: {:.0} nits{clip}",
+                    tone_map.output_target_nits
+                ));
+            }
+        }
+    }
+    lines.push(format!("Scaling: {scaling_description}"));
     lines.push(format!("Output: {output_description}"));
     lines.push(format!("Dither: {dither_description}"));
     lines.push(format!("Size: {}", format_file_size(file_size)));
@@ -752,6 +777,7 @@ mod info_text_tests {
             "8-bit sRGB",
             "Bilinear",
             "None",
+            None,
         );
         assert!(text.contains("Bit depth: 8-bit"));
     }
@@ -784,6 +810,7 @@ mod info_text_tests {
             "8-bit sRGB",
             "Bilinear",
             "None",
+            None,
         );
         assert!(untagged.contains("Color profile: None"));
         image.icc_profile = Some(vec![0; 4]);
@@ -796,8 +823,52 @@ mod info_text_tests {
             "8-bit sRGB",
             "Bilinear",
             "None",
+            None,
         );
         assert!(unparsable.contains("Color profile: Embedded"));
+    }
+
+    #[test]
+    fn hdr_lines_show_content_display_caps_and_the_tone_map() {
+        let image = DecodedImage {
+            width: 2,
+            height: 1,
+            pixel_width: 2,
+            pixel_height: 1,
+            format_name: "EXR",
+            icc_profile: None,
+            exif: None,
+            storage: PixelStorage::RgbaHalf,
+            source_bits_per_channel: 16,
+            peak_luminance_nits: Some(1000.0),
+            bright_coverage: Some(0.5),
+            frames: vec![Frame {
+                pixels: vec![0; 16],
+                delay_milliseconds: 0,
+            }],
+        };
+        let tone_map = ToneMapInfo {
+            hdr_display: true,
+            display_peak_nits: 600.0,
+            display_full_frame_nits: 400.0,
+            output_target_nits: 500.0,
+        };
+        let text = build_info_text(
+            "a.exr",
+            "C:\\a.exr",
+            &image,
+            100,
+            None,
+            "HDR10",
+            "Bilinear",
+            "None",
+            Some(tone_map),
+        );
+        assert!(text.contains("Content peak: 1000 nits"), "{text}");
+        assert!(text.contains("Display peak: 600 nits"));
+        assert!(text.contains("Display full: 400 nits"));
+        // Content peak (1000) exceeds the target (500), so the map clips.
+        assert!(text.contains("Tone map: 500 nits (clipping)"));
     }
 }
 

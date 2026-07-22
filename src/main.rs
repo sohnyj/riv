@@ -31,7 +31,7 @@ use shell::drag_drop::{self, WM_APP_DROP_PATHS};
 use shell::open_with::{self, OpenWithList, WM_APP_OPEN_WITH_LIST};
 use shell::{clipboard, file_ops, open_dialog};
 use view::dither::DitherMode;
-use view::renderer::Renderer;
+use view::renderer::{Renderer, ToneMapInfo};
 use view::transform::{FitMode, Size, ViewTransform};
 use window::context_menu::{self, MenuSelection, MenuState};
 use window::dwm;
@@ -151,6 +151,7 @@ struct InfoTextCache {
     output_description: &'static str,
     scaling_description: &'static str,
     dither_description: &'static str,
+    tone_map: Option<ToneMapInfo>,
     text: String,
 }
 
@@ -784,6 +785,7 @@ impl Application {
             .renderer
             .as_ref()
             .map_or("None", |renderer| renderer.dither_description());
+        let tone_map = self.renderer.as_ref().map(Renderer::tone_map_info);
         // Size and modified time are snapshotted at load (never re-statted here).
         let (file_size, modified) = self.metadata_snapshot.unwrap_or((0, None));
         let current = self.image_core.current.as_ref()?;
@@ -794,6 +796,7 @@ impl Application {
                 && cache.output_description == output_description
                 && cache.scaling_description == scaling_description
                 && cache.dither_description == dither_description
+                && cache.tone_map == tone_map
         });
         if !reuse {
             let text = overlay::build_info_text(
@@ -805,6 +808,7 @@ impl Application {
                 output_description,
                 scaling_description,
                 dither_description,
+                tone_map,
             );
             let location = current.location.clone();
             self.info_text_cache = Some(InfoTextCache {
@@ -813,6 +817,7 @@ impl Application {
                 output_description,
                 scaling_description,
                 dither_description,
+                tone_map,
                 text,
             });
         }

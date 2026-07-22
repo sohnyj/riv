@@ -68,6 +68,15 @@ struct ToneMapTarget {
     full_frame_nits: f32,
 }
 
+/// Tone-map luminances for the info overlay (nits).
+#[derive(Clone, Copy, PartialEq)]
+pub struct ToneMapInfo {
+    pub hdr_display: bool,
+    pub display_peak_nits: f32,
+    pub display_full_frame_nits: f32,
+    pub output_target_nits: f32,
+}
+
 pub struct Renderer {
     hdr_mode: bool,
     bits_per_color: u32,
@@ -590,6 +599,20 @@ impl Renderer {
 
     pub fn hdr_mode(&self) -> bool {
         self.hdr_mode
+    }
+
+    /// Tone-map luminances for the info overlay: display caps and the blended output target.
+    pub fn tone_map_info(&self) -> ToneMapInfo {
+        ToneMapInfo {
+            hdr_display: self.hdr_mode,
+            display_peak_nits: self.tone_map_target_nits,
+            display_full_frame_nits: self.display_full_frame_nits,
+            output_target_nits: blended_tone_map_output(
+                self.tone_map_target_nits,
+                self.display_full_frame_nits,
+                self.content_bright_coverage,
+            ),
+        }
     }
 
     pub fn bits_per_color(&self) -> u32 {
