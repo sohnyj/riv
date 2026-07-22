@@ -55,7 +55,7 @@ pub fn enumerate_in_background(window: HWND, path: PathBuf) {
 fn enumerate(path: &Path) -> OpenWithList {
     let mut items = Vec::new();
     let own_executable = std::env::current_exe()
-        .map(|exe| exe.to_string_lossy().to_lowercase())
+        .map(|exe| exe.to_string_lossy().into_owned())
         .unwrap_or_default();
     let default_executable = default_executable_for(path).unwrap_or_default();
 
@@ -64,7 +64,7 @@ fn enumerate(path: &Path) -> OpenWithList {
             continue;
         };
         if !Path::new(&executable_path).is_file()
-            || executable_path.to_lowercase() == own_executable
+            || executable_path.eq_ignore_ascii_case(&own_executable)
         {
             continue;
         }
