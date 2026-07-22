@@ -78,11 +78,11 @@ const APPLICATION_ICON_ID: PCWSTR = PCWSTR(std::ptr::without_provenance(1));
 
 const WM_APP_SHOW_WINDOW: u32 = WM_APP + 2;
 
-const STATUS_TEXT_TIMER: usize = 2;
-const SLIDESHOW_TIMER: usize = 3;
-const OPEN_WITH_TIMER: usize = 5;
-const ANIMATION_TIMER: usize = 6;
-const CURSOR_HIDE_TIMER: usize = 7;
+const STATUS_TEXT_TIMER: usize = 1;
+const SLIDESHOW_TIMER: usize = 2;
+const OPEN_WITH_TIMER: usize = 3;
+const ANIMATION_TIMER: usize = 4;
+const CURSOR_HIDE_TIMER: usize = 5;
 
 const PAN_STEP: f32 = 64.0;
 
