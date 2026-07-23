@@ -122,6 +122,8 @@ struct Application {
     display_description: DisplayDescription,
     /// The window's current monitor; a WM_MOVE re-evaluates color only when it changes.
     current_monitor: HMONITOR,
+    /// Last-applied dark title bar; a WM_SETTINGCHANGE reapplies only when it flips.
+    title_bar_dark: Option<bool>,
     /// File size and modified time, snapshotted when the item is drawn (never re-statted).
     metadata_snapshot: Option<(u64, Option<std::time::SystemTime>)>,
     /// Received bytes of the pending URL download the view reports on.
@@ -233,6 +235,7 @@ impl Application {
             info_text_cache: None,
             display_description: display_description(window),
             current_monitor: unsafe { MonitorFromWindow(window, MONITOR_DEFAULTTONEAREST) },
+            title_bar_dark: None,
             metadata_snapshot: None,
             download_progress: None,
             slideshow_active: false,
@@ -261,6 +264,15 @@ impl Application {
         let changed = monitor != self.current_monitor;
         self.current_monitor = monitor;
         changed
+    }
+
+    /// Reapplies the dark title bar only when the system app theme actually flips.
+    fn refresh_title_bar_theme(&mut self, window: HWND) {
+        let dark = dwm::system_apps_use_dark_theme();
+        if self.title_bar_dark != Some(dark) {
+            self.title_bar_dark = Some(dark);
+            dwm::apply_title_bar_theme(window, dark);
+        }
     }
 
     fn refresh_display_state(&mut self, window: HWND) {
@@ -1808,7 +1820,7 @@ fn create_main_window(initial_path: Option<&Path>) -> Result<HWND> {
     }
     if let Some(application) = application_from_window(window) {
         application.restore_window_geometry(window);
-        dwm::apply_title_bar_theme(window);
+        application.refresh_title_bar_theme(window);
         application.drop_target = drag_drop::register(window).ok();
         application.render(window);
         // Presented before the first show, so the class brush never flashes.
@@ -2329,7 +2341,10 @@ extern "system" fn window_procedure(
             unsafe { DefWindowProcW(window, message, wparam, lparam) }
         }
         WM_SETTINGCHANGE => {
-            dwm::apply_title_bar_theme(window);
+            // WM_SETTINGCHANGE fires for many unrelated settings; gate on an actual theme flip.
+            if let Some(application) = application_from_window(window) {
+                application.refresh_title_bar_theme(window);
+            }
             unsafe { DefWindowProcW(window, message, wparam, lparam) }
         }
         WM_NCDESTROY => {

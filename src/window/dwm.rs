@@ -18,13 +18,14 @@ fn set_attribute<T>(
     };
 }
 
-/// Dark title bar follows the system app theme (AppsUseLightTheme).
-pub fn apply_title_bar_theme(window: HWND) {
-    let dark: i32 = i32::from(system_apps_use_dark_theme());
+/// Draws the title bar in dark or light mode; the caller gates on the value changing.
+pub fn apply_title_bar_theme(window: HWND, dark: bool) {
+    let dark: i32 = i32::from(dark);
     set_attribute(window, DWMWA_USE_IMMERSIVE_DARK_MODE, &dark);
 }
 
-fn system_apps_use_dark_theme() -> bool {
+/// True when the system app theme is dark (AppsUseLightTheme is 0).
+pub fn system_apps_use_dark_theme() -> bool {
     use windows::Win32::System::Registry::{HKEY_CURRENT_USER, RRF_RT_REG_DWORD, RegGetValueW};
     use windows::core::w;
 
