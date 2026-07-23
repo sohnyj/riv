@@ -156,17 +156,20 @@ impl DisplayGamut {
             ("BT.2020", [[0.708, 0.292], [0.170, 0.797], [0.131, 0.046]]),
         ];
         let measured = [self.red, self.green, self.blue];
-        let mut best = ("unknown", f32::MAX);
-        for (name, reference) in REFERENCES {
-            let distance: f32 = reference
+        let distance = |reference: &[[f32; 2]; 3]| -> f32 {
+            reference
                 .iter()
                 .zip(measured)
                 .map(|(target, actual)| {
                     (target[0] - actual[0]).powi(2) + (target[1] - actual[1]).powi(2)
                 })
-                .sum();
-            if distance < best.1 {
-                best = (name, distance);
+                .sum()
+        };
+        let mut best = (REFERENCES[0].0, distance(&REFERENCES[0].1));
+        for (name, reference) in &REFERENCES[1..] {
+            let candidate = distance(reference);
+            if candidate < best.1 {
+                best = (*name, candidate);
             }
         }
         best.0
@@ -316,15 +319,19 @@ fn advanced_color_flags(path: &DISPLAYCONFIG_PATH_INFO) -> Option<u32> {
         .then_some(unsafe { advanced_color.Anonymous.value })
 }
 
+/// DISPLAYCONFIG_GET_ADVANCED_COLOR_INFO advancedColorEnabled bit.
+const ADVANCED_COLOR_ENABLED: u32 = 0x2;
+
 /// True when advanced color (HDR, or SDR auto color management) is on for the window's display.
 pub fn advanced_color_enabled(window: HWND) -> bool {
-    for_window_display_path(window, advanced_color_flags).is_some_and(|flags| flags & 0x2 != 0)
+    for_window_display_path(window, advanced_color_flags)
+        .is_some_and(|flags| flags & ADVANCED_COLOR_ENABLED != 0)
 }
 
 fn query_sdr_white_boost(window: HWND) -> Option<f32> {
     for_window_display_path(window, |path| {
-        // Bit 0x2 = advancedColorEnabled; the SDR white level is meaningful only then.
-        if advanced_color_flags(path)? & 0x2 == 0 {
+        // The SDR white level is meaningful only when advanced color is on.
+        if advanced_color_flags(path)? & ADVANCED_COLOR_ENABLED == 0 {
             return None;
         }
         let mut white_level = DISPLAYCONFIG_SDR_WHITE_LEVEL {

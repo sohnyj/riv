@@ -345,7 +345,7 @@ pub fn build_info_text(
     dither_description: &str,
     tone_map: Option<ToneMapInfo>,
     color_mode: &str,
-    display_gamut: &str,
+    gamut: &str,
 ) -> String {
     let megapixels = f64::from(image.width) * f64::from(image.height) / 1_000_000.0;
     let color_profile = match &image.icc_profile {
@@ -382,7 +382,7 @@ pub fn build_info_text(
     // Display: the output state.
     let display = vec![
         format!("Advanced color: {color_mode}"),
-        format!("Display: {display_gamut}"),
+        format!("Display: {gamut}"),
         format!("Output: {output_description}"),
     ];
 
@@ -393,26 +393,20 @@ pub fn build_info_text(
     }
     if let Some(peak) = image.peak_luminance_nits {
         metrics.push(format!("Content peak: {peak:.0} nits"));
-    }
-    if image.peak_luminance_nits.is_some()
-        && let Some(tone_map) = tone_map
-        && tone_map.hdr_display
-    {
-        metrics.push(format!(
-            "Display peak: {:.0} nits",
-            tone_map.display_peak_nits
-        ));
-        metrics.push(format!(
-            "Display full: {:.0} nits",
-            tone_map.display_full_frame_nits
-        ));
-    }
-    if let Some(peak) = image.peak_luminance_nits
-        && let Some(tone_map) = tone_map
-        && !tone_map.hdr_display
-        && peak > color::SDR_REFERENCE_WHITE_NITS
-    {
-        metrics.push(format!("Tone map: {:.0} nits", tone_map.output_target_nits));
+        if let Some(tone_map) = tone_map {
+            if tone_map.hdr_display {
+                metrics.push(format!(
+                    "Display peak: {:.0} nits",
+                    tone_map.display_peak_nits
+                ));
+                metrics.push(format!(
+                    "Display full: {:.0} nits",
+                    tone_map.display_full_frame_nits
+                ));
+            } else if peak > color::SDR_REFERENCE_WHITE_NITS {
+                metrics.push(format!("Tone map: {:.0} nits", tone_map.output_target_nits));
+            }
+        }
     }
 
     // Render: what the app applied.

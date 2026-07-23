@@ -169,8 +169,19 @@ struct DisplayDescription {
     gamut: &'static str,
 }
 
-fn display_description(window: HWND) -> DisplayDescription {
-    let capabilities = color::display_capabilities(window);
+/// The output mode the renderer drives, from the display's current capabilities.
+fn output_mode(capabilities: &color::DisplayCapabilities) -> OutputMode {
+    OutputMode {
+        hdr: capabilities.hdr,
+        bits_per_color: capabilities.bits_per_color,
+        advanced_color: capabilities.advanced_color,
+    }
+}
+
+fn display_description(
+    capabilities: &color::DisplayCapabilities,
+    window: HWND,
+) -> DisplayDescription {
     // Matches DISPLAYCONFIG_ADVANCED_COLOR_MODE (SDR/WCG/HDR) from the existing signals.
     let color_mode = if capabilities.hdr {
         "HDR"
@@ -192,11 +203,7 @@ impl Application {
             window,
             width.max(1),
             height.max(1),
-            OutputMode {
-                hdr: capabilities.hdr,
-                bits_per_color: capabilities.bits_per_color,
-                advanced_color: capabilities.advanced_color,
-            },
+            output_mode(&capabilities),
             target_nits,
             full_frame_nits,
         )?;
@@ -233,7 +240,7 @@ impl Application {
             show_file_info: false,
             status_text: None,
             info_text_cache: None,
-            display_description: display_description(window),
+            display_description: display_description(&capabilities, window),
             current_monitor: unsafe { MonitorFromWindow(window, MONITOR_DEFAULTTONEAREST) },
             title_bar_dark: None,
             metadata_snapshot: None,
@@ -257,7 +264,6 @@ impl Application {
         Ok(application)
     }
 
-    /// Reconfigure the output on HDR mode or bit depth change; else refresh boost and tone map target.
     /// Updates the tracked monitor; true when the window moved to a different display.
     fn monitor_changed(&mut self, window: HWND) -> bool {
         let monitor = unsafe { MonitorFromWindow(window, MONITOR_DEFAULTTONEAREST) };
@@ -275,9 +281,11 @@ impl Application {
         }
     }
 
+    /// Reconfigure the output on HDR mode or bit depth change; else refresh boost and tone map target.
     fn refresh_display_state(&mut self, window: HWND) {
-        self.display_description = display_description(window);
-        if self.reconfigure_display_output(window, false) {
+        let capabilities = color::display_capabilities(window);
+        self.display_description = display_description(&capabilities, window);
+        if self.reconfigure_display_output(window, &capabilities, false) {
             self.request_render(window);
             return;
         }
@@ -311,27 +319,26 @@ impl Application {
     }
 
     /// True when the output mode changed (repaint due); marks the retry pending on failure.
-    fn reconfigure_display_output(&mut self, window: HWND, force: bool) -> bool {
-        let capabilities = color::display_capabilities(window);
+    fn reconfigure_display_output(
+        &mut self,
+        window: HWND,
+        capabilities: &color::DisplayCapabilities,
+        force: bool,
+    ) -> bool {
+        let mode = output_mode(capabilities);
         let mismatch = self.renderer.as_ref().is_some_and(|renderer| {
-            capabilities.hdr != renderer.hdr_mode()
-                || capabilities.bits_per_color != renderer.bits_per_color()
-                || (!capabilities.hdr && capabilities.advanced_color) != renderer.sdr_wide()
+            mode.hdr != renderer.hdr_mode()
+                || mode.bits_per_color != renderer.bits_per_color()
+                || mode.sdr_wide_gamut() != renderer.sdr_wide_gamut()
         });
         if !mismatch && !force {
             return false;
         }
         self.sdr_white_boost = color::sdr_white_boost_for(window, capabilities.hdr);
-        let (target_nits, full_frame_nits) = tone_map_targets(&capabilities);
+        let (target_nits, full_frame_nits) = tone_map_targets(capabilities);
         let reconfigured = self.renderer.as_mut().is_some_and(|renderer| {
             renderer
-                .reconfigure_output(
-                    capabilities.hdr,
-                    capabilities.bits_per_color,
-                    capabilities.advanced_color,
-                    target_nits,
-                    full_frame_nits,
-                )
+                .reconfigure_output(mode, target_nits, full_frame_nits)
                 .is_ok()
         });
         self.output_reconfigure_pending = !reconfigured;
@@ -346,7 +353,7 @@ impl Application {
             return color::OutputColorTarget::Srgb;
         };
         if !renderer.hdr_mode() {
-            if renderer.sdr_wide() {
+            if renderer.sdr_wide_gamut() {
                 // Advanced-color SDR: overlay and clear colors go out as linear scRGB too.
                 return color::OutputColorTarget::ScrgbLinear {
                     sdr_white_boost: self.sdr_white_boost,
@@ -743,11 +750,7 @@ impl Application {
             window,
             width.max(1),
             height.max(1),
-            OutputMode {
-                hdr: capabilities.hdr,
-                bits_per_color: capabilities.bits_per_color,
-                advanced_color: capabilities.advanced_color,
-            },
+            output_mode(&capabilities),
             target_nits,
             full_frame_nits,
         )?);
@@ -885,7 +888,8 @@ impl Application {
         }
         if self.output_reconfigure_pending {
             self.output_reconfigure_pending = false;
-            let _ = self.reconfigure_display_output(window, true);
+            let capabilities = color::display_capabilities(window);
+            let _ = self.reconfigure_display_output(window, &capabilities, true);
         }
         let viewport = self.viewport(window);
         let image = self.image_size();

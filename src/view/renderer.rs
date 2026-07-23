@@ -78,6 +78,13 @@ pub struct OutputMode {
     pub advanced_color: bool,
 }
 
+impl OutputMode {
+    /// True for SDR output with advanced color on (the wide-gamut path).
+    pub fn sdr_wide_gamut(&self) -> bool {
+        !self.hdr && self.advanced_color
+    }
+}
+
 /// Tone-map luminances for the info overlay (nits).
 #[derive(Clone, Copy, PartialEq)]
 pub struct ToneMapInfo {
@@ -90,7 +97,7 @@ pub struct ToneMapInfo {
 pub struct Renderer {
     hdr_mode: bool,
     /// Advanced-color SDR: FP16 scRGB output so DWM color-manages the wide gamut.
-    sdr_wide: bool,
+    sdr_wide_gamut: bool,
     bits_per_color: u32,
     swap_chain_format: DXGI_FORMAT,
     tone_map_target_nits: f32,
@@ -395,7 +402,7 @@ impl Renderer {
     fn preferred_swap_chain_format(
         hdr_mode: bool,
         pq_output: bool,
-        sdr_wide: bool,
+        sdr_wide_gamut: bool,
         ten_bit_target: bool,
         bits_per_color: u32,
     ) -> DXGI_FORMAT {
@@ -405,7 +412,7 @@ impl Renderer {
             } else {
                 DXGI_FORMAT_R16G16B16A16_FLOAT
             }
-        } else if sdr_wide {
+        } else if sdr_wide_gamut {
             // Advanced color is on: hand wide-gamut scRGB to DWM's composition.
             DXGI_FORMAT_R16G16B16A16_FLOAT
         } else if ten_bit_target && bits_per_color >= 10 {
@@ -433,12 +440,12 @@ impl Renderer {
         target: ToneMapTarget,
         deep_color: bool,
     ) -> Result<Self> {
+        let sdr_wide_gamut = mode.sdr_wide_gamut();
         let OutputMode {
             hdr: hdr_mode,
             bits_per_color,
-            advanced_color,
+            ..
         } = mode;
-        let sdr_wide = !hdr_mode && advanced_color;
         let tone_map_target_nits = target.peak_nits;
         let full_frame_nits = target.full_frame_nits;
         // D3D11 WARP is documented only through 11_1; shader model 5.0 needs no more.
@@ -481,7 +488,7 @@ impl Renderer {
         let mut swap_chain_format = Self::preferred_swap_chain_format(
             hdr_mode,
             hdr_output_color_management_effect.is_some(),
-            sdr_wide,
+            sdr_wide_gamut,
             ten_bit_target,
             bits_per_color,
         );
@@ -550,7 +557,7 @@ impl Renderer {
                         declare_color_space(swap_chain3, DXGI_COLOR_SPACE_RGB_FULL_G10_NONE_P709);
                 }
             }
-        } else if sdr_wide && let Ok(swap_chain3) = swap_chain.cast::<IDXGISwapChain3>() {
+        } else if sdr_wide_gamut && let Ok(swap_chain3) = swap_chain.cast::<IDXGISwapChain3>() {
             // The FP16 default is already scRGB; declare it so the intent is explicit.
             let _ = declare_color_space(&swap_chain3, DXGI_COLOR_SPACE_RGB_FULL_G10_NONE_P709);
         }
@@ -567,7 +574,7 @@ impl Renderer {
         );
         let mut renderer = Self {
             hdr_mode,
-            sdr_wide,
+            sdr_wide_gamut,
             bits_per_color,
             swap_chain_format,
             tone_map_target_nits,
@@ -629,8 +636,8 @@ impl Renderer {
     }
 
     /// True when the SDR output is advanced-color FP16 scRGB (wide gamut handed to DWM).
-    pub fn sdr_wide(&self) -> bool {
-        self.sdr_wide
+    pub fn sdr_wide_gamut(&self) -> bool {
+        self.sdr_wide_gamut
     }
 
     /// Active backbuffer, for the info overlay.
@@ -723,16 +730,19 @@ impl Renderer {
     /// Switches the output mode in place: DXGI allows one flip-model swapchain per window.
     pub fn reconfigure_output(
         &mut self,
-        hdr_mode: bool,
-        bits_per_color: u32,
-        advanced_color: bool,
+        mode: OutputMode,
         tone_map_target_nits: f32,
         full_frame_nits: f32,
     ) -> Result<()> {
-        let sdr_wide = !hdr_mode && advanced_color;
+        let sdr_wide_gamut = mode.sdr_wide_gamut();
+        let OutputMode {
+            hdr: hdr_mode,
+            bits_per_color,
+            ..
+        } = mode;
         // Adopt the target state first so a partial failure cannot retry every WM_MOVE.
         self.hdr_mode = hdr_mode;
-        self.sdr_wide = sdr_wide;
+        self.sdr_wide_gamut = sdr_wide_gamut;
         self.bits_per_color = bits_per_color;
         self.tone_map_target_nits = tone_map_target_nits;
         self.display_full_frame_nits = full_frame_nits;
@@ -764,7 +774,7 @@ impl Renderer {
         let mut swap_chain_format = Self::preferred_swap_chain_format(
             hdr_mode,
             hdr_output_color_management_effect.is_some(),
-            sdr_wide,
+            sdr_wide_gamut,
             ten_bit_target,
             bits_per_color,
         );
@@ -799,7 +809,7 @@ impl Renderer {
                 }
             }
         } else if let Some(swap_chain3) = &swap_chain3 {
-            if sdr_wide {
+            if sdr_wide_gamut {
                 // Advanced-color SDR: extended-range scRGB for DWM's composition.
                 let _ = declare_color_space(swap_chain3, DXGI_COLOR_SPACE_RGB_FULL_G10_NONE_P709);
             } else {
@@ -909,7 +919,7 @@ impl Renderer {
             .hdr_tone_map_effect
             .as_ref()
             .zip(peak_luminance_nits.filter(|peak| *peak > SDR_REFERENCE_WHITE_NITS));
-        let scrgb_destination = self.hdr_mode || self.sdr_wide || tone_map.is_some();
+        let scrgb_destination = self.hdr_mode || self.sdr_wide_gamut || tone_map.is_some();
         // Untagged SDR already matches the undeclared sRGB swapchain; scRGB output needs the transfer.
         if storage == PixelStorage::Bgra8 && icc_profile.is_none() && !scrgb_destination {
             // Unwire the previous bitmap so the effect does not keep it alive.
@@ -1004,7 +1014,7 @@ impl Renderer {
                     .ok()?;
                     unsafe { normalize.SetInput(0, &tone_mapped, true) };
                     let normalized = unsafe { normalize.GetOutput() }.ok()?;
-                    if self.sdr_wide {
+                    if self.sdr_wide_gamut {
                         // FP16 scRGB backbuffer: keep the tone-mapped scRGB, no sRGB re-encode.
                         return Some(normalized);
                     }
