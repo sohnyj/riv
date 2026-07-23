@@ -112,11 +112,6 @@ pub struct DisplayCapabilities {
     pub advanced_color: bool,
 }
 
-/// The window output's HDR mode, bit depth and peak luminance in one query.
-pub fn display_capabilities(window: HWND) -> DisplayCapabilities {
-    capabilities_from(window_output_description(window).as_ref(), window)
-}
-
 /// A display's color capabilities and EDID gamut, from one output enumeration.
 pub struct DisplayColorInfo {
     pub capabilities: DisplayCapabilities,

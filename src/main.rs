@@ -153,7 +153,7 @@ impl StatusText {
 struct InfoTextCache {
     location: ItemLocation,
     image: usize,
-    output_description: &'static str,
+    output_description: String,
     scaling_description: &'static str,
     dither_description: &'static str,
     tone_map: Option<ToneMapInfo>,
@@ -169,11 +169,15 @@ struct DisplayDescription {
 }
 
 /// The output mode the renderer drives, from the display's current capabilities.
-fn output_mode(capabilities: &color::DisplayCapabilities) -> OutputMode {
+fn output_mode(
+    capabilities: &color::DisplayCapabilities,
+    gamut: Option<color::DisplayGamut>,
+) -> OutputMode {
     OutputMode {
         hdr: capabilities.hdr,
         bits_per_color: capabilities.bits_per_color,
         advanced_color: capabilities.advanced_color,
+        gamut,
     }
 }
 
@@ -205,7 +209,7 @@ impl Application {
             window,
             width.max(1),
             height.max(1),
-            output_mode(&capabilities),
+            output_mode(&capabilities, gamut),
             target_nits,
             full_frame_nits,
         )?;
@@ -290,7 +294,7 @@ impl Application {
             gamut,
         } = color::display_color_info(window);
         self.display_description = display_description(&capabilities, gamut);
-        if self.reconfigure_display_output(window, &capabilities, false) {
+        if self.reconfigure_display_output(window, &capabilities, gamut, false) {
             self.request_render(window);
             return;
         }
@@ -331,9 +335,10 @@ impl Application {
         &mut self,
         window: HWND,
         capabilities: &color::DisplayCapabilities,
+        gamut: Option<color::DisplayGamut>,
         force: bool,
     ) -> bool {
-        let mode = output_mode(capabilities);
+        let mode = output_mode(capabilities, gamut);
         let mismatch = self.renderer.as_ref().is_some_and(|renderer| {
             mode.hdr != renderer.hdr_mode()
                 || mode.bits_per_color != renderer.bits_per_color()
@@ -747,13 +752,16 @@ impl Application {
         // The old swapchain must release the window first: DXGI allows one per window.
         self.renderer = None;
         let (width, height) = client_size(window);
-        let capabilities = color::display_capabilities(window);
+        let color::DisplayColorInfo {
+            capabilities,
+            gamut,
+        } = color::display_color_info(window);
         let (target_nits, full_frame_nits) = tone_map_targets(&capabilities);
         self.renderer = Some(Renderer::new(
             window,
             width.max(1),
             height.max(1),
-            output_mode(&capabilities),
+            output_mode(&capabilities, gamut),
             target_nits,
             full_frame_nits,
         )?);
@@ -829,7 +837,7 @@ impl Application {
         let output_description = self
             .renderer
             .as_ref()
-            .map_or("", |renderer| renderer.output_description());
+            .map_or(String::new(), |renderer| renderer.output_description());
         let scaling_description = self.scaling_description();
         let dither_description = self
             .renderer
@@ -856,7 +864,7 @@ impl Application {
                 &current.image,
                 file_size,
                 modified,
-                output_description,
+                &output_description,
                 scaling_description,
                 dither_description,
                 tone_map,
@@ -891,8 +899,11 @@ impl Application {
         }
         if self.output_reconfigure_pending {
             self.output_reconfigure_pending = false;
-            let capabilities = color::display_capabilities(window);
-            let _ = self.reconfigure_display_output(window, &capabilities, true);
+            let color::DisplayColorInfo {
+                capabilities,
+                gamut,
+            } = color::display_color_info(window);
+            let _ = self.reconfigure_display_output(window, &capabilities, gamut, true);
         }
         let viewport = self.viewport(window);
         let image = self.image_size();
