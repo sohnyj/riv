@@ -2,7 +2,7 @@
   <defs>
     <radialGradient id="sky" cx="0" cy="0" r="1" gradientUnits="userSpaceOnUse" gradientTransform="translate(-8.14286 -14.25) rotate(51.6869) scale(99.5459 90.5437)">
       <stop offset="0.337728" stop-color="#FDB08E"/>
-      <stop offset="0.529425" stop-color="#EF838A"/>
+      <stop offset="0.529425" stop-color="#EC6C75"/>
     </radialGradient>
     <linearGradient id="mountain" x1="19.1899" y1="24" x2="23.2892" y2="42.9348" gradientUnits="userSpaceOnUse">
       <stop stop-color="#F6EBDF"/>
