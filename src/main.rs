@@ -26,7 +26,7 @@ use image::core::{
 };
 use image::decode::DecodedImage;
 use network::curl;
-use settings::{Options, SettingsFile};
+use settings::{DEFAULT_BACKGROUND_COLOR, Options, SettingsFile};
 use shell::drag_drop::{self, WM_APP_DROP_PATHS};
 use shell::open_with::{self, OpenWithList, WM_APP_OPEN_WITH_LIST};
 use shell::{clipboard, file_ops, open_dialog};
@@ -44,9 +44,8 @@ use windows::Win32::Graphics::Direct2D::{
     D2D1_INTERPOLATION_MODE_LINEAR, D2D1_INTERPOLATION_MODE_NEAREST_NEIGHBOR,
 };
 use windows::Win32::Graphics::Gdi::{
-    COLOR_WINDOW, GetMonitorInfoW, GetSysColor, HBRUSH, HMONITOR, InvalidateRect,
-    MONITOR_DEFAULTTONEAREST, MONITORINFO, MonitorFromWindow, SC_SCREENSAVE, ScreenToClient,
-    ValidateRect,
+    GetMonitorInfoW, HBRUSH, HMONITOR, InvalidateRect, MONITOR_DEFAULTTONEAREST, MONITORINFO,
+    MonitorFromWindow, SC_SCREENSAVE, ScreenToClient, ValidateRect,
 };
 use windows::Win32::System::LibraryLoader::GetModuleHandleW;
 use windows::Win32::System::Ole::{IDropTarget, OleInitialize, RevokeDragDrop};
@@ -430,12 +429,7 @@ impl Application {
         let (red, green, blue) = if self.settings.options.background_color_enabled {
             self.settings.options.background_color
         } else {
-            let colorref = unsafe { GetSysColor(COLOR_WINDOW) };
-            (
-                (colorref & 0xFF) as u8,
-                ((colorref >> 8) & 0xFF) as u8,
-                ((colorref >> 16) & 0xFF) as u8,
-            )
+            DEFAULT_BACKGROUND_COLOR
         };
         D2D1_COLOR_F {
             r: f32::from(red) / 255.0,

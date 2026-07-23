@@ -7,6 +7,9 @@ use serde_json::{Map, Value};
 
 const RECENT_FILES_LIMIT: usize = 10;
 
+/// The default window background; used when the custom color is off.
+pub const DEFAULT_BACKGROUND_COLOR: (u8, u8, u8) = (0x21, 0x21, 0x21);
+
 #[derive(Clone, PartialEq)]
 pub struct Options {
     pub background_color_enabled: bool,
@@ -37,8 +40,8 @@ pub struct Options {
 impl Default for Options {
     fn default() -> Self {
         Self {
-            background_color_enabled: true,
-            background_color: (0x21, 0x21, 0x21),
+            background_color_enabled: false,
+            background_color: DEFAULT_BACKGROUND_COLOR,
             title_bar_mode: 1,
             control_drag_window: true,
             save_window_position: true,
