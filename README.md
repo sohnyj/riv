@@ -5,22 +5,29 @@ A fast, precise, minimal image viewer for Windows.
 <p align="center">
   <img src="screenshots/screenshot1.png" alt="Context menu" height="400">
   &nbsp;
-  <img src="screenshots/screenshot2.png" alt="Info panel: EXR with HDR luminance readout" height="400">
+  <img src="screenshots/screenshot2.png" alt="Info panel: EXR with display color mode, gamut, and HDR luminance" height="400">
 </p>
 
 ## Features
 
-- HDR and native 10-bit output: scRGB FP16 render pipeline
-- Display-adaptive HDR: passthrough on HDR displays, tone-mapped to SDR
-- Color management: embedded ICC profiles, PQ/HLG sources, Windows Advanced Color
-- Ordered or Fruit output dither shader
-- Animation playback (GIF, APNG, animated WebP) with pause, frame stepping, and speed control
-- Browse images inside archives (via archiveint.dll, shipped with Windows)
-- Open http/https image URLs (via curl.exe, shipped with Windows)
-- Per-extension file associations, reversible with no registry leftovers
-- Configurable preloading that follows the browsing direction
-- Single portable executable (~7 MB), no installation
-- Settings stored in `riv.json` next to `riv.exe`
+- Rendering
+  - FP16 linear render pipeline, FP16 scRGB output
+  - HDR passthrough on HDR displays
+  - HDR tone-mapped on SDR displays
+  - Native 10-bit output on deep-color displays
+  - Output dither: Ordered or Fruit shader
+  - Color management: embedded ICC, PQ/HLG, Windows Advanced Color with WCG
+- Browsing
+  - Browse images inside archives (via archiveint.dll, shipped with Windows)
+  - Open http/https image URLs (via curl.exe, shipped with Windows)
+  - Animation playback with pause, frame stepping, speed control
+  - Configurable preloading that follows the browsing direction
+- Application
+  - Info panel: file metadata, display color, HDR luminance, EXIF
+  - Customizable keyboard and mouse shortcuts
+  - Per-extension file associations, reversible with no registry leftovers
+  - Single portable executable (~7 MB), no installation
+  - Settings stored in `riv.json` next to `riv.exe`
 
 Running as administrator is blocked at startup.
 
@@ -106,7 +113,7 @@ cargo build --release
 Inspired by [qView](https://github.com/jurplel/qView).
 [mpv](https://github.com/mpv-player/mpv) and
 [libplacebo](https://code.videolan.org/videolan/libplacebo) served as references
-for context menu, dither, aspect ratio table, and HDR pipeline.
+for context menu, dither, aspect ratio table.
 
 ## License
 
