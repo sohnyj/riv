@@ -180,7 +180,7 @@ fn output_mode(capabilities: &color::DisplayCapabilities) -> OutputMode {
 
 fn display_description(
     capabilities: &color::DisplayCapabilities,
-    window: HWND,
+    gamut: Option<color::DisplayGamut>,
 ) -> DisplayDescription {
     // Matches DISPLAYCONFIG_ADVANCED_COLOR_MODE (SDR/WCG/HDR) from the existing signals.
     let color_mode = if capabilities.hdr {
@@ -190,14 +190,17 @@ fn display_description(
     } else {
         "SDR"
     };
-    let gamut = color::display_gamut(window).map_or("unknown", |gamut| gamut.label());
+    let gamut = gamut.map_or("unknown", |gamut| gamut.label());
     DisplayDescription { color_mode, gamut }
 }
 
 impl Application {
     fn new(window: HWND, initial_path: Option<&Path>) -> Result<Self> {
         let (width, height) = client_size(window);
-        let capabilities = color::display_capabilities(window);
+        let color::DisplayColorInfo {
+            capabilities,
+            gamut,
+        } = color::display_color_info(window);
         let (target_nits, full_frame_nits) = tone_map_targets(&capabilities);
         let renderer = Renderer::new(
             window,
@@ -240,7 +243,7 @@ impl Application {
             show_file_info: false,
             status_text: None,
             info_text_cache: None,
-            display_description: display_description(&capabilities, window),
+            display_description: display_description(&capabilities, gamut),
             current_monitor: unsafe { MonitorFromWindow(window, MONITOR_DEFAULTTONEAREST) },
             title_bar_dark: None,
             metadata_snapshot: None,
@@ -283,8 +286,11 @@ impl Application {
 
     /// Reconfigure the output on HDR mode or bit depth change; else refresh boost and tone map target.
     fn refresh_display_state(&mut self, window: HWND) {
-        let capabilities = color::display_capabilities(window);
-        self.display_description = display_description(&capabilities, window);
+        let color::DisplayColorInfo {
+            capabilities,
+            gamut,
+        } = color::display_color_info(window);
+        self.display_description = display_description(&capabilities, gamut);
         if self.reconfigure_display_output(window, &capabilities, false) {
             self.request_render(window);
             return;
@@ -300,7 +306,10 @@ impl Application {
             stale = true;
         }
         let (max_luminance, max_full_frame) = if hdr_mode {
-            color::display_luminance_limits(window)
+            (
+                capabilities.max_luminance,
+                capabilities.max_full_frame_luminance,
+            )
         } else {
             (None, None)
         };

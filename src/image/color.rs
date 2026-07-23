@@ -10,6 +10,7 @@ use windows::Win32::Devices::Display::{
 };
 use windows::Win32::Foundation::{ERROR_SUCCESS, HWND};
 use windows::Win32::Graphics::Direct2D::Common::D2D1_COLOR_F;
+use windows::Win32::Graphics::Dxgi::DXGI_OUTPUT_DESC1;
 use windows::Win32::Graphics::Gdi::{
     GetMonitorInfoW, MONITOR_DEFAULTTONEAREST, MONITORINFOEXW, MonitorFromWindow,
 };
@@ -113,8 +114,27 @@ pub struct DisplayCapabilities {
 
 /// The window output's HDR mode, bit depth and peak luminance in one query.
 pub fn display_capabilities(window: HWND) -> DisplayCapabilities {
+    capabilities_from(window_output_description(window).as_ref(), window)
+}
+
+/// A display's color capabilities and EDID gamut, from one output enumeration.
+pub struct DisplayColorInfo {
+    pub capabilities: DisplayCapabilities,
+    pub gamut: Option<DisplayGamut>,
+}
+
+/// Queries the display's color capabilities and gamut with a single enumeration.
+pub fn display_color_info(window: HWND) -> DisplayColorInfo {
+    let description = window_output_description(window);
+    DisplayColorInfo {
+        capabilities: capabilities_from(description.as_ref(), window),
+        gamut: description.as_ref().and_then(gamut_from),
+    }
+}
+
+fn capabilities_from(description: Option<&DXGI_OUTPUT_DESC1>, window: HWND) -> DisplayCapabilities {
     use windows::Win32::Graphics::Dxgi::Common::DXGI_COLOR_SPACE_RGB_FULL_G2084_NONE_P2020;
-    let Some(description) = window_output_description(window) else {
+    let Some(description) = description else {
         return DisplayCapabilities {
             hdr: false,
             bits_per_color: 8,
@@ -185,8 +205,7 @@ impl DisplayGamut {
 }
 
 /// The window output's EDID primaries, when the driver reports them.
-pub fn display_gamut(window: HWND) -> Option<DisplayGamut> {
-    let description = window_output_description(window)?;
+fn gamut_from(description: &DXGI_OUTPUT_DESC1) -> Option<DisplayGamut> {
     let gamut = DisplayGamut {
         red: description.RedPrimary,
         green: description.GreenPrimary,
@@ -204,19 +223,7 @@ pub fn sdr_white_boost_for(window: HWND, hdr: bool) -> f32 {
     query_sdr_white_boost(window).unwrap_or(1.0)
 }
 
-/// Peak and sustained full-frame luminance (nits) of the window's output, from one enumeration.
-pub fn display_luminance_limits(window: HWND) -> (Option<f32>, Option<f32>) {
-    window_output_description(window).map_or((None, None), |description| {
-        (
-            (description.MaxLuminance > 0.0).then_some(description.MaxLuminance),
-            (description.MaxFullFrameLuminance > 0.0).then_some(description.MaxFullFrameLuminance),
-        )
-    })
-}
-
-fn window_output_description(
-    window: HWND,
-) -> Option<windows::Win32::Graphics::Dxgi::DXGI_OUTPUT_DESC1> {
+fn window_output_description(window: HWND) -> Option<DXGI_OUTPUT_DESC1> {
     use windows::Win32::Graphics::Dxgi::{CreateDXGIFactory1, IDXGIFactory1, IDXGIOutput6};
     use windows::core::Interface;
 
