@@ -135,6 +135,8 @@ pub struct Renderer {
     sdr_gamut_label: Option<&'static str>,
     /// Nearest gamut label of a tagged source; None when untagged (output names the gamut only).
     source_gamut_label: Option<&'static str>,
+    /// Cached backbuffer label for the info overlay, refreshed on format/mode/gamut change.
+    output_description: String,
     source_icc_profile: Option<Vec<u8>>,
     source_color_context: Option<ID2D1ColorContext>,
     image_display_size: (f32, f32),
@@ -350,6 +352,22 @@ impl Renderer {
         context.cast().ok()
     }
 
+    /// EDID color context and its gamut label for ACM-off SDR; both None outside that mode.
+    fn edid_context_and_label(
+        d2d_context: &ID2D1DeviceContext,
+        hdr_mode: bool,
+        sdr_wide_gamut: bool,
+        gamut: Option<DisplayGamut>,
+    ) -> (Option<ID2D1ColorContext>, Option<&'static str>) {
+        let context = gamut
+            .filter(|_| !hdr_mode && !sdr_wide_gamut)
+            .and_then(|gamut| Self::create_edid_color_context(d2d_context, &gamut));
+        let label = gamut
+            .filter(|_| context.is_some())
+            .map(|gamut| gamut.label());
+        (context, label)
+    }
+
     fn create_transfer_effect(
         d2d_context: &ID2D1DeviceContext,
         source: Option<&ID2D1ColorContext>,
@@ -527,13 +545,8 @@ impl Renderer {
             unsafe { d2d_context.CreateColorContext(D2D1_COLOR_SPACE_SCRGB, None) }.ok();
         let srgb_color_context =
             unsafe { d2d_context.CreateColorContext(D2D1_COLOR_SPACE_SRGB, None) }.ok();
-        let edid_color_context = (!hdr_mode && !sdr_wide_gamut)
-            .then_some(())
-            .and(gamut.as_ref())
-            .and_then(|gamut| Self::create_edid_color_context(&d2d_context, gamut));
-        let sdr_gamut_label = gamut
-            .filter(|_| edid_color_context.is_some())
-            .map(|gamut| gamut.label());
+        let (edid_color_context, sdr_gamut_label) =
+            Self::edid_context_and_label(&d2d_context, hdr_mode, sdr_wide_gamut, gamut);
 
         // HDR encodes to PQ in the app so its 10-bit write is the only quantizer.
         let mut hdr_output_color_management_effect = (hdr_mode && ten_bit_target)
@@ -659,6 +672,7 @@ impl Renderer {
             edid_color_context,
             sdr_gamut_label,
             source_gamut_label: None,
+            output_description: String::new(),
             source_icc_profile: None,
             source_color_context: None,
             image_display_size: (0.0, 0.0),
@@ -666,6 +680,7 @@ impl Renderer {
             dither_description: "None",
             identity_draw: false,
         };
+        renderer.refresh_output_description();
         renderer.create_target()?;
         Ok(renderer)
     }
@@ -699,8 +714,13 @@ impl Renderer {
     }
 
     /// Active backbuffer, for the info overlay. ACM-off SDR names the EDID gamut it maps into.
-    pub fn output_description(&self) -> String {
-        if self.swap_chain_format == DXGI_FORMAT_R16G16B16A16_FLOAT {
+    pub fn output_description(&self) -> &str {
+        &self.output_description
+    }
+
+    /// Recomputes the cached output label after a format, mode, or gamut change.
+    fn refresh_output_description(&mut self) {
+        self.output_description = if self.swap_chain_format == DXGI_FORMAT_R16G16B16A16_FLOAT {
             "FP16 scRGB".to_string()
         } else if self.swap_chain_format == DXGI_FORMAT_R10G10B10A2_UNORM {
             if self.hdr_mode {
@@ -710,7 +730,14 @@ impl Renderer {
             }
         } else {
             self.sdr_output_description("8-bit")
-        }
+        };
+    }
+
+    /// SDR destination color context: the EDID display gamut when mapping, else sRGB.
+    fn sdr_destination_context(&self) -> Option<&ID2D1ColorContext> {
+        self.edid_color_context
+            .as_ref()
+            .or(self.srgb_color_context.as_ref())
     }
 
     /// SDR output label; ACM-off EDID mapping appends the destination gamut.
@@ -811,13 +838,8 @@ impl Renderer {
         // Adopt the target state first so a partial failure cannot retry every WM_MOVE.
         self.hdr_mode = hdr_mode;
         self.sdr_wide_gamut = sdr_wide_gamut;
-        self.edid_color_context = (!hdr_mode && !sdr_wide_gamut)
-            .then_some(())
-            .and(gamut.as_ref())
-            .and_then(|gamut| Self::create_edid_color_context(&self.d2d_context, gamut));
-        self.sdr_gamut_label = gamut
-            .filter(|_| self.edid_color_context.is_some())
-            .map(|gamut| gamut.label());
+        (self.edid_color_context, self.sdr_gamut_label) =
+            Self::edid_context_and_label(&self.d2d_context, hdr_mode, sdr_wide_gamut, gamut);
         self.bits_per_color = bits_per_color;
         self.tone_map_target_nits = tone_map_target_nits;
         self.display_full_frame_nits = full_frame_nits;
@@ -901,9 +923,7 @@ impl Renderer {
             hdr_mode,
             tone_map_target_nits,
             self.scrgb_color_context.as_ref(),
-            self.edid_color_context
-                .as_ref()
-                .or(self.srgb_color_context.as_ref()),
+            self.sdr_destination_context(),
         );
         self.color_management_effect = mode_effects.color_management_effect;
         self.white_level_effect = mode_effects.white_level_effect;
@@ -912,6 +932,7 @@ impl Renderer {
         self.output_color_management_effect = mode_effects.output_color_management_effect;
         self.hdr_output_color_management_effect = hdr_output_color_management_effect;
         self.swap_chain_format = swap_chain_format;
+        self.refresh_output_description();
         self.create_target()
     }
 
@@ -989,6 +1010,7 @@ impl Renderer {
     ) {
         self.effect_output = None;
         self.source_gamut_label = icc_profile.and_then(icc_source_gamut_label);
+        self.refresh_output_description();
         let Some(color_management) = &self.color_management_effect else {
             return;
         };
@@ -1043,11 +1065,9 @@ impl Renderer {
             }
         };
         let destination_context = if scrgb_destination {
-            &self.scrgb_color_context
-        } else if self.edid_color_context.is_some() {
-            &self.edid_color_context
+            self.scrgb_color_context.as_ref()
         } else {
-            &self.srgb_color_context
+            self.sdr_destination_context()
         };
         let Some(destination_context) = destination_context else {
             return;

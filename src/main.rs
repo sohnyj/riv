@@ -837,7 +837,7 @@ impl Application {
         let output_description = self
             .renderer
             .as_ref()
-            .map_or(String::new(), |renderer| renderer.output_description());
+            .map_or("", |renderer| renderer.output_description());
         let scaling_description = self.scaling_description();
         let dither_description = self
             .renderer
@@ -864,7 +864,7 @@ impl Application {
                 &current.image,
                 file_size,
                 modified,
-                &output_description,
+                output_description,
                 scaling_description,
                 dither_description,
                 tone_map,
@@ -875,7 +875,7 @@ impl Application {
             self.info_text_cache = Some(InfoTextCache {
                 location,
                 image: image_id,
-                output_description,
+                output_description: output_description.to_owned(),
                 scaling_description,
                 dither_description,
                 tone_map,
