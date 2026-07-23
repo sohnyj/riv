@@ -7,7 +7,7 @@ use std::os::windows::ffi::OsStrExt;
 use std::os::windows::fs::MetadataExt;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::{Arc, Condvar, Mutex};
+use std::sync::{Arc, Condvar, Mutex, mpsc};
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 use windows::Win32::Foundation::{HWND, LPARAM, WPARAM};
@@ -255,6 +255,53 @@ struct CacheEntry {
     image: Arc<DecodedImage>,
 }
 
+/// Frees evicted image buffers off the UI thread.
+struct ImageReaper {
+    sender: Option<mpsc::Sender<Arc<DecodedImage>>>,
+    handle: Option<std::thread::JoinHandle<()>>,
+}
+
+impl ImageReaper {
+    fn new() -> Self {
+        let (sender, receiver) = mpsc::channel::<Arc<DecodedImage>>();
+        match std::thread::Builder::new()
+            .name("riv-image-reaper".to_string())
+            .spawn(move || {
+                while let Ok(image) = receiver.recv() {
+                    drop(image);
+                }
+            }) {
+            Ok(handle) => Self {
+                sender: Some(sender),
+                handle: Some(handle),
+            },
+            Err(_) => Self {
+                sender: None,
+                handle: None,
+            },
+        }
+    }
+
+    /// Drops inline when the thread failed to start.
+    fn reap(&self, image: Arc<DecodedImage>) {
+        match &self.sender {
+            Some(sender) => {
+                let _ = sender.send(image);
+            }
+            None => drop(image),
+        }
+    }
+}
+
+impl Drop for ImageReaper {
+    fn drop(&mut self) {
+        self.sender = None; // close the channel so the thread's loop ends
+        if let Some(handle) = self.handle.take() {
+            let _ = handle.join();
+        }
+    }
+}
+
 pub struct PlaylistWindow {
     pub names: Vec<String>,
     pub first_index: usize,
@@ -277,6 +324,7 @@ pub struct ImageCore {
     travel_backward: bool,
     /// Consecutive steps against the polarity; the second one flips it.
     opposite_steps: u32,
+    reaper: ImageReaper,
 }
 
 impl ImageCore {
@@ -293,6 +341,7 @@ impl ImageCore {
             load_error: None,
             travel_backward: false,
             opposite_steps: 0,
+            reaper: ImageReaper::new(),
         }
     }
 
@@ -888,7 +937,10 @@ impl ImageCore {
     fn preload_neighbors(&mut self) {
         let (backward, forward, budget) = self.preload_distances();
         if backward == 0 && forward == 0 {
-            self.cache.clear(); // preloading off: drop the cache
+            // preloading off: drop the cache
+            for (_, entry) in self.cache.drain() {
+                self.reaper.reap(entry.image);
+            }
         } else if let Some(anchor_index) = self
             .navigation_anchor()
             .and_then(|location| self.position_of(location))
@@ -1022,7 +1074,9 @@ impl ImageCore {
             if total <= budget {
                 break;
             }
-            self.cache.remove(&location);
+            if let Some(entry) = self.cache.remove(&location) {
+                self.reaper.reap(entry.image);
+            }
             total -= cost;
         }
     }
