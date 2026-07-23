@@ -160,34 +160,7 @@ pub struct DisplayGamut {
 impl DisplayGamut {
     /// Nearest known gamut by primary distance; the tell is whether it is wider than sRGB.
     pub fn label(&self) -> &'static str {
-        // R, G, B primaries (xy) of the reference gamuts.
-        const REFERENCES: [(&str, [[f32; 2]; 3]); 4] = [
-            ("sRGB", [[0.640, 0.330], [0.300, 0.600], [0.150, 0.060]]),
-            (
-                "Adobe RGB",
-                [[0.640, 0.330], [0.210, 0.710], [0.150, 0.060]],
-            ),
-            ("DCI-P3", [[0.680, 0.320], [0.265, 0.690], [0.150, 0.060]]),
-            ("BT.2020", [[0.708, 0.292], [0.170, 0.797], [0.131, 0.046]]),
-        ];
-        let measured = [self.red, self.green, self.blue];
-        let distance = |reference: &[[f32; 2]; 3]| -> f32 {
-            reference
-                .iter()
-                .zip(measured)
-                .map(|(target, actual)| {
-                    (target[0] - actual[0]).powi(2) + (target[1] - actual[1]).powi(2)
-                })
-                .sum()
-        };
-        let mut best = (REFERENCES[0].0, distance(&REFERENCES[0].1));
-        for (name, reference) in &REFERENCES[1..] {
-            let candidate = distance(reference);
-            if candidate < best.1 {
-                best = (*name, candidate);
-            }
-        }
-        best.0
+        nearest_gamut([self.red, self.green, self.blue])
     }
 
     /// True when EDID carried real chromaticities rather than zeros.
@@ -197,6 +170,37 @@ impl DisplayGamut {
             .flatten()
             .any(|coordinate| *coordinate > 0.0)
     }
+}
+
+/// Nearest reference gamut label by R/G/B primary (xy) distance.
+pub(crate) fn nearest_gamut(measured: [[f32; 2]; 3]) -> &'static str {
+    // R, G, B primaries (xy) of the reference gamuts.
+    const REFERENCES: [(&str, [[f32; 2]; 3]); 4] = [
+        ("sRGB", [[0.640, 0.330], [0.300, 0.600], [0.150, 0.060]]),
+        (
+            "Adobe RGB",
+            [[0.640, 0.330], [0.210, 0.710], [0.150, 0.060]],
+        ),
+        ("DCI-P3", [[0.680, 0.320], [0.265, 0.690], [0.150, 0.060]]),
+        ("BT.2020", [[0.708, 0.292], [0.170, 0.797], [0.131, 0.046]]),
+    ];
+    let distance = |reference: &[[f32; 2]; 3]| -> f32 {
+        reference
+            .iter()
+            .zip(measured)
+            .map(|(target, actual)| {
+                (target[0] - actual[0]).powi(2) + (target[1] - actual[1]).powi(2)
+            })
+            .sum()
+    };
+    let mut best = (REFERENCES[0].0, distance(&REFERENCES[0].1));
+    for (name, reference) in &REFERENCES[1..] {
+        let candidate = distance(reference);
+        if candidate < best.1 {
+            best = (*name, candidate);
+        }
+    }
+    best.0
 }
 
 /// The window output's EDID primaries, when the driver reports them.

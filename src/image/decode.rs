@@ -927,6 +927,28 @@ fn icc_tag_offset(icc: &[u8], signature: &[u8; 4]) -> Option<usize> {
     None
 }
 
+/// Nearest gamut label from an ICC's matrix primaries; None for non-matrix profiles.
+pub fn icc_source_gamut_label(icc: &[u8]) -> Option<&'static str> {
+    let primary_xy = |tag: &[u8; 4]| -> Option<[f32; 2]> {
+        let offset = icc_tag_offset(icc, tag)?;
+        if icc.get(offset..offset + 4)? != b"XYZ " {
+            return None;
+        }
+        // s15Fixed16 X, Y, Z; PCS is D50, but the small D50/D65 shift keeps the class.
+        let value =
+            |at: usize| -> Option<f32> { Some(read_u32_be(icc, at)? as i32 as f32 / 65536.0) };
+        let x = value(offset + 8)?;
+        let y = value(offset + 12)?;
+        let z = value(offset + 16)?;
+        let sum = x + y + z;
+        (sum > 0.0).then_some([x / sum, y / sum])
+    };
+    let red = primary_xy(b"rXYZ")?;
+    let green = primary_xy(b"gXYZ")?;
+    let blue = primary_xy(b"bXYZ")?;
+    Some(crate::image::color::nearest_gamut([red, green, blue]))
+}
+
 /// Human-readable profile name from the ICC 'desc' tag (v2 text or v4 mluc).
 pub fn icc_profile_description(icc: &[u8]) -> Option<String> {
     let offset = icc_tag_offset(icc, b"desc")?;
