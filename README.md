@@ -12,18 +12,16 @@ A fast, precise, minimal image viewer for Windows.
 
 - Rendering
   - FP16 linear render pipeline, FP16 scRGB output
-  - HDR passthrough on HDR displays
-  - HDR tone-mapped on SDR displays
+  - HDR passthrough on HDR displays, HDR tone-mapped on SDR displays
   - Native 10-bit output on deep-color displays
   - Output dither: Ordered or Fruit shader
-  - Color management: embedded ICC, PQ/HLG, Windows Advanced Color with WCG
+  - Color management: Windows Advanced Color with WCG, PQ/HLG, embedded ICC, EDID gamut mapping
 - Browsing
   - Browse images inside archives (via archiveint.dll, shipped with Windows)
   - Open http/https image URLs (via curl.exe, shipped with Windows)
   - Animation playback with pause, frame stepping, speed control
   - Configurable preloading that follows the browsing direction
 - Application
-  - Info panel: file metadata, display color, HDR luminance, EXIF
   - Customizable keyboard and mouse shortcuts
   - Per-extension file associations, reversible with no registry leftovers
   - Single portable executable (~7 MB), no installation
