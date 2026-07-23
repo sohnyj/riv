@@ -133,8 +133,8 @@ pub struct Renderer {
     edid_color_context: Option<ID2D1ColorContext>,
     /// EDID gamut label shown as the output space when EDID mapping is active.
     sdr_gamut_label: Option<&'static str>,
-    /// Nearest gamut label of the current source, for the output overlay line.
-    source_gamut_label: &'static str,
+    /// Nearest gamut label of a tagged source; None when untagged (output names the gamut only).
+    source_gamut_label: Option<&'static str>,
     source_icc_profile: Option<Vec<u8>>,
     source_color_context: Option<ID2D1ColorContext>,
     image_display_size: (f32, f32),
@@ -658,7 +658,7 @@ impl Renderer {
             srgb_color_context,
             edid_color_context,
             sdr_gamut_label,
-            source_gamut_label: "sRGB",
+            source_gamut_label: None,
             source_icc_profile: None,
             source_color_context: None,
             image_display_size: (0.0, 0.0),
@@ -716,11 +716,9 @@ impl Renderer {
     /// SDR output label; ACM-off EDID mapping appends the destination gamut.
     fn sdr_output_description(&self, bits: &str) -> String {
         let destination = self.sdr_gamut_label.unwrap_or("sRGB");
-        let source = self.source_gamut_label;
-        if source == destination {
-            format!("{bits} {source}")
-        } else {
-            format!("{bits} {source} in {destination}")
+        match self.source_gamut_label {
+            Some(source) if source != destination => format!("{bits} {source} in {destination}"),
+            _ => format!("{bits} {destination}"),
         }
     }
 
@@ -990,9 +988,7 @@ impl Renderer {
         peak_luminance_nits: Option<f32>,
     ) {
         self.effect_output = None;
-        self.source_gamut_label = icc_profile
-            .and_then(icc_source_gamut_label)
-            .unwrap_or("sRGB");
+        self.source_gamut_label = icc_profile.and_then(icc_source_gamut_label);
         let Some(color_management) = &self.color_management_effect else {
             return;
         };
