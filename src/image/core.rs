@@ -1026,9 +1026,9 @@ impl ImageCore {
     pub fn rescan_listing(&mut self) {
         match &self.listing_scope {
             Some(ListingScope::Directory(directory)) => self.rescan_folder(&directory.clone()),
-            Some(ListingScope::Archive(archive)) => {
-                self.entries =
-                    enumerate_archive(&archive.clone(), &self.options).unwrap_or_default();
+            Some(ListingScope::Archive(_)) => {
+                // Archives are read-only in riv; order is all a rescan could change.
+                sort_entries(&mut self.entries, &self.options);
             }
             None => {}
         }
