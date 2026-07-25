@@ -229,6 +229,8 @@ pub enum DecodeStage {
 pub struct DecodeCompletion {
     pub location: ItemLocation,
     pub file_size: u64,
+    /// Measured by the worker alongside the decode; the UI thread never stats for it.
+    pub modified: Option<SystemTime>,
     pub stage: DecodeStage,
     pub result: Result<Arc<DecodedImage>, DecodeError>,
 }
@@ -242,10 +244,13 @@ pub struct DownloadProgress {
 pub struct CurrentImage {
     pub location: ItemLocation,
     pub image: Arc<DecodedImage>,
+    file_size: u64,
+    modified: Option<SystemTime>,
 }
 
 struct CacheEntry {
     file_size: u64,
+    modified: Option<SystemTime>,
     /// RAW preview or animation first frame standing in until someone pays for the full decode.
     preview: bool,
     image: Arc<DecodedImage>,
@@ -454,33 +459,16 @@ impl ImageCore {
         }
     }
 
-    /// (file size, modified) of the current item; member values from the listing.
+    /// (file size, modified) of the current item, carried from its decode; members use the listing.
     pub fn current_item_metadata(&self) -> Option<(u64, Option<SystemTime>)> {
         let current = self.current.as_ref()?;
-        match &current.location {
-            ItemLocation::File(path) => {
-                let metadata = std::fs::metadata(path).ok();
-                Some((
-                    metadata.as_ref().map_or(0, std::fs::Metadata::len),
-                    metadata.and_then(|metadata| metadata.modified().ok()),
-                ))
-            }
-            ItemLocation::ArchiveMember { .. } => {
-                let entry = self
-                    .position_of(&current.location)
-                    .map(|index| &self.entries[index]);
-                Some((
-                    entry.map_or(0, |entry| entry.file_size),
-                    entry.map(|entry| entry.modified),
-                ))
-            }
-            ItemLocation::Url(_) => Some((
-                self.cache
-                    .get(&current.location)
-                    .map_or(0, |entry| entry.file_size),
-                None,
-            )),
+        if matches!(&current.location, ItemLocation::ArchiveMember { .. }) {
+            let modified = self
+                .position_of(&current.location)
+                .map(|index| self.entries[index].modified);
+            return Some((current.file_size, modified));
         }
+        Some((current.file_size, current.modified))
     }
 
     /// True while this item is the one the view waits on.
@@ -710,10 +698,10 @@ impl ImageCore {
             .cache
             .get(location)
             .filter(|entry| entry.file_size == file_size)
-            .map(|entry| (entry.image.clone(), entry.preview));
+            .map(|entry| (entry.image.clone(), entry.modified, entry.preview));
         let mut kind = JobKind::PreviewThenFull;
-        if let Some((image, preview)) = cached {
-            self.show_image(location.clone(), image);
+        if let Some((image, modified, preview)) = cached {
+            self.show_image(location.clone(), image, file_size, modified);
             self.load_error = None;
             if !preview {
                 self.pending_display = None;
@@ -778,11 +766,22 @@ impl ImageCore {
     }
 
     /// Replaces the displayed image, freeing the outgoing buffer off the UI thread.
-    fn show_image(&mut self, location: ItemLocation, image: Arc<DecodedImage>) {
+    fn show_image(
+        &mut self,
+        location: ItemLocation,
+        image: Arc<DecodedImage>,
+        file_size: u64,
+        modified: Option<SystemTime>,
+    ) {
         if let Some(previous) = self.current.take() {
             self.reaper.reap(previous.image);
         }
-        self.current = Some(CurrentImage { location, image });
+        self.current = Some(CurrentImage {
+            location,
+            image,
+            file_size,
+            modified,
+        });
     }
 
     /// Caches an entry, freeing any replaced stand-in off the UI thread.
@@ -856,7 +855,12 @@ impl ImageCore {
                 .as_ref()
                 .is_some_and(|pending| *pending == completion.location);
             if is_pending && let Ok(image) = completion.result {
-                self.show_image(completion.location, image);
+                self.show_image(
+                    completion.location,
+                    image,
+                    completion.file_size,
+                    completion.modified,
+                );
                 self.load_error = None;
                 return true;
             }
@@ -875,6 +879,7 @@ impl ImageCore {
                 completion.location.clone(),
                 CacheEntry {
                     file_size: completion.file_size,
+                    modified: completion.modified,
                     preview: true,
                     image: image.clone(),
                 },
@@ -918,12 +923,18 @@ impl ImageCore {
                     completion.location.clone(),
                     CacheEntry {
                         file_size: completion.file_size,
+                        modified: completion.modified,
                         preview: false,
                         image: image.clone(),
                     },
                 );
                 if is_pending {
-                    self.show_image(completion.location, image);
+                    self.show_image(
+                        completion.location,
+                        image,
+                        completion.file_size,
+                        completion.modified,
+                    );
                     self.pending_display = None;
                     self.load_error = None;
                     self.preload_neighbors();
@@ -1493,8 +1504,12 @@ fn worker_loop(shared: &PoolShared, window: isize) {
             }
         };
         let mut file_size = job.file_size;
+        let mut modified = None;
         let result = match &job.location {
             ItemLocation::File(path) => {
+                modified = std::fs::metadata(path)
+                    .ok()
+                    .and_then(|metadata| metadata.modified().ok());
                 let post_preview = |image: DecodedImage, last: bool| {
                     post_boxed(
                         window,
@@ -1502,6 +1517,7 @@ fn worker_loop(shared: &PoolShared, window: isize) {
                         Box::new(DecodeCompletion {
                             location: job.location.clone(),
                             file_size: job.file_size,
+                            modified,
                             stage: if last {
                                 DecodeStage::PreviewFinal
                             } else {
@@ -1578,6 +1594,7 @@ fn worker_loop(shared: &PoolShared, window: isize) {
             Box::new(DecodeCompletion {
                 location: job.location,
                 file_size,
+                modified,
                 stage: DecodeStage::Final,
                 result,
             }),
