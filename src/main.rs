@@ -2398,7 +2398,7 @@ extern "system" fn window_procedure(
     }
 }
 
-/// Needs riv.exe and System32 curl.exe; posted messages only — wine focus is nondeterministic.
+/// Needs riv.exe and System32 curl.exe; posted messages only, since wine focus is nondeterministic.
 #[cfg(test)]
 mod open_url_smoke_tests {
     use std::io::{Read, Write};

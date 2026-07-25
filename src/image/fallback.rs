@@ -478,7 +478,7 @@ fn decode_heif_primary_image(
     })
 }
 
-/// A crafted near-SIZE_MAX scanline offset must error, not read out of bounds (fixtures: SECURITY_AUDIT.md).
+/// A crafted near-SIZE_MAX scanline offset must error, not read out of bounds (SECURITY_AUDIT.md).
 #[cfg(test)]
 mod exr_robustness_tests {
     use super::*;

@@ -332,7 +332,7 @@ mod fixture_tests {
     }
 }
 
-/// A crafted PAX mtime that overflows SystemTime must clamp, not panic (fixture: SECURITY_AUDIT.md).
+/// A crafted PAX mtime overflowing SystemTime must clamp, not panic (SECURITY_AUDIT.md).
 #[cfg(test)]
 mod mtime_tests {
     use super::*;

@@ -12,8 +12,7 @@ use windows::core::{PCSTR, Result, s};
 
 pub const BLUE_NOISE_SIZE: u32 = super::blue_noise::SIZE as u32;
 
-/// Bias and quantization functions for the quantize-pass pixel shaders; the
-/// including source declares `quantization_steps` in a constant buffer.
+/// Bias and quantization for the quantize-pass shaders; callers declare `quantization_steps`.
 pub const DITHER_SHADER_FUNCTIONS: &str = "\
 float ordered_bias(float2 position)
 {
