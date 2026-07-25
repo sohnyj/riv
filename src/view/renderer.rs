@@ -73,7 +73,7 @@ struct ToneMapTarget {
 }
 
 /// The output-affecting display state: HDR, wire depth, and advanced-color.
-#[derive(Clone)]
+#[derive(Clone, PartialEq)]
 pub struct OutputMode {
     pub hdr: bool,
     pub bits_per_color: u32,
@@ -99,6 +99,8 @@ pub struct ToneMapInfo {
 }
 
 pub struct Renderer {
+    /// The mode as built, so a caller can compare against a fresh display query.
+    output_mode: OutputMode,
     hdr_mode: bool,
     /// Advanced-color SDR: FP16 scRGB output so DWM color-manages the wide gamut.
     sdr_wide_gamut: bool,
@@ -218,6 +220,14 @@ fn interface_property_bytes<T: Interface>(interface: &T) -> [u8; size_of::<usize
     (interface.as_raw() as usize).to_ne_bytes()
 }
 
+/// ACM-off SDR maps into the display's own profile; sRGB otherwise.
+fn sdr_destination<'a>(
+    display_color_context: Option<&'a ID2D1ColorContext>,
+    srgb_color_context: Option<&'a ID2D1ColorContext>,
+) -> Option<&'a ID2D1ColorContext> {
+    display_color_context.or(srgb_color_context)
+}
+
 /// Points a ColorManagement effect at its source and destination color contexts.
 fn wire_color_management(
     effect: &ID2D1Effect,
@@ -322,17 +332,15 @@ impl Renderer {
         sdr_wide_gamut: bool,
         display_profile: Option<&Arc<Vec<u8>>>,
     ) -> (Option<ID2D1ColorContext>, Option<&'static str>) {
-        let display_profile = display_profile.filter(|_| !hdr_mode && !sdr_wide_gamut);
-        let context = display_profile.and_then(|display_profile| {
-            unsafe {
-                d2d_context.CreateColorContext(D2D1_COLOR_SPACE_CUSTOM, Some(display_profile))
-            }
-            .ok()
-        });
-        let label = display_profile
-            .filter(|_| context.is_some())
-            .and_then(|display_profile| icc_gamut_label(display_profile));
-        (context, label)
+        let Some(display_profile) = display_profile.filter(|_| !hdr_mode && !sdr_wide_gamut) else {
+            return (None, None);
+        };
+        let Ok(context) = (unsafe {
+            d2d_context.CreateColorContext(D2D1_COLOR_SPACE_CUSTOM, Some(display_profile))
+        }) else {
+            return (None, None);
+        };
+        (Some(context), icc_gamut_label(display_profile))
     }
 
     fn create_transfer_effect(
@@ -426,11 +434,11 @@ impl Renderer {
     }
 
     /// Dither only the UNORM backbuffers the app quantizes; FP16 leaves quantization to DWM.
-    fn quantization_steps_for(format: DXGI_FORMAT) -> Option<u32> {
+    fn backbuffer_bits_for(format: DXGI_FORMAT) -> Option<u32> {
         if format == DXGI_FORMAT_B8G8R8A8_UNORM {
-            Some(255)
+            Some(8)
         } else if format == DXGI_FORMAT_R10G10B10A2_UNORM {
-            Some(1023)
+            Some(10)
         } else {
             None
         }
@@ -478,6 +486,7 @@ impl Renderer {
         target: ToneMapTarget,
         deep_color: bool,
     ) -> Result<Self> {
+        let output_mode = mode.clone();
         let sdr_wide_gamut = mode.sdr_wide_gamut();
         let OutputMode {
             hdr: hdr_mode,
@@ -616,11 +625,10 @@ impl Renderer {
             sdr_wide_gamut,
             tone_map_target_nits,
             scrgb_color_context.as_ref(),
-            display_color_context
-                .as_ref()
-                .or(srgb_color_context.as_ref()),
+            sdr_destination(display_color_context.as_ref(), srgb_color_context.as_ref()),
         );
         let mut renderer = Self {
+            output_mode,
             hdr_mode,
             sdr_wide_gamut,
             bits_per_color,
@@ -669,6 +677,11 @@ impl Renderer {
         self.hdr_mode
     }
 
+    /// The mode this renderer was built or reconfigured with.
+    pub fn output_mode(&self) -> &OutputMode {
+        &self.output_mode
+    }
+
     /// Tone-map luminances for the info overlay: display caps and the output target.
     pub fn tone_map_info(&self) -> ToneMapInfo {
         ToneMapInfo {
@@ -677,10 +690,6 @@ impl Renderer {
             display_full_frame_nits: self.display_full_frame_nits,
             output_target_nits: self.tone_map_target_nits,
         }
-    }
-
-    pub fn bits_per_color(&self) -> u32 {
-        self.bits_per_color
     }
 
     /// True when the backbuffer is HDR10 (PQ) rather than the scRGB FP16 fallback.
@@ -715,9 +724,10 @@ impl Renderer {
 
     /// SDR destination color context: the display's own profile when mapping, else sRGB.
     fn sdr_destination_context(&self) -> Option<&ID2D1ColorContext> {
-        self.display_color_context
-            .as_ref()
-            .or(self.srgb_color_context.as_ref())
+        sdr_destination(
+            self.display_color_context.as_ref(),
+            self.srgb_color_context.as_ref(),
+        )
     }
 
     /// SDR output label; ACM-off profile mapping appends the destination gamut.
@@ -809,6 +819,7 @@ impl Renderer {
         full_frame_nits: f32,
     ) -> Result<()> {
         let sdr_wide_gamut = mode.sdr_wide_gamut();
+        let output_mode = mode.clone();
         let OutputMode {
             hdr: hdr_mode,
             bits_per_color,
@@ -816,6 +827,7 @@ impl Renderer {
         } = mode;
         let display_profile = mode.display_profile;
         // Adopt the target state first so a partial failure cannot retry every WM_MOVE.
+        self.output_mode = output_mode;
         self.hdr_mode = hdr_mode;
         self.sdr_wide_gamut = sdr_wide_gamut;
         (self.display_color_context, self.sdr_gamut_label) = Self::display_context_and_label(
@@ -1173,10 +1185,11 @@ impl Renderer {
         } else {
             false
         };
-        let quantization_steps = Self::quantization_steps_for(self.swap_chain_format)
+        let backbuffer_bits = Self::backbuffer_bits_for(self.swap_chain_format)
             .filter(|_| self.quantize_pass.is_some());
-        let pass_dither = match quantization_steps {
-            Some(_) if self.image.is_some() => self.active_dither_mode(identity_placement),
+        let quantization_steps = backbuffer_bits.map(|bits| (1 << bits) - 1);
+        let pass_dither = match backbuffer_bits {
+            Some(bits) if self.image.is_some() => self.active_dither_mode(identity_placement, bits),
             _ => DitherMode::None,
         };
         self.dither_description = match pass_dither {
@@ -1266,12 +1279,7 @@ impl Renderer {
     }
 
     /// The frame's output dither; a 1:1 draw skips it while the source fits the backbuffer depth.
-    fn active_dither_mode(&self, identity_placement: bool) -> DitherMode {
-        let backbuffer_bits = if self.swap_chain_format == DXGI_FORMAT_R10G10B10A2_UNORM {
-            10
-        } else {
-            8
-        };
+    fn active_dither_mode(&self, identity_placement: bool, backbuffer_bits: u32) -> DitherMode {
         let source_bits = self.image_source_bits_per_channel;
         // Pass-through is exact at equal depth; a color transform can band there.
         let within_depth = if self.effect_output.is_none() {

@@ -125,13 +125,20 @@ pub struct DisplayColorInfo {
 /// Queries the display's color capabilities, gamut, and profile with a single enumeration.
 pub fn display_color_info(window: HWND) -> DisplayColorInfo {
     let description = window_output_description(window);
+    let capabilities = capabilities_from(description.as_ref(), window);
+    // Only ACM-off SDR consumes the profile; skip the disk read in the delegated modes.
+    let display_profile = (!capabilities.hdr && !capabilities.advanced_color)
+        .then(|| {
+            description
+                .as_ref()
+                .and_then(|d| device_profile(&d.DeviceName))
+        })
+        .flatten()
+        .map(Arc::new);
     DisplayColorInfo {
-        capabilities: capabilities_from(description.as_ref(), window),
+        capabilities,
         gamut: description.as_ref().and_then(gamut_from),
-        display_profile: description
-            .as_ref()
-            .and_then(|description| device_profile(&description.DeviceName))
-            .map(Arc::new),
+        display_profile,
     }
 }
 
@@ -196,7 +203,6 @@ pub struct DisplayGamut {
     pub red: [f32; 2],
     pub green: [f32; 2],
     pub blue: [f32; 2],
-    pub white: [f32; 2],
 }
 
 impl DisplayGamut {
@@ -207,7 +213,7 @@ impl DisplayGamut {
 
     /// True when EDID carried real chromaticities rather than zeros.
     pub fn is_known(&self) -> bool {
-        [self.red, self.green, self.blue, self.white]
+        [self.red, self.green, self.blue]
             .iter()
             .flatten()
             .any(|coordinate| *coordinate > 0.0)
@@ -251,7 +257,6 @@ fn gamut_from(description: &DXGI_OUTPUT_DESC1) -> Option<DisplayGamut> {
         red: description.RedPrimary,
         green: description.GreenPrimary,
         blue: description.BluePrimary,
-        white: description.WhitePoint,
     };
     gamut.is_known().then_some(gamut)
 }

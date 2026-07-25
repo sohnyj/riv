@@ -515,7 +515,7 @@ fn decode_input(
         },
         Adapter::Svg => decode_svg(&input.read_all()?, format_name),
         Adapter::WebPAnimation => {
-            super::fallback::decode_webp_animation(&input.read_all()?, format_name)
+            super::fallback::decode_webp_animation(&input.read_all()?, format_name, usize::MAX)
         }
         Adapter::Exr => match input {
             DecodeInput::File(path) => super::fallback::decode_exr(path, format_name),
@@ -542,11 +542,11 @@ pub fn decode_animation_first_frame(
     path: &Path,
     cancellation: &AtomicBool,
 ) -> Option<DecodedImage> {
-    let descriptor = probe_file(path)?;
+    let input = DecodeInput::File(path);
+    let descriptor = input.descriptor()?;
     if !matches!(descriptor.semantics, FrameSemantics::Animation) {
         return None;
     }
-    let input = DecodeInput::File(path);
     match descriptor.adapter {
         // A GIF frame can be a placed sub-rectangle, so even one goes through the compositor.
         Adapter::Wic => with_wic_factory(|factory| {
@@ -568,7 +568,7 @@ pub fn decode_animation_first_frame(
         )
         .ok(),
         Adapter::WebPAnimation => {
-            super::fallback::decode_webp_first_frame(&input.read_all().ok()?, descriptor.name)
+            super::fallback::decode_webp_animation(&input.read_all().ok()?, descriptor.name, 1)
                 .and_then(|decoded| enforce_device_limit(decoded, cancellation))
                 .ok()
         }

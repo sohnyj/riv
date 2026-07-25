@@ -197,23 +197,32 @@ fn display_description(
     DisplayDescription { color_mode, gamut }
 }
 
+/// Builds a window-sized renderer for the queried display state.
+fn create_renderer(
+    window: HWND,
+    capabilities: &color::DisplayCapabilities,
+    display_profile: Option<Arc<Vec<u8>>>,
+) -> Result<Renderer> {
+    let (width, height) = client_size(window);
+    let (target_nits, full_frame_nits) = tone_map_targets(capabilities);
+    Renderer::new(
+        window,
+        width.max(1),
+        height.max(1),
+        output_mode(capabilities, display_profile),
+        target_nits,
+        full_frame_nits,
+    )
+}
+
 impl Application {
     fn new(window: HWND, initial_path: Option<&Path>) -> Result<Self> {
-        let (width, height) = client_size(window);
         let color::DisplayColorInfo {
             capabilities,
             gamut,
             display_profile,
         } = color::display_color_info(window);
-        let (target_nits, full_frame_nits) = tone_map_targets(&capabilities);
-        let renderer = Renderer::new(
-            window,
-            width.max(1),
-            height.max(1),
-            output_mode(&capabilities, display_profile),
-            target_nits,
-            full_frame_nits,
-        )?;
+        let renderer = create_renderer(window, &capabilities, display_profile)?;
         let device_pixel_ratio = unsafe { GetDpiForWindow(window) } as f32 / 96.0;
         let settings = SettingsFile::load();
         let bindings =
@@ -341,11 +350,10 @@ impl Application {
         force: bool,
     ) -> bool {
         let mode = output_mode(capabilities, display_profile);
-        let mismatch = self.renderer.as_ref().is_some_and(|renderer| {
-            mode.hdr != renderer.hdr_mode()
-                || mode.bits_per_color != renderer.bits_per_color()
-                || mode.sdr_wide_gamut() != renderer.sdr_wide_gamut()
-        });
+        let mismatch = self
+            .renderer
+            .as_ref()
+            .is_some_and(|renderer| *renderer.output_mode() != mode);
         if !mismatch && !force {
             return false;
         }
@@ -753,21 +761,12 @@ impl Application {
     fn rebuild_renderer(&mut self, window: HWND) -> Result<()> {
         // The old swapchain must release the window first: DXGI allows one per window.
         self.renderer = None;
-        let (width, height) = client_size(window);
         let color::DisplayColorInfo {
             capabilities,
             display_profile,
             ..
         } = color::display_color_info(window);
-        let (target_nits, full_frame_nits) = tone_map_targets(&capabilities);
-        self.renderer = Some(Renderer::new(
-            window,
-            width.max(1),
-            height.max(1),
-            output_mode(&capabilities, display_profile),
-            target_nits,
-            full_frame_nits,
-        )?);
+        self.renderer = Some(create_renderer(window, &capabilities, display_profile)?);
         self.apply_renderer_state()
     }
 

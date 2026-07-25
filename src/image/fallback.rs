@@ -68,24 +68,10 @@ unsafe extern "C" {
 }
 
 /// Composes only the first frame, for the animation two-stage path.
-pub fn decode_webp_first_frame(
-    data: &[u8],
-    format_name: &'static str,
-) -> Result<DecodedImage, DecodeError> {
-    demux_webp(data, format_name, true)
-}
-
 pub fn decode_webp_animation(
     data: &[u8],
     format_name: &'static str,
-) -> Result<DecodedImage, DecodeError> {
-    demux_webp(data, format_name, false)
-}
-
-fn demux_webp(
-    data: &[u8],
-    format_name: &'static str,
-    first_frame_only: bool,
+    frame_limit: usize,
 ) -> Result<DecodedImage, DecodeError> {
     let webp_data = WebPData {
         bytes: data.as_ptr(),
@@ -102,7 +88,7 @@ fn demux_webp(
     if demuxer.is_null() {
         return Err(uncoded_error("WebP demux failed"));
     }
-    let result = compose_webp_frames(demuxer, format_name, first_frame_only);
+    let result = compose_webp_frames(demuxer, format_name, frame_limit);
     unsafe { WebPDemuxDelete(demuxer) };
     result
 }
@@ -110,7 +96,7 @@ fn demux_webp(
 fn compose_webp_frames(
     demuxer: *mut WebPDemuxer,
     format_name: &'static str,
-    first_frame_only: bool,
+    frame_limit: usize,
 ) -> Result<DecodedImage, DecodeError> {
     let canvas_width = unsafe { WebPDemuxGetI(demuxer, WEBP_FF_CANVAS_WIDTH) };
     let canvas_height = unsafe { WebPDemuxGetI(demuxer, WEBP_FF_CANVAS_HEIGHT) };
@@ -179,7 +165,7 @@ fn compose_webp_frames(
                 frame_height,
             );
         }
-        if first_frame_only || unsafe { WebPDemuxNextFrame(&raw mut iterator) } == 0 {
+        if frames.len() >= frame_limit || unsafe { WebPDemuxNextFrame(&raw mut iterator) } == 0 {
             break;
         }
     }

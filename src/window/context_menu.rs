@@ -164,7 +164,12 @@ impl MenuBuilder {
         self.append_action(menu, Action::OpenUrl)?;
 
         let recent = unsafe { CreatePopupMenu()? };
-        for index in 0..self.state_snapshot.recent_names.len().min(10) {
+        for index in 0..self
+            .state_snapshot
+            .recent_names
+            .len()
+            .min(crate::settings::RECENT_FILES_LIMIT)
+        {
             let name = self.state_snapshot.recent_names[index].clone();
             self.append_action_labeled(recent, Action::Recent(index as u8), &name)?;
         }

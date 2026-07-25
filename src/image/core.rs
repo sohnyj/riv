@@ -255,50 +255,23 @@ struct CacheEntry {
     image: Arc<DecodedImage>,
 }
 
-/// Frees evicted image buffers off the UI thread.
+/// Frees retired image buffers off the UI thread.
 struct ImageReaper {
-    sender: Option<mpsc::Sender<Arc<DecodedImage>>>,
-    handle: Option<std::thread::JoinHandle<()>>,
+    sender: mpsc::Sender<Arc<DecodedImage>>,
 }
 
 impl ImageReaper {
     fn new() -> Self {
         let (sender, receiver) = mpsc::channel::<Arc<DecodedImage>>();
-        match std::thread::Builder::new()
+        // A spawn failure drops the receiver, so every reap frees inline instead.
+        let _ = std::thread::Builder::new()
             .name("riv-image-reaper".to_string())
-            .spawn(move || {
-                while let Ok(image) = receiver.recv() {
-                    drop(image);
-                }
-            }) {
-            Ok(handle) => Self {
-                sender: Some(sender),
-                handle: Some(handle),
-            },
-            Err(_) => Self {
-                sender: None,
-                handle: None,
-            },
-        }
+            .spawn(move || receiver.iter().for_each(drop));
+        Self { sender }
     }
 
-    /// Drops inline when the thread failed to start.
     fn reap(&self, image: Arc<DecodedImage>) {
-        match &self.sender {
-            Some(sender) => {
-                let _ = sender.send(image);
-            }
-            None => drop(image),
-        }
-    }
-}
-
-impl Drop for ImageReaper {
-    fn drop(&mut self) {
-        self.sender = None; // close the channel so the thread's loop ends
-        if let Some(handle) = self.handle.take() {
-            let _ = handle.join();
-        }
+        let _ = self.sender.send(image);
     }
 }
 
@@ -418,7 +391,7 @@ impl ImageCore {
         Some((index + 1, self.entries.len()))
     }
 
-    /// A Folder-gated action can act: somewhere to go besides the anchor itself.
+    /// A NavigationTargets-gated action can act: somewhere to go besides the anchor itself.
     pub fn has_navigation_targets(&self) -> bool {
         match self.entries.len() {
             0 => false,
@@ -491,7 +464,9 @@ impl ImageCore {
         let Some(location) = self.navigation_anchor().cloned() else {
             return false;
         };
-        self.cache.remove(&location);
+        if let Some(entry) = self.cache.remove(&location) {
+            self.reaper.reap(entry.image);
+        }
         if let ItemLocation::Url(url) = &location {
             // Back through load_url so validation errors reproduce on retry.
             return self.load_url(url);
@@ -654,10 +629,7 @@ impl ImageCore {
             .map(|entry| (entry.image.clone(), entry.preview));
         let mut kind = JobKind::PreviewThenFull;
         if let Some((image, preview)) = cached {
-            self.current = Some(CurrentImage {
-                location: location.clone(),
-                image,
-            });
+            self.show_image(location.clone(), image);
             self.load_error = None;
             if !preview {
                 self.pending_display = None;
@@ -718,7 +690,24 @@ impl ImageCore {
     pub fn clear_current_item(&mut self) {
         self.pending_display = None;
         self.load_error = None;
-        self.current = None;
+        if let Some(previous) = self.current.take() {
+            self.reaper.reap(previous.image);
+        }
+    }
+
+    /// Replaces the displayed image, freeing the outgoing buffer off the UI thread.
+    fn show_image(&mut self, location: ItemLocation, image: Arc<DecodedImage>) {
+        if let Some(previous) = self.current.take() {
+            self.reaper.reap(previous.image);
+        }
+        self.current = Some(CurrentImage { location, image });
+    }
+
+    /// Caches an entry, freeing any replaced stand-in off the UI thread.
+    fn cache_image(&mut self, location: ItemLocation, entry: CacheEntry) {
+        if let Some(replaced) = self.cache.insert(location, entry) {
+            self.reaper.reap(replaced.image);
+        }
     }
 
     pub fn has_pending_display(&self) -> bool {
@@ -768,10 +757,7 @@ impl ImageCore {
                 .as_ref()
                 .is_some_and(|pending| *pending == completion.location);
             if is_pending && let Ok(image) = completion.result {
-                self.current = Some(CurrentImage {
-                    location: completion.location,
-                    image,
-                });
+                self.show_image(completion.location, image);
                 self.load_error = None;
                 return true;
             }
@@ -786,7 +772,7 @@ impl ImageCore {
         if matches!(completion.stage, DecodeStage::PreviewFinal)
             && let Ok(image) = &completion.result
         {
-            self.cache.insert(
+            self.cache_image(
                 completion.location.clone(),
                 CacheEntry {
                     file_size: completion.file_size,
@@ -829,7 +815,7 @@ impl ImageCore {
         }
         match completion.result {
             Ok(image) => {
-                self.cache.insert(
+                self.cache_image(
                     completion.location.clone(),
                     CacheEntry {
                         file_size: completion.file_size,
@@ -838,10 +824,7 @@ impl ImageCore {
                     },
                 );
                 if is_pending {
-                    self.current = Some(CurrentImage {
-                        location: completion.location,
-                        image,
-                    });
+                    self.show_image(completion.location, image);
                     self.pending_display = None;
                     self.load_error = None;
                     self.preload_neighbors();
@@ -1444,13 +1427,10 @@ fn worker_loop(shared: &PoolShared, window: isize) {
         let mut file_size = job.file_size;
         let result = match &job.location {
             ItemLocation::File(path) => {
-                if job.kind != JobKind::Full
-                    && decode::is_raw_two_stage(path)
-                    && let Some(preview) = decode::decode_raw_preview(path, &job.cancellation)
-                {
-                    let last = job.kind == JobKind::PreviewOnly;
-                    post_completion(
+                let post_preview = |image: DecodedImage, last: bool| {
+                    post_boxed(
                         window,
+                        WM_APP_DECODE_COMPLETE,
                         Box::new(DecodeCompletion {
                             location: job.location.clone(),
                             file_size: job.file_size,
@@ -1459,9 +1439,16 @@ fn worker_loop(shared: &PoolShared, window: isize) {
                             } else {
                                 DecodeStage::Preview
                             },
-                            result: Ok(Arc::new(preview)),
+                            result: Ok(Arc::new(image)),
                         }),
                     );
+                };
+                if job.kind != JobKind::Full
+                    && decode::is_raw_two_stage(path)
+                    && let Some(preview) = decode::decode_raw_preview(path, &job.cancellation)
+                {
+                    let last = job.kind == JobKind::PreviewOnly;
+                    post_preview(preview, last);
                     if last {
                         continue; // the full decode waits until someone asks for it
                     }
@@ -1471,19 +1458,7 @@ fn worker_loop(shared: &PoolShared, window: isize) {
                     && let Some(first_frame) =
                         decode::decode_animation_first_frame(path, &job.cancellation)
                 {
-                    post_completion(
-                        window,
-                        Box::new(DecodeCompletion {
-                            location: job.location.clone(),
-                            file_size: job.file_size,
-                            stage: if job.speculative {
-                                DecodeStage::PreviewFinal
-                            } else {
-                                DecodeStage::Preview
-                            },
-                            result: Ok(Arc::new(first_frame)),
-                        }),
-                    );
+                    post_preview(first_frame, job.speculative);
                     if job.speculative {
                         continue;
                     }
@@ -1508,8 +1483,9 @@ fn worker_loop(shared: &PoolShared, window: isize) {
                         return;
                     }
                     last_report = Some(Instant::now());
-                    post_download_progress(
+                    post_boxed(
                         window,
+                        WM_APP_DOWNLOAD_PROGRESS,
                         Box::new(DownloadProgress {
                             location: job.location.clone(),
                             received_bytes,
@@ -1528,8 +1504,9 @@ fn worker_loop(shared: &PoolShared, window: isize) {
             }
         }
         .map(Arc::new);
-        post_completion(
+        post_boxed(
             window,
+            WM_APP_DECODE_COMPLETE,
             Box::new(DecodeCompletion {
                 location: job.location,
                 file_size,
@@ -1551,27 +1528,13 @@ fn url_decode_error(error: DecodeError) -> DecodeError {
     error
 }
 
-fn post_completion(window: isize, completion: Box<DecodeCompletion>) {
-    let pointer = Box::into_raw(completion);
+/// Posts an owned payload; reclaims it when the message cannot be delivered.
+fn post_boxed<T>(window: isize, message: u32, payload: Box<T>) {
+    let pointer = Box::into_raw(payload);
     let posted = unsafe {
         PostMessageW(
             Some(HWND(window as *mut c_void)),
-            WM_APP_DECODE_COMPLETE,
-            WPARAM(0),
-            LPARAM(pointer as isize),
-        )
-    };
-    if posted.is_err() {
-        drop(unsafe { Box::from_raw(pointer) });
-    }
-}
-
-fn post_download_progress(window: isize, progress: Box<DownloadProgress>) {
-    let pointer = Box::into_raw(progress);
-    let posted = unsafe {
-        PostMessageW(
-            Some(HWND(window as *mut c_void)),
-            WM_APP_DOWNLOAD_PROGRESS,
+            message,
             WPARAM(0),
             LPARAM(pointer as isize),
         )

@@ -5,7 +5,7 @@ use std::path::{Path, PathBuf};
 
 use serde_json::{Map, Value};
 
-const RECENT_FILES_LIMIT: usize = 10;
+pub const RECENT_FILES_LIMIT: usize = 10;
 
 /// The default window background; used when the custom color is off.
 pub const DEFAULT_BACKGROUND_COLOR: (u8, u8, u8) = (0x21, 0x21, 0x21);

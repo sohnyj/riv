@@ -289,7 +289,7 @@ impl Action {
 
     pub fn name(self) -> &'static str {
         if let Self::Recent(index) = self {
-            return RECENT_NAMES[usize::from(index).min(9)];
+            return RECENT_NAMES[usize::from(index).min(RECENT_NAMES.len() - 1)];
         }
         ACTION_TABLE
             .iter()
