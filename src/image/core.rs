@@ -548,7 +548,7 @@ impl ImageCore {
             });
             return false;
         }
-        self.rescan_listing();
+        // A reload re-decodes the item; the listing snapshot stays put (SPEC section 4.4).
         self.load_item(&location)
     }
 
