@@ -160,8 +160,8 @@ pub struct SettingsFile {
     path: PathBuf,
     document: Value,
     pub options: Options,
-    /// Entries dropped this session (missing on open); the exit merge must not resurrect them.
-    removed_recent_files: HashSet<String>,
+    /// ASCII-lowercased path keys dropped this session; the exit merge must not resurrect them.
+    removed_recent_keys: HashSet<String>,
 }
 
 fn recent_files_of(document: &Value) -> Vec<(String, String)> {
@@ -191,7 +191,7 @@ impl SettingsFile {
             path,
             document,
             options,
-            removed_recent_files: HashSet::new(),
+            removed_recent_keys: HashSet::new(),
         }
     }
 
@@ -510,11 +510,11 @@ impl SettingsFile {
                 .map(|(_, path)| path.to_ascii_lowercase())
                 .collect();
             for (name, path) in recent_files_of(&disk) {
-                let lowercase = path.to_ascii_lowercase();
-                if self.removed_recent_files.contains(&lowercase) {
+                let key = path.to_ascii_lowercase();
+                if self.removed_recent_keys.contains(&key) {
                     continue; // dropped as missing this session
                 }
-                if seen.insert(lowercase) {
+                if seen.insert(key) {
                     files.push((name, path));
                 }
             }
@@ -564,16 +564,19 @@ impl SettingsFile {
         self.set_recent_files(&files);
     }
 
-    /// Drops one entry, for a recents open that failed as missing (SPEC section 6.4).
-    pub fn remove_recent_file(&mut self, path: &str) {
-        let lowercase = path.to_ascii_lowercase();
-        let kept: Vec<(String, String)> = self
-            .recent_files()
-            .into_iter()
-            .filter(|(_, stored)| stored.to_ascii_lowercase() != lowercase)
+    /// Drops the entry and tombstones it so the exit merge cannot restore it (SPEC section 6.4).
+    pub fn remove_recent_file(&mut self, path: &std::path::Path) {
+        let text = path.to_string_lossy();
+        let files = self.recent_files();
+        let kept: Vec<(String, String)> = files
+            .iter()
+            .filter(|(_, stored)| !stored.eq_ignore_ascii_case(&text))
+            .cloned()
             .collect();
-        self.set_recent_files(&kept);
-        self.removed_recent_files.insert(lowercase);
+        if kept.len() != files.len() {
+            self.set_recent_files(&kept);
+        }
+        self.removed_recent_keys.insert(text.to_ascii_lowercase());
     }
 
     pub fn clear_recent_files(&mut self) {

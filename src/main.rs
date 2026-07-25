@@ -127,7 +127,6 @@ struct Application {
     /// Last-applied dark title bar; a WM_SETTINGCHANGE reapplies only when it flips.
     title_bar_dark: Option<bool>,
     /// File size and modified time, snapshotted when the item is drawn (never re-statted).
-    metadata_snapshot: Option<(u64, Option<std::time::SystemTime>)>,
     /// Received bytes of the pending URL download the view reports on.
     download_progress: Option<(ItemLocation, u64)>,
     slideshow_active: bool,
@@ -263,7 +262,6 @@ impl Application {
             window_title: "riv".to_string(),
             current_monitor: unsafe { MonitorFromWindow(window, MONITOR_DEFAULTTONEAREST) },
             title_bar_dark: None,
-            metadata_snapshot: None,
             download_progress: None,
             slideshow_active: false,
             slideshow_item_shown_at: None,
@@ -625,8 +623,6 @@ impl Application {
                 unsafe { SetTimer(Some(window), OPEN_WITH_TIMER, 250, None) };
             }
         }
-        // Snapshot file metadata once, now that this (possibly preloaded) item is displayed.
-        self.metadata_snapshot = self.image_core.current_item_metadata();
         self.update_window_title(window);
         self.request_render(window);
     }
@@ -868,8 +864,8 @@ impl Application {
             .as_ref()
             .map_or("None", |renderer| renderer.dither_description());
         let tone_map = self.renderer.as_ref().map(Renderer::tone_map_info);
-        // Size and modified time are snapshotted at load (never re-statted here).
-        let (file_size, modified) = self.metadata_snapshot.unwrap_or((0, None));
+        // Size and modified time were carried by the load; nothing re-stats here.
+        let (file_size, modified) = self.image_core.current_item_metadata().unwrap_or((0, None));
         let current = self.image_core.current.as_ref()?;
         let image_id = Arc::as_ptr(&current.image) as usize;
         let reuse = self.info_text_cache.as_ref().is_some_and(|cache| {
@@ -1236,20 +1232,6 @@ fn open_external(
     application.apply_load_outcome(window, displayed);
 }
 
-/// The opened recents entry failed on the spot as not found; transient failures stay.
-fn recent_entry_is_missing(application: &Application, path: &Path) -> bool {
-    const ERROR_FILE_NOT_FOUND: i32 = 2;
-    const ERROR_PATH_NOT_FOUND: i32 = 3;
-    let opened =
-        ItemLocation::File(std::path::absolute(path).unwrap_or_else(|_| path.to_path_buf()));
-    matches!(
-        &application.image_core.load_error,
-        Some((location, error))
-            if *location == opened
-                && matches!(error.code, ERROR_FILE_NOT_FOUND | ERROR_PATH_NOT_FOUND)
-    )
-}
-
 fn open_external_path(application: &mut Application, window: HWND, path: &Path) {
     open_external(application, window, |core| core.load_path(path));
 }
@@ -1356,10 +1338,8 @@ fn dispatch_action(application: &mut Application, window: HWND, action: Action) 
                 .map(|(_, path)| std::path::PathBuf::from(path));
             if let Some(path) = path {
                 open_external_path(application, window, &path);
-                if recent_entry_is_missing(application, &path) {
-                    application
-                        .settings
-                        .remove_recent_file(&path.to_string_lossy());
+                if application.image_core.open_failed_missing(&path) {
+                    application.settings.remove_recent_file(&path);
                 }
             }
         }

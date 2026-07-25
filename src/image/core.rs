@@ -159,9 +159,27 @@ impl ItemLocation {
 }
 
 /// What the entry listing was scanned from.
+#[derive(Clone)]
 enum ListingScope {
     Directory(PathBuf),
     Archive(PathBuf),
+}
+
+impl ListingScope {
+    /// Same kind over the same path, compared like item identity (case-insensitive).
+    fn covers(&self, other: &ListingScope) -> bool {
+        match (self, other) {
+            (Self::Directory(first), Self::Directory(second))
+            | (Self::Archive(first), Self::Archive(second)) => paths_equal(first, second),
+            _ => false,
+        }
+    }
+
+    fn path(&self) -> &Path {
+        match self {
+            Self::Directory(path) | Self::Archive(path) => path,
+        }
+    }
 }
 
 /// Preload mode 0/1/2 -> (backward distance, forward distance, cache budget in bytes).
@@ -229,7 +247,7 @@ pub enum DecodeStage {
 pub struct DecodeCompletion {
     pub location: ItemLocation,
     pub file_size: u64,
-    /// Measured by the worker alongside the decode; the UI thread never stats for it.
+    /// Echoed from the submit stat or the listing; None for URLs.
     pub modified: Option<SystemTime>,
     pub stage: DecodeStage,
     pub result: Result<Arc<DecodedImage>, DecodeError>,
@@ -299,92 +317,67 @@ pub struct ImageCore {
     /// Consecutive steps against the polarity; the second one flips it.
     opposite_steps: u32,
     reaper: ImageReaper,
-    /// Folder scan in flight, awaiting its ScannedListing.
+    /// Listing scan in flight (folder or archive), awaiting its ScannedListing.
     pending_scan: Option<PendingScan>,
     window: isize,
 }
 
-/// A scan request: what it awaits, and whether arrival opens the first entry.
-enum PendingScan {
-    Directory {
-        directory: PathBuf,
-        load_first_entry: bool,
-    },
-    Archive {
-        archive: PathBuf,
-    },
-}
-
-impl PendingScan {
-    fn awaits(&self, scope: &ListingScope) -> bool {
-        match (self, scope) {
-            (Self::Directory { directory, .. }, ListingScope::Directory(scanned)) => {
-                paths_equal(directory, scanned)
-            }
-            (Self::Archive { archive }, ListingScope::Archive(scanned)) => {
-                paths_equal(archive, scanned)
-            }
-            _ => false,
-        }
-    }
-
-    fn opens_first_entry(&self) -> bool {
-        match self {
-            Self::Directory {
-                load_first_entry, ..
-            } => *load_first_entry,
-            Self::Archive { .. } => true,
-        }
-    }
+/// A scan request: the scope it awaits, and whether arrival opens the first entry.
+struct PendingScan {
+    scope: ListingScope,
+    open_first_entry: bool,
 }
 
 /// A finished background scan, posted back as WM_APP_LISTING_READY.
 pub struct ScannedListing {
     scope: ListingScope,
-    entries: Vec<ListingEntry>,
-    /// An archive that failed to enumerate or held no supported images.
-    error: Option<DecodeError>,
+    sort_mode: SortMode,
+    sort_descending: bool,
+    /// Directories always land Ok; archives can fail to enumerate or hold no images.
+    result: Result<Vec<ListingEntry>, DecodeError>,
 }
 
 impl ScannedListing {
-    /// Enumerates and sorts a directory: the worker half of submit_listing_scan.
-    fn of_directory(directory: PathBuf, options: &CoreOptions) -> Self {
-        let mut entries = scan_folder(&directory, options);
-        sort_entries(&mut entries, options);
-        Self {
-            scope: ListingScope::Directory(directory),
-            entries,
-            error: None,
-        }
-    }
-
-    /// Enumerates an archive's image members: the worker half of submit_archive_scan.
-    fn of_archive(archive: PathBuf, options: &CoreOptions) -> Self {
-        let (entries, error) = match archive_reader::enumerate(&archive) {
-            Ok(members) => {
-                let mut entries: Vec<ListingEntry> = members
-                    .into_iter()
-                    .filter_map(|member| member_entry(&archive, member))
-                    .collect();
+    /// Enumerates and sorts the scope's contents: the worker half of submit_scan.
+    fn of(scope: ListingScope, options: &CoreOptions) -> Self {
+        let result = match &scope {
+            ListingScope::Directory(directory) => {
+                let mut entries = scan_folder(directory, options);
                 sort_entries(&mut entries, options);
-                let error = entries.is_empty().then(|| DecodeError {
-                    code: 0,
-                    message: "archive contains no supported images".to_string(),
-                    store_extension: None,
-                });
-                (entries, error)
+                Ok(entries)
             }
-            Err(error) => (Vec::new(), Some(error.into())),
+            ListingScope::Archive(archive) => enumerate_archive(archive, options),
         };
         Self {
-            scope: ListingScope::Archive(archive),
-            entries,
-            error,
+            scope,
+            sort_mode: options.sort_mode,
+            sort_descending: options.sort_descending,
+            result,
         }
     }
 }
 
-/// What an arrived scan did: nothing (stale), the listing alone, or a first-entry load too.
+/// Image members of an archive, sorted; an empty archive is an error, not a listing.
+fn enumerate_archive(
+    archive: &Path,
+    options: &CoreOptions,
+) -> Result<Vec<ListingEntry>, DecodeError> {
+    let members = archive_reader::enumerate(archive).map_err(DecodeError::from)?;
+    let mut entries: Vec<ListingEntry> = members
+        .into_iter()
+        .filter_map(|member| member_entry(archive, member))
+        .collect();
+    if entries.is_empty() {
+        return Err(decode::uncoded_error(
+            "archive contains no supported images",
+        ));
+    }
+    sort_entries(&mut entries, options);
+    Ok(entries)
+}
+
+/// What an arrived scan did: nothing (stale), the listing alone, or an open that
+/// displayed or errored.
 pub enum ListingInstall {
     Discarded,
     Installed,
@@ -518,15 +511,9 @@ impl ImageCore {
         }
     }
 
-    /// (file size, modified) of the current item, carried from its decode; members use the listing.
+    /// (file size, modified) of the current item, carried from its load; None for URL times.
     pub fn current_item_metadata(&self) -> Option<(u64, Option<SystemTime>)> {
         let current = self.current.as_ref()?;
-        if matches!(&current.location, ItemLocation::ArchiveMember { .. }) {
-            let modified = self
-                .position_of(&current.location)
-                .map(|index| self.entries[index].modified);
-            return Some((current.file_size, modified));
-        }
         Some((current.file_size, current.modified))
     }
 
@@ -548,14 +535,17 @@ impl ImageCore {
             return self.load_url(url);
         }
         if let ItemLocation::File(path) = &location
-            && path
-                .extension()
-                .map(|extension| extension.to_string_lossy().to_lowercase())
-                .is_some_and(|extension| archive_reader::is_archive_extension(&extension))
+            && location
+                .extension_lowercase()
+                .as_deref()
+                .is_some_and(archive_reader::is_archive_extension)
         {
             // An archive anchor retries through its scan, like a URL revalidates.
-            let path = path.clone();
-            self.submit_archive_scan(path);
+            let scope = ListingScope::Archive(path.clone());
+            self.submit_scan(PendingScan {
+                scope,
+                open_first_entry: true,
+            });
             return false;
         }
         self.rescan_listing();
@@ -567,7 +557,10 @@ impl ImageCore {
             return false;
         };
         if path.is_dir() {
-            self.submit_listing_scan(path, true);
+            self.submit_scan(PendingScan {
+                scope: ListingScope::Directory(path),
+                open_first_entry: true,
+            });
             return false;
         }
         let extension = path
@@ -577,97 +570,77 @@ impl ImageCore {
             .as_deref()
             .is_some_and(archive_reader::is_archive_extension)
         {
-            self.submit_archive_scan(path);
+            self.submit_scan(PendingScan {
+                scope: ListingScope::Archive(path),
+                open_first_entry: true,
+            });
             return false;
         }
         let directory = path.parent().map(Path::to_path_buf);
         if let Some(directory) = directory
             && !self.directory_covered(&directory)
         {
-            self.submit_listing_scan(directory, false);
+            self.submit_scan(PendingScan {
+                scope: ListingScope::Directory(directory),
+                open_first_entry: false,
+            });
         }
         self.load_item(&ItemLocation::File(path))
     }
 
     /// True when the listing or the scan in flight already covers this directory.
     fn directory_covered(&self, directory: &Path) -> bool {
-        let listed = matches!(
-            &self.listing_scope,
-            Some(ListingScope::Directory(scanned)) if paths_equal(scanned, directory)
-        );
-        listed
-            || matches!(
-                &self.pending_scan,
-                Some(PendingScan::Directory { directory: requested, .. })
-                    if paths_equal(requested, directory)
-            )
+        let covers = |scope: &ListingScope| matches!(scope, ListingScope::Directory(scanned) if paths_equal(scanned, directory));
+        matches!(&self.listing_scope, Some(scope) if covers(scope))
+            || matches!(&self.pending_scan, Some(pending) if covers(&pending.scope))
     }
 
-    /// Clears the listing and enumerates the folder off the UI thread; it installs on arrival.
-    fn submit_listing_scan(&mut self, directory: PathBuf, load_first_entry: bool) {
-        self.begin_scan(PendingScan::Directory {
-            directory: directory.clone(),
-            load_first_entry,
-        });
-        let options = self.options.clone();
-        let window = self.window;
-        let _ = std::thread::Builder::new()
-            .name("riv-folder-scan".to_string())
-            .spawn(move || {
-                post_boxed(
-                    window,
-                    WM_APP_LISTING_READY,
-                    Box::new(ScannedListing::of_directory(directory, &options)),
-                );
-            });
-    }
-
-    /// Clears the listing and enumerates the archive off the UI thread; it installs on arrival.
-    fn submit_archive_scan(&mut self, archive: PathBuf) {
-        self.begin_scan(PendingScan::Archive {
-            archive: archive.clone(),
-        });
-        let options = self.options.clone();
-        let window = self.window;
-        let _ = std::thread::Builder::new()
-            .name("riv-folder-scan".to_string())
-            .spawn(move || {
-                post_boxed(
-                    window,
-                    WM_APP_LISTING_READY,
-                    Box::new(ScannedListing::of_archive(archive, &options)),
-                );
-            });
-    }
-
-    /// Clears the listing and records the request the arrival must match.
-    fn begin_scan(&mut self, pending: PendingScan) {
+    /// Clears the listing and enumerates the scope off the UI thread; it installs on arrival.
+    fn submit_scan(&mut self, pending: PendingScan) {
+        let scope = pending.scope.clone();
         self.reset_travel_direction();
         self.entries = Vec::new();
         self.listing_scope = None;
         self.pending_scan = Some(pending);
+        let options = self.options.clone();
+        let window = self.window;
+        let _ = std::thread::Builder::new()
+            .name("riv-listing-scan".to_string())
+            .spawn(move || {
+                post_boxed(
+                    window,
+                    WM_APP_LISTING_READY,
+                    Box::new(ScannedListing::of(scope, &options)),
+                );
+            });
     }
 
     /// Installs an arrived scan; a stale one is dropped, an archive failure becomes the error.
-    pub fn install_listing_scan(&mut self, mut scan: ScannedListing) -> ListingInstall {
+    pub fn install_listing_scan(&mut self, scan: ScannedListing) -> ListingInstall {
         let Some(pending) = self
             .pending_scan
-            .take_if(|pending| pending.awaits(&scan.scope))
+            .take_if(|pending| pending.scope.covers(&scan.scope))
         else {
             return ListingInstall::Discarded;
         };
-        if let ListingScope::Archive(archive) = &scan.scope
-            && let Some(error) = scan.error.take()
+        let mut entries = match scan.result {
+            Ok(entries) => entries,
+            Err(error) => {
+                self.pending_display = None;
+                self.load_error =
+                    Some((ItemLocation::File(scan.scope.path().to_path_buf()), error));
+                return ListingInstall::Opened { displayed: false };
+            }
+        };
+        // The worker sorted under an options snapshot; a change since then re-sorts here.
+        if scan.sort_mode != self.options.sort_mode
+            || scan.sort_descending != self.options.sort_descending
         {
-            self.pending_display = None;
-            self.load_error = Some((ItemLocation::File(archive.clone()), error));
-            return ListingInstall::Opened { displayed: false };
+            sort_entries(&mut entries, &self.options);
         }
-        // The worker sorted under an options snapshot; re-sorting covers a change since.
-        sort_entries(&mut scan.entries, &self.options);
-        self.entries = scan.entries;
+        self.entries = entries;
         self.listing_scope = Some(scan.scope);
-        if pending.opens_first_entry() {
+        if pending.open_first_entry {
             let Some(first) = self.entries.first().map(|entry| entry.location.clone()) else {
                 return ListingInstall::Installed;
             };
@@ -679,7 +652,7 @@ impl ImageCore {
         ListingInstall::Installed
     }
 
-    /// True while a folder scan is in flight; the window is loading, not empty.
+    /// True while a listing scan is in flight; the window is loading, not empty.
     pub fn listing_scan_pending(&self) -> bool {
         self.pending_scan.is_some()
     }
@@ -720,9 +693,9 @@ impl ImageCore {
     }
 
     fn load_item(&mut self, location: &ItemLocation) -> bool {
-        let file_size = match location {
+        let (file_size, modified) = match location {
             ItemLocation::File(path) => match std::fs::metadata(path) {
-                Ok(metadata) => metadata.len(),
+                Ok(metadata) => (metadata.len(), metadata.modified().ok()),
                 Err(error) => {
                     self.load_error = Some((
                         location.clone(),
@@ -737,7 +710,10 @@ impl ImageCore {
             },
             // Member sizes are fixed by the listing; a vanished member fails here.
             ItemLocation::ArchiveMember { .. } => match self.position_of(location) {
-                Some(index) => self.entries[index].file_size,
+                Some(index) => (
+                    self.entries[index].file_size,
+                    Some(self.entries[index].modified),
+                ),
                 None => {
                     self.load_error = Some((
                         location.clone(),
@@ -751,7 +727,10 @@ impl ImageCore {
                 }
             },
             // A cached remote item stays valid until an explicit reload.
-            ItemLocation::Url(_) => self.cache.get(location).map_or(0, |entry| entry.file_size),
+            ItemLocation::Url(_) => (
+                self.cache.get(location).map_or(0, |entry| entry.file_size),
+                None,
+            ),
         };
         let cached = self
             .cache
@@ -759,8 +738,8 @@ impl ImageCore {
             .filter(|entry| entry.file_size == file_size)
             .map(|entry| (entry.image.clone(), entry.modified, entry.preview));
         let mut kind = JobKind::PreviewThenFull;
-        if let Some((image, modified, preview)) = cached {
-            self.show_image(location.clone(), image, file_size, modified);
+        if let Some((image, cached_modified, preview)) = cached {
+            self.show_image(location.clone(), image, file_size, cached_modified);
             self.load_error = None;
             if !preview {
                 self.pending_display = None;
@@ -781,8 +760,14 @@ impl ImageCore {
             let cancellation = Arc::new(AtomicBool::new(false));
             self.in_flight
                 .insert(location.clone(), cancellation.clone());
-            self.pool
-                .submit(location.clone(), file_size, cancellation, kind, true);
+            self.pool.submit(
+                location.clone(),
+                file_size,
+                modified,
+                cancellation,
+                kind,
+                true,
+            );
         }
         self.cancel_irrelevant_decodes();
         displayed
@@ -850,6 +835,22 @@ impl ImageCore {
         }
     }
 
+    /// The just-attempted plain-file open failed synchronously as not-found; scans report later.
+    pub fn open_failed_missing(&self, path: &Path) -> bool {
+        const ERROR_FILE_NOT_FOUND: i32 = 2;
+        const ERROR_PATH_NOT_FOUND: i32 = 3;
+        let Some((location, error)) = &self.load_error else {
+            return false;
+        };
+        if !matches!(error.code, ERROR_FILE_NOT_FOUND | ERROR_PATH_NOT_FOUND) {
+            return false;
+        }
+        let Ok(path) = std::path::absolute(path) else {
+            return false;
+        };
+        *location == ItemLocation::File(path)
+    }
+
     /// True while a remote image download owns the pending slot.
     pub fn url_download_pending(&self) -> bool {
         matches!(self.pending_display, Some(ItemLocation::Url(_)))
@@ -888,23 +889,15 @@ impl ImageCore {
         let anchor_index = self
             .navigation_anchor()
             .and_then(|location| self.position_of(location));
+        let length = self.entries.len();
+        let looped = self.options.loop_within_folder;
         let index = match command {
-            NavigationCommand::First => Some(0),
-            NavigationCommand::Last => Some(self.entries.len() - 1),
-            NavigationCommand::Next => self.adjacent_index(anchor_index, 1),
-            NavigationCommand::Previous => self.adjacent_index(anchor_index, -1),
-        }?;
+            NavigationCommand::First => 0,
+            NavigationCommand::Last => length - 1,
+            NavigationCommand::Next => step_index(anchor_index, 1, length, looped)?,
+            NavigationCommand::Previous => step_index(anchor_index, -1, length, looped)?,
+        };
         Some(self.entries[index].location.clone())
-    }
-
-    fn adjacent_index(&self, anchor: Option<usize>, direction: isize) -> Option<usize> {
-        step_candidate_indices(
-            anchor,
-            direction,
-            self.entries.len(),
-            self.options.loop_within_folder,
-        )
-        .next()
     }
 
     pub fn on_decode_complete(&mut self, completion: DecodeCompletion) -> bool {
@@ -969,6 +962,7 @@ impl ImageCore {
                 self.pool.submit(
                     completion.location,
                     completion.file_size,
+                    completion.modified,
                     cancellation,
                     kind,
                     true,
@@ -1015,10 +1009,10 @@ impl ImageCore {
     }
 
     fn rescan_folder(&mut self, directory: &Path) {
-        let mut entries = scan_folder(directory, &self.options);
-        sort_entries(&mut entries, &self.options);
-        self.entries = entries;
-        self.listing_scope = Some(ListingScope::Directory(directory.to_path_buf()));
+        let scope = ListingScope::Directory(directory.to_path_buf());
+        let scan = ScannedListing::of(scope, &self.options);
+        self.entries = scan.result.unwrap_or_default();
+        self.listing_scope = Some(scan.scope);
     }
 
     /// Drops a deleted item from the listing snapshot; no rescan (SPEC section 4.3).
@@ -1028,22 +1022,13 @@ impl ImageCore {
         }
     }
 
-    /// Re-scans whatever the current listing came from (folder or archive).
+    /// Synchronous by design (SPEC section 4.3); only opens enumerate off the UI thread.
     pub fn rescan_listing(&mut self) {
         match &self.listing_scope {
             Some(ListingScope::Directory(directory)) => self.rescan_folder(&directory.clone()),
             Some(ListingScope::Archive(archive)) => {
-                let archive = archive.clone();
-                let mut entries: Vec<ListingEntry> = archive_reader::enumerate(&archive)
-                    .map(|members| {
-                        members
-                            .into_iter()
-                            .filter_map(|member| member_entry(&archive, member))
-                            .collect()
-                    })
-                    .unwrap_or_default();
-                sort_entries(&mut entries, &self.options);
-                self.entries = entries;
+                self.entries =
+                    enumerate_archive(&archive.clone(), &self.options).unwrap_or_default();
             }
             None => {}
         }
@@ -1104,6 +1089,7 @@ impl ImageCore {
                 self.pool.submit(
                     entry.location.clone(),
                     entry.file_size,
+                    Some(entry.modified),
                     cancellation,
                     kind,
                     false,
@@ -1240,26 +1226,26 @@ fn preload_offsets(backward: usize, forward: usize) -> impl Iterator<Item = isiz
 }
 
 /// Next/Previous candidates in walk order; an absent anchor starts at the matching end.
-fn step_candidate_indices(
+/// One step from the anchor (or the matching end when absent); None past a non-looping end.
+fn step_index(
     anchor: Option<usize>,
     direction: isize,
     length: usize,
-    loop_enabled: bool,
-) -> impl Iterator<Item = usize> {
+    looped: bool,
+) -> Option<usize> {
+    if length == 0 {
+        return None;
+    }
     let length = length as isize;
     let start = anchor.map_or(if direction > 0 { -1 } else { length }, |index| {
         index as isize
     });
-    (1..=length).map_while(move |step| {
-        let index = start + step * direction;
-        if loop_enabled {
-            Some(index.rem_euclid(length) as usize)
-        } else if (0..length).contains(&index) {
-            Some(index as usize)
-        } else {
-            None // stop at folder ends when not looping
-        }
-    })
+    let index = start + direction;
+    if looped {
+        Some(index.rem_euclid(length) as usize)
+    } else {
+        (0..length).contains(&index).then_some(index as usize)
+    }
 }
 
 /// Signed offset from anchor to index; the nearest way round when looping.
@@ -1435,6 +1421,8 @@ enum JobKind {
 struct DecodeJob {
     location: ItemLocation,
     file_size: u64,
+    /// Carried from the submit stat or the listing; the worker echoes it, never stats.
+    modified: Option<SystemTime>,
     cancellation: Arc<AtomicBool>,
     kind: JobKind,
     /// Preloaded on a guess, so an animation stops at its first frame.
@@ -1469,6 +1457,7 @@ impl DecodePool {
         &self,
         location: ItemLocation,
         file_size: u64,
+        modified: Option<SystemTime>,
         cancellation: Arc<AtomicBool>,
         kind: JobKind,
         awaited: bool,
@@ -1477,6 +1466,7 @@ impl DecodePool {
         let job = DecodeJob {
             location,
             file_size,
+            modified,
             cancellation,
             kind,
             speculative: !awaited, // only a preload goes to the back of the queue
@@ -1563,12 +1553,9 @@ fn worker_loop(shared: &PoolShared, window: isize) {
             }
         };
         let mut file_size = job.file_size;
-        let mut modified = None;
+        let modified = job.modified;
         let result = match &job.location {
             ItemLocation::File(path) => {
-                modified = std::fs::metadata(path)
-                    .ok()
-                    .and_then(|metadata| metadata.modified().ok());
                 let post_preview = |image: DecodedImage, last: bool| {
                     post_boxed(
                         window,
@@ -1689,41 +1676,30 @@ fn post_boxed<T>(window: isize, message: u32, payload: Box<T>) {
 }
 
 #[cfg(test)]
-mod step_candidate_tests {
+mod step_index_tests {
     use super::*;
 
-    fn walk(
-        anchor: Option<usize>,
-        direction: isize,
-        length: usize,
-        loop_enabled: bool,
-    ) -> Vec<usize> {
-        step_candidate_indices(anchor, direction, length, loop_enabled).collect()
+    #[test]
+    fn an_absent_anchor_starts_at_the_matching_end() {
+        assert_eq!(step_index(None, 1, 3, false), Some(0));
+        assert_eq!(step_index(None, -1, 3, false), Some(2));
     }
 
     #[test]
-    fn absent_anchor_starts_at_the_matching_end() {
-        assert_eq!(walk(None, 1, 3, false), [0, 1, 2]);
-        assert_eq!(walk(None, -1, 3, false), [2, 1, 0]);
-        assert_eq!(walk(None, 1, 3, true), [0, 1, 2]);
-        assert_eq!(walk(None, -1, 3, true), [2, 1, 0]);
-    }
-
-    #[test]
-    fn anchored_walks_step_away_from_the_anchor() {
-        assert_eq!(walk(Some(1), 1, 4, false), [2, 3]);
-        assert_eq!(walk(Some(1), -1, 4, false), [0]);
-        assert_eq!(walk(Some(1), 1, 4, true), [2, 3, 0, 1]);
-        assert_eq!(walk(Some(1), -1, 4, true), [0, 3, 2, 1]);
+    fn steps_move_one_entry_and_ends_obey_the_loop_option() {
+        assert_eq!(step_index(Some(1), 1, 4, false), Some(2));
+        assert_eq!(step_index(Some(3), 1, 4, false), None);
+        assert_eq!(step_index(Some(3), 1, 4, true), Some(0));
+        assert_eq!(step_index(Some(0), -1, 4, false), None);
+        assert_eq!(step_index(Some(0), -1, 4, true), Some(3));
     }
 
     #[test]
     fn degenerate_lengths_stay_in_bounds() {
-        assert_eq!(walk(None, 1, 0, true), Vec::<usize>::new());
-        assert_eq!(walk(None, -1, 0, false), Vec::<usize>::new());
-        assert_eq!(walk(None, 1, 1, false), [0]);
-        assert_eq!(walk(Some(0), 1, 1, true), [0]);
-        assert_eq!(walk(Some(0), 1, 1, false), Vec::<usize>::new());
+        assert_eq!(step_index(None, 1, 0, true), None);
+        assert_eq!(step_index(None, 1, 1, false), Some(0));
+        assert_eq!(step_index(Some(0), 1, 1, true), Some(0));
+        assert_eq!(step_index(Some(0), 1, 1, false), None);
     }
 }
 
@@ -2089,7 +2065,7 @@ mod url_session_state_tests {
         // The scan is asynchronous: no listing until its arrival installs one.
         assert!(core.listing_scan_pending());
         assert!(core.entries.is_empty());
-        let scan = ScannedListing::of_directory(directory.clone(), &core.options);
+        let scan = ScannedListing::of(ListingScope::Directory(directory.clone()), &core.options);
         core.install_listing_scan(scan);
         assert!(!core.listing_scan_pending());
         assert!(matches!(
@@ -2111,7 +2087,7 @@ mod url_session_state_tests {
         assert!(core.listing_scan_pending());
         let _ = core.load_url("ftp://a.com/b.png");
         assert!(!core.listing_scan_pending());
-        let scan = ScannedListing::of_directory(directory.clone(), &core.options);
+        let scan = ScannedListing::of(ListingScope::Directory(directory.clone()), &core.options);
         let outcome = core.install_listing_scan(scan); // nothing waits for it any more
         assert!(matches!(outcome, ListingInstall::Discarded));
         assert!(core.entries.is_empty());
@@ -2148,7 +2124,7 @@ mod listing_scan_tests {
         core.load_path(&file);
         assert!(core.listing_scan_pending());
         let elsewhere = std::env::temp_dir().join("riv-stale-scan-elsewhere");
-        let stale = ScannedListing::of_directory(elsewhere, &core.options);
+        let stale = ScannedListing::of(ListingScope::Directory(elsewhere), &core.options);
         assert!(matches!(
             core.install_listing_scan(stale),
             ListingInstall::Discarded
@@ -2173,17 +2149,16 @@ mod listing_scan_tests {
         let _ = std::fs::remove_dir_all(&directory);
     }
 
-    fn archive_member(archive: &std::path::Path, name: &str) -> ListingEntry {
-        ListingEntry {
-            location: ItemLocation::ArchiveMember {
-                archive: archive.to_path_buf(),
-                member: name.to_string(),
+    fn archive_member(archive: &Path, name: &str) -> ListingEntry {
+        member_entry(
+            archive,
+            archive_reader::MemberInfo {
+                name: name.to_string(),
+                size: 8,
+                modified: UNIX_EPOCH,
             },
-            wide_name: name.encode_utf16().chain(std::iter::once(0)).collect(),
-            file_size: 8,
-            modified: UNIX_EPOCH,
-            created: UNIX_EPOCH,
-        }
+        )
+        .expect("supported member")
     }
 
     #[test]
@@ -2195,8 +2170,9 @@ mod listing_scan_tests {
         let resolved = std::path::absolute(&archive).expect("absolute");
         let scan = ScannedListing {
             scope: ListingScope::Archive(resolved.clone()),
-            entries: vec![archive_member(&resolved, "one.png")],
-            error: None,
+            sort_mode: core.options.sort_mode,
+            sort_descending: core.options.sort_descending,
+            result: Ok(vec![archive_member(&resolved, "one.png")]),
         };
         assert!(matches!(
             core.install_listing_scan(scan),
@@ -2214,12 +2190,9 @@ mod listing_scan_tests {
         let resolved = std::path::absolute(&archive).expect("absolute");
         let scan = ScannedListing {
             scope: ListingScope::Archive(resolved),
-            entries: Vec::new(),
-            error: Some(DecodeError {
-                code: 0,
-                message: "enumerate failed".to_string(),
-                store_extension: None,
-            }),
+            sort_mode: core.options.sort_mode,
+            sort_descending: core.options.sort_descending,
+            result: Err(decode::uncoded_error("enumerate failed")),
         };
         assert!(matches!(
             core.install_listing_scan(scan),
@@ -2238,7 +2211,7 @@ mod listing_scan_tests {
         let mut core = core();
         assert!(!core.load_path(&directory));
         assert!(core.listing_scan_pending());
-        let scan = ScannedListing::of_directory(directory.clone(), &core.options);
+        let scan = ScannedListing::of(ListingScope::Directory(directory.clone()), &core.options);
         assert!(matches!(
             core.install_listing_scan(scan),
             ListingInstall::Opened { .. }
