@@ -21,8 +21,8 @@ use dialogs::options::{WM_APP_OPTIONS_APPLIED, WM_APP_OPTIONS_GEOMETRY};
 use image::animation::Animation;
 use image::color;
 use image::core::{
-    CoreOptions, DecodeCompletion, DownloadProgress, ImageCore, ItemLocation, ListingScan,
-    NavigationCommand, SortMode, WM_APP_DECODE_COMPLETE, WM_APP_DOWNLOAD_PROGRESS,
+    CoreOptions, DecodeCompletion, DownloadProgress, ImageCore, ItemLocation, ListingInstall,
+    NavigationCommand, ScannedListing, SortMode, WM_APP_DECODE_COMPLETE, WM_APP_DOWNLOAD_PROGRESS,
     WM_APP_LISTING_READY,
 };
 use image::decode::DecodedImage;
@@ -120,6 +120,8 @@ struct Application {
     info_text_cache: Option<InfoTextCache>,
     /// Advanced-color state and EDID gamut for the info overlay; refreshed on display change.
     display_description: DisplayDescription,
+    /// The last title set, so unchanged rebuilds skip the caption write.
+    window_title: String,
     /// The window's current monitor; a WM_MOVE re-evaluates color only when it changes.
     current_monitor: HMONITOR,
     /// Last-applied dark title bar; a WM_SETTINGCHANGE reapplies only when it flips.
@@ -258,6 +260,7 @@ impl Application {
             status_text: None,
             info_text_cache: None,
             display_description: display_description(&capabilities, gamut),
+            window_title: "riv".to_string(),
             current_monitor: unsafe { MonitorFromWindow(window, MONITOR_DEFAULTTONEAREST) },
             title_bar_dark: None,
             metadata_snapshot: None,
@@ -521,10 +524,10 @@ impl Application {
         let _ = self.settings.save_merging_recents();
     }
 
-    /// Names the position baseline (in-flight load, errored item, else the display).
-    fn update_window_title(&self, window: HWND) {
-        let title = if self.image_core.downloading_url() {
-            // The whole URL is no title; the centered text carries the progress.
+    /// The title follows the navigation anchor, so a load in flight already names its file.
+    fn update_window_title(&mut self, window: HWND) {
+        let title = if self.image_core.url_download_pending() {
+            // A full URL makes a useless title; the centered overlay carries the progress.
             "Downloading...".to_string()
         } else {
             let anchor = self.image_core.navigation_anchor();
@@ -543,11 +546,15 @@ impl Application {
                 (_, Some(name)) => name,
             }
         };
+        if title == self.window_title {
+            return;
+        }
         let wide = crate::text::wide(&title);
         let _ = unsafe { SetWindowTextW(window, PCWSTR(wide.as_ptr())) };
+        self.window_title = title;
     }
 
-    /// Prefixes "[index/total]" when the folder listing gives a position.
+    /// Prefixes "[index/total]" when the listing gives a position.
     fn prefix_with_position(&self, body: String) -> String {
         match self.image_core.listing_position() {
             Some((index, total)) => format!("[{index}/{total}] {body}"),
@@ -630,6 +637,18 @@ impl Application {
     }
 
     /// Drop the image so only centered overlay text (error, download) shows.
+    /// Applies a load's outcome: the display, the error, or the in-flight freeze; then the title.
+    fn apply_load_outcome(&mut self, window: HWND, displayed: bool) {
+        if displayed {
+            self.apply_current_image(window);
+        } else if self.image_core.load_error.is_some() {
+            self.apply_load_error(window);
+        } else {
+            self.freeze_animation_for_load(window);
+        }
+        self.update_window_title(window);
+    }
+
     fn clear_displayed_image(&mut self, window: HWND) {
         let _ = unsafe { KillTimer(Some(window), ANIMATION_TIMER) };
         self.dismiss_sticky_status();
@@ -1198,18 +1217,12 @@ fn apply_navigation_result(
     result: Option<bool>,
 ) -> bool {
     match result {
-        Some(true) => application.apply_current_image(window),
-        Some(false) => {
-            if application.image_core.load_error.is_some() {
-                application.apply_load_error(window);
-            } else {
-                application.freeze_animation_for_load(window);
-            }
+        Some(displayed) => {
+            application.apply_load_outcome(window, displayed);
+            true
         }
-        None => return false,
+        None => false,
     }
-    application.update_window_title(window);
-    true
 }
 
 fn open_external(
@@ -1219,12 +1232,8 @@ fn open_external(
 ) {
     application.stop_slideshow(window);
     application.freeze_animation_for_load(window);
-    if load(&mut application.image_core) {
-        application.apply_current_image(window);
-    } else if application.image_core.load_error.is_some() {
-        application.apply_load_error(window);
-    }
-    application.update_window_title(window);
+    let displayed = load(&mut application.image_core);
+    application.apply_load_outcome(window, displayed);
 }
 
 fn open_external_path(application: &mut Application, window: HWND, path: &Path) {
@@ -1264,10 +1273,8 @@ fn dispatch_action(application: &mut Application, window: HWND, action: Action) 
             execute_navigation(application, window, NavigationCommand::Last);
         }
         Action::Reload => {
-            if application.image_core.reload_current() {
-                application.apply_current_image(window);
-            }
-            application.update_window_title(window);
+            let displayed = application.image_core.reload_current();
+            application.apply_load_outcome(window, displayed);
         }
         Action::ZoomIn => application.zoom_by(window, zoom_step),
         Action::ZoomOut => application.zoom_by(window, 1.0 / zoom_step),
@@ -1521,15 +1528,12 @@ fn delete_current_file(application: &mut Application, window: HWND, permanent: b
                 None => {
                     application.image_core.clear_current_item();
                     application.clear_displayed_image(window);
-                    application.update_window_title(window);
                 }
             }
         }
         Err(_) => {
-            if application.image_core.reload_current() {
-                application.apply_current_image(window);
-            }
-            application.update_window_title(window);
+            let displayed = application.image_core.reload_current();
+            application.apply_load_outcome(window, displayed);
         }
     }
 }
@@ -1953,11 +1957,8 @@ extern "system" fn window_procedure(
             if let Some(application) = application_from_window(window)
                 && application.image_core.on_decode_complete(*completion)
             {
-                if application.image_core.load_error.is_some() {
-                    application.apply_load_error(window);
-                } else {
-                    application.apply_current_image(window);
-                }
+                let displayed = application.image_core.load_error.is_none();
+                application.apply_load_outcome(window, displayed);
             }
             LRESULT(0)
         }
@@ -1969,18 +1970,18 @@ extern "system" fn window_procedure(
             LRESULT(0)
         }
         WM_APP_LISTING_READY => {
-            let scan = unsafe { Box::from_raw(lparam.0 as *mut ListingScan) };
+            let scan = unsafe { Box::from_raw(lparam.0 as *mut ScannedListing) };
             if let Some(application) = application_from_window(window) {
-                if application.image_core.install_listing(*scan) {
-                    if application.image_core.load_error.is_some() {
-                        application.apply_load_error(window);
-                    } else {
-                        application.apply_current_image(window);
+                match application.image_core.install_listing_scan(*scan) {
+                    ListingInstall::Discarded => {}
+                    ListingInstall::Installed => {
+                        // The position prefix and the wordmark suppression may have changed.
+                        application.update_window_title(window);
+                        application.request_render(window);
                     }
-                } else {
-                    // The position prefix and the wordmark suppression may have changed.
-                    application.update_window_title(window);
-                    application.request_render(window);
+                    ListingInstall::Opened { displayed } => {
+                        application.apply_load_outcome(window, displayed);
+                    }
                 }
             }
             LRESULT(0)

@@ -299,17 +299,37 @@ pub struct ImageCore {
     /// Consecutive steps against the polarity; the second one flips it.
     opposite_steps: u32,
     reaper: ImageReaper,
-    /// Folder scan in flight: the requested directory, and whether to load its first entry.
-    pending_listing: Option<(PathBuf, bool)>,
+    /// Folder scan in flight, awaiting its ScannedListing.
+    pending_scan: Option<PendingScan>,
     window: isize,
 }
 
+/// A folder scan request: where it looks, and whether arrival opens the first entry.
+struct PendingScan {
+    directory: PathBuf,
+    load_first_entry: bool,
+}
+
 /// A finished background folder scan, posted back as WM_APP_LISTING_READY.
-pub struct ListingScan {
+pub struct ScannedListing {
     directory: PathBuf,
     entries: Vec<ListingEntry>,
-    sort_mode: SortMode,
-    sort_descending: bool,
+}
+
+impl ScannedListing {
+    /// Enumerates and sorts a directory: the worker half of submit_listing_scan.
+    fn of_directory(directory: PathBuf, options: &CoreOptions) -> Self {
+        let mut entries = scan_folder(&directory, options);
+        sort_entries(&mut entries, options);
+        Self { directory, entries }
+    }
+}
+
+/// What an arrived scan did: nothing (stale), the listing alone, or a first-entry load too.
+pub enum ListingInstall {
+    Discarded,
+    Installed,
+    Opened { displayed: bool },
 }
 
 impl ImageCore {
@@ -327,7 +347,7 @@ impl ImageCore {
             travel_backward: false,
             opposite_steps: 0,
             reaper: ImageReaper::new(),
-            pending_listing: None,
+            pending_scan: None,
             window: window.0 as isize,
         }
     }
@@ -507,82 +527,76 @@ impl ImageCore {
             return self.load_archive(&path);
         }
         let directory = path.parent().map(Path::to_path_buf);
-        let listing_covers = match (&self.listing_scope, &directory) {
-            (Some(ListingScope::Directory(scanned)), Some(directory)) => {
-                paths_equal(scanned, directory)
-            }
-            _ => false,
-        };
-        let scan_covers = match (&self.pending_listing, &directory) {
-            (Some((requested, _)), Some(directory)) => paths_equal(requested, directory),
-            _ => false,
-        };
         if let Some(directory) = directory
-            && !listing_covers
-            && !scan_covers
+            && !self.directory_covered(&directory)
         {
             self.submit_listing_scan(directory, false);
         }
         self.load_item(&ItemLocation::File(path))
     }
 
-    /// Enumerates a folder off the UI thread; the listing installs on arrival (SPEC 4.3).
-    fn submit_listing_scan(&mut self, directory: PathBuf, load_first: bool) {
+    /// True when the listing or the scan in flight already covers this directory.
+    fn directory_covered(&self, directory: &Path) -> bool {
+        let listed = matches!(
+            &self.listing_scope,
+            Some(ListingScope::Directory(scanned)) if paths_equal(scanned, directory)
+        );
+        listed
+            || self
+                .pending_scan
+                .as_ref()
+                .is_some_and(|pending| paths_equal(&pending.directory, directory))
+    }
+
+    /// Clears the listing and enumerates the folder off the UI thread; it installs on arrival.
+    fn submit_listing_scan(&mut self, directory: PathBuf, load_first_entry: bool) {
         self.reset_travel_direction();
         self.entries = Vec::new();
         self.listing_scope = None;
-        self.pending_listing = Some((directory.clone(), load_first));
+        self.pending_scan = Some(PendingScan {
+            directory: directory.clone(),
+            load_first_entry,
+        });
         let options = self.options.clone();
         let window = self.window;
         let _ = std::thread::Builder::new()
             .name("riv-folder-scan".to_string())
             .spawn(move || {
-                let mut entries = scan_folder(&directory, &options);
-                sort_entries(&mut entries, &options);
                 post_boxed(
                     window,
                     WM_APP_LISTING_READY,
-                    Box::new(ListingScan {
-                        directory,
-                        entries,
-                        sort_mode: options.sort_mode,
-                        sort_descending: options.sort_descending,
-                    }),
+                    Box::new(ScannedListing::of_directory(directory, &options)),
                 );
             });
     }
 
-    /// Installs an arrived folder scan; stale directories are dropped. True on a display change.
-    pub fn install_listing(&mut self, mut scan: ListingScan) -> bool {
-        let Some((requested, load_first)) = &self.pending_listing else {
-            return false;
+    /// Installs an arrived folder scan; a stale directory is dropped.
+    pub fn install_listing_scan(&mut self, mut scan: ScannedListing) -> ListingInstall {
+        let Some(pending) = self
+            .pending_scan
+            .take_if(|pending| paths_equal(&pending.directory, &scan.directory))
+        else {
+            return ListingInstall::Discarded;
         };
-        if !paths_equal(requested, &scan.directory) {
-            return false;
-        }
-        let load_first = *load_first;
-        self.pending_listing = None;
-        // A sort option change while the scan was in flight lands here.
-        if scan.sort_mode != self.options.sort_mode
-            || scan.sort_descending != self.options.sort_descending
-        {
-            sort_entries(&mut scan.entries, &self.options);
-        }
+        // The worker sorted under an options snapshot; re-sorting covers a change since.
+        sort_entries(&mut scan.entries, &self.options);
         self.entries = scan.entries;
         self.listing_scope = Some(ListingScope::Directory(scan.directory));
-        if load_first {
+        if pending.load_first_entry {
             let Some(first) = self.first_existing_entry() else {
-                return false;
+                return ListingInstall::Installed;
             };
-            return self.load_item(&first) || self.load_error.is_some();
+            return ListingInstall::Opened {
+                displayed: self.load_item(&first),
+            };
         }
         self.preload_neighbors();
-        false
+        ListingInstall::Installed
     }
 
-    /// True while a folder scan is in flight (the listing has not arrived yet).
+    /// True while a folder scan is in flight; the window is loading, not empty.
     pub fn listing_scan_pending(&self) -> bool {
-        self.pending_listing.is_some()
+        self.pending_scan.is_some()
     }
 
     /// Opens a remote image as a standalone item (no listing, no navigation).
@@ -590,7 +604,7 @@ impl ImageCore {
         // Even a failed attempt leaves the single-item state; no listing survives.
         self.entries = Vec::new();
         self.listing_scope = None;
-        self.pending_listing = None;
+        self.pending_scan = None;
         let failure = if url.is_empty() {
             Some("no URL in the clipboard") // only the paste path can deliver an empty URL
         } else if !curl::is_supported_protocol(url) {
@@ -624,7 +638,7 @@ impl ImageCore {
     fn load_archive(&mut self, archive: &Path) -> bool {
         self.reset_travel_direction();
         self.entries = Vec::new();
-        self.pending_listing = None;
+        self.pending_scan = None;
         self.listing_scope = Some(ListingScope::Archive(archive.to_path_buf()));
         let members = match archive_reader::enumerate(archive) {
             Ok(members) => members,
@@ -786,7 +800,7 @@ impl ImageCore {
     }
 
     /// True while a remote image download owns the pending slot.
-    pub fn downloading_url(&self) -> bool {
+    pub fn url_download_pending(&self) -> bool {
         matches!(self.pending_display, Some(ItemLocation::Url(_)))
     }
 
@@ -1855,7 +1869,7 @@ mod item_location_tests {
     }
 }
 
-/// A URL attempt owns the session alone; local opens rebuild their listing.
+/// A URL attempt owns the session alone; a local open rebuilds its listing on scan arrival.
 #[cfg(test)]
 mod url_session_state_tests {
     use super::*;
@@ -2015,18 +2029,6 @@ mod url_session_state_tests {
         let _ = std::fs::remove_dir_all(&directory);
     }
 
-    /// A scan result fabricated synchronously, standing in for the worker thread's post.
-    fn arrived_scan(directory: &Path, options: &CoreOptions) -> ListingScan {
-        let mut entries = scan_folder(directory, options);
-        sort_entries(&mut entries, options);
-        ListingScan {
-            directory: directory.to_path_buf(),
-            entries,
-            sort_mode: options.sort_mode,
-            sort_descending: options.sort_descending,
-        }
-    }
-
     #[test]
     fn a_local_open_after_a_url_restores_the_listing() {
         let directory = std::env::temp_dir().join("riv-url-session-state");
@@ -2039,36 +2041,14 @@ mod url_session_state_tests {
         // The scan is asynchronous: no listing until its arrival installs one.
         assert!(core.listing_scan_pending());
         assert!(core.entries.is_empty());
-        let scan = arrived_scan(&directory, &core.options.clone());
-        core.install_listing(scan);
+        let scan = ScannedListing::of_directory(directory.clone(), &core.options);
+        core.install_listing_scan(scan);
         assert!(!core.listing_scan_pending());
         assert!(matches!(
             core.listing_scope,
             Some(ListingScope::Directory(_))
         ));
         assert_eq!(core.entries.len(), 1);
-        let _ = std::fs::remove_dir_all(&directory);
-    }
-
-    #[test]
-    fn a_stale_scan_arrival_is_discarded() {
-        let directory = std::env::temp_dir().join("riv-stale-scan");
-        std::fs::create_dir_all(&directory).expect("fixture directory");
-        let file = directory.join("a.png");
-        std::fs::write(&file, b"listing only; never decoded").expect("fixture file");
-        let mut core = core();
-        core.load_path(&file);
-        assert!(core.listing_scan_pending());
-        let elsewhere = std::env::temp_dir().join("riv-stale-scan-elsewhere");
-        let stale = ListingScan {
-            directory: elsewhere,
-            entries: Vec::new(),
-            sort_mode: core.options.sort_mode,
-            sort_descending: core.options.sort_descending,
-        };
-        assert!(!core.install_listing(stale));
-        assert!(core.listing_scan_pending()); // the requested scan is still due
-        assert!(core.listing_scope.is_none());
         let _ = std::fs::remove_dir_all(&directory);
     }
 
@@ -2083,9 +2063,50 @@ mod url_session_state_tests {
         assert!(core.listing_scan_pending());
         let _ = core.load_url("ftp://a.com/b.png");
         assert!(!core.listing_scan_pending());
-        let scan = arrived_scan(&directory, &core.options.clone());
-        assert!(!core.install_listing(scan)); // nothing waits for it any more
+        let scan = ScannedListing::of_directory(directory.clone(), &core.options);
+        let outcome = core.install_listing_scan(scan); // nothing waits for it any more
+        assert!(matches!(outcome, ListingInstall::Discarded));
         assert!(core.entries.is_empty());
+        let _ = std::fs::remove_dir_all(&directory);
+    }
+}
+
+/// The listing arrives from a background scan; installs are matched against the request.
+#[cfg(test)]
+mod listing_scan_tests {
+    use super::*;
+
+    fn core() -> ImageCore {
+        ImageCore::new(
+            HWND::default(),
+            CoreOptions {
+                sort_mode: SortMode::Name,
+                sort_descending: false,
+                preloading_mode: 1,
+                loop_within_folder: true,
+                skip_hidden: true,
+                detect_format_by_content: false,
+            },
+        )
+    }
+
+    #[test]
+    fn a_stale_scan_arrival_is_discarded() {
+        let directory = std::env::temp_dir().join("riv-stale-scan");
+        std::fs::create_dir_all(&directory).expect("fixture directory");
+        let file = directory.join("a.png");
+        std::fs::write(&file, b"listing only; never decoded").expect("fixture file");
+        let mut core = core();
+        core.load_path(&file);
+        assert!(core.listing_scan_pending());
+        let elsewhere = std::env::temp_dir().join("riv-stale-scan-elsewhere");
+        let stale = ScannedListing::of_directory(elsewhere, &core.options);
+        assert!(matches!(
+            core.install_listing_scan(stale),
+            ListingInstall::Discarded
+        ));
+        assert!(core.listing_scan_pending()); // the requested scan is still due
+        assert!(core.listing_scope.is_none());
         let _ = std::fs::remove_dir_all(&directory);
     }
 
@@ -2097,10 +2118,7 @@ mod url_session_state_tests {
         let second = directory.join("b.png");
         std::fs::write(&second, b"listing only").expect("fixture file");
         let mut core = core();
-        let mut entries = scan_folder(&directory, &core.options);
-        sort_entries(&mut entries, &core.options);
-        core.entries = entries;
-        core.listing_scope = Some(ListingScope::Directory(directory.clone()));
+        core.rescan_folder(&directory);
         core.load_path(&second);
         assert!(core.has_pending_display()); // the decode has not landed yet
         assert_eq!(core.listing_position(), Some((2, 2)));
@@ -2116,8 +2134,11 @@ mod url_session_state_tests {
         let mut core = core();
         assert!(!core.load_path(&directory));
         assert!(core.listing_scan_pending());
-        let scan = arrived_scan(&directory, &core.options.clone());
-        core.install_listing(scan);
+        let scan = ScannedListing::of_directory(directory.clone(), &core.options);
+        assert!(matches!(
+            core.install_listing_scan(scan),
+            ListingInstall::Opened { .. }
+        ));
         assert_eq!(core.entries.len(), 1);
         assert!(core.has_pending_display()); // the first entry's decode is under way
         let _ = std::fs::remove_dir_all(&directory);
