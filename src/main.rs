@@ -1232,10 +1232,9 @@ fn open_external_url(application: &mut Application, window: HWND, url: &str) {
 }
 
 /// Opens clipboard text as a URL; empty or non-text clipboard surfaces an error too.
-fn paste_open_url(application: &mut Application, window: HWND) -> bool {
+fn paste_open_url(application: &mut Application, window: HWND) {
     let text = clipboard::read_text(window).unwrap_or_default();
     open_external_url(application, window, &text);
-    true
 }
 
 /// The single dispatch point; every input path converges here.
@@ -1626,7 +1625,8 @@ fn handle_key(application: &mut Application, window: HWND, virtual_key: u16) -> 
     }
     // Fixed paste-to-open key; user bindings on Ctrl+V take precedence above.
     if modifiers == MODIFIER_CONTROL && virtual_key == u16::from(b'V') {
-        return paste_open_url(application, window);
+        paste_open_url(application, window);
+        return true;
     }
     false
 }
@@ -1789,7 +1789,7 @@ fn main() -> Result<()> {
     Ok(())
 }
 
-fn create_main_window(initial_path: Option<&Path>) -> Result<HWND> {
+fn create_main_window(initial_path: Option<&Path>) -> Result<()> {
     let instance = unsafe { GetModuleHandleW(None)? };
     let (default_x, default_y) =
         window::work_area_centered_origin(640, 480).unwrap_or((CW_USEDEFAULT, CW_USEDEFAULT));
@@ -1848,7 +1848,7 @@ fn create_main_window(initial_path: Option<&Path>) -> Result<HWND> {
         // Presented before the first show, so the class brush never flashes.
         let _ = unsafe { PostMessageW(Some(window), WM_APP_SHOW_WINDOW, WPARAM(0), LPARAM(0)) };
     }
-    Ok(window)
+    Ok(())
 }
 
 fn open_in_new_window(path: &Path) {

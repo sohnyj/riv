@@ -132,7 +132,7 @@ unsafe extern "system" fn keyboard_procedure(
             unsafe { SetWindowLongPtrW(dialog, DWLP_USER, lparam.0) };
             let state = unsafe { &*(lparam.0 as *const KeyboardCaptureState) };
             for sequence in &state.sequences {
-                listbox_add(dialog, IDC_CAPTURE_KEY_LIST, sequence);
+                listbox_add(dialog, sequence);
             }
             if let Ok(listbox) = unsafe { GetDlgItem(Some(dialog), IDC_CAPTURE_KEY_LIST) } {
                 let procedure = key_list_procedure as *const core::ffi::c_void;
@@ -152,7 +152,7 @@ unsafe extern "system" fn keyboard_procedure(
                 && let Some(state) = state_mut::<KeyboardCaptureState>(dialog)
                 && !state.sequences.contains(&sequence)
             {
-                listbox_add(dialog, IDC_CAPTURE_KEY_LIST, &sequence);
+                listbox_add(dialog, &sequence);
                 state.sequences.push(sequence);
             }
             1
@@ -162,7 +162,7 @@ unsafe extern "system" fn keyboard_procedure(
                 let index = wparam.0;
                 if index < state.sequences.len() {
                     state.sequences.remove(index);
-                    listbox_remove(dialog, IDC_CAPTURE_KEY_LIST, index);
+                    listbox_remove(dialog, index);
                 }
             }
             1
@@ -181,7 +181,7 @@ unsafe extern "system" fn keyboard_procedure(
                 IDC_CAPTURE_KEY_CLEAR => {
                     if let Some(state) = state_mut::<KeyboardCaptureState>(dialog) {
                         state.sequences.clear();
-                        listbox_clear(dialog, IDC_CAPTURE_KEY_LIST);
+                        listbox_clear(dialog);
                     }
                     1
                 }
@@ -432,9 +432,9 @@ unsafe extern "system" fn key_list_procedure(
     unsafe { CallWindowProcW(original, listbox, message, wparam, lparam) }
 }
 
-fn listbox_add(dialog: HWND, control: i32, text: &str) {
+fn listbox_add(dialog: HWND, text: &str) {
     const LB_ADDSTRING: u32 = 0x0180;
-    if let Ok(listbox) = unsafe { GetDlgItem(Some(dialog), control) } {
+    if let Ok(listbox) = unsafe { GetDlgItem(Some(dialog), IDC_CAPTURE_KEY_LIST) } {
         let wide = crate::text::wide(text);
         unsafe {
             SendMessageW(
@@ -447,21 +447,21 @@ fn listbox_add(dialog: HWND, control: i32, text: &str) {
     }
 }
 
-fn listbox_remove(dialog: HWND, control: i32, index: usize) {
+fn listbox_remove(dialog: HWND, index: usize) {
     const LB_DELETESTRING: u32 = 0x0182;
-    if let Ok(listbox) = unsafe { GetDlgItem(Some(dialog), control) } {
+    if let Ok(listbox) = unsafe { GetDlgItem(Some(dialog), IDC_CAPTURE_KEY_LIST) } {
         unsafe { SendMessageW(listbox, LB_DELETESTRING, Some(WPARAM(index)), None) };
     }
 }
 
-fn listbox_clear(dialog: HWND, control: i32) {
+fn listbox_clear(dialog: HWND) {
     const LB_RESETCONTENT: u32 = 0x0184;
-    if let Ok(listbox) = unsafe { GetDlgItem(Some(dialog), control) } {
+    if let Ok(listbox) = unsafe { GetDlgItem(Some(dialog), IDC_CAPTURE_KEY_LIST) } {
         unsafe { SendMessageW(listbox, LB_RESETCONTENT, None, None) };
     }
 }
 
-pub fn ensure_capture_classes() {
+fn ensure_capture_classes() {
     static REGISTER: std::sync::Once = std::sync::Once::new();
     REGISTER.call_once(|| {
         let instance = unsafe { GetModuleHandleW(None) }.unwrap_or_default();

@@ -193,7 +193,7 @@ impl SettingsFile {
     }
 
     /// Atomic save: write a temp file, then rename over.
-    pub fn save(&self) -> std::io::Result<()> {
+    fn save(&self) -> std::io::Result<()> {
         let serialized =
             serde_json::to_string_pretty(&self.document).map_err(std::io::Error::other)?;
         let temporary = self.path.with_extension("json.tmp");

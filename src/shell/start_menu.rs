@@ -30,7 +30,7 @@ pub fn create_shortcut() {
     let Ok(executable) = std::env::current_exe() else {
         return;
     };
-    let result: Result<()> = (|| unsafe {
+    let _: Result<()> = (|| unsafe {
         let link: IShellLinkW = CoCreateInstance(&ShellLink, None, CLSCTX_INPROC_SERVER)?;
         link.SetPath(&HSTRING::from(executable.as_os_str()))?;
         link.SetDescription(w!("riv image viewer"))?;
@@ -40,7 +40,6 @@ pub fn create_shortcut() {
         let persist: IPersistFile = link.cast()?;
         persist.Save(&HSTRING::from(path.as_os_str()), true)
     })();
-    let _ = result;
 }
 
 pub fn remove_shortcut() {

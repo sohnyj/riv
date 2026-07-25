@@ -146,7 +146,6 @@ fn default_shortcut_rows() -> Vec<ShortcutRow> {
 }
 
 pub fn show(parent: HWND, settings: &SettingsFile) {
-    shortcut_capture::ensure_capture_classes();
     let shortcuts: Vec<ShortcutRow> = Action::all_bindable()
         .map(|action| ShortcutRow {
             action,

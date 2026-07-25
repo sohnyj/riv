@@ -348,6 +348,7 @@ impl Renderer {
     fn create_mode_effects(
         d2d_context: &ID2D1DeviceContext,
         hdr_mode: bool,
+        sdr_wide_gamut: bool,
         tone_map_target_nits: f32,
         scrgb_color_context: Option<&ID2D1ColorContext>,
         srgb_color_context: Option<&ID2D1ColorContext>,
@@ -387,7 +388,8 @@ impl Renderer {
                 set_white_level_input(&effect, SDR_REFERENCE_WHITE_NITS).ok()?;
                 Some(effect)
             });
-        let output_color_management_effect = (!hdr_mode)
+        // The FP16 scRGB backbuffer of ACM-on SDR takes the tone-mapped scRGB with no re-encode.
+        let output_color_management_effect = (!hdr_mode && !sdr_wide_gamut)
             .then_some(())
             .and(hdr_tone_map_effect.as_ref())
             .and_then(|_| {
@@ -607,6 +609,7 @@ impl Renderer {
         let mode_effects = Self::create_mode_effects(
             &d2d_context,
             hdr_mode,
+            sdr_wide_gamut,
             tone_map_target_nits,
             scrgb_color_context.as_ref(),
             display_color_context
@@ -898,6 +901,7 @@ impl Renderer {
         let mode_effects = Self::create_mode_effects(
             &self.d2d_context,
             hdr_mode,
+            sdr_wide_gamut,
             tone_map_target_nits,
             self.scrgb_color_context.as_ref(),
             self.sdr_destination_context(),
