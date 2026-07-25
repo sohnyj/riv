@@ -1522,7 +1522,7 @@ fn delete_current_file(application: &mut Application, window: HWND, permanent: b
         .and_then(|candidate| candidate.as_file().map(Path::to_path_buf));
     match file_ops::delete_file(&path, permanent) {
         Ok(()) => {
-            application.image_core.rescan_listing();
+            application.image_core.remove_listing_entry(&deleted);
             match target {
                 Some(target) => open_external_path(application, window, &target),
                 None => {

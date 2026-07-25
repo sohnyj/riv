@@ -146,11 +146,6 @@ impl ItemLocation {
         }
     }
 
-    fn exists(&self) -> bool {
-        // Remote items have no cheap existence signal; the download is the probe.
-        self.containing_file().is_none_or(Path::is_file)
-    }
-
     fn extension_lowercase(&self) -> Option<String> {
         let name_path = match self {
             Self::File(path) => path.as_path(),
@@ -583,7 +578,7 @@ impl ImageCore {
         self.entries = scan.entries;
         self.listing_scope = Some(ListingScope::Directory(scan.directory));
         if pending.load_first_entry {
-            let Some(first) = self.first_existing_entry() else {
+            let Some(first) = self.entries.first().map(|entry| entry.location.clone()) else {
                 return ListingInstall::Installed;
             };
             return ListingInstall::Opened {
@@ -671,7 +666,7 @@ impl ImageCore {
         }
         sort_entries(&mut entries, &self.options);
         self.entries = entries;
-        let Some(first) = self.first_existing_entry() else {
+        let Some(first) = self.entries.first().map(|entry| entry.location.clone()) else {
             return false;
         };
         self.load_item(&first)
@@ -747,7 +742,6 @@ impl ImageCore {
     }
 
     pub fn navigate(&mut self, command: NavigationCommand) -> Option<bool> {
-        self.refresh_listing_if_current_missing();
         let anchor = self.navigation_anchor();
         let target = self.navigation_target(command)?;
         if anchor.is_some_and(|anchor| anchor == &target) {
@@ -770,8 +764,7 @@ impl ImageCore {
         Some(self.load_item(&target))
     }
 
-    pub fn peek_navigation_target(&mut self, command: NavigationCommand) -> Option<ItemLocation> {
-        self.refresh_listing_if_current_missing();
+    pub fn peek_navigation_target(&self, command: NavigationCommand) -> Option<ItemLocation> {
         self.navigation_target(command)
     }
 
@@ -837,12 +830,23 @@ impl ImageCore {
         let anchor_index = self
             .navigation_anchor()
             .and_then(|location| self.position_of(location));
-        match command {
-            NavigationCommand::First => self.first_existing_entry(),
-            NavigationCommand::Last => self.last_existing_entry(),
-            NavigationCommand::Next => self.step_existing_entry(anchor_index, 1),
-            NavigationCommand::Previous => self.step_existing_entry(anchor_index, -1),
-        }
+        let index = match command {
+            NavigationCommand::First => Some(0),
+            NavigationCommand::Last => Some(self.entries.len() - 1),
+            NavigationCommand::Next => self.adjacent_index(anchor_index, 1),
+            NavigationCommand::Previous => self.adjacent_index(anchor_index, -1),
+        }?;
+        Some(self.entries[index].location.clone())
+    }
+
+    fn adjacent_index(&self, anchor: Option<usize>, direction: isize) -> Option<usize> {
+        step_candidate_indices(
+            anchor,
+            direction,
+            self.entries.len(),
+            self.options.loop_within_folder,
+        )
+        .next()
     }
 
     pub fn on_decode_complete(&mut self, completion: DecodeCompletion) -> bool {
@@ -947,6 +951,13 @@ impl ImageCore {
         self.listing_scope = Some(ListingScope::Directory(directory.to_path_buf()));
     }
 
+    /// Drops a deleted item from the listing snapshot; no rescan (SPEC section 4.3).
+    pub fn remove_listing_entry(&mut self, location: &ItemLocation) {
+        if let Some(index) = self.position_of(location) {
+            self.entries.remove(index);
+        }
+    }
+
     /// Re-scans whatever the current listing came from (folder or archive).
     pub fn rescan_listing(&mut self) {
         match &self.listing_scope {
@@ -968,48 +979,10 @@ impl ImageCore {
         }
     }
 
-    /// The listing is fixed at load time; only a vanished current item rescans.
-    fn refresh_listing_if_current_missing(&mut self) {
-        let current_missing = self
-            .current
-            .as_ref()
-            .is_some_and(|current| !current.location.exists());
-        if current_missing {
-            self.rescan_listing();
-        }
-    }
-
     fn position_of(&self, location: &ItemLocation) -> Option<usize> {
         self.entries
             .iter()
             .position(|entry| entry.location == *location)
-    }
-
-    fn first_existing_entry(&self) -> Option<ItemLocation> {
-        self.entries
-            .iter()
-            .find(|entry| entry.location.exists())
-            .map(|entry| entry.location.clone())
-    }
-
-    fn last_existing_entry(&self) -> Option<ItemLocation> {
-        self.entries
-            .iter()
-            .rev()
-            .find(|entry| entry.location.exists())
-            .map(|entry| entry.location.clone())
-    }
-
-    fn step_existing_entry(&self, anchor: Option<usize>, direction: isize) -> Option<ItemLocation> {
-        step_candidate_indices(
-            anchor,
-            direction,
-            self.entries.len(),
-            self.options.loop_within_folder,
-        )
-        .map(|index| &self.entries[index])
-        .find(|entry| entry.location.exists())
-        .map(|entry| entry.location.clone())
     }
 
     fn preload_neighbors(&mut self) {
@@ -1838,7 +1811,6 @@ mod item_location_tests {
         assert_eq!(location.display_text(), "https://a.com/b/c.png?width=1");
         assert_eq!(location.containing_file(), None);
         assert_eq!(location.as_file(), None);
-        assert!(location.exists());
         assert_eq!(format_name_of(&location), "PNG");
         // URLs compare exactly; remote paths are case-sensitive.
         assert!(location == url("https://a.com/b/c.png?width=1"));
