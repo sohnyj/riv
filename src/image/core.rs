@@ -400,8 +400,8 @@ impl ImageCore {
     }
 
     pub fn listing_position(&self) -> Option<(usize, usize)> {
-        let current = self.current.as_ref()?;
-        let index = self.position_of(&current.location)?;
+        let anchor = self.navigation_anchor()?;
+        let index = self.position_of(anchor)?;
         Some((index + 1, self.entries.len()))
     }
 
@@ -785,6 +785,11 @@ impl ImageCore {
         }
     }
 
+    /// True while a remote image download owns the pending slot.
+    pub fn downloading_url(&self) -> bool {
+        matches!(self.pending_display, Some(ItemLocation::Url(_)))
+    }
+
     pub fn has_pending_display(&self) -> bool {
         self.pending_display.is_some()
     }
@@ -803,7 +808,8 @@ impl ImageCore {
             .and_then(|current| current.location.containing_file())
     }
 
-    fn navigation_anchor(&self) -> Option<&ItemLocation> {
+    /// The position baseline: the in-flight load, else the errored item, else the display.
+    pub fn navigation_anchor(&self) -> Option<&ItemLocation> {
         self.pending_display
             .as_ref()
             .or_else(|| self.load_error.as_ref().map(|(location, _)| location))
@@ -2080,6 +2086,24 @@ mod url_session_state_tests {
         let scan = arrived_scan(&directory, &core.options.clone());
         assert!(!core.install_listing(scan)); // nothing waits for it any more
         assert!(core.entries.is_empty());
+        let _ = std::fs::remove_dir_all(&directory);
+    }
+
+    #[test]
+    fn the_listing_position_follows_the_pending_anchor() {
+        let directory = std::env::temp_dir().join("riv-anchor-position");
+        std::fs::create_dir_all(&directory).expect("fixture directory");
+        std::fs::write(directory.join("a.png"), b"listing only").expect("fixture file");
+        let second = directory.join("b.png");
+        std::fs::write(&second, b"listing only").expect("fixture file");
+        let mut core = core();
+        let mut entries = scan_folder(&directory, &core.options);
+        sort_entries(&mut entries, &core.options);
+        core.entries = entries;
+        core.listing_scope = Some(ListingScope::Directory(directory.clone()));
+        core.load_path(&second);
+        assert!(core.has_pending_display()); // the decode has not landed yet
+        assert_eq!(core.listing_position(), Some((2, 2)));
         let _ = std::fs::remove_dir_all(&directory);
     }
 

@@ -521,26 +521,27 @@ impl Application {
         let _ = self.settings.save_merging_recents();
     }
 
+    /// Names the position baseline (in-flight load, errored item, else the display).
     fn update_window_title(&self, window: HWND) {
-        let file_name = self
-            .image_core
-            .current
-            .as_ref()
-            .map(|current| current.location.display_name())
-            .filter(|name| !name.is_empty());
-        let title = match (self.settings.options.title_bar_mode, file_name) {
-            (0, _) | (_, None) => "riv".to_string(),
-            (2, Some(name)) => self.prefix_with_position(name),
-            (3, Some(name)) => {
-                let body = self
-                    .image_core
-                    .current
-                    .as_ref()
-                    .and_then(|current| current.location.folder_name())
-                    .map_or_else(|| name.clone(), |folder| format!("{folder}\\{name}"));
-                self.prefix_with_position(body)
+        let title = if self.image_core.downloading_url() {
+            // The whole URL is no title; the centered text carries the progress.
+            "Downloading...".to_string()
+        } else {
+            let anchor = self.image_core.navigation_anchor();
+            let file_name = anchor
+                .map(|location| location.display_name())
+                .filter(|name| !name.is_empty());
+            match (self.settings.options.title_bar_mode, file_name) {
+                (0, _) | (_, None) => "riv".to_string(),
+                (2, Some(name)) => self.prefix_with_position(name),
+                (3, Some(name)) => {
+                    let body = anchor
+                        .and_then(|location| location.folder_name())
+                        .map_or_else(|| name.clone(), |folder| format!("{folder}\\{name}"));
+                    self.prefix_with_position(body)
+                }
+                (_, Some(name)) => name,
             }
-            (_, Some(name)) => name,
         };
         let wide = crate::text::wide(&title);
         let _ = unsafe { SetWindowTextW(window, PCWSTR(wide.as_ptr())) };
@@ -1207,6 +1208,7 @@ fn apply_navigation_result(
         }
         None => return false,
     }
+    application.update_window_title(window);
     true
 }
 
@@ -1222,6 +1224,7 @@ fn open_external(
     } else if application.image_core.load_error.is_some() {
         application.apply_load_error(window);
     }
+    application.update_window_title(window);
 }
 
 fn open_external_path(application: &mut Application, window: HWND, path: &Path) {
@@ -1264,6 +1267,7 @@ fn dispatch_action(application: &mut Application, window: HWND, action: Action) 
             if application.image_core.reload_current() {
                 application.apply_current_image(window);
             }
+            application.update_window_title(window);
         }
         Action::ZoomIn => application.zoom_by(window, zoom_step),
         Action::ZoomOut => application.zoom_by(window, 1.0 / zoom_step),
@@ -1517,6 +1521,7 @@ fn delete_current_file(application: &mut Application, window: HWND, permanent: b
                 None => {
                     application.image_core.clear_current_item();
                     application.clear_displayed_image(window);
+                    application.update_window_title(window);
                 }
             }
         }
@@ -1524,6 +1529,7 @@ fn delete_current_file(application: &mut Application, window: HWND, permanent: b
             if application.image_core.reload_current() {
                 application.apply_current_image(window);
             }
+            application.update_window_title(window);
         }
     }
 }
@@ -1845,6 +1851,7 @@ fn create_main_window(initial_path: Option<&Path>) -> Result<()> {
         application.restore_window_geometry(window);
         application.refresh_title_bar_theme(window);
         application.drop_target = drag_drop::register(window).ok();
+        application.update_window_title(window);
         application.render(window);
         // Presented before the first show, so the class brush never flashes.
         let _ = unsafe { PostMessageW(Some(window), WM_APP_SHOW_WINDOW, WPARAM(0), LPARAM(0)) };
