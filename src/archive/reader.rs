@@ -346,7 +346,7 @@ mod mtime_tests {
         assert_eq!(members[0].modified, UNIX_EPOCH); // clamped fallback, no panic
     }
 
-    // libarchive returns the declared size verbatim; the cap must hold (fixture: SECURITY_AUDIT.md).
+    // libarchive returns the declared size verbatim; the cap must hold (SECURITY_AUDIT.md).
     #[test]
     #[ignore = "needs archiveint.dll and test/fixture_zip_declared_1gib.zip"]
     fn a_member_declaring_a_huge_size_is_handled_gracefully() {

@@ -1,5 +1,4 @@
-//! Fullscreen pass from the UNORM16 scene to the UNORM backbuffer: applies the
-//! output dither in destination pixel space, then the UNORM write quantizes.
+//! Fullscreen pass from the UNORM16 scene to the UNORM backbuffer; the dithered write quantizes.
 
 use windows::Win32::Graphics::Direct3D::D3D11_PRIMITIVE_TOPOLOGY_TRIANGLELIST;
 use windows::Win32::Graphics::Direct3D11::{

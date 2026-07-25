@@ -24,7 +24,7 @@ use crate::network::curl;
 pub const WM_APP_DECODE_COMPLETE: u32 = WM_APP + 1;
 pub const WM_APP_DOWNLOAD_PROGRESS: u32 = WM_APP + 7;
 
-/// UI updates at most this often while a URL downloads.
+/// UI updates at most this often while a remote image downloads.
 const DOWNLOAD_PROGRESS_INTERVAL: Duration = Duration::from_millis(100);
 
 /// Viewable item identity; paths compare case-insensitively, member names and URLs exactly.
@@ -250,7 +250,7 @@ pub struct CurrentImage {
 
 struct CacheEntry {
     file_size: u64,
-    /// Embedded RAW preview standing in until someone pays for the full decode.
+    /// RAW preview or animation first frame standing in until someone pays for the full decode.
     preview: bool,
     image: Arc<DecodedImage>,
 }
@@ -782,7 +782,7 @@ impl ImageCore {
             .pending_display
             .as_ref()
             .is_some_and(|pending| *pending == completion.location);
-        // A failed PreviewFinal falls through to share Final's failure paths.
+        // Preview stages always post Ok; an Err would fall through to Final's failure paths.
         if matches!(completion.stage, DecodeStage::PreviewFinal)
             && let Ok(image) = &completion.result
         {
@@ -956,7 +956,7 @@ impl ImageCore {
                     continue;
                 };
                 let entry = &self.entries[index];
-                // Speculative work stays cheap: a RAW neighbor gets its preview only.
+                // Cheap speculation: RAW neighbors get the preview; animations stop at frame one.
                 let kind = match &entry.location {
                     ItemLocation::File(path) if decode::is_raw_two_stage(path) => {
                         JobKind::PreviewOnly
@@ -1303,7 +1303,7 @@ fn format_name_of(location: &ItemLocation) -> &'static str {
         .unwrap_or("")
 }
 
-/// Fixed once a worker takes the job; PreviewOnly is what keeps preload cheap.
+/// Fixed once a worker takes the job; PreviewOnly and the speculative flag keep preload cheap.
 #[derive(Clone, Copy, PartialEq, Eq)]
 enum JobKind {
     Full,

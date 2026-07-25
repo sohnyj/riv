@@ -1137,7 +1137,6 @@ pub fn peak_luminance_from_half_pixels(pixels: &[u8]) -> Option<f32> {
     if pixels.len() < 8 {
         return None;
     }
-    // Within SDR white the tone map is skipped, so the histogram never needs to run.
     // Four uniform lanes; the discarded alpha keeps the stride pattern regular.
     let mut channel_maxima = [0u16; 4];
     for pixel in pixels.chunks_exact(8) {

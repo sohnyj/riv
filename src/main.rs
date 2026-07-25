@@ -288,7 +288,7 @@ impl Application {
         }
     }
 
-    /// Reconfigure the output on HDR mode or bit depth change; else refresh boost and tone map target.
+    /// Reconfigure the output on a display mode change; else refresh boost and tone map target.
     fn refresh_display_state(&mut self, window: HWND) {
         let color::DisplayColorInfo {
             capabilities,
@@ -332,7 +332,7 @@ impl Application {
         }
     }
 
-    /// True when the output mode changed (repaint due); marks the retry pending on failure.
+    /// True when a reconfigure was attempted (repaint due); a failure marks the retry pending.
     fn reconfigure_display_output(
         &mut self,
         window: HWND,
@@ -485,7 +485,7 @@ impl Application {
         let _ = unsafe { SetWindowPlacement(window, &raw const placement) };
     }
 
-    /// The one persistence point during a session: geometry (when enabled), then the merged save.
+    /// Exit persistence: geometry (when enabled), then the merged save.
     fn save_on_exit(&mut self, window: HWND) {
         if self.settings.options.save_window_position {
             let mut placement = WINDOWPLACEMENT {
@@ -1076,7 +1076,7 @@ impl Application {
         if !self.cursor_autohide_active() {
             return;
         }
-        // A held drag or a pointer over a menu or another window: restart the countdown, don't hide.
+        // A held drag or a pointer over a menu or other window: restart the countdown, don't hide.
         if self.pan_drag_position.is_some() || !cursor_over_window(window) {
             start_cursor_hide_timer(window);
             return;
@@ -1766,7 +1766,7 @@ fn main() -> Result<()> {
         hIcon: application_icon,
         hIconSm: application_icon,
         hCursor: unsafe { LoadCursorW(None, IDC_ARROW)? },
-        // No class brush: the swapchain owns the client area, so a system erase would flash on resize.
+        // No class brush: the swapchain owns the client area; a system erase would flash on resize.
         hbrBackground: HBRUSH::default(),
         lpszClassName: class_name,
         ..Default::default()

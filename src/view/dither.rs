@@ -1,5 +1,4 @@
-//! Output-dither building blocks for the quantize pass: Ordered (Bayer 16x16)
-//! and Fruit (blue noise).
+//! Output-dither building blocks for the quantize pass: Ordered (Bayer) and Fruit (blue noise).
 //!
 //! The dither math is ported from libplacebo's pl_shader_dither
 //! (src/shaders/dithering.c, LGPL-2.1-or-later): ordered-fixed and
@@ -43,7 +42,7 @@ float3 dither_quantize(float3 color, float bias)
 }
 ";
 
-/// Fullscreen triangle from SV_VertexID, shared by the D3D11 passes.
+/// Fullscreen triangle from SV_VertexID for the quantize pass.
 pub const FULLSCREEN_TRIANGLE_VERTEX_SHADER: &str = "\
 float4 main(uint vertex_id : SV_VertexID) : SV_POSITION
 {

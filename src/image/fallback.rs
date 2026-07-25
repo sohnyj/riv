@@ -287,10 +287,10 @@ fn decode_exr_with(
     }
     let byte_count = width as usize * height as usize * 8;
     // Fallible copy: to_vec aborts on OOM; a huge EXR should error, not crash.
-    // The shim hands over associated-alpha linear RGBA halves - the FP16 storage layout.
     let mut pixels = Vec::new();
     let reserved = pixels.try_reserve_exact(byte_count).is_ok();
     if reserved {
+        // The shim hands over associated-alpha linear RGBA halves (the FP16 storage layout).
         pixels.extend_from_slice(unsafe {
             std::slice::from_raw_parts(half_pixels.cast::<u8>(), byte_count)
         });

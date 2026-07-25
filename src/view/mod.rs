@@ -10,7 +10,7 @@ use windows::Win32::Graphics::Direct3D11::{
 };
 use windows::Win32::Graphics::Dxgi::Common::{DXGI_FORMAT, DXGI_SAMPLE_DESC};
 
-/// Render-target + shader-resource texture for intermediate scenes.
+/// Render-target + shader-resource texture for the intermediate scene.
 pub fn create_scene_texture(
     device: &ID3D11Device,
     size: (u32, u32),

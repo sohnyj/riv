@@ -497,7 +497,7 @@ impl SettingsFile {
         recent_files_of(&self.document)
     }
 
-    /// Exit save: fold other instances' recents back in (union, this session first) before writing.
+    /// Fold other instances' recents back in (union, this session first) before writing.
     pub fn save_merging_recents(&mut self) -> std::io::Result<()> {
         if self.options.remember_recents {
             let disk = read_document(&self.path);

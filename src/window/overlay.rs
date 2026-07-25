@@ -54,7 +54,7 @@ const BLACK: D2D1_COLOR_F = D2D1_COLOR_F {
 
 pub struct OverlayContent {
     pub error_text: Option<String>,
-    /// Centered like an error while a URL downloads (no image is up then).
+    /// Centered like an error while a remote image downloads (no image is up then).
     pub download_text: Option<String>,
     pub info_text: Option<String>,
     pub status_text: Option<String>,
@@ -552,7 +552,7 @@ pub fn build_error_text(
     text
 }
 
-/// Centered status while a URL downloads; received bytes only, no total is known.
+/// Centered status while a remote image downloads; received bytes only, no total is known.
 pub fn build_download_text(file_name: &str, received_bytes: u64) -> String {
     if received_bytes == 0 {
         return format!("Connecting...\n{file_name}");

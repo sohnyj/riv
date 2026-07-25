@@ -222,7 +222,7 @@ pub fn resolved_keyboard_sequences(
     overrides: Option<&Map<String, Value>>,
     action_name: &str,
 ) -> Vec<String> {
-    // Parser round-trip discards unparseable or unbounded riv.json strings.
+    // Parser round-trip discards unparseable riv.json strings.
     override_or_default(
         overrides,
         action_name,
@@ -257,7 +257,7 @@ pub fn resolved_mouse_encodings(
     overrides: Option<&Map<String, Value>>,
     action_name: &str,
 ) -> Vec<String> {
-    // Parser round-trip discards unparseable or unbounded riv.json strings.
+    // Parser round-trip discards unparseable riv.json strings.
     override_or_default(overrides, action_name, default_mouse_encodings(action_name))
         .iter()
         .filter_map(|encoding| {

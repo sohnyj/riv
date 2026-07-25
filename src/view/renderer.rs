@@ -569,7 +569,7 @@ impl Renderer {
             }
             Err(error) => return Err(error),
         };
-        // Declare a color space only in HDR mode; declaring on SDR flashes DWM composition.
+        // Only HDR and ACM-on wide gamut declare; scRGB on plain SDR flashes DWM composition.
         if hdr_mode {
             let swap_chain3 = swap_chain.cast::<IDXGISwapChain3>().ok();
             let pq_declared = hdr_output_color_management_effect.is_some()
@@ -997,7 +997,7 @@ impl Renderer {
             .as_ref()
             .zip(peak_luminance_nits.filter(|peak| *peak > SDR_REFERENCE_WHITE_NITS));
         let scrgb_destination = self.hdr_mode || self.sdr_wide_gamut || tone_map.is_some();
-        // Untagged SDR already matches the undeclared sRGB swapchain; scRGB output needs the transfer.
+        // Untagged sRGB skips CM only when no scRGB output and no display profile needs a mapping.
         if storage == PixelStorage::Bgra8
             && icc_profile.is_none()
             && !scrgb_destination
