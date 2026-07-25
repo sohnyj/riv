@@ -21,8 +21,9 @@ use dialogs::options::{WM_APP_OPTIONS_APPLIED, WM_APP_OPTIONS_GEOMETRY};
 use image::animation::Animation;
 use image::color;
 use image::core::{
-    CoreOptions, DecodeCompletion, DownloadProgress, ImageCore, ItemLocation, NavigationCommand,
-    SortMode, WM_APP_DECODE_COMPLETE, WM_APP_DOWNLOAD_PROGRESS,
+    CoreOptions, DecodeCompletion, DownloadProgress, ImageCore, ItemLocation, ListingScan,
+    NavigationCommand, SortMode, WM_APP_DECODE_COMPLETE, WM_APP_DOWNLOAD_PROGRESS,
+    WM_APP_LISTING_READY,
 };
 use image::decode::DecodedImage;
 use network::curl;
@@ -819,7 +820,8 @@ impl Application {
             && download_text.is_none()
             && self.displayed_image.is_none()
             && self.image_core.current.is_none()
-            && !self.image_core.has_pending_display();
+            && !self.image_core.has_pending_display()
+            && !self.image_core.listing_scan_pending();
         OverlayContent {
             error_text,
             download_text,
@@ -1956,6 +1958,23 @@ extern "system" fn window_procedure(
             let progress = unsafe { Box::from_raw(lparam.0 as *mut DownloadProgress) };
             if let Some(application) = application_from_window(window) {
                 application.apply_download_progress(window, *progress);
+            }
+            LRESULT(0)
+        }
+        WM_APP_LISTING_READY => {
+            let scan = unsafe { Box::from_raw(lparam.0 as *mut ListingScan) };
+            if let Some(application) = application_from_window(window) {
+                if application.image_core.install_listing(*scan) {
+                    if application.image_core.load_error.is_some() {
+                        application.apply_load_error(window);
+                    } else {
+                        application.apply_current_image(window);
+                    }
+                } else {
+                    // The position prefix and the wordmark suppression may have changed.
+                    application.update_window_title(window);
+                    application.request_render(window);
+                }
             }
             LRESULT(0)
         }
