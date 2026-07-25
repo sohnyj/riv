@@ -1236,6 +1236,20 @@ fn open_external(
     application.apply_load_outcome(window, displayed);
 }
 
+/// The opened recents entry failed on the spot as not found; transient failures stay.
+fn recent_entry_is_missing(application: &Application, path: &Path) -> bool {
+    const ERROR_FILE_NOT_FOUND: i32 = 2;
+    const ERROR_PATH_NOT_FOUND: i32 = 3;
+    let opened =
+        ItemLocation::File(std::path::absolute(path).unwrap_or_else(|_| path.to_path_buf()));
+    matches!(
+        &application.image_core.load_error,
+        Some((location, error))
+            if *location == opened
+                && matches!(error.code, ERROR_FILE_NOT_FOUND | ERROR_PATH_NOT_FOUND)
+    )
+}
+
 fn open_external_path(application: &mut Application, window: HWND, path: &Path) {
     open_external(application, window, |core| core.load_path(path));
 }
@@ -1342,6 +1356,11 @@ fn dispatch_action(application: &mut Application, window: HWND, action: Action) 
                 .map(|(_, path)| std::path::PathBuf::from(path));
             if let Some(path) = path {
                 open_external_path(application, window, &path);
+                if recent_entry_is_missing(application, &path) {
+                    application
+                        .settings
+                        .remove_recent_file(&path.to_string_lossy());
+                }
             }
         }
         Action::ClearRecents => {
@@ -2251,7 +2270,6 @@ extern "system" fn window_procedure(
                     x = (bounds.left + bounds.right) / 2;
                     y = (bounds.top + bounds.bottom) / 2;
                 }
-                application.settings.prune_recent_files();
                 let playlist = application
                     .image_core
                     .playlist_window(context_menu::PLAYLIST_CAPACITY);

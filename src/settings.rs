@@ -160,6 +160,8 @@ pub struct SettingsFile {
     path: PathBuf,
     document: Value,
     pub options: Options,
+    /// Entries dropped this session (missing on open); the exit merge must not resurrect them.
+    removed_recent_files: HashSet<String>,
 }
 
 fn recent_files_of(document: &Value) -> Vec<(String, String)> {
@@ -189,6 +191,7 @@ impl SettingsFile {
             path,
             document,
             options,
+            removed_recent_files: HashSet::new(),
         }
     }
 
@@ -507,7 +510,11 @@ impl SettingsFile {
                 .map(|(_, path)| path.to_ascii_lowercase())
                 .collect();
             for (name, path) in recent_files_of(&disk) {
-                if seen.insert(path.to_ascii_lowercase()) {
+                let lowercase = path.to_ascii_lowercase();
+                if self.removed_recent_files.contains(&lowercase) {
+                    continue; // dropped as missing this session
+                }
+                if seen.insert(lowercase) {
                     files.push((name, path));
                 }
             }
@@ -557,16 +564,16 @@ impl SettingsFile {
         self.set_recent_files(&files);
     }
 
-    pub fn prune_recent_files(&mut self) {
-        let files = self.recent_files();
-        let pruned: Vec<(String, String)> = files
-            .iter()
-            .filter(|(_, path)| std::path::Path::new(path).is_file())
-            .cloned()
+    /// Drops one entry, for a recents open that failed as missing (SPEC section 6.4).
+    pub fn remove_recent_file(&mut self, path: &str) {
+        let lowercase = path.to_ascii_lowercase();
+        let kept: Vec<(String, String)> = self
+            .recent_files()
+            .into_iter()
+            .filter(|(_, stored)| stored.to_ascii_lowercase() != lowercase)
             .collect();
-        if pruned.len() != files.len() {
-            self.set_recent_files(&pruned);
-        }
+        self.set_recent_files(&kept);
+        self.removed_recent_files.insert(lowercase);
     }
 
     pub fn clear_recent_files(&mut self) {
