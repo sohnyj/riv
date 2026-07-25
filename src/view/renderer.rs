@@ -475,7 +475,7 @@ impl Renderer {
             bits_per_color,
             ..
         } = mode;
-        let profile = mode.profile.clone();
+        let profile = mode.profile;
         let tone_map_target_nits = target.peak_nits;
         let full_frame_nits = target.full_frame_nits;
         // D3D11 WARP is documented only through 11_1; shader model 5.0 needs no more.
@@ -804,7 +804,7 @@ impl Renderer {
             bits_per_color,
             ..
         } = mode;
-        let profile = mode.profile.clone();
+        let profile = mode.profile;
         // Adopt the target state first so a partial failure cannot retry every WM_MOVE.
         self.hdr_mode = hdr_mode;
         self.sdr_wide_gamut = sdr_wide_gamut;
@@ -1183,9 +1183,9 @@ impl Renderer {
         unsafe {
             self.d2d_context.BeginDraw();
             self.d2d_context.Clear(Some(&raw const clear_color));
-            if self.image.is_some() {
-                match (&self.effect_output, &self.image) {
-                    (Some(output), _) => {
+            if let Some(image) = &self.image {
+                match &self.effect_output {
+                    Some(output) => {
                         self.d2d_context.SetTransform(&raw const transform);
                         self.d2d_context.DrawImage(
                             output,
@@ -1197,7 +1197,7 @@ impl Renderer {
                         self.d2d_context.SetTransform(&Matrix3x2::identity());
                     }
                     // Untouched pixels, or no effect support.
-                    (None, Some(image)) => {
+                    None => {
                         let destination = D2D_RECT_F {
                             left: 0.0,
                             top: 0.0,
@@ -1215,7 +1215,6 @@ impl Renderer {
                         );
                         self.d2d_context.SetTransform(&Matrix3x2::identity());
                     }
-                    _ => {}
                 }
             }
             // Overlay failure must not block presenting the frame.

@@ -534,9 +534,10 @@ impl SettingsFile {
             .insert("recentFiles".to_string(), Value::Array(list));
     }
 
-    pub fn add_recent_file(&mut self, path: &std::path::Path) -> bool {
+    pub fn add_recent_file(&mut self, path: &std::path::Path) {
         if !self.options.remember_recents {
-            return self.clear_recent_files();
+            self.clear_recent_files();
+            return;
         }
         let path_text = path.to_string_lossy().into_owned();
         let name = path.file_name().map_or_else(
@@ -548,35 +549,30 @@ impl SettingsFile {
             .first()
             .is_some_and(|(_, existing)| existing.eq_ignore_ascii_case(&path_text))
         {
-            return false;
+            return;
         }
         files.retain(|(_, existing)| !existing.eq_ignore_ascii_case(&path_text));
         files.insert(0, (name, path_text));
         files.truncate(RECENT_FILES_LIMIT);
         self.set_recent_files(&files);
-        true
     }
 
-    pub fn prune_recent_files(&mut self) -> bool {
+    pub fn prune_recent_files(&mut self) {
         let files = self.recent_files();
         let pruned: Vec<(String, String)> = files
             .iter()
             .filter(|(_, path)| std::path::Path::new(path).is_file())
             .cloned()
             .collect();
-        if pruned.len() == files.len() {
-            return false;
+        if pruned.len() != files.len() {
+            self.set_recent_files(&pruned);
         }
-        self.set_recent_files(&pruned);
-        true
     }
 
-    pub fn clear_recent_files(&mut self) -> bool {
-        if self.recent_files().is_empty() {
-            return false;
+    pub fn clear_recent_files(&mut self) {
+        if !self.recent_files().is_empty() {
+            self.set_recent_files(&[]);
         }
-        self.set_recent_files(&[]);
-        true
     }
 }
 

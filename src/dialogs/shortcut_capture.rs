@@ -562,11 +562,7 @@ unsafe extern "system" fn key_field_procedure(
             }
             LRESULT(0)
         }
-        WM_KEYUP | WM_SYSKEYUP => {
-            let _ = unsafe { InvalidateRect(Some(field), None, true) };
-            LRESULT(0)
-        }
-        WM_SETFOCUS | WM_KILLFOCUS => {
+        WM_KEYUP | WM_SYSKEYUP | WM_SETFOCUS | WM_KILLFOCUS => {
             let _ = unsafe { InvalidateRect(Some(field), None, true) };
             LRESULT(0)
         }
