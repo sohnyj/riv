@@ -537,6 +537,45 @@ fn decode_input(
     }
 }
 
+/// Decodes only the opening frame; None unless the file really holds several.
+pub fn decode_animation_first_frame(
+    path: &Path,
+    cancellation: &AtomicBool,
+) -> Option<DecodedImage> {
+    let descriptor = probe_file(path)?;
+    if !matches!(descriptor.semantics, FrameSemantics::Animation) {
+        return None;
+    }
+    let input = DecodeInput::File(path);
+    match descriptor.adapter {
+        // A GIF frame can be a placed sub-rectangle, so even one goes through the compositor.
+        Adapter::Wic => with_wic_factory(|factory| {
+            let decoder = create_wic_decoder(factory, &input)?;
+            if unsafe { decoder.GetFrameCount()? } <= 1 {
+                return Ok(None);
+            }
+            decode_animation(factory, &decoder, 1, cancellation).map(Some)
+        })
+        .ok()
+        .flatten()
+        .map(|frames| frames.into_image(descriptor.name)),
+        // The acTL chunk already proved the animation; WIC hands back the default image.
+        Adapter::Apng => decode_with_wic(
+            &input,
+            descriptor.name,
+            &FrameSemantics::Single,
+            cancellation,
+        )
+        .ok(),
+        Adapter::WebPAnimation => {
+            super::fallback::decode_webp_first_frame(&input.read_all().ok()?, descriptor.name)
+                .and_then(|decoded| enforce_device_limit(decoded, cancellation))
+                .ok()
+        }
+        _ => None,
+    }
+}
+
 /// Extension-only: magic probing never yields RAW, and this runs on the UI thread.
 pub fn is_raw_two_stage(path: &Path) -> bool {
     path.extension()

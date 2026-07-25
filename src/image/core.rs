@@ -1316,6 +1316,8 @@ struct DecodeJob {
     file_size: u64,
     cancellation: Arc<AtomicBool>,
     kind: JobKind,
+    /// Preloaded on a guess, so an animation stops at its first frame.
+    speculative: bool,
 }
 
 struct PoolShared {
@@ -1356,6 +1358,7 @@ impl DecodePool {
             file_size,
             cancellation,
             kind,
+            speculative: !front, // only a preload goes to the back of the queue
         };
         if front {
             queue.push_front(job);
@@ -1375,6 +1378,7 @@ impl DecodePool {
             if job.kind == JobKind::PreviewOnly {
                 job.kind = JobKind::PreviewThenFull;
             }
+            job.speculative = false; // someone is waiting on it now
             queue.push_front(job);
         }
     }
@@ -1460,6 +1464,28 @@ fn worker_loop(shared: &PoolShared, window: isize) {
                     );
                     if last {
                         continue; // the full decode waits until someone asks for it
+                    }
+                }
+                // An animation opens on its first frame; a guess stops there.
+                if (job.speculative || job.kind != JobKind::Full)
+                    && let Some(first_frame) =
+                        decode::decode_animation_first_frame(path, &job.cancellation)
+                {
+                    post_completion(
+                        window,
+                        Box::new(DecodeCompletion {
+                            location: job.location.clone(),
+                            file_size: job.file_size,
+                            stage: if job.speculative {
+                                DecodeStage::PreviewFinal
+                            } else {
+                                DecodeStage::Preview
+                            },
+                            result: Ok(Arc::new(first_frame)),
+                        }),
+                    );
+                    if job.speculative {
+                        continue;
                     }
                 }
                 decode::decode_file(path, &job.cancellation)
