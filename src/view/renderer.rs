@@ -53,7 +53,7 @@ use windows_numerics::Matrix3x2;
 use std::sync::Arc;
 
 use crate::image::color::SDR_REFERENCE_WHITE_NITS;
-use crate::image::decode::{DecodedImage, PixelStorage, icc_source_gamut_label};
+use crate::image::decode::{DecodedImage, PixelStorage, icc_gamut_label};
 use crate::view::dither::DitherMode;
 use crate::view::quantize::QuantizePass;
 
@@ -331,7 +331,7 @@ impl Renderer {
         });
         let label = display_profile
             .filter(|_| context.is_some())
-            .and_then(|display_profile| icc_source_gamut_label(display_profile));
+            .and_then(|display_profile| icc_gamut_label(display_profile));
         (context, label)
     }
 
@@ -351,7 +351,7 @@ impl Renderer {
         sdr_wide_gamut: bool,
         tone_map_target_nits: f32,
         scrgb_color_context: Option<&ID2D1ColorContext>,
-        srgb_color_context: Option<&ID2D1ColorContext>,
+        sdr_destination_context: Option<&ID2D1ColorContext>,
     ) -> ModeEffects {
         let color_management_effect = Self::create_color_management_effect(d2d_context);
         // SDR only: HDR displays pass content through with no tone map.
@@ -393,7 +393,11 @@ impl Renderer {
             .then_some(())
             .and(hdr_tone_map_effect.as_ref())
             .and_then(|_| {
-                Self::create_transfer_effect(d2d_context, scrgb_color_context, srgb_color_context)
+                Self::create_transfer_effect(
+                    d2d_context,
+                    scrgb_color_context,
+                    sdr_destination_context,
+                )
             });
         let white_level_effect = hdr_mode
             .then_some(())
@@ -990,7 +994,7 @@ impl Renderer {
         peak_luminance_nits: Option<f32>,
     ) {
         self.effect_output = None;
-        self.source_gamut_label = icc_profile.and_then(icc_source_gamut_label);
+        self.source_gamut_label = icc_profile.and_then(icc_gamut_label);
         self.refresh_output_description();
         let Some(color_management) = &self.color_management_effect else {
             return;

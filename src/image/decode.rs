@@ -967,7 +967,7 @@ fn icc_tag_offset(icc: &[u8], signature: &[u8; 4]) -> Option<usize> {
 }
 
 /// Nearest gamut label from an ICC's matrix primaries; None for non-matrix profiles.
-pub fn icc_source_gamut_label(icc: &[u8]) -> Option<&'static str> {
+pub fn icc_gamut_label(icc: &[u8]) -> Option<&'static str> {
     let primary_xy = |tag: &[u8; 4]| -> Option<[f32; 2]> {
         let offset = icc_tag_offset(icc, tag)?;
         if icc.get(offset..offset + 4)? != b"XYZ " {

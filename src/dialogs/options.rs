@@ -596,7 +596,7 @@ fn handle_page_command(
         (IDC_WINDOW_HIDE_CURSOR_FULLSCREEN, BN_CLICKED) => {
             options.hide_cursor_fullscreen = is_checked(page, control);
         }
-        (IDC_IMAGE_FILTERING, CBN_SELCHANGE) => {
+        (IDC_IMAGE_SCALING, CBN_SELCHANGE) => {
             options.scaling_filter = combo_selection(page, control);
         }
         (IDC_IMAGE_DITHER, CBN_SELCHANGE) => {
@@ -683,7 +683,7 @@ fn initialize_image_page(state: &OptionsState) {
     let page = state.pages[1];
     combo_fill(
         page,
-        IDC_IMAGE_FILTERING,
+        IDC_IMAGE_SCALING,
         &["Nearest", "Bilinear", "Bicubic", "High Quality"],
     );
     combo_fill(page, IDC_IMAGE_DITHER, &["None", "Ordered", "Fruit"]);
@@ -744,7 +744,7 @@ fn sync_all_pages(state: &mut OptionsState) {
     sync_background_color_button(state, window_page);
 
     let image_page = state.pages[1];
-    combo_select(image_page, IDC_IMAGE_FILTERING, options.scaling_filter);
+    combo_select(image_page, IDC_IMAGE_SCALING, options.scaling_filter);
     combo_select(image_page, IDC_IMAGE_DITHER, options.dither);
     combo_select(image_page, IDC_IMAGE_FITMODE, options.fit_mode);
     combo_select(image_page, IDC_IMAGE_PRELOADING, options.preloading_mode);
