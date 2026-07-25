@@ -171,13 +171,13 @@ struct DisplayDescription {
 /// The output mode the renderer drives, from the display's current capabilities.
 fn output_mode(
     capabilities: &color::DisplayCapabilities,
-    gamut: Option<color::DisplayGamut>,
+    profile: Option<Arc<Vec<u8>>>,
 ) -> OutputMode {
     OutputMode {
         hdr: capabilities.hdr,
         bits_per_color: capabilities.bits_per_color,
         advanced_color: capabilities.advanced_color,
-        gamut,
+        profile,
     }
 }
 
@@ -203,13 +203,14 @@ impl Application {
         let color::DisplayColorInfo {
             capabilities,
             gamut,
+            profile,
         } = color::display_color_info(window);
         let (target_nits, full_frame_nits) = tone_map_targets(&capabilities);
         let renderer = Renderer::new(
             window,
             width.max(1),
             height.max(1),
-            output_mode(&capabilities, gamut),
+            output_mode(&capabilities, profile),
             target_nits,
             full_frame_nits,
         )?;
@@ -292,9 +293,10 @@ impl Application {
         let color::DisplayColorInfo {
             capabilities,
             gamut,
+            profile,
         } = color::display_color_info(window);
         self.display_description = display_description(&capabilities, gamut);
-        if self.reconfigure_display_output(window, &capabilities, gamut, false) {
+        if self.reconfigure_display_output(window, &capabilities, profile, false) {
             self.request_render(window);
             return;
         }
@@ -335,10 +337,10 @@ impl Application {
         &mut self,
         window: HWND,
         capabilities: &color::DisplayCapabilities,
-        gamut: Option<color::DisplayGamut>,
+        profile: Option<Arc<Vec<u8>>>,
         force: bool,
     ) -> bool {
-        let mode = output_mode(capabilities, gamut);
+        let mode = output_mode(capabilities, profile);
         let mismatch = self.renderer.as_ref().is_some_and(|renderer| {
             mode.hdr != renderer.hdr_mode()
                 || mode.bits_per_color != renderer.bits_per_color()
@@ -754,14 +756,15 @@ impl Application {
         let (width, height) = client_size(window);
         let color::DisplayColorInfo {
             capabilities,
-            gamut,
+            profile,
+            ..
         } = color::display_color_info(window);
         let (target_nits, full_frame_nits) = tone_map_targets(&capabilities);
         self.renderer = Some(Renderer::new(
             window,
             width.max(1),
             height.max(1),
-            output_mode(&capabilities, gamut),
+            output_mode(&capabilities, profile),
             target_nits,
             full_frame_nits,
         )?);
@@ -901,9 +904,10 @@ impl Application {
             self.output_reconfigure_pending = false;
             let color::DisplayColorInfo {
                 capabilities,
-                gamut,
+                profile,
+                ..
             } = color::display_color_info(window);
-            let _ = self.reconfigure_display_output(window, &capabilities, gamut, true);
+            let _ = self.reconfigure_display_output(window, &capabilities, profile, true);
         }
         let viewport = self.viewport(window);
         let image = self.image_size();

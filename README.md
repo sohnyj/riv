@@ -15,7 +15,7 @@ A fast, precise, minimal image viewer for Windows.
   - HDR passthrough on HDR displays, HDR tone-mapped on SDR displays
   - Native 10-bit output on deep-color displays
   - Output dither: Ordered or Fruit shader
-  - Color management: Windows Advanced Color with WCG, PQ/HLG, embedded ICC, EDID gamut mapping
+  - Color management: Windows Advanced Color with WCG/HDR, PQ/HLG, embedded/display ICC profiles
 - Browsing
   - Browse images inside archives (via archiveint.dll, shipped with Windows)
   - Open http/https image URLs (via curl.exe, shipped with Windows)

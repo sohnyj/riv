@@ -1,5 +1,7 @@
 //! Color helpers: scRGB conversion and display capability queries.
 
+use std::sync::Arc;
+
 use windows::Win32::Devices::Display::{
     DISPLAYCONFIG_DEVICE_INFO_GET_ADVANCED_COLOR_INFO,
     DISPLAYCONFIG_DEVICE_INFO_GET_SDR_WHITE_LEVEL, DISPLAYCONFIG_DEVICE_INFO_GET_SOURCE_NAME,
@@ -112,19 +114,59 @@ pub struct DisplayCapabilities {
     pub advanced_color: bool,
 }
 
-/// A display's color capabilities and EDID gamut, from one output enumeration.
+/// A display's color capabilities, EDID gamut, and installed profile, from one enumeration.
 pub struct DisplayColorInfo {
     pub capabilities: DisplayCapabilities,
     pub gamut: Option<DisplayGamut>,
+    /// The display's ICC profile, the destination when the OS color-manages nothing.
+    pub profile: Option<Arc<Vec<u8>>>,
 }
 
-/// Queries the display's color capabilities and gamut with a single enumeration.
+/// Queries the display's color capabilities, gamut, and profile with a single enumeration.
 pub fn display_color_info(window: HWND) -> DisplayColorInfo {
     let description = window_output_description(window);
     DisplayColorInfo {
         capabilities: capabilities_from(description.as_ref(), window),
         gamut: description.as_ref().and_then(gamut_from),
+        profile: description
+            .as_ref()
+            .and_then(|description| display_profile(&description.DeviceName))
+            .map(Arc::new),
     }
+}
+
+/// The ICC profile Windows associates with this output.
+fn display_profile(device_name: &[u16; 32]) -> Option<Vec<u8>> {
+    use windows::Win32::Graphics::Gdi::{CreateDCW, DeleteDC};
+    use windows::Win32::UI::ColorSystem::GetICMProfileW;
+    use windows::core::{PCWSTR, PWSTR};
+
+    let device = PCWSTR(device_name.as_ptr());
+    let device_context = unsafe { CreateDCW(device, device, PCWSTR::null(), None) };
+    if device_context.is_invalid() {
+        return None;
+    }
+    // First call sizes the path buffer, second fills it.
+    let mut length = 0u32;
+    let _ = unsafe { GetICMProfileW(device_context, &raw mut length, None) };
+    let mut path = vec![0u16; length as usize];
+    let filled = unsafe {
+        GetICMProfileW(
+            device_context,
+            &raw mut length,
+            Some(PWSTR(path.as_mut_ptr())),
+        )
+    }
+    .as_bool();
+    let _ = unsafe { DeleteDC(device_context) };
+    if !filled {
+        return None;
+    }
+    let end = path
+        .iter()
+        .position(|unit| *unit == 0)
+        .unwrap_or(path.len());
+    std::fs::read(String::from_utf16_lossy(&path[..end])).ok()
 }
 
 fn capabilities_from(description: Option<&DXGI_OUTPUT_DESC1>, window: HWND) -> DisplayCapabilities {

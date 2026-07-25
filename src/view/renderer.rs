@@ -15,15 +15,15 @@ use windows::Win32::Graphics::Direct2D::{
     D2D1_COLORMANAGEMENT_PROP_SOURCE_COLOR_CONTEXT,
     D2D1_COLORMANAGEMENT_PROP_SOURCE_RENDERING_INTENT, D2D1_COLORMANAGEMENT_QUALITY_BEST,
     D2D1_COLORMANAGEMENT_RENDERING_INTENT_RELATIVE_COLORIMETRIC, D2D1_DEVICE_CONTEXT_OPTIONS_NONE,
-    D2D1_FACTORY_TYPE_SINGLE_THREADED, D2D1_GAMMA1_G22, D2D1_HDRTONEMAP_DISPLAY_MODE_HDR,
+    D2D1_FACTORY_TYPE_SINGLE_THREADED, D2D1_HDRTONEMAP_DISPLAY_MODE_HDR,
     D2D1_HDRTONEMAP_PROP_DISPLAY_MODE, D2D1_HDRTONEMAP_PROP_INPUT_MAX_LUMINANCE,
     D2D1_HDRTONEMAP_PROP_OUTPUT_MAX_LUMINANCE, D2D1_INTERPOLATION_MODE,
     D2D1_INTERPOLATION_MODE_NEAREST_NEIGHBOR, D2D1_PROPERTY_TYPE_COLOR_CONTEXT,
-    D2D1_PROPERTY_TYPE_ENUM, D2D1_PROPERTY_TYPE_FLOAT, D2D1_SIMPLE_COLOR_PROFILE,
+    D2D1_PROPERTY_TYPE_ENUM, D2D1_PROPERTY_TYPE_FLOAT,
     D2D1_WHITELEVELADJUSTMENT_PROP_INPUT_WHITE_LEVEL,
     D2D1_WHITELEVELADJUSTMENT_PROP_OUTPUT_WHITE_LEVEL, D2D1CreateFactory, ID2D1Bitmap1,
-    ID2D1ColorContext, ID2D1ColorContext1, ID2D1DeviceContext, ID2D1DeviceContext5, ID2D1Effect,
-    ID2D1Factory1, ID2D1Image,
+    ID2D1ColorContext, ID2D1DeviceContext, ID2D1DeviceContext5, ID2D1Effect, ID2D1Factory1,
+    ID2D1Image,
 };
 use windows::Win32::Graphics::Direct3D::{
     D3D_DRIVER_TYPE, D3D_DRIVER_TYPE_HARDWARE, D3D_DRIVER_TYPE_WARP, D3D_FEATURE_LEVEL,
@@ -48,9 +48,11 @@ use windows::Win32::Graphics::Dxgi::{
     IDXGISwapChain3,
 };
 use windows::core::{Interface, Result};
-use windows_numerics::{Matrix3x2, Vector2};
+use windows_numerics::Matrix3x2;
 
-use crate::image::color::{DisplayGamut, SDR_REFERENCE_WHITE_NITS};
+use std::sync::Arc;
+
+use crate::image::color::SDR_REFERENCE_WHITE_NITS;
 use crate::image::decode::{DecodedImage, PixelStorage, icc_source_gamut_label};
 use crate::view::dither::DitherMode;
 use crate::view::quantize::QuantizePass;
@@ -71,13 +73,13 @@ struct ToneMapTarget {
 }
 
 /// The output-affecting display state: HDR, wire depth, and advanced-color.
-#[derive(Clone, Copy)]
+#[derive(Clone)]
 pub struct OutputMode {
     pub hdr: bool,
     pub bits_per_color: u32,
     pub advanced_color: bool,
-    /// EDID display primaries, for ACM-off SDR gamut mapping; None when unknown.
-    pub gamut: Option<DisplayGamut>,
+    /// The display's ICC profile, the ACM-off SDR destination; None when unavailable.
+    pub profile: Option<Arc<Vec<u8>>>,
 }
 
 impl OutputMode {
@@ -129,9 +131,9 @@ pub struct Renderer {
     image_source_bits_per_channel: u32,
     scrgb_color_context: Option<ID2D1ColorContext>,
     srgb_color_context: Option<ID2D1ColorContext>,
-    /// ACM-off SDR destination = EDID display gamut (G22); None outside that mode.
-    edid_color_context: Option<ID2D1ColorContext>,
-    /// EDID gamut label shown as the output space when EDID mapping is active.
+    /// ACM-off SDR destination = the display's own profile; None outside that mode.
+    display_color_context: Option<ID2D1ColorContext>,
+    /// Display gamut label shown as the output space when profile mapping is active.
     sdr_gamut_label: Option<&'static str>,
     /// Nearest gamut label of a tagged source; None when untagged (output names the gamut only).
     source_gamut_label: Option<&'static str>,
@@ -262,7 +264,7 @@ impl Renderer {
             full_frame_nits,
         };
         // A deep-color failure downgrades to the proven formats, never blocks launch.
-        Self::build(window, width, height, mode, target, true)
+        Self::build(window, width, height, mode.clone(), target, true)
             .or_else(|_| Self::build(window, width, height, mode, target, false))
     }
 
@@ -313,58 +315,20 @@ impl Renderer {
         Some(effect)
     }
 
-    /// EDID display-gamut (G22) color context for ACM-off SDR mapping.
-    fn create_edid_color_context(
-        d2d_context: &ID2D1DeviceContext,
-        gamut: &DisplayGamut,
-    ) -> Option<ID2D1ColorContext> {
-        let [white_x, white_y] = gamut.white;
-        if white_y <= 0.0 {
-            return None;
-        }
-        let profile = D2D1_SIMPLE_COLOR_PROFILE {
-            redPrimary: Vector2 {
-                X: gamut.red[0],
-                Y: gamut.red[1],
-            },
-            greenPrimary: Vector2 {
-                X: gamut.green[0],
-                Y: gamut.green[1],
-            },
-            bluePrimary: Vector2 {
-                X: gamut.blue[0],
-                Y: gamut.blue[1],
-            },
-            // XZ tristimulus of the whitepoint, luminance (Y) normalized to 1.
-            whitePointXZ: Vector2 {
-                X: white_x / white_y,
-                Y: (1.0 - white_x - white_y) / white_y,
-            },
-            gamma: D2D1_GAMMA1_G22,
-        };
-        let context: ID2D1ColorContext1 = unsafe {
-            d2d_context
-                .cast::<ID2D1DeviceContext5>()
-                .ok()?
-                .CreateColorContextFromSimpleColorProfile(&profile)
-        }
-        .ok()?;
-        context.cast().ok()
-    }
-
-    /// EDID color context and its gamut label for ACM-off SDR; both None outside that mode.
-    fn edid_context_and_label(
+    /// Display-profile color context and its gamut label for ACM-off SDR; both None otherwise.
+    fn display_context_and_label(
         d2d_context: &ID2D1DeviceContext,
         hdr_mode: bool,
         sdr_wide_gamut: bool,
-        gamut: Option<DisplayGamut>,
+        profile: Option<&Arc<Vec<u8>>>,
     ) -> (Option<ID2D1ColorContext>, Option<&'static str>) {
-        let context = gamut
-            .filter(|_| !hdr_mode && !sdr_wide_gamut)
-            .and_then(|gamut| Self::create_edid_color_context(d2d_context, &gamut));
-        let label = gamut
+        let profile = profile.filter(|_| !hdr_mode && !sdr_wide_gamut);
+        let context = profile.and_then(|profile| {
+            unsafe { d2d_context.CreateColorContext(D2D1_COLOR_SPACE_CUSTOM, Some(profile)) }.ok()
+        });
+        let label = profile
             .filter(|_| context.is_some())
-            .map(|gamut| gamut.label());
+            .and_then(|profile| icc_source_gamut_label(profile));
         (context, label)
     }
 
@@ -511,7 +475,7 @@ impl Renderer {
             bits_per_color,
             ..
         } = mode;
-        let gamut = mode.gamut;
+        let profile = mode.profile.clone();
         let tone_map_target_nits = target.peak_nits;
         let full_frame_nits = target.full_frame_nits;
         // D3D11 WARP is documented only through 11_1; shader model 5.0 needs no more.
@@ -545,8 +509,12 @@ impl Renderer {
             unsafe { d2d_context.CreateColorContext(D2D1_COLOR_SPACE_SCRGB, None) }.ok();
         let srgb_color_context =
             unsafe { d2d_context.CreateColorContext(D2D1_COLOR_SPACE_SRGB, None) }.ok();
-        let (edid_color_context, sdr_gamut_label) =
-            Self::edid_context_and_label(&d2d_context, hdr_mode, sdr_wide_gamut, gamut);
+        let (display_color_context, sdr_gamut_label) = Self::display_context_and_label(
+            &d2d_context,
+            hdr_mode,
+            sdr_wide_gamut,
+            profile.as_ref(),
+        );
 
         // HDR encodes to PQ in the app so its 10-bit write is the only quantizer.
         let mut hdr_output_color_management_effect = (hdr_mode && ten_bit_target)
@@ -638,7 +606,9 @@ impl Renderer {
             hdr_mode,
             tone_map_target_nits,
             scrgb_color_context.as_ref(),
-            edid_color_context.as_ref().or(srgb_color_context.as_ref()),
+            display_color_context
+                .as_ref()
+                .or(srgb_color_context.as_ref()),
         );
         let mut renderer = Self {
             hdr_mode,
@@ -669,7 +639,7 @@ impl Renderer {
             image_source_bits_per_channel: 8,
             scrgb_color_context,
             srgb_color_context,
-            edid_color_context,
+            display_color_context,
             sdr_gamut_label,
             source_gamut_label: None,
             output_description: String::new(),
@@ -713,7 +683,7 @@ impl Renderer {
         self.sdr_wide_gamut
     }
 
-    /// Active backbuffer, for the info overlay. ACM-off SDR names the EDID gamut it maps into.
+    /// Active backbuffer, for the info overlay. ACM-off SDR names the gamut it maps into.
     pub fn output_description(&self) -> &str {
         &self.output_description
     }
@@ -733,14 +703,14 @@ impl Renderer {
         };
     }
 
-    /// SDR destination color context: the EDID display gamut when mapping, else sRGB.
+    /// SDR destination color context: the display's own profile when mapping, else sRGB.
     fn sdr_destination_context(&self) -> Option<&ID2D1ColorContext> {
-        self.edid_color_context
+        self.display_color_context
             .as_ref()
             .or(self.srgb_color_context.as_ref())
     }
 
-    /// SDR output label; ACM-off EDID mapping appends the destination gamut.
+    /// SDR output label; ACM-off profile mapping appends the destination gamut.
     fn sdr_output_description(&self, bits: &str) -> String {
         let destination = self.sdr_gamut_label.unwrap_or("sRGB");
         match self.source_gamut_label {
@@ -834,12 +804,16 @@ impl Renderer {
             bits_per_color,
             ..
         } = mode;
-        let gamut = mode.gamut;
+        let profile = mode.profile.clone();
         // Adopt the target state first so a partial failure cannot retry every WM_MOVE.
         self.hdr_mode = hdr_mode;
         self.sdr_wide_gamut = sdr_wide_gamut;
-        (self.edid_color_context, self.sdr_gamut_label) =
-            Self::edid_context_and_label(&self.d2d_context, hdr_mode, sdr_wide_gamut, gamut);
+        (self.display_color_context, self.sdr_gamut_label) = Self::display_context_and_label(
+            &self.d2d_context,
+            hdr_mode,
+            sdr_wide_gamut,
+            profile.as_ref(),
+        );
         self.bits_per_color = bits_per_color;
         self.tone_map_target_nits = tone_map_target_nits;
         self.display_full_frame_nits = full_frame_nits;
@@ -1024,7 +998,7 @@ impl Renderer {
         if storage == PixelStorage::Bgra8
             && icc_profile.is_none()
             && !scrgb_destination
-            && self.edid_color_context.is_none()
+            && self.display_color_context.is_none()
         {
             // Unwire the previous bitmap so the effect does not keep it alive.
             unsafe { color_management.SetInput(0, None, true) };
