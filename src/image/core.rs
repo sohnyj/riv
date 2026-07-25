@@ -304,16 +304,46 @@ pub struct ImageCore {
     window: isize,
 }
 
-/// A folder scan request: where it looks, and whether arrival opens the first entry.
-struct PendingScan {
-    directory: PathBuf,
-    load_first_entry: bool,
+/// A scan request: what it awaits, and whether arrival opens the first entry.
+enum PendingScan {
+    Directory {
+        directory: PathBuf,
+        load_first_entry: bool,
+    },
+    Archive {
+        archive: PathBuf,
+    },
 }
 
-/// A finished background folder scan, posted back as WM_APP_LISTING_READY.
+impl PendingScan {
+    fn awaits(&self, scope: &ListingScope) -> bool {
+        match (self, scope) {
+            (Self::Directory { directory, .. }, ListingScope::Directory(scanned)) => {
+                paths_equal(directory, scanned)
+            }
+            (Self::Archive { archive }, ListingScope::Archive(scanned)) => {
+                paths_equal(archive, scanned)
+            }
+            _ => false,
+        }
+    }
+
+    fn opens_first_entry(&self) -> bool {
+        match self {
+            Self::Directory {
+                load_first_entry, ..
+            } => *load_first_entry,
+            Self::Archive { .. } => true,
+        }
+    }
+}
+
+/// A finished background scan, posted back as WM_APP_LISTING_READY.
 pub struct ScannedListing {
-    directory: PathBuf,
+    scope: ListingScope,
     entries: Vec<ListingEntry>,
+    /// An archive that failed to enumerate or held no supported images.
+    error: Option<DecodeError>,
 }
 
 impl ScannedListing {
@@ -321,7 +351,36 @@ impl ScannedListing {
     fn of_directory(directory: PathBuf, options: &CoreOptions) -> Self {
         let mut entries = scan_folder(&directory, options);
         sort_entries(&mut entries, options);
-        Self { directory, entries }
+        Self {
+            scope: ListingScope::Directory(directory),
+            entries,
+            error: None,
+        }
+    }
+
+    /// Enumerates an archive's image members: the worker half of submit_archive_scan.
+    fn of_archive(archive: PathBuf, options: &CoreOptions) -> Self {
+        let (entries, error) = match archive_reader::enumerate(&archive) {
+            Ok(members) => {
+                let mut entries: Vec<ListingEntry> = members
+                    .into_iter()
+                    .filter_map(|member| member_entry(&archive, member))
+                    .collect();
+                sort_entries(&mut entries, options);
+                let error = entries.is_empty().then(|| DecodeError {
+                    code: 0,
+                    message: "archive contains no supported images".to_string(),
+                    store_extension: None,
+                });
+                (entries, error)
+            }
+            Err(error) => (Vec::new(), Some(error.into())),
+        };
+        Self {
+            scope: ListingScope::Archive(archive),
+            entries,
+            error,
+        }
     }
 }
 
@@ -488,6 +547,17 @@ impl ImageCore {
             // Back through load_url so validation errors reproduce on retry.
             return self.load_url(url);
         }
+        if let ItemLocation::File(path) = &location
+            && path
+                .extension()
+                .map(|extension| extension.to_string_lossy().to_lowercase())
+                .is_some_and(|extension| archive_reader::is_archive_extension(&extension))
+        {
+            // An archive anchor retries through its scan, like a URL revalidates.
+            let path = path.clone();
+            self.submit_archive_scan(path);
+            return false;
+        }
         self.rescan_listing();
         self.load_item(&location)
     }
@@ -507,7 +577,8 @@ impl ImageCore {
             .as_deref()
             .is_some_and(archive_reader::is_archive_extension)
         {
-            return self.load_archive(&path);
+            self.submit_archive_scan(path);
+            return false;
         }
         let directory = path.parent().map(Path::to_path_buf);
         if let Some(directory) = directory
@@ -525,18 +596,16 @@ impl ImageCore {
             Some(ListingScope::Directory(scanned)) if paths_equal(scanned, directory)
         );
         listed
-            || self
-                .pending_scan
-                .as_ref()
-                .is_some_and(|pending| paths_equal(&pending.directory, directory))
+            || matches!(
+                &self.pending_scan,
+                Some(PendingScan::Directory { directory: requested, .. })
+                    if paths_equal(requested, directory)
+            )
     }
 
     /// Clears the listing and enumerates the folder off the UI thread; it installs on arrival.
     fn submit_listing_scan(&mut self, directory: PathBuf, load_first_entry: bool) {
-        self.reset_travel_direction();
-        self.entries = Vec::new();
-        self.listing_scope = None;
-        self.pending_scan = Some(PendingScan {
+        self.begin_scan(PendingScan::Directory {
             directory: directory.clone(),
             load_first_entry,
         });
@@ -553,19 +622,52 @@ impl ImageCore {
             });
     }
 
-    /// Installs an arrived folder scan; a stale directory is dropped.
+    /// Clears the listing and enumerates the archive off the UI thread; it installs on arrival.
+    fn submit_archive_scan(&mut self, archive: PathBuf) {
+        self.begin_scan(PendingScan::Archive {
+            archive: archive.clone(),
+        });
+        let options = self.options.clone();
+        let window = self.window;
+        let _ = std::thread::Builder::new()
+            .name("riv-folder-scan".to_string())
+            .spawn(move || {
+                post_boxed(
+                    window,
+                    WM_APP_LISTING_READY,
+                    Box::new(ScannedListing::of_archive(archive, &options)),
+                );
+            });
+    }
+
+    /// Clears the listing and records the request the arrival must match.
+    fn begin_scan(&mut self, pending: PendingScan) {
+        self.reset_travel_direction();
+        self.entries = Vec::new();
+        self.listing_scope = None;
+        self.pending_scan = Some(pending);
+    }
+
+    /// Installs an arrived scan; a stale one is dropped, an archive failure becomes the error.
     pub fn install_listing_scan(&mut self, mut scan: ScannedListing) -> ListingInstall {
         let Some(pending) = self
             .pending_scan
-            .take_if(|pending| paths_equal(&pending.directory, &scan.directory))
+            .take_if(|pending| pending.awaits(&scan.scope))
         else {
             return ListingInstall::Discarded;
         };
+        if let ListingScope::Archive(archive) = &scan.scope
+            && let Some(error) = scan.error.take()
+        {
+            self.pending_display = None;
+            self.load_error = Some((ItemLocation::File(archive.clone()), error));
+            return ListingInstall::Opened { displayed: false };
+        }
         // The worker sorted under an options snapshot; re-sorting covers a change since.
         sort_entries(&mut scan.entries, &self.options);
         self.entries = scan.entries;
-        self.listing_scope = Some(ListingScope::Directory(scan.directory));
-        if pending.load_first_entry {
+        self.listing_scope = Some(scan.scope);
+        if pending.opens_first_entry() {
             let Some(first) = self.entries.first().map(|entry| entry.location.clone()) else {
                 return ListingInstall::Installed;
             };
@@ -615,49 +717,6 @@ impl ImageCore {
             return false;
         }
         self.load_item(&location)
-    }
-
-    /// Opens an archive as a virtual folder of its image members.
-    fn load_archive(&mut self, archive: &Path) -> bool {
-        self.reset_travel_direction();
-        self.entries = Vec::new();
-        self.pending_scan = None;
-        self.listing_scope = Some(ListingScope::Archive(archive.to_path_buf()));
-        let members = match archive_reader::enumerate(archive) {
-            Ok(members) => members,
-            Err(error) => {
-                self.load_error = Some((
-                    ItemLocation::File(archive.to_path_buf()),
-                    DecodeError {
-                        code: error.code,
-                        message: error.message,
-                        store_extension: None,
-                    },
-                ));
-                return false;
-            }
-        };
-        let mut entries: Vec<ListingEntry> = members
-            .into_iter()
-            .filter_map(|member| member_entry(archive, member))
-            .collect();
-        if entries.is_empty() {
-            self.load_error = Some((
-                ItemLocation::File(archive.to_path_buf()),
-                DecodeError {
-                    code: 0,
-                    message: "archive contains no supported images".to_string(),
-                    store_extension: None,
-                },
-            ));
-            return false;
-        }
-        sort_entries(&mut entries, &self.options);
-        self.entries = entries;
-        let Some(first) = self.entries.first().map(|entry| entry.location.clone()) else {
-            return false;
-        };
-        self.load_item(&first)
     }
 
     fn load_item(&mut self, location: &ItemLocation) -> bool {
@@ -2112,6 +2171,62 @@ mod listing_scan_tests {
         assert!(core.has_pending_display()); // the decode has not landed yet
         assert_eq!(core.listing_position(), Some((2, 2)));
         let _ = std::fs::remove_dir_all(&directory);
+    }
+
+    fn archive_member(archive: &std::path::Path, name: &str) -> ListingEntry {
+        ListingEntry {
+            location: ItemLocation::ArchiveMember {
+                archive: archive.to_path_buf(),
+                member: name.to_string(),
+            },
+            wide_name: name.encode_utf16().chain(std::iter::once(0)).collect(),
+            file_size: 8,
+            modified: UNIX_EPOCH,
+            created: UNIX_EPOCH,
+        }
+    }
+
+    #[test]
+    fn an_archive_open_loads_its_first_member_on_arrival() {
+        let archive = std::env::temp_dir().join("riv-archive-open.zip");
+        let mut core = core();
+        assert!(!core.load_path(&archive));
+        assert!(core.listing_scan_pending());
+        let resolved = std::path::absolute(&archive).expect("absolute");
+        let scan = ScannedListing {
+            scope: ListingScope::Archive(resolved.clone()),
+            entries: vec![archive_member(&resolved, "one.png")],
+            error: None,
+        };
+        assert!(matches!(
+            core.install_listing_scan(scan),
+            ListingInstall::Opened { .. }
+        ));
+        assert_eq!(core.entries.len(), 1);
+        assert!(core.has_pending_display()); // the first member's decode is under way
+    }
+
+    #[test]
+    fn a_failed_archive_enumerate_surfaces_as_the_error() {
+        let archive = std::env::temp_dir().join("riv-archive-error.zip");
+        let mut core = core();
+        assert!(!core.load_path(&archive));
+        let resolved = std::path::absolute(&archive).expect("absolute");
+        let scan = ScannedListing {
+            scope: ListingScope::Archive(resolved),
+            entries: Vec::new(),
+            error: Some(DecodeError {
+                code: 0,
+                message: "enumerate failed".to_string(),
+                store_extension: None,
+            }),
+        };
+        assert!(matches!(
+            core.install_listing_scan(scan),
+            ListingInstall::Opened { displayed: false }
+        ));
+        assert!(core.load_error.is_some());
+        assert!(!core.listing_scan_pending());
     }
 
     #[test]
