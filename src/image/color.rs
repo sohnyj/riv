@@ -119,7 +119,7 @@ pub struct DisplayColorInfo {
     pub capabilities: DisplayCapabilities,
     pub gamut: Option<DisplayGamut>,
     /// The display's ICC profile, the destination when the OS color-manages nothing.
-    pub profile: Option<Arc<Vec<u8>>>,
+    pub display_profile: Option<Arc<Vec<u8>>>,
 }
 
 /// Queries the display's color capabilities, gamut, and profile with a single enumeration.
@@ -128,15 +128,15 @@ pub fn display_color_info(window: HWND) -> DisplayColorInfo {
     DisplayColorInfo {
         capabilities: capabilities_from(description.as_ref(), window),
         gamut: description.as_ref().and_then(gamut_from),
-        profile: description
+        display_profile: description
             .as_ref()
-            .and_then(|description| display_profile(&description.DeviceName))
+            .and_then(|description| device_profile(&description.DeviceName))
             .map(Arc::new),
     }
 }
 
 /// The ICC profile Windows associates with this output.
-fn display_profile(device_name: &[u16; 32]) -> Option<Vec<u8>> {
+fn device_profile(device_name: &[u16; 32]) -> Option<Vec<u8>> {
     use windows::Win32::Graphics::Gdi::{CreateDCW, DeleteDC};
     use windows::Win32::UI::ColorSystem::GetICMProfileW;
     use windows::core::{PCWSTR, PWSTR};

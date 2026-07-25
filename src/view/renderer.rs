@@ -79,7 +79,7 @@ pub struct OutputMode {
     pub bits_per_color: u32,
     pub advanced_color: bool,
     /// The display's ICC profile, the ACM-off SDR destination; None when unavailable.
-    pub profile: Option<Arc<Vec<u8>>>,
+    pub display_profile: Option<Arc<Vec<u8>>>,
 }
 
 impl OutputMode {
@@ -320,15 +320,18 @@ impl Renderer {
         d2d_context: &ID2D1DeviceContext,
         hdr_mode: bool,
         sdr_wide_gamut: bool,
-        profile: Option<&Arc<Vec<u8>>>,
+        display_profile: Option<&Arc<Vec<u8>>>,
     ) -> (Option<ID2D1ColorContext>, Option<&'static str>) {
-        let profile = profile.filter(|_| !hdr_mode && !sdr_wide_gamut);
-        let context = profile.and_then(|profile| {
-            unsafe { d2d_context.CreateColorContext(D2D1_COLOR_SPACE_CUSTOM, Some(profile)) }.ok()
+        let display_profile = display_profile.filter(|_| !hdr_mode && !sdr_wide_gamut);
+        let context = display_profile.and_then(|display_profile| {
+            unsafe {
+                d2d_context.CreateColorContext(D2D1_COLOR_SPACE_CUSTOM, Some(display_profile))
+            }
+            .ok()
         });
-        let label = profile
+        let label = display_profile
             .filter(|_| context.is_some())
-            .and_then(|profile| icc_source_gamut_label(profile));
+            .and_then(|display_profile| icc_source_gamut_label(display_profile));
         (context, label)
     }
 
@@ -475,7 +478,7 @@ impl Renderer {
             bits_per_color,
             ..
         } = mode;
-        let profile = mode.profile;
+        let display_profile = mode.display_profile;
         let tone_map_target_nits = target.peak_nits;
         let full_frame_nits = target.full_frame_nits;
         // D3D11 WARP is documented only through 11_1; shader model 5.0 needs no more.
@@ -513,7 +516,7 @@ impl Renderer {
             &d2d_context,
             hdr_mode,
             sdr_wide_gamut,
-            profile.as_ref(),
+            display_profile.as_ref(),
         );
 
         // HDR encodes to PQ in the app so its 10-bit write is the only quantizer.
@@ -804,7 +807,7 @@ impl Renderer {
             bits_per_color,
             ..
         } = mode;
-        let profile = mode.profile;
+        let display_profile = mode.display_profile;
         // Adopt the target state first so a partial failure cannot retry every WM_MOVE.
         self.hdr_mode = hdr_mode;
         self.sdr_wide_gamut = sdr_wide_gamut;
@@ -812,7 +815,7 @@ impl Renderer {
             &self.d2d_context,
             hdr_mode,
             sdr_wide_gamut,
-            profile.as_ref(),
+            display_profile.as_ref(),
         );
         self.bits_per_color = bits_per_color;
         self.tone_map_target_nits = tone_map_target_nits;
@@ -1016,9 +1019,9 @@ impl Renderer {
                     || self.source_icc_profile.as_deref() != icc_profile
                 {
                     self.source_color_context = match icc_profile {
-                        Some(profile) => unsafe {
+                        Some(icc_profile) => unsafe {
                             self.d2d_context
-                                .CreateColorContext(D2D1_COLOR_SPACE_CUSTOM, Some(profile))
+                                .CreateColorContext(D2D1_COLOR_SPACE_CUSTOM, Some(icc_profile))
                         }
                         .ok(),
                         None => None,

@@ -349,7 +349,7 @@ pub fn build_info_text(
 ) -> String {
     let megapixels = f64::from(image.width) * f64::from(image.height) / 1_000_000.0;
     let color_profile = match &image.icc_profile {
-        Some(profile) => crate::image::decode::icc_profile_description(profile)
+        Some(icc_profile) => crate::image::decode::icc_profile_description(icc_profile)
             .unwrap_or_else(|| "Embedded".to_string()),
         None => "None".to_string(),
     };
