@@ -1184,18 +1184,15 @@ impl Renderer {
             self.d2d_context.BeginDraw();
             self.d2d_context.Clear(Some(&raw const clear_color));
             if let Some(image) = &self.image {
+                self.d2d_context.SetTransform(&raw const transform);
                 match &self.effect_output {
-                    Some(output) => {
-                        self.d2d_context.SetTransform(&raw const transform);
-                        self.d2d_context.DrawImage(
-                            output,
-                            None,
-                            None,
-                            draw_interpolation,
-                            D2D1_COMPOSITE_MODE_SOURCE_OVER,
-                        );
-                        self.d2d_context.SetTransform(&Matrix3x2::identity());
-                    }
+                    Some(output) => self.d2d_context.DrawImage(
+                        output,
+                        None,
+                        None,
+                        draw_interpolation,
+                        D2D1_COMPOSITE_MODE_SOURCE_OVER,
+                    ),
                     // Untouched pixels, or no effect support.
                     None => {
                         let destination = D2D_RECT_F {
@@ -1204,7 +1201,6 @@ impl Renderer {
                             right: self.image_pixel_size.0,
                             bottom: self.image_pixel_size.1,
                         };
-                        self.d2d_context.SetTransform(&raw const transform);
                         self.d2d_context.DrawBitmap(
                             image,
                             Some(&raw const destination),
@@ -1213,9 +1209,9 @@ impl Renderer {
                             None,
                             None,
                         );
-                        self.d2d_context.SetTransform(&Matrix3x2::identity());
                     }
                 }
+                self.d2d_context.SetTransform(&Matrix3x2::identity());
             }
             // Overlay failure must not block presenting the frame.
             let overlay_result = draw_overlay(&self.d2d_context);
