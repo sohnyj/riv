@@ -21,7 +21,7 @@ pub struct Options {
     pub scaling_filter: u32,
     pub fit_mode: u32,
     pub zoom_step_percent: u32,
-    pub dither: u32,
+    pub dither_mode: u32,
     pub fractional_zoom: bool,
     pub cursor_zoom: bool,
     pub sort_mode: u32,
@@ -49,7 +49,7 @@ impl Default for Options {
             scaling_filter: 1,
             fit_mode: 0,
             zoom_step_percent: 25,
-            dither: 2,
+            dither_mode: 2,
             fractional_zoom: true,
             cursor_zoom: true,
             sort_mode: 0,
@@ -104,7 +104,7 @@ impl Options {
             scaling_filter: bounded("scaling", 3, default.scaling_filter),
             fit_mode: bounded("fitmode", 1, default.fit_mode),
             zoom_step_percent: unsigned("zoomstep", default.zoom_step_percent).clamp(1, 200),
-            dither: bounded("dither", 2, default.dither),
+            dither_mode: bounded("dither", 2, default.dither_mode),
             fractional_zoom: boolean("fractionalzoom", default.fractional_zoom),
             cursor_zoom: boolean("cursorzoom", default.cursor_zoom),
             sort_mode: bounded("sortmode", 4, default.sort_mode),
@@ -145,7 +145,7 @@ fn parse_hex_color(text: &str) -> Option<(u8, u8, u8)> {
     Some((red, green, blue))
 }
 
-pub fn probe_writable() -> bool {
+pub fn save_directory_is_writable() -> bool {
     let probe = settings_path().with_extension("json.probe");
     match std::fs::write(&probe, b"") {
         Ok(()) => {
@@ -222,7 +222,7 @@ impl SettingsFile {
     }
 
     /// Writes the in-memory options into the settings document (persisted at exit/Apply).
-    pub fn sync_options(&mut self) {
+    pub fn store_options(&mut self) {
         let options = std::mem::take(&mut self.options);
         self.set_options(&options);
     }
@@ -277,8 +277,8 @@ impl SettingsFile {
             ),
             (
                 "dither",
-                Value::from(options.dither),
-                Value::from(default.dither),
+                Value::from(options.dither_mode),
+                Value::from(default.dither_mode),
             ),
             (
                 "fractionalzoom",
@@ -628,7 +628,7 @@ mod option_bounds_tests {
         assert_eq!(options.scaling_filter, default.scaling_filter);
         assert_eq!(options.fit_mode, default.fit_mode);
         assert_eq!(options.preloading_mode, default.preloading_mode);
-        assert_eq!(options.dither, default.dither);
+        assert_eq!(options.dither_mode, default.dither_mode);
         assert_eq!(options.sort_mode, default.sort_mode);
         assert_eq!(options.after_delete, default.after_delete);
     }

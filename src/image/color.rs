@@ -208,7 +208,7 @@ pub struct DisplayGamut {
 impl DisplayGamut {
     /// Nearest known gamut by primary distance; the tell is whether it is wider than sRGB.
     pub fn label(&self) -> &'static str {
-        nearest_gamut([self.red, self.green, self.blue])
+        nearest_gamut_label([self.red, self.green, self.blue])
     }
 
     /// True when EDID carried real chromaticities rather than zeros.
@@ -221,7 +221,7 @@ impl DisplayGamut {
 }
 
 /// Nearest reference gamut label by R/G/B primary (xy) distance.
-pub(crate) fn nearest_gamut(measured: [[f32; 2]; 3]) -> &'static str {
+pub(crate) fn nearest_gamut_label(measured: [[f32; 2]; 3]) -> &'static str {
     // R, G, B primaries (xy) of the reference gamuts.
     const REFERENCES: [(&str, [[f32; 2]; 3]); 4] = [
         ("sRGB", [[0.640, 0.330], [0.300, 0.600], [0.150, 0.060]]),

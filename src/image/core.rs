@@ -360,7 +360,7 @@ impl ImageCore {
     }
 
     /// Preload distances and budget, aimed along the current travel direction.
-    fn preload_distances(&self) -> (usize, usize, u64) {
+    fn preload_plan(&self) -> (usize, usize, u64) {
         let (backward, forward, budget) =
             PRELOAD_SPECIFICATIONS[self.options.preloading_mode.min(2)];
         if self.travel_backward {
@@ -918,7 +918,7 @@ impl ImageCore {
     }
 
     fn preload_neighbors(&mut self) {
-        let (backward, forward, budget) = self.preload_distances();
+        let (backward, forward, budget) = self.preload_plan();
         if backward == 0 && forward == 0 {
             // preloading off: drop the cache
             for (_, entry) in self.cache.drain() {
@@ -985,7 +985,7 @@ impl ImageCore {
         if let Some(current) = &self.current {
             relevant.insert(current.location.clone());
         }
-        let (backward, forward, _) = self.preload_distances();
+        let (backward, forward, _) = self.preload_plan();
         let anchor_index = self
             .navigation_anchor()
             .and_then(|location| self.position_of(location));
@@ -1014,7 +1014,7 @@ impl ImageCore {
 
     /// Evicts entries in reverse preload priority until within budget.
     fn evict_cache(&mut self) {
-        let (backward, forward, budget) = self.preload_distances();
+        let (backward, forward, budget) = self.preload_plan();
         let mut total: u64 = self
             .cache
             .values()
@@ -1333,7 +1333,7 @@ impl DecodePool {
         file_size: u64,
         cancellation: Arc<AtomicBool>,
         kind: JobKind,
-        front: bool,
+        awaited: bool,
     ) {
         let mut queue = self.shared.queue.lock().expect("decode queue poisoned");
         let job = DecodeJob {
@@ -1341,9 +1341,9 @@ impl DecodePool {
             file_size,
             cancellation,
             kind,
-            speculative: !front, // only a preload goes to the back of the queue
+            speculative: !awaited, // only a preload goes to the back of the queue
         };
-        if front {
+        if awaited {
             queue.push_front(job);
         } else {
             queue.push_back(job);
@@ -1976,7 +1976,7 @@ mod travel_direction_tests {
         let mut core = core();
         core.note_navigation(NavigationCommand::Previous);
         assert!(!core.travel_backward);
-        assert_eq!(core.preload_distances(), (1, 3, 1 << 30));
+        assert_eq!(core.preload_plan(), (1, 3, 1 << 30));
     }
 
     #[test]
@@ -1985,7 +1985,7 @@ mod travel_direction_tests {
         core.note_navigation(NavigationCommand::Previous);
         core.note_navigation(NavigationCommand::Previous);
         assert!(core.travel_backward);
-        assert_eq!(core.preload_distances(), (3, 1, 1 << 30));
+        assert_eq!(core.preload_plan(), (3, 1, 1 << 30));
         // The way back flips with the same grace.
         core.note_navigation(NavigationCommand::Next);
         assert!(core.travel_backward);
@@ -2015,9 +2015,9 @@ mod travel_direction_tests {
     fn a_declared_direction_aims_at_once() {
         let mut core = core();
         core.set_travel_direction(true);
-        assert_eq!(core.preload_distances(), (3, 1, 1 << 30));
+        assert_eq!(core.preload_plan(), (3, 1, 1 << 30));
         core.reset_travel_direction();
-        assert_eq!(core.preload_distances(), (1, 3, 1 << 30));
+        assert_eq!(core.preload_plan(), (1, 3, 1 << 30));
     }
 }
 

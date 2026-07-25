@@ -492,7 +492,7 @@ fn field_font(field: HWND) -> HFONT {
     HFONT(unsafe { GetWindowLongPtrW(field, GWLP_USERDATA) } as *mut _)
 }
 
-fn field_paint(field: HWND, text: &str, hint: bool) {
+fn paint_field(field: HWND, text: &str, hint: bool) {
     let mut paint = PAINTSTRUCT::default();
     let device = unsafe { BeginPaint(field, &raw mut paint) };
     unsafe {
@@ -576,12 +576,12 @@ unsafe extern "system" fn key_field_procedure(
             if focused {
                 let prefix = bindings::modifier_prefix(current_modifiers());
                 if prefix.is_empty() {
-                    field_paint(field, "Press a key combination\u{2026}", true);
+                    paint_field(field, "Press a key combination\u{2026}", true);
                 } else {
-                    field_paint(field, &format!("{prefix}\u{2026}"), false);
+                    paint_field(field, &format!("{prefix}\u{2026}"), false);
                 }
             } else {
-                field_paint(field, "Click here to capture", true);
+                paint_field(field, "Click here to capture", true);
             }
             LRESULT(0)
         }
@@ -633,7 +633,7 @@ unsafe extern "system" fn mouse_field_procedure(
             };
             let current = String::from_utf16_lossy(&text[..length as usize]);
             let hint = current.is_empty() || current == "None";
-            field_paint(
+            paint_field(
                 field,
                 if current.is_empty() { "None" } else { &current },
                 hint,

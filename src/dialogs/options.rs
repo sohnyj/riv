@@ -351,24 +351,24 @@ fn initialize_frame(state: &mut OptionsState) {
         };
     }
 
-    let mut display = RECT::default();
-    let _ = unsafe { GetWindowRect(tab, &raw mut display) };
+    let mut display_area = RECT::default();
+    let _ = unsafe { GetWindowRect(tab, &raw mut display_area) };
     unsafe {
         SendMessageW(
             tab,
             TCM_ADJUSTRECT,
             Some(WPARAM(0)),
-            Some(LPARAM(&raw mut display as isize)),
+            Some(LPARAM(&raw mut display_area as isize)),
         )
     };
     let mut corners = [
         POINT {
-            x: display.left,
-            y: display.top,
+            x: display_area.left,
+            y: display_area.top,
         },
         POINT {
-            x: display.right,
-            y: display.bottom,
+            x: display_area.right,
+            y: display_area.bottom,
         },
     ];
     unsafe { windows::Win32::Graphics::Gdi::MapWindowPoints(None, Some(dialog), &mut corners) };
@@ -413,7 +413,7 @@ fn initialize_frame(state: &mut OptionsState) {
 
     initialize_image_page(state);
     initialize_window_page(state);
-    initialize_misc_page(state);
+    initialize_miscellaneous_page(state);
     initialize_shortcuts_page(state);
     initialize_association_page(state);
     state.about_fonts = about::initialize_page(state.pages[6]);
@@ -600,7 +600,7 @@ fn handle_page_command(
             options.scaling_filter = combo_selection(page, control);
         }
         (IDC_IMAGE_DITHER, CBN_SELCHANGE) => {
-            options.dither = combo_selection(page, control);
+            options.dither_mode = combo_selection(page, control);
         }
         (IDC_IMAGE_ZOOM_STEP_EDIT, EN_CHANGE) => {
             let value = unsafe { GetDlgItemInt(page, control, None, false) };
@@ -698,7 +698,7 @@ fn initialize_image_page(state: &OptionsState) {
     }
 }
 
-fn initialize_misc_page(state: &OptionsState) {
+fn initialize_miscellaneous_page(state: &OptionsState) {
     let page = state.pages[2];
     combo_fill(
         page,
@@ -745,7 +745,7 @@ fn sync_all_pages(state: &mut OptionsState) {
 
     let image_page = state.pages[1];
     combo_select(image_page, IDC_IMAGE_SCALING, options.scaling_filter);
-    combo_select(image_page, IDC_IMAGE_DITHER, options.dither);
+    combo_select(image_page, IDC_IMAGE_DITHER, options.dither_mode);
     combo_select(image_page, IDC_IMAGE_FITMODE, options.fit_mode);
     combo_select(image_page, IDC_IMAGE_PRELOADING, options.preloading_mode);
     set_dialog_item_text(
@@ -760,11 +760,11 @@ fn sync_all_pages(state: &mut OptionsState) {
         options.fractional_zoom,
     );
 
-    let misc_page = state.pages[2];
-    combo_select(misc_page, IDC_MISC_SORT, options.sort_mode);
+    let miscellaneous_page = state.pages[2];
+    combo_select(miscellaneous_page, IDC_MISC_SORT, options.sort_mode);
     let _ = unsafe {
         CheckRadioButton(
-            misc_page,
+            miscellaneous_page,
             IDC_MISC_ASCENDING,
             IDC_MISC_DESCENDING,
             if options.sort_descending {
@@ -775,33 +775,41 @@ fn sync_all_pages(state: &mut OptionsState) {
         )
     };
     set_check(
-        misc_page,
+        miscellaneous_page,
         IDC_MISC_LOOP_WITHIN_FOLDER,
         options.loop_within_folder,
     );
     combo_select(
-        misc_page,
+        miscellaneous_page,
         IDC_MISC_SLIDESHOW_DIRECTION,
         u32::from(!options.slideshow_reversed),
     );
     set_dialog_item_text(
-        misc_page,
+        miscellaneous_page,
         IDC_MISC_SLIDESHOW_INTERVAL_EDIT,
         &options.slideshow_interval_seconds.to_string(),
     );
-    combo_select(misc_page, IDC_MISC_AFTER_DELETE, options.after_delete);
-    set_check(misc_page, IDC_MISC_ASK_DELETE, options.ask_delete);
+    combo_select(
+        miscellaneous_page,
+        IDC_MISC_AFTER_DELETE,
+        options.after_delete,
+    );
+    set_check(miscellaneous_page, IDC_MISC_ASK_DELETE, options.ask_delete);
     set_check(
-        misc_page,
+        miscellaneous_page,
         IDC_MISC_CONTENT_DETECTION,
         options.detect_format_by_content,
     );
     set_check(
-        misc_page,
+        miscellaneous_page,
         IDC_MISC_REMEMBER_RECENTS,
         options.remember_recents,
     );
-    set_check(misc_page, IDC_MISC_SKIP_HIDDEN, options.skip_hidden);
+    set_check(
+        miscellaneous_page,
+        IDC_MISC_SKIP_HIDDEN,
+        options.skip_hidden,
+    );
     set_check(
         state.pages[5],
         IDC_STARTMENU_SHORTCUT,
@@ -1058,7 +1066,7 @@ fn initialize_association_page(state: &mut OptionsState) {
         }
     }
     for group_index in 0..state.groups.len() {
-        refresh_group_state(state, tree, group_index);
+        refresh_group_check_image(state, tree, group_index);
     }
 }
 
@@ -1106,7 +1114,7 @@ fn tree_insert(
     tree: HWND,
     parent: HTREEITEM,
     text: &str,
-    parameter: isize,
+    item_data: isize,
     state_image: isize,
 ) -> HTREEITEM {
     let label = wide(text);
@@ -1117,7 +1125,7 @@ fn tree_insert(
             itemex: TVITEMEXW {
                 mask: TVIF_TEXT | TVIF_PARAM | TVIF_STATE,
                 pszText: windows::core::PWSTR(label.as_ptr().cast_mut()),
-                lParam: LPARAM(parameter),
+                lParam: LPARAM(item_data),
                 state: (state_image as u32) << 12,
                 stateMask: TVIS_STATEIMAGEMASK.0,
                 ..Default::default()
@@ -1186,9 +1194,9 @@ fn toggle_association_item(state: &mut OptionsState, tree: HWND, item: HTREEITEM
             Some(LPARAM(&raw mut query as isize)),
         )
     };
-    let parameter = query.lParam.0;
-    if parameter & GROUP_FLAG != 0 {
-        let group_index = (parameter & !GROUP_FLAG) as usize;
+    let item_data = query.lParam.0;
+    if item_data & GROUP_FLAG != 0 {
+        let group_index = (item_data & !GROUP_FLAG) as usize;
         let Some(group) = state.groups.get(group_index) else {
             return;
         };
@@ -1209,9 +1217,9 @@ fn toggle_association_item(state: &mut OptionsState, tree: HWND, item: HTREEITEM
                 },
             );
         }
-        refresh_group_state(state, tree, group_index);
+        refresh_group_check_image(state, tree, group_index);
     } else {
-        let extension_index = parameter as usize;
+        let extension_index = item_data as usize;
         let Some(entry) = state.extensions.get_mut(extension_index) else {
             return;
         };
@@ -1230,13 +1238,13 @@ fn toggle_association_item(state: &mut OptionsState, tree: HWND, item: HTREEITEM
             .iter()
             .position(|group| group.members.contains(&extension_index))
         {
-            refresh_group_state(state, tree, group_index);
+            refresh_group_check_image(state, tree, group_index);
         }
     }
     update_buttons(state);
 }
 
-fn refresh_group_state(state: &OptionsState, tree: HWND, group_index: usize) {
+fn refresh_group_check_image(state: &OptionsState, tree: HWND, group_index: usize) {
     let group = &state.groups[group_index];
     let checked_count = group
         .members
@@ -1270,7 +1278,7 @@ fn set_all_associations(state: &mut OptionsState, checked: bool) {
         );
     }
     for group_index in 0..state.groups.len() {
-        refresh_group_state(state, tree, group_index);
+        refresh_group_check_image(state, tree, group_index);
     }
 }
 

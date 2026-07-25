@@ -559,11 +559,11 @@ pub fn build_download_text(file_name: &str, received_bytes: u64) -> String {
     }
     format!(
         "Downloading...\n{file_name}\n{}",
-        scaled_size(received_bytes)
+        binary_size_text(received_bytes)
     )
 }
 
-fn scaled_size(bytes: u64) -> String {
+fn binary_size_text(bytes: u64) -> String {
     let units: [(&str, u64); 3] = [("GiB", 1 << 30), ("MiB", 1 << 20), ("KiB", 1 << 10)];
     units.iter().find(|(_, unit)| bytes >= *unit).map_or_else(
         || format!("{bytes} B"),
@@ -725,7 +725,11 @@ fn format_aspect_ratio(width: u32, height: u32) -> String {
 }
 
 fn format_file_size(bytes: u64) -> String {
-    format!("{} ({} bytes)", scaled_size(bytes), group_thousands(bytes))
+    format!(
+        "{} ({} bytes)",
+        binary_size_text(bytes),
+        group_thousands(bytes)
+    )
 }
 
 fn group_thousands(value: u64) -> String {

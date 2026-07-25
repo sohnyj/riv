@@ -60,7 +60,7 @@ fn enumerate(path: &Path) -> OpenWithList {
     let default_executable = default_executable_for(path).unwrap_or_default();
 
     for handler in handlers_for(path) {
-        let Some(executable_path) = handler_name(&handler) else {
+        let Some(executable_path) = handler_executable_path(&handler) else {
             continue;
         };
         if !Path::new(&executable_path).is_file()
@@ -98,7 +98,9 @@ fn enumerate(path: &Path) -> OpenWithList {
 
 pub fn invoke(path: &Path, executable_path: &str) -> Result<()> {
     for handler in handlers_for(path) {
-        if handler_name(&handler).is_some_and(|name| name.eq_ignore_ascii_case(executable_path)) {
+        if handler_executable_path(&handler)
+            .is_some_and(|name| name.eq_ignore_ascii_case(executable_path))
+        {
             unsafe {
                 let item: IShellItem =
                     SHCreateItemFromParsingName(&HSTRING::from(path.as_os_str()), None)?;
@@ -145,7 +147,7 @@ fn handlers_for(path: &Path) -> Vec<IAssocHandler> {
     handlers
 }
 
-fn handler_name(handler: &IAssocHandler) -> Option<String> {
+fn handler_executable_path(handler: &IAssocHandler) -> Option<String> {
     take_shell_string(unsafe { handler.GetName() }.ok()?)
 }
 

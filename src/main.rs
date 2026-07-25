@@ -93,7 +93,7 @@ struct Application {
     output_reconfigure_pending: bool,
     view_transform: ViewTransform,
     image_core: ImageCore,
-    display: Option<Arc<DecodedImage>>,
+    displayed_image: Option<Arc<DecodedImage>>,
     displayed_location: Option<ItemLocation>,
     settings: SettingsFile,
     bindings: Bindings,
@@ -152,7 +152,7 @@ impl StatusText {
 /// Memoized info panel text and the display inputs it was built from.
 struct InfoTextCache {
     location: ItemLocation,
-    image: usize,
+    image_id: usize,
     output_description: String,
     scaling_description: &'static str,
     dither_description: &'static str,
@@ -234,7 +234,7 @@ impl Application {
             output_reconfigure_pending: false,
             view_transform,
             image_core: ImageCore::new(window, core_options(&settings.options)),
-            display: None,
+            displayed_image: None,
             displayed_location: None,
             settings,
             bindings,
@@ -270,7 +270,7 @@ impl Application {
         if let Some(renderer) = &mut application.renderer {
             renderer.set_sdr_white_boost(application.sdr_white_boost);
             renderer.set_dither_mode(DitherMode::from_setting(
-                application.settings.options.dither,
+                application.settings.options.dither_mode,
             ));
         }
         application.overlay.set_scale(device_pixel_ratio);
@@ -281,7 +281,7 @@ impl Application {
     }
 
     /// Updates the tracked monitor; true when the window moved to a different display.
-    fn monitor_changed(&mut self, window: HWND) -> bool {
+    fn update_current_monitor(&mut self, window: HWND) -> bool {
         let monitor = unsafe { MonitorFromWindow(window, MONITOR_DEFAULTTONEAREST) };
         let changed = monitor != self.current_monitor;
         self.current_monitor = monitor;
@@ -397,7 +397,7 @@ impl Application {
 
     fn image_size(&self) -> Size {
         let (width, height) = self
-            .display
+            .displayed_image
             .as_ref()
             .map_or((1, 1), |image| (image.width, image.height));
         Size {
@@ -555,7 +555,7 @@ impl Application {
 
     fn apply_current_image(&mut self, window: HWND) {
         self.download_progress = None;
-        self.dismiss_frame_counter();
+        self.dismiss_sticky_status();
         let Some(current) = &self.image_core.current else {
             return;
         };
@@ -566,7 +566,7 @@ impl Application {
             .displayed_location
             .as_ref()
             .is_some_and(|displayed| *displayed == location)
-            && self.display.as_ref().is_some_and(|previous| {
+            && self.displayed_image.as_ref().is_some_and(|previous| {
                 previous.width == image.width && previous.height == image.height
             });
         let frame = &image.frames[0];
@@ -574,7 +574,7 @@ impl Application {
             Some(renderer) => renderer.set_image(&frame.pixels, &image),
             None => Err(windows::core::Error::empty()),
         };
-        self.display = Some(image);
+        self.displayed_image = Some(image);
         self.displayed_location = Some(location.clone());
         if !same_view {
             let transform = &mut self.view_transform;
@@ -590,7 +590,7 @@ impl Application {
         }
         let _ = unsafe { KillTimer(Some(window), ANIMATION_TIMER) };
         self.animation = self
-            .display
+            .displayed_image
             .as_ref()
             .and_then(|image| Animation::new(image));
         if let Some(animation) = &self.animation {
@@ -630,9 +630,9 @@ impl Application {
     /// Drop the image so only centered overlay text (error, download) shows.
     fn clear_displayed_image(&mut self, window: HWND) {
         let _ = unsafe { KillTimer(Some(window), ANIMATION_TIMER) };
-        self.dismiss_frame_counter();
+        self.dismiss_sticky_status();
         self.animation = None;
-        self.display = None;
+        self.displayed_image = None;
         self.displayed_location = None;
         if let Some(renderer) = &mut self.renderer {
             renderer.clear_image();
@@ -700,7 +700,7 @@ impl Application {
     }
 
     fn render_animation_frame(&mut self, window: HWND, frame_index: usize) {
-        let Some(image) = self.display.clone() else {
+        let Some(image) = self.displayed_image.clone() else {
             return;
         };
         let frame = &image.frames[frame_index];
@@ -718,7 +718,7 @@ impl Application {
     }
 
     /// Drops the frame-step pill; returns whether one was showing.
-    fn dismiss_frame_counter(&mut self) -> bool {
+    fn dismiss_sticky_status(&mut self) -> bool {
         let showing = matches!(self.status_text, Some(StatusText::Sticky(_)));
         if showing {
             self.status_text = None;
@@ -734,7 +734,7 @@ impl Application {
 
     fn toggle_slideshow(&mut self, window: HWND) {
         if self.slideshow_active {
-            self.cancel_slideshow(window);
+            self.stop_slideshow(window);
         } else {
             self.restart_slideshow_timer(window);
             // The declared direction aims the preload before the first tick.
@@ -748,7 +748,7 @@ impl Application {
         }
     }
 
-    fn cancel_slideshow(&mut self, window: HWND) {
+    fn stop_slideshow(&mut self, window: HWND) {
         if self.slideshow_active {
             let _ = unsafe { KillTimer(Some(window), SLIDESHOW_TIMER) };
             self.slideshow_active = false;
@@ -776,8 +776,8 @@ impl Application {
             return Ok(());
         };
         renderer.set_sdr_white_boost(self.sdr_white_boost);
-        renderer.set_dither_mode(DitherMode::from_setting(self.settings.options.dither));
-        if let Some(image) = &self.display {
+        renderer.set_dither_mode(DitherMode::from_setting(self.settings.options.dither_mode));
+        if let Some(image) = &self.displayed_image {
             let frame_index = self
                 .animation
                 .as_ref()
@@ -817,7 +817,7 @@ impl Application {
         // The wordmark marks a truly empty window, never a load in flight.
         let show_wordmark = error_text.is_none()
             && download_text.is_none()
-            && self.display.is_none()
+            && self.displayed_image.is_none()
             && self.image_core.current.is_none()
             && !self.image_core.has_pending_display();
         OverlayContent {
@@ -852,7 +852,7 @@ impl Application {
         let image_id = Arc::as_ptr(&current.image) as usize;
         let reuse = self.info_text_cache.as_ref().is_some_and(|cache| {
             cache.location == current.location
-                && cache.image == image_id
+                && cache.image_id == image_id
                 && cache.output_description == output_description
                 && cache.scaling_description == scaling_description
                 && cache.dither_description == dither_description
@@ -876,7 +876,7 @@ impl Application {
             let location = current.location.clone();
             self.info_text_cache = Some(InfoTextCache {
                 location,
-                image: image_id,
+                image_id,
                 output_description: output_description.to_owned(),
                 scaling_description,
                 dither_description,
@@ -944,7 +944,7 @@ impl Application {
 
     /// Records the current options in the in-memory document (written at exit) and applies them.
     fn commit_options(&mut self, window: HWND) {
-        self.settings.sync_options();
+        self.settings.store_options();
         self.apply_options(window);
     }
 
@@ -955,7 +955,7 @@ impl Application {
         );
         self.view_transform.fit_mode = FitMode::from_setting(self.settings.options.fit_mode);
         if let Some(renderer) = &mut self.renderer {
-            renderer.set_dither_mode(DitherMode::from_setting(self.settings.options.dither));
+            renderer.set_dither_mode(DitherMode::from_setting(self.settings.options.dither_mode));
         }
         self.image_core
             .update_options(core_options(&self.settings.options));
@@ -1213,7 +1213,7 @@ fn open_external(
     window: HWND,
     load: impl FnOnce(&mut ImageCore) -> bool,
 ) {
-    application.cancel_slideshow(window);
+    application.stop_slideshow(window);
     application.freeze_animation_for_load(window);
     if load(&mut application.image_core) {
         application.apply_current_image(window);
@@ -1448,7 +1448,7 @@ fn dispatch_action(application: &mut Application, window: HWND, action: Action) 
                     unsafe { SetTimer(Some(window), ANIMATION_TIMER, delay, None) };
                 }
                 // Resuming drops the frame-step pill left by a manual step.
-                if !paused && application.dismiss_frame_counter() {
+                if !paused && application.dismiss_sticky_status() {
                     application.request_render(window);
                 }
             }
@@ -1740,7 +1740,7 @@ fn main() -> Result<()> {
         );
         return Ok(());
     }
-    if !settings::probe_writable() {
+    if !settings::save_directory_is_writable() {
         fail_fast_dialog(
             "Settings cannot be saved here",
             "riv stores riv.json next to the executable, but this folder is not writable. \
@@ -2042,7 +2042,7 @@ extern "system" fn window_procedure(
                         NavigationCommand::Next
                     };
                     if !execute_navigation(application, window, command) {
-                        application.cancel_slideshow(window);
+                        application.stop_slideshow(window);
                     }
                 }
             }
@@ -2316,7 +2316,7 @@ extern "system" fn window_procedure(
         WM_MOVE => {
             // Display-bound state re-evaluates only on a monitor change, not on every drag move.
             if let Some(application) = application_from_window(window)
-                && application.monitor_changed(window)
+                && application.update_current_monitor(window)
             {
                 application.refresh_display_state(window);
             }
@@ -2325,7 +2325,7 @@ extern "system" fn window_procedure(
         WM_DISPLAYCHANGE => {
             // HDR/ACM toggle, bit depth, or monitor reconfigure: re-evaluate once.
             if let Some(application) = application_from_window(window) {
-                let _ = application.monitor_changed(window);
+                let _ = application.update_current_monitor(window);
                 application.refresh_display_state(window);
             }
             LRESULT(0)

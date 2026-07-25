@@ -11,8 +11,8 @@ fn cell_index(x: usize, y: usize) -> usize {
 }
 
 struct Generator {
-    gauss: Vec<u64>,
-    gauss_accumulator: Vec<u64>,
+    gaussian: Vec<u64>,
+    gaussian_accumulator: Vec<u64>,
     placed: Vec<bool>,
     ranks: Vec<usize>,
     tie_candidates: Vec<usize>,
@@ -22,8 +22,8 @@ struct Generator {
 impl Generator {
     fn new() -> Self {
         Self {
-            gauss: vec![0; CELL_COUNT],
-            gauss_accumulator: vec![0; CELL_COUNT],
+            gaussian: vec![0; CELL_COUNT],
+            gaussian_accumulator: vec![0; CELL_COUNT],
             placed: vec![false; CELL_COUNT],
             ranks: vec![0; CELL_COUNT],
             tie_candidates: Vec::new(),
@@ -36,7 +36,7 @@ impl Generator {
         ((self.random_state >> 16) & 0x7FFF) as usize
     }
 
-    fn make_gaussian(&mut self) {
+    fn fill_gaussian(&mut self) {
         let radius = SIZE / 2 - 1;
         let diameter = radius * 2 + 1;
         let area = (diameter * diameter) as f64;
@@ -58,7 +58,7 @@ impl Generator {
                     (last - grid_x, last - grid_y),
                     (last - grid_y, last - grid_x),
                 ] {
-                    self.gauss[cell_index(x, y)] = value;
+                    self.gaussian[cell_index(x, y)] = value;
                 }
             }
         }
@@ -73,12 +73,12 @@ impl Generator {
         let offset = (middle + CELL_COUNT - cell) & (CELL_COUNT - 1);
         let split = CELL_COUNT - offset;
         for index in 0..split {
-            self.gauss_accumulator[index] =
-                self.gauss_accumulator[index].wrapping_add(self.gauss[offset + index]);
+            self.gaussian_accumulator[index] =
+                self.gaussian_accumulator[index].wrapping_add(self.gaussian[offset + index]);
         }
         for index in 0..offset {
-            self.gauss_accumulator[split + index] =
-                self.gauss_accumulator[split + index].wrapping_add(self.gauss[index]);
+            self.gaussian_accumulator[split + index] =
+                self.gaussian_accumulator[split + index].wrapping_add(self.gaussian[index]);
         }
     }
 
@@ -89,7 +89,7 @@ impl Generator {
             if self.placed[cell] {
                 continue;
             }
-            let total = self.gauss_accumulator[cell];
+            let total = self.gaussian_accumulator[cell];
             if total <= minimum {
                 if total != minimum {
                     minimum = total;
@@ -112,7 +112,7 @@ impl Generator {
 /// 64x64 matrix of unique rank values in [0, 1), row-major.
 pub fn generate() -> Vec<f32> {
     let mut generator = Generator::new();
-    generator.make_gaussian();
+    generator.fill_gaussian();
     for rank in 0..CELL_COUNT {
         let cell = generator.minimum_cell();
         generator.place(cell);

@@ -802,7 +802,7 @@ fn decode_single_frame(
     let orientation = exif_orientation(&frame);
     let icc_profile = icc_profile_bytes(factory, &frame);
     let exif = read_exif(&frame);
-    let (native_bits_per_channel, float_native) = frame_pixel_format_traits(factory, &frame);
+    let (native_bits_per_channel, float_native) = frame_pixel_format_info(factory, &frame);
     let high_depth = native_bits_per_channel > 8;
     // PQ/HLG integers bypass WIC's sRGB-assuming float conversion (SPEC section 7).
     let hdr_encoding = if float_native {
@@ -889,7 +889,7 @@ fn decode_single_frame(
 }
 
 /// Native format traits: (bits per channel, float representation).
-fn frame_pixel_format_traits(
+fn frame_pixel_format_info(
     factory: &IWICImagingFactory,
     frame: &IWICBitmapFrameDecode,
 ) -> (u32, bool) {
@@ -985,7 +985,7 @@ pub fn icc_gamut_label(icc: &[u8]) -> Option<&'static str> {
     let red = primary_xy(b"rXYZ")?;
     let green = primary_xy(b"gXYZ")?;
     let blue = primary_xy(b"bXYZ")?;
-    Some(crate::image::color::nearest_gamut([red, green, blue]))
+    Some(crate::image::color::nearest_gamut_label([red, green, blue]))
 }
 
 /// Human-readable profile name from the ICC 'desc' tag (v2 text or v4 mluc).

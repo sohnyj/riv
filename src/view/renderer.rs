@@ -136,7 +136,7 @@ pub struct Renderer {
     /// ACM-off SDR destination = the display's own profile; None outside that mode.
     display_color_context: Option<ID2D1ColorContext>,
     /// Display gamut label shown as the output space when profile mapping is active.
-    sdr_gamut_label: Option<&'static str>,
+    destination_gamut_label: Option<&'static str>,
     /// Nearest gamut label of a tagged source; None when untagged (output names the gamut only).
     source_gamut_label: Option<&'static str>,
     /// Cached backbuffer label for the info overlay, refreshed on format/mode/gamut change.
@@ -343,7 +343,7 @@ impl Renderer {
         (Some(context), icc_gamut_label(display_profile))
     }
 
-    fn create_transfer_effect(
+    fn create_conversion_effect(
         d2d_context: &ID2D1DeviceContext,
         source: Option<&ID2D1ColorContext>,
         destination: Option<&ID2D1ColorContext>,
@@ -401,7 +401,7 @@ impl Renderer {
             .then_some(())
             .and(hdr_tone_map_effect.as_ref())
             .and_then(|_| {
-                Self::create_transfer_effect(
+                Self::create_conversion_effect(
                     d2d_context,
                     scrgb_color_context,
                     sdr_destination_context,
@@ -527,7 +527,7 @@ impl Renderer {
             unsafe { d2d_context.CreateColorContext(D2D1_COLOR_SPACE_SCRGB, None) }.ok();
         let srgb_color_context =
             unsafe { d2d_context.CreateColorContext(D2D1_COLOR_SPACE_SRGB, None) }.ok();
-        let (display_color_context, sdr_gamut_label) = Self::display_context_and_label(
+        let (display_color_context, destination_gamut_label) = Self::display_context_and_label(
             &d2d_context,
             hdr_mode,
             sdr_wide_gamut,
@@ -658,7 +658,7 @@ impl Renderer {
             scrgb_color_context,
             srgb_color_context,
             display_color_context,
-            sdr_gamut_label,
+            destination_gamut_label,
             source_gamut_label: None,
             output_description: String::new(),
             source_icc_profile: None,
@@ -732,7 +732,7 @@ impl Renderer {
 
     /// SDR output label; ACM-off profile mapping appends the destination gamut.
     fn sdr_output_description(&self, bits: &str) -> String {
-        let destination = self.sdr_gamut_label.unwrap_or("sRGB");
+        let destination = self.destination_gamut_label.unwrap_or("sRGB");
         match self.source_gamut_label {
             Some(source) if source != destination => format!("{bits} {source} in {destination}"),
             _ => format!("{bits} {destination}"),
@@ -830,12 +830,13 @@ impl Renderer {
         self.output_mode = output_mode;
         self.hdr_mode = hdr_mode;
         self.sdr_wide_gamut = sdr_wide_gamut;
-        (self.display_color_context, self.sdr_gamut_label) = Self::display_context_and_label(
-            &self.d2d_context,
-            hdr_mode,
-            sdr_wide_gamut,
-            display_profile.as_ref(),
-        );
+        (self.display_color_context, self.destination_gamut_label) =
+            Self::display_context_and_label(
+                &self.d2d_context,
+                hdr_mode,
+                sdr_wide_gamut,
+                display_profile.as_ref(),
+            );
         self.bits_per_color = bits_per_color;
         self.tone_map_target_nits = tone_map_target_nits;
         self.display_full_frame_nits = full_frame_nits;

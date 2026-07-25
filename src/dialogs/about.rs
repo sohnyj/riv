@@ -47,8 +47,8 @@ pub fn initialize_page(page: HWND) -> AboutFonts {
         title: create_font(TITLE_POINT_SIZE, dpi),
         version: create_font(VERSION_POINT_SIZE, dpi),
     };
-    apply_font(page, IDC_ABOUT_TITLE, fonts.title);
-    apply_font(page, IDC_ABOUT_VERSION, fonts.version);
+    set_font(page, IDC_ABOUT_TITLE, fonts.title);
+    set_font(page, IDC_ABOUT_VERSION, fonts.version);
     layout_centered(page);
     fonts
 }
@@ -192,7 +192,7 @@ fn set_text(page: HWND, control: i32, text: &str) {
     let _ = unsafe { SetDlgItemTextW(page, control, PCWSTR(wide.as_ptr())) };
 }
 
-fn apply_font(page: HWND, control: i32, font: HFONT) {
+fn set_font(page: HWND, control: i32, font: HFONT) {
     if font.is_invalid() {
         return;
     }

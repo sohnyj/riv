@@ -39,7 +39,7 @@ pub fn show(window: HWND, request: &TextInputRequest) -> Option<String> {
         accepted_text: None,
     };
     let template = build_template(request.title, request.width);
-    let confirmed = unsafe {
+    let dialog_result = unsafe {
         DialogBoxIndirectParamW(
             None,
             template.as_ptr().cast::<DLGTEMPLATE>(),
@@ -48,7 +48,7 @@ pub fn show(window: HWND, request: &TextInputRequest) -> Option<String> {
             LPARAM(&raw mut state as isize),
         )
     };
-    (confirmed == IDOK as isize)
+    (dialog_result == IDOK as isize)
         .then(|| state.accepted_text.take())
         .flatten()
 }
