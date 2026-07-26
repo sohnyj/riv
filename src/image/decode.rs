@@ -536,11 +536,13 @@ fn decode_input(
         .and_then(|decoded| enforce_device_limit(decoded, cancellation)),
         Adapter::HeifWithWicPreferred => {
             decode_with_wic(input, format_name, semantics, cancellation).or_else(|error| {
-                if error.code == WINCODEC_ERR_COMPONENTNOTFOUND.0 {
+                // Any WIC failure tries the bundled decoder; a registered codec can
+                // still fail to initialize when its video decoder dependency is broken.
+                if error.is_cancelled() {
+                    Err(error)
+                } else {
                     super::fallback::decode_heif(&input.read_all()?, format_name)
                         .and_then(|decoded| enforce_device_limit(decoded, cancellation))
-                } else {
-                    Err(error)
                 }
             })
         }

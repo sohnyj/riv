@@ -36,7 +36,8 @@ files fail without it; the error names the one to install:
 
 | Format | Required extension |
 |---|---|
-| HEIC / HEIF † | HEVC Video Extensions (Microsoft Corporation) |
+| HEIC † | HEVC Video Extensions (Microsoft Corporation) |
+| HEIF ‡ | HEIF Image Extension (Microsoft Corporation) |
 | AVIF ‡ | AV1 Video Extension (Microsoft Corporation) |
 | JPEG XL ‡ | JPEG XL Image Extension (Microsoft Corporation) |
 | WebP (still) ‡ | WebP Image Extensions (Microsoft Corporation) |
