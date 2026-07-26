@@ -1,6 +1,6 @@
 //! D3D11 + DXGI flip swapchain + D2D draw path; the swapchain format matches the monitor mode.
 
-use windows::Win32::Foundation::{HMODULE, HWND};
+use windows::Win32::Foundation::{CloseHandle, HANDLE, HMODULE, HWND};
 use windows::Win32::Graphics::Direct2D::Common::{
     D2D_RECT_F, D2D_SIZE_U, D2D1_ALPHA_MODE_PREMULTIPLIED, D2D1_COLOR_F,
     D2D1_COMPOSITE_MODE_SOURCE_OVER, D2D1_PIXEL_FORMAT,
@@ -43,10 +43,11 @@ use windows::Win32::Graphics::Dxgi::Common::{
 };
 use windows::Win32::Graphics::Dxgi::{
     DXGI_PRESENT, DXGI_SCALING_STRETCH, DXGI_SWAP_CHAIN_COLOR_SPACE_SUPPORT_FLAG_PRESENT,
-    DXGI_SWAP_CHAIN_DESC1, DXGI_SWAP_CHAIN_FLAG, DXGI_SWAP_EFFECT_FLIP_DISCARD,
-    DXGI_USAGE_RENDER_TARGET_OUTPUT, IDXGIDevice, IDXGIFactory2, IDXGISurface, IDXGISwapChain1,
-    IDXGISwapChain3,
+    DXGI_SWAP_CHAIN_DESC1, DXGI_SWAP_CHAIN_FLAG_FRAME_LATENCY_WAITABLE_OBJECT,
+    DXGI_SWAP_EFFECT_FLIP_DISCARD, DXGI_USAGE_RENDER_TARGET_OUTPUT, IDXGIDevice, IDXGIFactory2,
+    IDXGISurface, IDXGISwapChain1, IDXGISwapChain2, IDXGISwapChain3,
 };
+use windows::Win32::System::Threading::WaitForSingleObjectEx;
 use windows::core::{Interface, Result};
 use windows_numerics::Matrix3x2;
 
@@ -110,6 +111,8 @@ pub struct Renderer {
     /// Display's sustained full-frame luminance, shown in the overlay diagnostics.
     display_full_frame_nits: f32,
     swap_chain: IDXGISwapChain1,
+    /// Signals when the present queue (depth 1) has room; a render waits here first.
+    frame_latency_wait: Option<HANDLE>,
     d3d_device: ID3D11Device,
     d3d_context: ID3D11DeviceContext,
     d2d_context: ID2D1DeviceContext,
@@ -153,6 +156,9 @@ pub struct Renderer {
 
 impl Drop for Renderer {
     fn drop(&mut self) {
+        if let Some(handle) = self.frame_latency_wait.take() {
+            let _ = unsafe { CloseHandle(handle) };
+        }
         unsafe { self.d2d_context.SetTarget(None) };
         self.effect_output = None;
         self.image = None;
@@ -563,6 +569,7 @@ impl Renderer {
                     Scaling: DXGI_SCALING_STRETCH,
                     SwapEffect: DXGI_SWAP_EFFECT_FLIP_DISCARD,
                     AlphaMode: DXGI_ALPHA_MODE_IGNORE,
+                    Flags: DXGI_SWAP_CHAIN_FLAG_FRAME_LATENCY_WAITABLE_OBJECT.0 as u32,
                     ..Default::default()
                 };
                 factory.CreateSwapChainForHwnd(
@@ -602,7 +609,7 @@ impl Renderer {
                             width,
                             height,
                             swap_chain_format,
-                            DXGI_SWAP_CHAIN_FLAG(0),
+                            DXGI_SWAP_CHAIN_FLAG_FRAME_LATENCY_WAITABLE_OBJECT,
                         )?;
                     }
                 }
@@ -619,6 +626,12 @@ impl Renderer {
         if swap_chain_format == DXGI_FORMAT_R16G16B16A16_FLOAT {
             quantize_pass = None;
         }
+        // Waitable swapchains default to a present-queue depth of 1.
+        let frame_latency_wait = swap_chain
+            .cast::<IDXGISwapChain2>()
+            .ok()
+            .map(|swap_chain2| unsafe { swap_chain2.GetFrameLatencyWaitableObject() })
+            .filter(|handle| !handle.is_invalid());
         let mode_effects = Self::create_mode_effects(
             &d2d_context,
             hdr_mode,
@@ -636,6 +649,7 @@ impl Renderer {
             tone_map_target_nits,
             display_full_frame_nits: full_frame_nits,
             swap_chain,
+            frame_latency_wait,
             d3d_device,
             d3d_context,
             d2d_context,
@@ -805,7 +819,7 @@ impl Renderer {
                 width,
                 height,
                 DXGI_FORMAT_UNKNOWN,
-                DXGI_SWAP_CHAIN_FLAG(0),
+                DXGI_SWAP_CHAIN_FLAG_FRAME_LATENCY_WAITABLE_OBJECT,
             )?;
         }
         self.create_target()
@@ -873,7 +887,13 @@ impl Renderer {
             bits_per_color,
         );
         let resize_to = |swap_chain: &IDXGISwapChain1, format| unsafe {
-            swap_chain.ResizeBuffers(0, 0, 0, format, DXGI_SWAP_CHAIN_FLAG(0))
+            swap_chain.ResizeBuffers(
+                0,
+                0,
+                0,
+                format,
+                DXGI_SWAP_CHAIN_FLAG_FRAME_LATENCY_WAITABLE_OBJECT,
+            )
         };
         if let Err(error) = resize_to(&self.swap_chain, swap_chain_format) {
             if swap_chain_format != DXGI_FORMAT_R10G10B10A2_UNORM {
@@ -1161,6 +1181,10 @@ impl Renderer {
         clear_color: D2D1_COLOR_F,
         draw_overlay: impl FnOnce(&ID2D1DeviceContext) -> Result<()>,
     ) -> Result<()> {
+        // Wait for present-queue room first, so the frame draws the freshest state.
+        if let Some(handle) = self.frame_latency_wait {
+            let _ = unsafe { WaitForSingleObjectEx(handle, 1000, false) };
+        }
         // DrawImage has no destination rect; fold the display scale into the matrix.
         let scale_x = self.image_display_size.0 / self.image_pixel_size.0.max(1.0);
         let scale_y = self.image_display_size.1 / self.image_pixel_size.1.max(1.0);
