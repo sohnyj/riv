@@ -2089,6 +2089,110 @@ mod hdr_linearization_tests {
             }
         }
     }
+
+    /// Deterministic 16-bit RGBA codes covering the full range.
+    fn coded_pixels(count: usize, mut state: u32) -> Vec<u8> {
+        let mut pixels = Vec::with_capacity(count * 8);
+        for _ in 0..count {
+            for _ in 0..4 {
+                state = state.wrapping_mul(1_664_525).wrapping_add(1_013_904_223);
+                pixels.extend_from_slice(&((state >> 8) as u16).to_le_bytes());
+            }
+        }
+        pixels
+    }
+
+    fn linearize_hdr_pixels_reference(pixels: &mut [u8], encoding: HdrEncoding) {
+        let matrix = encoding.primaries.bt709_conversion();
+        let transfer_table = hdr_transfer_lookup_table(encoding.transfer);
+        for pixel in pixels.chunks_exact_mut(8) {
+            let mut channel_nits = [0.0f32; 3];
+            for (channel, nits) in channel_nits.iter_mut().enumerate() {
+                let code = u16::from_le_bytes([pixel[channel * 2], pixel[channel * 2 + 1]]);
+                *nits = transfer_table[usize::from(code)];
+            }
+            if matches!(encoding.transfer, HdrTransfer::HybridLogGamma) {
+                let scene_luminance =
+                    0.2627 * channel_nits[0] + 0.6780 * channel_nits[1] + 0.0593 * channel_nits[2];
+                let display_scale = HLG_PEAK_NITS * scene_luminance.max(0.0).powf(0.2);
+                for nits in &mut channel_nits {
+                    *nits *= display_scale;
+                }
+            }
+            let alpha = f32::from(u16::from_le_bytes([pixel[6], pixel[7]])) / f32::from(u16::MAX);
+            for (row, coefficients) in matrix.iter().enumerate() {
+                let bt709_nits = coefficients[0] * channel_nits[0]
+                    + coefficients[1] * channel_nits[1]
+                    + coefficients[2] * channel_nits[2];
+                let premultiplied = bt709_nits / SDR_REFERENCE_WHITE_NITS * alpha;
+                pixel[row * 2..row * 2 + 2]
+                    .copy_from_slice(&f32_to_half(premultiplied).to_le_bytes());
+            }
+            pixel[6..8].copy_from_slice(&f32_to_half(alpha).to_le_bytes());
+        }
+    }
+
+    #[test]
+    fn linearization_matches_the_scalar_reference() {
+        for transfer in [
+            HdrTransfer::PerceptualQuantizer,
+            HdrTransfer::HybridLogGamma,
+        ] {
+            let encoding = HdrEncoding {
+                transfer,
+                primaries: HdrPrimaries::Bt2020,
+            };
+            let mut pixels = coded_pixels(4096, 21);
+            let mut expected = pixels.clone();
+            linearize_hdr_pixels_reference(&mut expected, encoding);
+            linearize_hdr_pixels(&mut pixels, encoding);
+            assert_eq!(pixels, expected);
+        }
+    }
+
+    #[test]
+    #[ignore = "manual timing comparison (--nocapture)"]
+    fn half_encode_timing() {
+        let mut state = 1u32;
+        let values: Vec<f32> = (0..64_000_000)
+            .map(|_| {
+                state = state.wrapping_mul(1_664_525).wrapping_add(1_013_904_223);
+                (state as f32 / u32::MAX as f32) * 30.0 - 2.0
+            })
+            .collect();
+        for _ in 0..3 {
+            let start = std::time::Instant::now();
+            let mut accumulator = 0u16;
+            for value in &values {
+                accumulator ^= f32_to_half(*value);
+            }
+            println!(
+                "half encode 64M elapsed={:?} accumulator={accumulator}",
+                start.elapsed()
+            );
+        }
+    }
+
+    #[test]
+    #[ignore = "manual timing comparison (--nocapture)"]
+    fn linearization_timing() {
+        for (label, transfer) in [
+            ("pq", HdrTransfer::PerceptualQuantizer),
+            ("hlg", HdrTransfer::HybridLogGamma),
+        ] {
+            let encoding = HdrEncoding {
+                transfer,
+                primaries: HdrPrimaries::Bt2020,
+            };
+            let pixels = coded_pixels(16_000_000, 77);
+            for _ in 0..3 {
+                let mut scratch = pixels.clone();
+                let start = std::time::Instant::now();
+                linearize_hdr_pixels(&mut scratch, encoding);
+                println!("{label} 16M pixels elapsed={:?}", start.elapsed());
+            }
+        }
+    }
 }
 
 #[cfg(test)]
