@@ -319,7 +319,7 @@ dependencies = [
 
 [[package]]
 name = "riv"
-version = "1.5.0"
+version = "1.5.1"
 dependencies = [
  "png",
  "resvg",
