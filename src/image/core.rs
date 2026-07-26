@@ -737,7 +737,7 @@ impl ImageCore {
             .get(location)
             .filter(|entry| entry.file_size == file_size)
             .map(|entry| (entry.image.clone(), entry.modified, entry.preview));
-        let mut kind = JobKind::Preview;
+        let mut preview_shown = false;
         if let Some((image, cached_modified, preview)) = cached {
             self.show_image(location.clone(), image, file_size, cached_modified);
             self.load_error = None;
@@ -746,9 +746,8 @@ impl ImageCore {
                 self.preload_neighbors();
                 return true;
             }
-            kind = JobKind::Full; // the preview is already on screen
+            preview_shown = true;
         }
-        let displayed = kind == JobKind::Full;
         self.pending_display = Some(location.clone());
         // The new load owns the view; a leftover error would mask its progress.
         self.load_error = None;
@@ -756,22 +755,35 @@ impl ImageCore {
             // Already queued as a preload: revoke any cancellation and promote.
             cancellation.store(false, Ordering::Relaxed);
             self.pool.promote(location);
-        } else if kind == JobKind::Preview {
-            let cancellation = Arc::new(AtomicBool::new(false));
-            self.in_flight
-                .insert(location.clone(), cancellation.clone());
-            self.pool.submit(
+        } else if !preview_shown {
+            self.submit_decode(
                 location.clone(),
                 file_size,
                 modified,
-                cancellation,
-                kind,
+                JobKind::Preview,
                 true,
             );
         }
-        // A deferred full decode waits for navigation to rest; the caller schedules it.
+        // A shown preview defers its full decode until navigation stops; the caller
+        // schedules that through start_pending_full_decode.
         self.preload_neighbors();
-        displayed
+        preview_shown
+    }
+
+    /// Registers the job in flight and hands it to the pool under a fresh cancellation.
+    fn submit_decode(
+        &mut self,
+        location: ItemLocation,
+        file_size: u64,
+        modified: Option<SystemTime>,
+        kind: JobKind,
+        awaited: bool,
+    ) {
+        let cancellation = Arc::new(AtomicBool::new(false));
+        self.in_flight
+            .insert(location.clone(), cancellation.clone());
+        self.pool
+            .submit(location, file_size, modified, cancellation, kind, awaited);
     }
 
     /// A pending item is showing its preview and waits for the deferred full decode.
@@ -784,27 +796,21 @@ impl ImageCore {
 
     /// Submits the deferred full decode for the pending preview; a no-op when none waits.
     pub fn start_pending_full_decode(&mut self) {
-        if !self.full_decode_pending() {
-            return;
-        }
         let Some(location) = self.pending_display.clone() else {
             return;
         };
-        let Some(entry) = self.cache.get(&location) else {
+        if self.in_flight.contains_key(&location) {
+            return;
+        }
+        let Some((file_size, modified)) = self
+            .cache
+            .get(&location)
+            .filter(|entry| entry.preview)
+            .map(|entry| (entry.file_size, entry.modified))
+        else {
             return;
         };
-        let (file_size, modified) = (entry.file_size, entry.modified);
-        let cancellation = Arc::new(AtomicBool::new(false));
-        self.in_flight
-            .insert(location.clone(), cancellation.clone());
-        self.pool.submit(
-            location,
-            file_size,
-            modified,
-            cancellation,
-            JobKind::Full,
-            true,
-        );
+        self.submit_decode(location, file_size, modified, JobKind::Full, true);
     }
 
     pub fn navigate(&mut self, command: NavigationCommand) -> Option<bool> {
@@ -988,14 +994,10 @@ impl ImageCore {
                     .get(&completion.location)
                     .is_some_and(|entry| entry.preview && entry.file_size == completion.file_size)
             {
-                let cancellation = Arc::new(AtomicBool::new(false));
-                self.in_flight
-                    .insert(completion.location.clone(), cancellation.clone());
-                self.pool.submit(
+                self.submit_decode(
                     completion.location,
                     completion.file_size,
                     completion.modified,
-                    cancellation,
                     JobKind::Preview,
                     true,
                 );
@@ -1113,17 +1115,12 @@ impl ImageCore {
                 {
                     continue;
                 }
-                let cancellation = Arc::new(AtomicBool::new(false));
-                self.in_flight
-                    .insert(entry.location.clone(), cancellation.clone());
-                self.pool.submit(
+                let (location, file_size, modified) = (
                     entry.location.clone(),
                     entry.file_size,
                     Some(entry.modified),
-                    cancellation,
-                    kind,
-                    false,
                 );
+                self.submit_decode(location, file_size, modified, kind, false);
             }
         }
         self.cancel_irrelevant_decodes();

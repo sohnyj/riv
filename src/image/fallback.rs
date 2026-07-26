@@ -5,7 +5,7 @@ use std::os::windows::ffi::OsStrExt;
 use std::path::Path;
 
 use super::decode::{
-    ANIMATION_FRAMES_BYTE_LIMIT, DecodeError, DecodedImage, Frame, PixelStorage, blend_over,
+    DecodeError, DecodedImage, Frame, PixelStorage, animation_budget_exceeded, blend_over,
     clear_rectangle, copy_rectangle, peak_luminance_from_half_pixels, uncoded_error,
 };
 
@@ -109,8 +109,15 @@ fn compose_webp_frames(
     }
     let mut canvas = vec![0u8; canvas_width as usize * canvas_height as usize * 4];
     let mut frames = Vec::with_capacity(iterator.frame_count.max(1) as usize);
-    let mut frames_over_limit = false;
+    let mut frames_truncated = false;
     loop {
+        // The demuxer's frame count is real, so the budget is known after frame one.
+        if !frames.is_empty()
+            && animation_budget_exceeded(iterator.frame_count.max(1) as u64, canvas.len())
+        {
+            frames_truncated = true;
+            break;
+        }
         let frame_width = iterator.width.max(0) as u32;
         let frame_height = iterator.height.max(0) as u32;
         let mut frame_pixels = vec![0u8; frame_width as usize * frame_height as usize * 4];
@@ -166,18 +173,11 @@ fn compose_webp_frames(
                 frame_height,
             );
         }
-        if (frames.len() as u64 + 1) * canvas.len() as u64 > ANIMATION_FRAMES_BYTE_LIMIT {
-            frames_over_limit = true;
-            break;
-        }
         if frames.len() >= frame_limit || unsafe { WebPDemuxNextFrame(&raw mut iterator) } == 0 {
             break;
         }
     }
     unsafe { WebPDemuxReleaseIterator(&raw mut iterator) };
-    if frames_over_limit {
-        frames.truncate(1);
-    }
     Ok(DecodedImage {
         width: canvas_width,
         height: canvas_height,
@@ -190,7 +190,7 @@ fn compose_webp_frames(
         source_bits_per_channel: 8,
         peak_luminance_nits: None,
         frames,
-        frames_over_limit,
+        frames_truncated,
     })
 }
 
@@ -310,7 +310,7 @@ fn decode_exr_with(
             pixels,
             delay_milliseconds: 0,
         }],
-        frames_over_limit: false,
+        frames_truncated: false,
     })
 }
 
@@ -471,7 +471,7 @@ fn decode_heif_primary_image(
             pixels,
             delay_milliseconds: 0,
         }],
-        frames_over_limit: false,
+        frames_truncated: false,
     })
 }
 

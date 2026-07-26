@@ -614,7 +614,7 @@ impl Application {
         if self
             .displayed_image
             .as_ref()
-            .is_some_and(|image| image.frames_over_limit)
+            .is_some_and(|image| image.frames_truncated)
         {
             self.show_status_text(
                 window,
@@ -653,7 +653,7 @@ impl Application {
         } else {
             self.freeze_animation_for_load(window);
         }
-        // A shown preview buys its full decode once navigation rests for a beat.
+        // A shown preview gets its full decode once navigation stops briefly.
         if self.image_core.full_decode_pending() {
             unsafe { SetTimer(Some(window), FULL_DECODE_TIMER, 250, None) };
         }

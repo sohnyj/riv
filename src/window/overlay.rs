@@ -790,7 +790,7 @@ mod info_text_tests {
                 pixels: vec![0; 8],
                 delay_milliseconds: 0,
             }],
-            frames_over_limit: false,
+            frames_truncated: false,
         };
         let text = build_info_text(
             "a.png",
@@ -825,7 +825,7 @@ mod info_text_tests {
                 pixels: vec![0; 8],
                 delay_milliseconds: 0,
             }],
-            frames_over_limit: false,
+            frames_truncated: false,
         };
         let untagged = build_info_text(
             "a.png",
@@ -875,7 +875,7 @@ mod info_text_tests {
                 pixels: vec![0; 16],
                 delay_milliseconds: 0,
             }],
-            frames_over_limit: false,
+            frames_truncated: false,
         };
         let tone_map = ToneMapInfo {
             hdr_display: true,
@@ -920,7 +920,7 @@ mod info_text_tests {
                 pixels: vec![0; 16],
                 delay_milliseconds: 0,
             }],
-            frames_over_limit: false,
+            frames_truncated: false,
         };
         let tone_map = ToneMapInfo {
             hdr_display: false,
