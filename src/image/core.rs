@@ -737,7 +737,7 @@ impl ImageCore {
             .get(location)
             .filter(|entry| entry.file_size == file_size)
             .map(|entry| (entry.image.clone(), entry.modified, entry.preview));
-        let mut kind = JobKind::PreviewThenFull;
+        let mut kind = JobKind::Preview;
         if let Some((image, cached_modified, preview)) = cached {
             self.show_image(location.clone(), image, file_size, cached_modified);
             self.load_error = None;
@@ -756,7 +756,7 @@ impl ImageCore {
             // Already queued as a preload: revoke any cancellation and promote.
             cancellation.store(false, Ordering::Relaxed);
             self.pool.promote(location);
-        } else {
+        } else if kind == JobKind::Preview {
             let cancellation = Arc::new(AtomicBool::new(false));
             self.in_flight
                 .insert(location.clone(), cancellation.clone());
@@ -769,8 +769,42 @@ impl ImageCore {
                 true,
             );
         }
-        self.cancel_irrelevant_decodes();
+        // A deferred full decode waits for navigation to rest; the caller schedules it.
+        self.preload_neighbors();
         displayed
+    }
+
+    /// A pending item is showing its preview and waits for the deferred full decode.
+    pub fn full_decode_pending(&self) -> bool {
+        self.pending_display.as_ref().is_some_and(|pending| {
+            !self.in_flight.contains_key(pending)
+                && self.cache.get(pending).is_some_and(|entry| entry.preview)
+        })
+    }
+
+    /// Submits the deferred full decode for the pending preview; a no-op when none waits.
+    pub fn start_pending_full_decode(&mut self) {
+        if !self.full_decode_pending() {
+            return;
+        }
+        let Some(location) = self.pending_display.clone() else {
+            return;
+        };
+        let Some(entry) = self.cache.get(&location) else {
+            return;
+        };
+        let (file_size, modified) = (entry.file_size, entry.modified);
+        let cancellation = Arc::new(AtomicBool::new(false));
+        self.in_flight
+            .insert(location.clone(), cancellation.clone());
+        self.pool.submit(
+            location,
+            file_size,
+            modified,
+            cancellation,
+            JobKind::Full,
+            true,
+        );
     }
 
     pub fn navigate(&mut self, command: NavigationCommand) -> Option<bool> {
@@ -946,16 +980,14 @@ impl ImageCore {
         if let Err(error) = &completion.result
             && error.is_cancelled()
         {
-            // Navigation can return to an item while its decode is cancelling.
-            if is_pending {
-                let kind =
-                    if self.cache.get(&completion.location).is_some_and(|entry| {
-                        entry.preview && entry.file_size == completion.file_size
-                    }) {
-                        JobKind::Full // the cached preview already stands in
-                    } else {
-                        JobKind::PreviewThenFull
-                    };
+            // Navigation can return to an item while its decode is cancelling. A cached
+            // preview stands in and its full decode waits for the deferral timer.
+            if is_pending
+                && !self
+                    .cache
+                    .get(&completion.location)
+                    .is_some_and(|entry| entry.preview && entry.file_size == completion.file_size)
+            {
                 let cancellation = Arc::new(AtomicBool::new(false));
                 self.in_flight
                     .insert(completion.location.clone(), cancellation.clone());
@@ -964,7 +996,7 @@ impl ImageCore {
                     completion.file_size,
                     completion.modified,
                     cancellation,
-                    kind,
+                    JobKind::Preview,
                     true,
                 );
             }
@@ -1064,9 +1096,7 @@ impl ImageCore {
                 let entry = &self.entries[index];
                 // Cheap speculation: RAW neighbors get the preview; animations stop at frame one.
                 let kind = match &entry.location {
-                    ItemLocation::File(path) if decode::is_raw_two_stage(path) => {
-                        JobKind::PreviewOnly
-                    }
+                    ItemLocation::File(path) if decode::is_raw_two_stage(path) => JobKind::Preview,
                     _ => JobKind::Full,
                 };
                 // The oversize gate is about decoded weight; previews stay cheap.
@@ -1414,8 +1444,8 @@ fn format_name_of(location: &ItemLocation) -> &'static str {
 #[derive(Clone, Copy, PartialEq, Eq)]
 enum JobKind {
     Full,
-    PreviewOnly,
-    PreviewThenFull,
+    /// Stops at a RAW's embedded preview when one exists; decodes fully otherwise.
+    Preview,
 }
 
 struct DecodeJob {
@@ -1486,9 +1516,6 @@ impl DecodePool {
         if let Some(position) = queue.iter().position(|job| job.location == *location)
             && let Some(mut job) = queue.remove(position)
         {
-            if job.kind == JobKind::PreviewOnly {
-                job.kind = JobKind::PreviewThenFull;
-            }
             job.speculative = false; // someone is waiting on it now
             queue.push_front(job);
         }
@@ -1577,11 +1604,8 @@ fn worker_loop(shared: &PoolShared, window: isize) {
                     && decode::is_raw_two_stage(path)
                     && let Some(preview) = decode::decode_raw_preview(path, &job.cancellation)
                 {
-                    let last = job.kind == JobKind::PreviewOnly;
-                    post_preview(preview, last);
-                    if last {
-                        continue; // the full decode waits until someone asks for it
-                    }
+                    post_preview(preview, true);
+                    continue; // the full decode waits until someone asks for it
                 }
                 // An animation opens on its first frame; a guess stops there.
                 if (job.speculative || job.kind != JobKind::Full)

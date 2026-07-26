@@ -84,6 +84,7 @@ const SLIDESHOW_TIMER: usize = 2;
 const OPEN_WITH_TIMER: usize = 3;
 const ANIMATION_TIMER: usize = 4;
 const CURSOR_HIDE_TIMER: usize = 5;
+const FULL_DECODE_TIMER: usize = 6;
 
 const PAN_STEP: f32 = 64.0;
 
@@ -641,6 +642,10 @@ impl Application {
             self.apply_load_error(window);
         } else {
             self.freeze_animation_for_load(window);
+        }
+        // A shown preview buys its full decode once navigation rests for a beat.
+        if self.image_core.full_decode_pending() {
+            unsafe { SetTimer(Some(window), FULL_DECODE_TIMER, 250, None) };
         }
         self.update_window_title(window);
     }
@@ -2017,6 +2022,13 @@ extern "system" fn window_procedure(
         WM_TIMER if wparam.0 == ANIMATION_TIMER => {
             if let Some(application) = application_from_window(window) {
                 application.play_animation_frame(window);
+            }
+            LRESULT(0)
+        }
+        WM_TIMER if wparam.0 == FULL_DECODE_TIMER => {
+            let _ = unsafe { KillTimer(Some(window), FULL_DECODE_TIMER) };
+            if let Some(application) = application_from_window(window) {
+                application.image_core.start_pending_full_decode();
             }
             LRESULT(0)
         }
