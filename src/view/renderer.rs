@@ -988,6 +988,38 @@ impl Renderer {
                 &raw const properties,
             )?
         };
+        self.adopt_image_bitmap(bitmap, image);
+        Ok(())
+    }
+
+    /// Wraps a worker-uploaded texture; the caller falls back to set_image on failure.
+    pub fn set_image_from_texture(
+        &mut self,
+        texture: &ID3D11Texture2D,
+        image: &DecodedImage,
+    ) -> Result<()> {
+        let surface: IDXGISurface = texture.cast()?;
+        let properties = D2D1_BITMAP_PROPERTIES1 {
+            pixelFormat: source_pixel_format(image.storage),
+            dpiX: 96.0,
+            dpiY: 96.0,
+            bitmapOptions: D2D1_BITMAP_OPTIONS_NONE,
+            ..Default::default()
+        };
+        let bitmap = unsafe {
+            self.d2d_context
+                .CreateBitmapFromDxgiSurface(&surface, Some(&raw const properties))?
+        };
+        self.adopt_image_bitmap(bitmap, image);
+        Ok(())
+    }
+
+    /// The device workers create textures on; creation entry points are free-threaded.
+    pub fn d3d_device(&self) -> ID3D11Device {
+        self.d3d_device.clone()
+    }
+
+    fn adopt_image_bitmap(&mut self, bitmap: ID2D1Bitmap1, image: &DecodedImage) {
         self.image_display_size = (image.width as f32, image.height as f32);
         self.image_pixel_size = (image.pixel_width as f32, image.pixel_height as f32);
         self.image_storage = image.storage;
@@ -999,7 +1031,6 @@ impl Renderer {
             image.peak_luminance_nits,
         );
         self.image = Some(bitmap);
-        Ok(())
     }
 
     pub fn set_dither_mode(&mut self, mode: DitherMode) {

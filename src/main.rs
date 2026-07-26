@@ -25,7 +25,7 @@ use image::core::{
     NavigationCommand, ScannedListing, SortMode, WM_APP_DECODE_COMPLETE, WM_APP_DOWNLOAD_PROGRESS,
     WM_APP_LISTING_READY,
 };
-use image::decode::DecodedImage;
+use image::decode::{DecodedImage, UploadDevice};
 use network::curl;
 use settings::{DEFAULT_BACKGROUND_COLOR, Options, SettingsFile};
 use shell::drag_drop::{self, WM_APP_DROP_PATHS};
@@ -91,6 +91,8 @@ const PAN_STEP: f32 = 64.0;
 struct Application {
     /// None between a device loss and the next successful rebuild.
     renderer: Option<Renderer>,
+    /// Bumped per renderer device; worker textures from other generations are stale.
+    upload_device_generation: u64,
     /// A failed output mode switch retries on the next paint.
     output_reconfigure_pending: bool,
     view_transform: ViewTransform,
@@ -234,6 +236,7 @@ impl Application {
         view_transform.fit_mode = FitMode::from_setting(settings.options.fit_mode);
         let mut application = Self {
             renderer: Some(renderer),
+            upload_device_generation: 0,
             output_reconfigure_pending: false,
             view_transform,
             image_core: ImageCore::new(window, core_options(&settings.options)),
@@ -280,6 +283,7 @@ impl Application {
         if let Some(path) = initial_path {
             application.image_core.load_path(path);
         }
+        application.register_upload_device();
         Ok(application)
     }
 
@@ -578,8 +582,20 @@ impl Application {
                 previous.width == image.width && previous.height == image.height
             });
         let frame = &image.frames[0];
+        let texture = self
+            .image_core
+            .current
+            .as_ref()
+            .and_then(|current| current.texture.as_ref())
+            .filter(|uploaded| uploaded.generation == self.upload_device_generation)
+            .map(|uploaded| uploaded.texture.clone());
         let upload = match &mut self.renderer {
-            Some(renderer) => renderer.set_image(&frame.pixels, &image),
+            Some(renderer) => match &texture {
+                Some(texture) => renderer
+                    .set_image_from_texture(texture, &image)
+                    .or_else(|_| renderer.set_image(&frame.pixels, &image)),
+                None => renderer.set_image(&frame.pixels, &image),
+            },
             None => Err(windows::core::Error::empty()),
         };
         self.displayed_image = Some(image);
@@ -801,13 +817,31 @@ impl Application {
     fn rebuild_renderer(&mut self, window: HWND) -> Result<()> {
         // The old swapchain must release the window first: DXGI allows one per window.
         self.renderer = None;
+        self.register_upload_device();
         let color::DisplayColorInfo {
             capabilities,
             display_profile,
             ..
         } = color::display_color_info(window);
         self.renderer = Some(create_renderer(window, &capabilities, display_profile)?);
+        self.register_upload_device();
         self.apply_renderer_state()
+    }
+
+    /// Hands the workers the current device and retires textures from older ones.
+    fn register_upload_device(&mut self) {
+        match &self.renderer {
+            Some(renderer) => {
+                self.upload_device_generation += 1;
+                self.image_core.set_upload_device(Some(UploadDevice {
+                    device: renderer.d3d_device(),
+                    generation: self.upload_device_generation,
+                }));
+            }
+            None => self.image_core.set_upload_device(None),
+        }
+        self.image_core
+            .discard_stale_textures(self.upload_device_generation);
     }
 
     /// Reapplies the application-held state after a renderer rebuild or reconfigure.

@@ -17,7 +17,9 @@ use windows::Win32::UI::Shell::StrCmpLogicalW;
 use windows::Win32::UI::WindowsAndMessaging::{PostMessageW, WM_APP};
 use windows::core::PCWSTR;
 
-use super::decode::{self, DecodeError, DecodedImage};
+use super::decode::{
+    self, DecodeError, DecodedImage, UploadDevice, UploadedTexture, upload_still_texture,
+};
 use crate::archive::reader as archive_reader;
 use crate::network::curl;
 
@@ -251,6 +253,8 @@ pub struct DecodeCompletion {
     pub modified: Option<SystemTime>,
     pub stage: DecodeStage,
     pub result: Result<Arc<DecodedImage>, DecodeError>,
+    /// Worker-side upload for still frames; None falls back to the UI-thread upload.
+    pub texture: Option<UploadedTexture>,
 }
 
 /// Bytes received so far for a downloading URL item; 0 means connecting.
@@ -262,6 +266,7 @@ pub struct DownloadProgress {
 pub struct CurrentImage {
     pub location: ItemLocation,
     pub image: Arc<DecodedImage>,
+    pub texture: Option<UploadedTexture>,
     file_size: u64,
     modified: Option<SystemTime>,
 }
@@ -272,6 +277,7 @@ struct CacheEntry {
     /// RAW preview or animation first frame standing in until someone pays for the full decode.
     preview: bool,
     image: Arc<DecodedImage>,
+    texture: Option<UploadedTexture>,
 }
 
 /// Frees retired image buffers off the UI thread.
@@ -736,10 +742,17 @@ impl ImageCore {
             .cache
             .get(location)
             .filter(|entry| entry.file_size == file_size)
-            .map(|entry| (entry.image.clone(), entry.modified, entry.preview));
+            .map(|entry| {
+                (
+                    entry.image.clone(),
+                    entry.texture.clone(),
+                    entry.modified,
+                    entry.preview,
+                )
+            });
         let mut preview_shown = false;
-        if let Some((image, cached_modified, preview)) = cached {
-            self.show_image(location.clone(), image, file_size, cached_modified);
+        if let Some((image, texture, cached_modified, preview)) = cached {
+            self.show_image(location.clone(), image, texture, file_size, cached_modified);
             self.load_error = None;
             if !preview {
                 self.pending_display = None;
@@ -860,11 +873,38 @@ impl ImageCore {
         }
     }
 
+    /// Hands the workers the device they upload with; None while the renderer is gone.
+    pub fn set_upload_device(&self, upload_device: Option<UploadDevice>) {
+        self.pool.set_upload_device(upload_device);
+    }
+
+    /// Drops textures from older device generations; their device is gone or going.
+    pub fn discard_stale_textures(&mut self, generation: u64) {
+        for entry in self.cache.values_mut() {
+            if entry
+                .texture
+                .as_ref()
+                .is_some_and(|texture| texture.generation != generation)
+            {
+                entry.texture = None;
+            }
+        }
+        if let Some(current) = &mut self.current
+            && current
+                .texture
+                .as_ref()
+                .is_some_and(|texture| texture.generation != generation)
+        {
+            current.texture = None;
+        }
+    }
+
     /// Replaces the displayed image, freeing the outgoing buffer off the UI thread.
     fn show_image(
         &mut self,
         location: ItemLocation,
         image: Arc<DecodedImage>,
+        texture: Option<UploadedTexture>,
         file_size: u64,
         modified: Option<SystemTime>,
     ) {
@@ -874,6 +914,7 @@ impl ImageCore {
         self.current = Some(CurrentImage {
             location,
             image,
+            texture,
             file_size,
             modified,
         });
@@ -961,6 +1002,7 @@ impl ImageCore {
                 self.show_image(
                     completion.location,
                     image,
+                    completion.texture,
                     completion.file_size,
                     completion.modified,
                 );
@@ -985,6 +1027,7 @@ impl ImageCore {
                     modified: completion.modified,
                     preview: true,
                     image: image.clone(),
+                    texture: completion.texture.clone(),
                 },
             );
             if is_pending {
@@ -1021,12 +1064,14 @@ impl ImageCore {
                         modified: completion.modified,
                         preview: false,
                         image: image.clone(),
+                        texture: completion.texture.clone(),
                     },
                 );
                 if is_pending {
                     self.show_image(
                         completion.location,
                         image,
+                        completion.texture,
                         completion.file_size,
                         completion.modified,
                     );
@@ -1175,6 +1220,35 @@ impl ImageCore {
     /// Evicts entries in reverse preload priority until within budget.
     fn evict_cache(&mut self) {
         let (backward, forward, budget) = self.preload_plan();
+        let anchor = self.navigation_anchor().cloned();
+        let anchor_index = anchor
+            .as_ref()
+            .and_then(|location| self.position_of(location));
+        let length = self.entries.len();
+        let loop_enabled = self.options.loop_within_folder;
+        let priorities = anchor_index.map_or_else(HashMap::new, |anchor| {
+            preload_priorities(anchor, backward, forward, length, loop_enabled)
+        });
+        // Textures live only inside the preload neighborhood; outside, CPU pixels remain.
+        let demoted: Vec<ItemLocation> = self
+            .cache
+            .iter()
+            .filter(|(location, entry)| {
+                entry.texture.is_some()
+                    && anchor.as_ref() != Some(location)
+                    && !self
+                        .entries
+                        .iter()
+                        .position(|listed| listed.location == **location)
+                        .is_some_and(|index| priorities.contains_key(&index))
+            })
+            .map(|(location, _)| location.clone())
+            .collect();
+        for location in demoted {
+            if let Some(entry) = self.cache.get_mut(&location) {
+                entry.texture = None;
+            }
+        }
         let mut total: u64 = self
             .cache
             .values()
@@ -1183,19 +1257,12 @@ impl ImageCore {
         if total <= budget {
             return;
         }
-        let anchor = self.navigation_anchor();
-        let anchor_index = anchor.and_then(|location| self.position_of(location));
-        let length = self.entries.len();
-        let loop_enabled = self.options.loop_within_folder;
-        let priorities = anchor_index.map_or_else(HashMap::new, |anchor| {
-            preload_priorities(anchor, backward, forward, length, loop_enabled)
-        });
         let mut ranked: Vec<(ItemLocation, u64, (u8, usize))> = self
             .cache
             .iter()
             .map(|(location, entry)| {
                 // The baseline item goes last even when unlisted (URL items).
-                let key = if anchor == Some(location) {
+                let key = if anchor.as_ref() == Some(location) {
                     (0, 0)
                 } else {
                     self.position_of(location).zip(anchor_index).map_or(
@@ -1472,6 +1539,7 @@ struct DecodeJob {
 
 struct PoolShared {
     queue: Mutex<VecDeque<DecodeJob>>,
+    upload_device: Mutex<Option<UploadDevice>>,
     available: Condvar,
 }
 
@@ -1483,6 +1551,7 @@ impl DecodePool {
     fn new(window: isize) -> Self {
         let shared = Arc::new(PoolShared {
             queue: Mutex::new(VecDeque::new()),
+            upload_device: Mutex::new(None),
             available: Condvar::new(),
         });
         let worker_count =
@@ -1492,6 +1561,12 @@ impl DecodePool {
             std::thread::spawn(move || worker_loop(&shared, window));
         }
         Self { shared }
+    }
+
+    fn set_upload_device(&self, upload_device: Option<UploadDevice>) {
+        if let Ok(mut slot) = self.shared.upload_device.lock() {
+            *slot = upload_device;
+        }
     }
 
     fn submit(
@@ -1608,6 +1683,7 @@ fn worker_loop(shared: &PoolShared, window: isize) {
                                 DecodeStage::Preview
                             },
                             result: Ok(Arc::new(image)),
+                            texture: None,
                         }),
                     );
                 };
@@ -1669,6 +1745,10 @@ fn worker_loop(shared: &PoolShared, window: isize) {
             }
         }
         .map(Arc::new);
+        let texture = result.as_ref().ok().and_then(|image| {
+            let upload_device = shared.upload_device.lock().ok()?.clone()?;
+            upload_still_texture(&upload_device, image)
+        });
         post_boxed(
             window,
             WM_APP_DECODE_COMPLETE,
@@ -1678,6 +1758,7 @@ fn worker_loop(shared: &PoolShared, window: isize) {
                 modified,
                 stage: DecodeStage::Final,
                 result,
+                texture,
             }),
         );
     }

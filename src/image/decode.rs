@@ -10,6 +10,13 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use windows::Win32::Foundation::{
     E_ABORT, GENERIC_READ, WINCODEC_ERR_COMPONENTINITIALIZEFAILURE, WINCODEC_ERR_COMPONENTNOTFOUND,
 };
+use windows::Win32::Graphics::Direct3D11::{
+    D3D11_BIND_SHADER_RESOURCE, D3D11_SUBRESOURCE_DATA, D3D11_TEXTURE2D_DESC,
+    D3D11_USAGE_IMMUTABLE, ID3D11Device, ID3D11Texture2D,
+};
+use windows::Win32::Graphics::Dxgi::Common::{
+    DXGI_FORMAT_B8G8R8A8_UNORM, DXGI_FORMAT_R16G16B16A16_FLOAT, DXGI_SAMPLE_DESC,
+};
 use windows::Win32::Graphics::Imaging::{
     CLSID_WICImagingFactory, GUID_WICPixelFormat32bppPBGRA, GUID_WICPixelFormat64bppPRGBAHalf,
     GUID_WICPixelFormat64bppRGBA, IWICBitmapDecoder, IWICBitmapFrameDecode, IWICBitmapSource,
@@ -1096,6 +1103,77 @@ fn hdr_transfer_lookup_table(transfer: HdrTransfer) -> &'static [f32; 65536] {
             *value = function(code as f32 / f32::from(u16::MAX));
         }
         table
+    })
+}
+
+/// The renderer's D3D11 device shared with the workers; free-threaded for creation.
+#[derive(Clone)]
+pub struct UploadDevice {
+    pub device: ID3D11Device,
+    pub generation: u64,
+}
+
+/// A texture uploaded off the UI thread, usable only while its generation is current.
+#[derive(Clone)]
+pub struct UploadedTexture {
+    pub texture: ID3D11Texture2D,
+    pub generation: u64,
+}
+
+/// Frames above this stay on the UI-thread upload path; keeps worst-case
+/// texture residency at neighborhood size times this bound.
+const UPLOAD_MAXIMUM_FRAME_BYTES: usize = 256 * 1024 * 1024;
+
+/// Uploads a still frame on the worker; None leaves the UI-thread upload path.
+pub fn upload_still_texture(
+    upload_device: &UploadDevice,
+    image: &DecodedImage,
+) -> Option<UploadedTexture> {
+    let frame = match image.frames.as_slice() {
+        [frame] => frame,
+        _ => return None,
+    };
+    let pitch = image.pixel_width * image.storage.bytes_per_pixel();
+    if frame.pixels.len() != pitch as usize * image.pixel_height as usize
+        || frame.pixels.len() > UPLOAD_MAXIMUM_FRAME_BYTES
+    {
+        return None;
+    }
+    let format = match image.storage {
+        PixelStorage::Bgra8 => DXGI_FORMAT_B8G8R8A8_UNORM,
+        PixelStorage::RgbaHalf => DXGI_FORMAT_R16G16B16A16_FLOAT,
+    };
+    let description = D3D11_TEXTURE2D_DESC {
+        Width: image.pixel_width,
+        Height: image.pixel_height,
+        MipLevels: 1,
+        ArraySize: 1,
+        Format: format,
+        SampleDesc: DXGI_SAMPLE_DESC {
+            Count: 1,
+            Quality: 0,
+        },
+        Usage: D3D11_USAGE_IMMUTABLE,
+        BindFlags: D3D11_BIND_SHADER_RESOURCE.0 as u32,
+        ..Default::default()
+    };
+    let data = D3D11_SUBRESOURCE_DATA {
+        pSysMem: frame.pixels.as_ptr().cast(),
+        SysMemPitch: pitch,
+        ..Default::default()
+    };
+    let mut texture = None;
+    unsafe {
+        upload_device.device.CreateTexture2D(
+            &raw const description,
+            Some(&raw const data),
+            Some(&raw mut texture),
+        )
+    }
+    .ok()?;
+    texture.map(|texture| UploadedTexture {
+        texture,
+        generation: upload_device.generation,
     })
 }
 
