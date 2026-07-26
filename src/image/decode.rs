@@ -123,6 +123,32 @@ impl DecodedImage {
         self.frames.iter().map(|frame| frame.pixels.len()).sum()
     }
 
+    /// Bytes per row of a frame; the D3D pitch and the buffer stride alike.
+    pub fn row_pitch(&self) -> u32 {
+        self.pixel_width * self.storage.bytes_per_pixel()
+    }
+
+    /// Exact byte length of one full frame at this geometry.
+    pub fn frame_byte_length(&self) -> usize {
+        self.row_pitch() as usize * self.pixel_height as usize
+    }
+
+    /// The geometry half of a texture description; usage and binding stay caller-side.
+    pub fn texture_description(&self) -> D3D11_TEXTURE2D_DESC {
+        D3D11_TEXTURE2D_DESC {
+            Width: self.pixel_width,
+            Height: self.pixel_height,
+            MipLevels: 1,
+            ArraySize: 1,
+            Format: self.storage.dxgi_format(),
+            SampleDesc: DXGI_SAMPLE_DESC {
+                Count: 1,
+                Quality: 0,
+            },
+            ..Default::default()
+        }
+    }
+
     /// The metadata with pixels released; a texture is the only copy afterward.
     pub fn without_pixels(&self) -> Self {
         Self {
@@ -1167,29 +1193,19 @@ pub fn upload_still_texture(
         [frame] => frame,
         _ => return None,
     };
-    let pitch = image.pixel_width * image.storage.bytes_per_pixel();
-    if frame.pixels.len() != pitch as usize * image.pixel_height as usize
+    if frame.pixels.len() != image.frame_byte_length()
         || frame.pixels.len() > UPLOAD_MAXIMUM_FRAME_BYTES
     {
         return None;
     }
     let description = D3D11_TEXTURE2D_DESC {
-        Width: image.pixel_width,
-        Height: image.pixel_height,
-        MipLevels: 1,
-        ArraySize: 1,
-        Format: image.storage.dxgi_format(),
-        SampleDesc: DXGI_SAMPLE_DESC {
-            Count: 1,
-            Quality: 0,
-        },
         Usage: D3D11_USAGE_IMMUTABLE,
         BindFlags: D3D11_BIND_SHADER_RESOURCE.0 as u32,
-        ..Default::default()
+        ..image.texture_description()
     };
     let data = D3D11_SUBRESOURCE_DATA {
         pSysMem: frame.pixels.as_ptr().cast(),
-        SysMemPitch: pitch,
+        SysMemPitch: image.row_pitch(),
         ..Default::default()
     };
     let mut texture = None;

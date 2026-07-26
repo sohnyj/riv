@@ -1000,8 +1000,7 @@ impl Renderer {
         {
             return Ok(true);
         }
-        let pitch = image.pixel_width * image.storage.bytes_per_pixel();
-        if frame_pixels.len() != pitch as usize * image.pixel_height as usize {
+        if frame_pixels.len() != image.frame_byte_length() {
             // A slimmed image has no pixels to upload; the caller recovers elsewhere.
             return Err(windows::core::Error::empty());
         }
@@ -1013,7 +1012,7 @@ impl Renderer {
                     height: image.pixel_height,
                 },
                 Some(frame_pixels.as_ptr().cast()),
-                pitch,
+                image.row_pitch(),
                 &raw const properties,
             )?
         };
@@ -1047,18 +1046,9 @@ impl Renderer {
             return Err(windows::core::Error::empty());
         }
         let description = D3D11_TEXTURE2D_DESC {
-            Width: image.pixel_width,
-            Height: image.pixel_height,
-            MipLevels: 1,
-            ArraySize: 1,
-            Format: image.storage.dxgi_format(),
-            SampleDesc: DXGI_SAMPLE_DESC {
-                Count: 1,
-                Quality: 0,
-            },
             Usage: D3D11_USAGE_STAGING,
             CPUAccessFlags: D3D11_CPU_ACCESS_READ.0 as u32,
-            ..Default::default()
+            ..image.texture_description()
         };
         let mut staging = None;
         unsafe {
@@ -1066,8 +1056,8 @@ impl Renderer {
                 .CreateTexture2D(&raw const description, None, Some(&raw mut staging))?
         };
         let staging = staging.ok_or_else(windows::core::Error::empty)?;
-        let pitch = (image.pixel_width * image.storage.bytes_per_pixel()) as usize;
-        let mut pixels = vec![0u8; pitch * image.pixel_height as usize];
+        let pitch = image.row_pitch() as usize;
+        let mut pixels = vec![0u8; image.frame_byte_length()];
         unsafe {
             self.d3d_context.CopyResource(&staging, &uploaded.texture);
             let mut mapped = D3D11_MAPPED_SUBRESOURCE::default();
