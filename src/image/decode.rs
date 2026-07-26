@@ -884,12 +884,14 @@ fn decode_single_frame(
         storage.bytes_per_pixel(),
         cancellation,
     )?;
-    if let Some(encoding) = hdr_encoding {
-        linearize_hdr_pixels(&mut pixels, encoding);
-    }
+    let linearized_maximum_bits =
+        hdr_encoding.map(|encoding| linearize_hdr_pixels(&mut pixels, encoding));
     // Half-stored pixels are linear scRGB regardless of the conversion route.
     let peak_luminance_nits = (storage == PixelStorage::RgbaHalf)
-        .then(|| peak_luminance_from_half_pixels(&pixels))
+        .then(|| match linearized_maximum_bits {
+            Some(maximum_bits) => peak_luminance_with_maximum_bits(&pixels, maximum_bits),
+            None => peak_luminance_from_half_pixels(&pixels),
+        })
         .flatten();
     // The 8bpc fallback conversion truncates whatever the native format held.
     let source_bits_per_channel = if storage == PixelStorage::RgbaHalf {
@@ -1133,13 +1135,17 @@ fn map_pixel_blocks<Output: Send>(
     })
 }
 
-/// Converts 16-bit PQ/HLG pixels (straight alpha) in place to premultiplied scRGB halves.
-fn linearize_hdr_pixels(pixels: &mut [u8], encoding: HdrEncoding) {
+/// Converts 16-bit PQ/HLG pixels (straight alpha) in place to premultiplied scRGB
+/// halves, returning the maximum positive normal color half it wrote.
+fn linearize_hdr_pixels(pixels: &mut [u8], encoding: HdrEncoding) -> u16 {
     let matrix = encoding.primaries.bt709_conversion();
     let transfer_table = hdr_transfer_lookup_table(encoding.transfer);
     map_pixel_blocks(pixels, 8, |block| {
         linearize_block(block, &matrix, transfer_table, encoding)
-    });
+    })
+    .into_iter()
+    .max()
+    .unwrap_or(0)
 }
 
 fn linearize_block(
@@ -1147,7 +1153,8 @@ fn linearize_block(
     matrix: &[[f32; 3]; 3],
     transfer_table: &[f32; 65536],
     encoding: HdrEncoding,
-) {
+) -> u16 {
+    let mut maximum_bits = 0u16;
     for pixel in pixels.chunks_exact_mut(8) {
         let mut channel_nits = [0.0f32; 3];
         for (channel, nits) in channel_nits.iter_mut().enumerate() {
@@ -1169,10 +1176,13 @@ fn linearize_block(
                 + coefficients[1] * channel_nits[1]
                 + coefficients[2] * channel_nits[2];
             let premultiplied = bt709_nits / SDR_REFERENCE_WHITE_NITS * alpha;
-            pixel[row * 2..row * 2 + 2].copy_from_slice(&f32_to_half(premultiplied).to_le_bytes());
+            let half = f32_to_half(premultiplied);
+            maximum_bits = maximum_bits.max(positive_normal_half_bits(half));
+            pixel[row * 2..row * 2 + 2].copy_from_slice(&half.to_le_bytes());
         }
         pixel[6..8].copy_from_slice(&f32_to_half(alpha).to_le_bytes());
     }
+    maximum_bits
 }
 
 /// BT.2100 HLG inverse OETF (code -> scene linear, 1.0 at nominal peak).
@@ -1208,15 +1218,21 @@ fn peak_histogram_bin_table() -> &'static [u16; 65536] {
 
 /// Content peak of linear scRGB halves: 99.9th-percentile max channel, binned in PQ codes.
 pub fn peak_luminance_from_half_pixels(pixels: &[u8]) -> Option<f32> {
-    if pixels.len() < 8 {
-        return None;
-    }
     let channel_maxima = channel_maxima_from_half_pixels(pixels);
-    let maximum_linear = half_to_f32(
+    peak_luminance_with_maximum_bits(
+        pixels,
         channel_maxima[0]
             .max(channel_maxima[1])
             .max(channel_maxima[2]),
-    );
+    )
+}
+
+/// Peak from a known channel maximum, skipping the scan that would recompute it.
+fn peak_luminance_with_maximum_bits(pixels: &[u8], maximum_bits: u16) -> Option<f32> {
+    if pixels.len() < 8 {
+        return None;
+    }
+    let maximum_linear = half_to_f32(maximum_bits);
     if maximum_linear <= 1.0 {
         // Entirely within SDR white: the tone map is skipped, so skip the histogram.
         return Some(maximum_linear * SDR_REFERENCE_WHITE_NITS);
@@ -2228,6 +2244,53 @@ mod hdr_linearization_tests {
         linearize_hdr_pixels_reference(&mut expected, encoding);
         linearize_hdr_pixels(&mut pixels, encoding);
         assert_eq!(pixels, expected);
+    }
+
+    #[test]
+    fn linearization_maximum_matches_a_rescan() {
+        // Below and above the parallel block threshold, for both transfers.
+        for (count, transfer) in [
+            (4096usize, HdrTransfer::PerceptualQuantizer),
+            (4096, HdrTransfer::HybridLogGamma),
+            (600_000, HdrTransfer::PerceptualQuantizer),
+        ] {
+            let encoding = HdrEncoding {
+                transfer,
+                primaries: HdrPrimaries::Bt2020,
+            };
+            let mut pixels = coded_pixels(count, 31);
+            let maximum_bits = linearize_hdr_pixels(&mut pixels, encoding);
+            assert_eq!(
+                peak_luminance_with_maximum_bits(&pixels, maximum_bits),
+                peak_luminance_from_half_pixels(&pixels),
+                "count={count}"
+            );
+        }
+    }
+
+    #[test]
+    #[ignore = "manual timing comparison (--nocapture)"]
+    fn linearized_peak_timing() {
+        let encoding = HdrEncoding {
+            transfer: HdrTransfer::PerceptualQuantizer,
+            primaries: HdrPrimaries::Bt2020,
+        };
+        let pixels = coded_pixels(16_000_000, 77);
+        for _ in 0..3 {
+            let mut scratch = pixels.clone();
+            let start = std::time::Instant::now();
+            let maximum_bits = linearize_hdr_pixels(&mut scratch, encoding);
+            let fused = peak_luminance_with_maximum_bits(&scratch, maximum_bits);
+            let fused_elapsed = start.elapsed();
+            let start = std::time::Instant::now();
+            let rescanned = peak_luminance_from_half_pixels(&scratch);
+            let rescan_elapsed = start.elapsed();
+            assert_eq!(fused, rescanned);
+            println!(
+                "fused={fused_elapsed:?} versus linearize+rescan={:?}",
+                fused_elapsed + rescan_elapsed
+            );
+        }
     }
 
     #[test]
