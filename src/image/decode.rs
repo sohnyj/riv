@@ -57,6 +57,14 @@ impl PixelStorage {
             Self::RgbaHalf => 8,
         }
     }
+
+    /// The DXGI format both the worker upload and the D2D wrap must agree on.
+    pub fn dxgi_format(self) -> windows::Win32::Graphics::Dxgi::Common::DXGI_FORMAT {
+        match self {
+            Self::Bgra8 => DXGI_FORMAT_B8G8R8A8_UNORM,
+            Self::RgbaHalf => DXGI_FORMAT_R16G16B16A16_FLOAT,
+        }
+    }
 }
 
 pub struct DecodedImage {
@@ -1139,16 +1147,12 @@ pub fn upload_still_texture(
     {
         return None;
     }
-    let format = match image.storage {
-        PixelStorage::Bgra8 => DXGI_FORMAT_B8G8R8A8_UNORM,
-        PixelStorage::RgbaHalf => DXGI_FORMAT_R16G16B16A16_FLOAT,
-    };
     let description = D3D11_TEXTURE2D_DESC {
         Width: image.pixel_width,
         Height: image.pixel_height,
         MipLevels: 1,
         ArraySize: 1,
-        Format: format,
+        Format: image.storage.dxgi_format(),
         SampleDesc: DXGI_SAMPLE_DESC {
             Count: 1,
             Quality: 0,
@@ -1202,14 +1206,20 @@ fn map_pixel_blocks<Output: Send>(
     }
     std::thread::scope(|scope| {
         let work = &work;
-        let handles: Vec<_> = pixels
-            .chunks_mut(block_bytes)
+        let mut blocks: Vec<&mut [u8]> = pixels.chunks_mut(block_bytes).collect();
+        let last = blocks.pop();
+        let handles: Vec<_> = blocks
+            .into_iter()
             .map(|block| scope.spawn(move || work(block)))
             .collect();
-        handles
+        // The calling thread takes the last block instead of idling in join.
+        let last_output = last.map(&work);
+        let mut outputs: Vec<Output> = handles
             .into_iter()
             .map(|handle| handle.join().expect("pixel block worker panicked"))
-            .collect()
+            .collect();
+        outputs.extend(last_output);
+        outputs
     })
 }
 

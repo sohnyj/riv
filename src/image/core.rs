@@ -271,6 +271,7 @@ pub struct CurrentImage {
     modified: Option<SystemTime>,
 }
 
+#[derive(Clone)]
 struct CacheEntry {
     file_size: u64,
     modified: Option<SystemTime>,
@@ -742,17 +743,17 @@ impl ImageCore {
             .cache
             .get(location)
             .filter(|entry| entry.file_size == file_size)
-            .map(|entry| {
-                (
-                    entry.image.clone(),
-                    entry.texture.clone(),
-                    entry.modified,
-                    entry.preview,
-                )
-            });
+            .cloned();
         let mut preview_shown = false;
-        if let Some((image, texture, cached_modified, preview)) = cached {
-            self.show_image(location.clone(), image, texture, file_size, cached_modified);
+        if let Some(entry) = cached {
+            let preview = entry.preview;
+            self.show_image(CurrentImage {
+                location: location.clone(),
+                image: entry.image,
+                texture: entry.texture,
+                file_size,
+                modified: entry.modified,
+            });
             self.load_error = None;
             if !preview {
                 self.pending_display = None;
@@ -873,51 +874,29 @@ impl ImageCore {
         }
     }
 
-    /// Hands the workers the device they upload with; None while the renderer is gone.
-    pub fn set_upload_device(&self, upload_device: Option<UploadDevice>) {
+    /// Hands the workers the device they upload with (None while the renderer is
+    /// gone) and drops every texture from another generation; its device is going.
+    pub fn set_upload_device(&mut self, upload_device: Option<UploadDevice>) {
+        let generation = upload_device
+            .as_ref()
+            .map(|upload_device| upload_device.generation);
         self.pool.set_upload_device(upload_device);
-    }
-
-    /// Drops textures from older device generations; their device is gone or going.
-    pub fn discard_stale_textures(&mut self, generation: u64) {
-        for entry in self.cache.values_mut() {
-            if entry
-                .texture
-                .as_ref()
-                .is_some_and(|texture| texture.generation != generation)
-            {
-                entry.texture = None;
-            }
-        }
-        if let Some(current) = &mut self.current
-            && current
-                .texture
-                .as_ref()
-                .is_some_and(|texture| texture.generation != generation)
+        for texture in self
+            .cache
+            .values_mut()
+            .map(|entry| &mut entry.texture)
+            .chain(self.current.as_mut().map(|current| &mut current.texture))
         {
-            current.texture = None;
+            texture.take_if(|uploaded| Some(uploaded.generation) != generation);
         }
     }
 
     /// Replaces the displayed image, freeing the outgoing buffer off the UI thread.
-    fn show_image(
-        &mut self,
-        location: ItemLocation,
-        image: Arc<DecodedImage>,
-        texture: Option<UploadedTexture>,
-        file_size: u64,
-        modified: Option<SystemTime>,
-    ) {
+    fn show_image(&mut self, current: CurrentImage) {
         if let Some(previous) = self.current.take() {
             self.reaper.reap(previous.image);
         }
-        self.current = Some(CurrentImage {
-            location,
-            image,
-            texture,
-            file_size,
-            modified,
-        });
+        self.current = Some(current);
     }
 
     /// Caches an entry, freeing any replaced stand-in off the UI thread.
@@ -999,13 +978,13 @@ impl ImageCore {
                 .as_ref()
                 .is_some_and(|pending| *pending == completion.location);
             if is_pending && let Ok(image) = completion.result {
-                self.show_image(
-                    completion.location,
+                self.show_image(CurrentImage {
+                    location: completion.location,
                     image,
-                    completion.texture,
-                    completion.file_size,
-                    completion.modified,
-                );
+                    texture: completion.texture,
+                    file_size: completion.file_size,
+                    modified: completion.modified,
+                });
                 self.load_error = None;
                 return true;
             }
@@ -1068,13 +1047,13 @@ impl ImageCore {
                     },
                 );
                 if is_pending {
-                    self.show_image(
-                        completion.location,
+                    self.show_image(CurrentImage {
+                        location: completion.location,
                         image,
-                        completion.texture,
-                        completion.file_size,
-                        completion.modified,
-                    );
+                        texture: completion.texture,
+                        file_size: completion.file_size,
+                        modified: completion.modified,
+                    });
                     self.pending_display = None;
                     self.load_error = None;
                     self.preload_neighbors();
@@ -1220,6 +1199,15 @@ impl ImageCore {
     /// Evicts entries in reverse preload priority until within budget.
     fn evict_cache(&mut self) {
         let (backward, forward, budget) = self.preload_plan();
+        let mut total: u64 = self
+            .cache
+            .values()
+            .map(|entry| entry.image.pixel_bytes() as u64)
+            .sum();
+        let textures_resident = self.cache.values().any(|entry| entry.texture.is_some());
+        if total <= budget && !textures_resident {
+            return;
+        }
         let anchor = self.navigation_anchor().cloned();
         let anchor_index = anchor
             .as_ref()
@@ -1229,31 +1217,19 @@ impl ImageCore {
         let priorities = anchor_index.map_or_else(HashMap::new, |anchor| {
             preload_priorities(anchor, backward, forward, length, loop_enabled)
         });
-        // Textures live only inside the preload neighborhood; outside, CPU pixels remain.
-        let demoted: Vec<ItemLocation> = self
-            .cache
-            .iter()
-            .filter(|(location, entry)| {
-                entry.texture.is_some()
-                    && anchor.as_ref() != Some(location)
-                    && !self
-                        .entries
-                        .iter()
-                        .position(|listed| listed.location == **location)
-                        .is_some_and(|index| priorities.contains_key(&index))
-            })
-            .map(|(location, _)| location.clone())
-            .collect();
-        for location in demoted {
-            if let Some(entry) = self.cache.get_mut(&location) {
-                entry.texture = None;
+        if textures_resident {
+            // Textures live only inside the preload neighborhood; outside, CPU pixels remain.
+            let mut resident: HashSet<&ItemLocation> = priorities
+                .keys()
+                .map(|index| &self.entries[*index].location)
+                .collect();
+            resident.extend(anchor.as_ref());
+            for (location, entry) in &mut self.cache {
+                if !resident.contains(location) {
+                    entry.texture = None;
+                }
             }
         }
-        let mut total: u64 = self
-            .cache
-            .values()
-            .map(|entry| entry.image.pixel_bytes() as u64)
-            .sum();
         if total <= budget {
             return;
         }

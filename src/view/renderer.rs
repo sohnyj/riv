@@ -55,7 +55,9 @@ use windows_numerics::Matrix3x2;
 use std::sync::Arc;
 
 use crate::image::color::SDR_REFERENCE_WHITE_NITS;
-use crate::image::decode::{DecodedImage, PixelStorage, icc_gamut_label};
+use crate::image::decode::{
+    DecodedImage, PixelStorage, UploadDevice, UploadedTexture, icc_gamut_label,
+};
 use crate::view::dither::DitherMode;
 use crate::view::quantize::QuantizePass;
 
@@ -118,6 +120,8 @@ pub struct Renderer {
     /// Signals when the present queue (depth 1) has room; a render waits here first.
     frame_latency_waitable: Option<HANDLE>,
     d3d_device: ID3D11Device,
+    /// Minted per build; worker textures from other generations never wrap here.
+    upload_device_generation: u64,
     d3d_context: ID3D11DeviceContext,
     d2d_context: ID2D1DeviceContext,
     /// Fullscreen quantizing copy for the 10-bit backbuffers D2D cannot target.
@@ -217,11 +221,19 @@ fn declare_color_space(
 
 fn source_pixel_format(storage: PixelStorage) -> D2D1_PIXEL_FORMAT {
     D2D1_PIXEL_FORMAT {
-        format: match storage {
-            PixelStorage::Bgra8 => DXGI_FORMAT_B8G8R8A8_UNORM,
-            PixelStorage::RgbaHalf => DXGI_FORMAT_R16G16B16A16_FLOAT,
-        },
+        format: storage.dxgi_format(),
         alphaMode: D2D1_ALPHA_MODE_PREMULTIPLIED,
+    }
+}
+
+/// Shared by the CPU upload and the worker-texture wrap; both must describe alike.
+fn image_bitmap_properties(storage: PixelStorage) -> D2D1_BITMAP_PROPERTIES1 {
+    D2D1_BITMAP_PROPERTIES1 {
+        pixelFormat: source_pixel_format(storage),
+        dpiX: 96.0,
+        dpiY: 96.0,
+        bitmapOptions: D2D1_BITMAP_OPTIONS_NONE,
+        ..Default::default()
     }
 }
 
@@ -643,8 +655,12 @@ impl Renderer {
             scrgb_color_context.as_ref(),
             sdr_destination(display_color_context.as_ref(), srgb_color_context.as_ref()),
         );
+        static UPLOAD_DEVICE_GENERATIONS: std::sync::atomic::AtomicU64 =
+            std::sync::atomic::AtomicU64::new(1);
         let mut renderer = Self {
             output_mode,
+            upload_device_generation: UPLOAD_DEVICE_GENERATIONS
+                .fetch_add(1, std::sync::atomic::Ordering::Relaxed),
             hdr_mode,
             sdr_wide_gamut,
             bits_per_color,
@@ -969,14 +985,20 @@ impl Renderer {
         true
     }
 
-    pub fn set_image(&mut self, frame_pixels: &[u8], image: &DecodedImage) -> Result<()> {
-        let properties = D2D1_BITMAP_PROPERTIES1 {
-            pixelFormat: source_pixel_format(image.storage),
-            dpiX: 96.0,
-            dpiY: 96.0,
-            bitmapOptions: D2D1_BITMAP_OPTIONS_NONE,
-            ..Default::default()
-        };
+    /// A matching worker texture wraps without an upload; anything else re-uploads.
+    pub fn set_image(
+        &mut self,
+        frame_pixels: &[u8],
+        texture: Option<&UploadedTexture>,
+        image: &DecodedImage,
+    ) -> Result<()> {
+        if let Some(uploaded) = texture
+            && uploaded.generation == self.upload_device_generation
+            && self.wrap_uploaded_texture(uploaded, image).is_ok()
+        {
+            return Ok(());
+        }
+        let properties = image_bitmap_properties(image.storage);
         let bitmap = unsafe {
             self.d2d_context.CreateBitmap(
                 D2D_SIZE_U {
@@ -992,20 +1014,13 @@ impl Renderer {
         Ok(())
     }
 
-    /// Wraps a worker-uploaded texture; the caller falls back to set_image on failure.
-    pub fn set_image_from_texture(
+    fn wrap_uploaded_texture(
         &mut self,
-        texture: &ID3D11Texture2D,
+        uploaded: &UploadedTexture,
         image: &DecodedImage,
     ) -> Result<()> {
-        let surface: IDXGISurface = texture.cast()?;
-        let properties = D2D1_BITMAP_PROPERTIES1 {
-            pixelFormat: source_pixel_format(image.storage),
-            dpiX: 96.0,
-            dpiY: 96.0,
-            bitmapOptions: D2D1_BITMAP_OPTIONS_NONE,
-            ..Default::default()
-        };
+        let surface: IDXGISurface = uploaded.texture.cast()?;
+        let properties = image_bitmap_properties(image.storage);
         let bitmap = unsafe {
             self.d2d_context
                 .CreateBitmapFromDxgiSurface(&surface, Some(&raw const properties))?
@@ -1014,9 +1029,12 @@ impl Renderer {
         Ok(())
     }
 
-    /// The device workers create textures on; creation entry points are free-threaded.
-    pub fn d3d_device(&self) -> ID3D11Device {
-        self.d3d_device.clone()
+    /// What the workers upload with; the generation ties their textures to this build.
+    pub fn upload_device(&self) -> UploadDevice {
+        UploadDevice {
+            device: self.d3d_device.clone(),
+            generation: self.upload_device_generation,
+        }
     }
 
     fn adopt_image_bitmap(&mut self, bitmap: ID2D1Bitmap1, image: &DecodedImage) {
