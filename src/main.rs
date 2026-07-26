@@ -16,7 +16,7 @@ use std::path::Path;
 use std::sync::Arc;
 
 use actions::{Action, ActivationGate};
-use bindings::{Bindings, MODIFIER_CONTROL, MODIFIER_SHIFT, MouseBase, current_modifiers};
+use bindings::{Bindings, MODIFIER_CONTROL, MouseBase, current_modifiers};
 use dialogs::options::{WM_APP_OPTIONS_APPLIED, WM_APP_OPTIONS_GEOMETRY};
 use image::animation::Animation;
 use image::color;
@@ -1643,16 +1643,6 @@ fn handle_key(application: &mut Application, window: HWND, virtual_key: u16) -> 
 
 fn handle_wheel(application: &mut Application, window: HWND, wheel_delta: i16) {
     let modifiers = current_modifiers();
-    // Fine-grained deltas with no modifiers read as touchpad panning.
-    if wheel_delta % 120 != 0 && modifiers & !MODIFIER_SHIFT == 0 {
-        let amount = f32::from(wheel_delta) / 2.0;
-        if modifiers & MODIFIER_SHIFT != 0 {
-            application.pan_by(window, amount, 0.0);
-        } else {
-            application.pan_by(window, 0.0, amount);
-        }
-        return;
-    }
     let base = if wheel_delta > 0 {
         MouseBase::WheelUp
     } else {
