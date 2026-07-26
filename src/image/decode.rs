@@ -1755,6 +1755,27 @@ fn decode_apng<Input: BufRead + Seek>(
     })
 }
 
+/// Straight RGBA to premultiplied BGRA; both slices hold the same pixel count.
+pub fn premultiplied_bgra_from_rgba(source: &[u8], output: &mut [u8]) {
+    for (source_pixel, output_pixel) in source.chunks_exact(4).zip(output.chunks_exact_mut(4)) {
+        // Uniform four-lane multiply; the alpha lane's 255 factor leaves it unchanged.
+        let alpha = u16::from(source_pixel[3]);
+        let swizzled = [
+            source_pixel[2],
+            source_pixel[1],
+            source_pixel[0],
+            source_pixel[3],
+        ];
+        let multipliers = [alpha, alpha, alpha, 255];
+        for (output_channel, (value, multiplier)) in output_pixel
+            .iter_mut()
+            .zip(swizzled.into_iter().zip(multipliers))
+        {
+            *output_channel = (u16::from(value) * multiplier / 255) as u8;
+        }
+    }
+}
+
 fn pixels_to_premultiplied_bgra(
     pixels: &[u8],
     color_type: png::ColorType,
@@ -1762,20 +1783,20 @@ fn pixels_to_premultiplied_bgra(
     height: u32,
 ) -> Result<Vec<u8>, DecodeError> {
     let pixel_count = width as usize * height as usize;
-    let mut output = Vec::with_capacity(pixel_count * 4);
+    let mut output = vec![0u8; pixel_count * 4];
     match color_type {
         png::ColorType::Rgba => {
-            for pixel in pixels[..pixel_count * 4].chunks_exact(4) {
-                let alpha = u16::from(pixel[3]);
-                output.push((u16::from(pixel[2]) * alpha / 255) as u8);
-                output.push((u16::from(pixel[1]) * alpha / 255) as u8);
-                output.push((u16::from(pixel[0]) * alpha / 255) as u8);
-                output.push(pixel[3]);
-            }
+            premultiplied_bgra_from_rgba(&pixels[..pixel_count * 4], &mut output);
         }
         png::ColorType::Rgb => {
-            for pixel in pixels[..pixel_count * 3].chunks_exact(3) {
-                output.extend_from_slice(&[pixel[2], pixel[1], pixel[0], 255]);
+            for (source_pixel, output_pixel) in pixels[..pixel_count * 3]
+                .chunks_exact(3)
+                .zip(output.chunks_exact_mut(4))
+            {
+                output_pixel[0] = source_pixel[2];
+                output_pixel[1] = source_pixel[1];
+                output_pixel[2] = source_pixel[0];
+                output_pixel[3] = 255;
             }
         }
         other => {
@@ -2215,6 +2236,80 @@ mod compositing_tests {
                 blend_over(&mut canvas, WIDTH, HEIGHT, &source, WIDTH, HEIGHT, 0, 0);
             }
             println!("blend_over 50 frames elapsed={:?}", start.elapsed());
+        }
+    }
+}
+
+#[cfg(test)]
+mod premultiplied_conversion_tests {
+    use super::*;
+
+    /// Deterministic straight-alpha RGBA with frequent fully transparent and opaque pixels.
+    fn rgba_pixels(count: usize, mut state: u32) -> Vec<u8> {
+        let mut pixels = Vec::with_capacity(count * 4);
+        for _ in 0..count {
+            state = state.wrapping_mul(1_664_525).wrapping_add(1_013_904_223);
+            for shift in [0u32, 8, 16] {
+                pixels.push((state >> shift) as u8);
+            }
+            pixels.push(match state >> 30 {
+                0 => 0,
+                1 => 255,
+                _ => (state >> 8) as u8,
+            });
+        }
+        pixels
+    }
+
+    #[test]
+    fn rgba_conversion_matches_the_scalar_reference() {
+        let rgba = rgba_pixels(64 * 64, 3);
+        let Ok(converted) = pixels_to_premultiplied_bgra(&rgba, png::ColorType::Rgba, 64, 64)
+        else {
+            panic!("conversion failed");
+        };
+        let mut expected = Vec::new();
+        for pixel in rgba.chunks_exact(4) {
+            let alpha = u16::from(pixel[3]);
+            expected.push((u16::from(pixel[2]) * alpha / 255) as u8);
+            expected.push((u16::from(pixel[1]) * alpha / 255) as u8);
+            expected.push((u16::from(pixel[0]) * alpha / 255) as u8);
+            expected.push(pixel[3]);
+        }
+        assert_eq!(converted, expected);
+    }
+
+    #[test]
+    fn rgb_conversion_matches_the_scalar_reference() {
+        let rgb: Vec<u8> = rgba_pixels(64 * 64, 11)
+            .chunks_exact(4)
+            .flat_map(|pixel| [pixel[0], pixel[1], pixel[2]])
+            .collect();
+        let Ok(converted) = pixels_to_premultiplied_bgra(&rgb, png::ColorType::Rgb, 64, 64) else {
+            panic!("conversion failed");
+        };
+        let mut expected = Vec::new();
+        for pixel in rgb.chunks_exact(3) {
+            expected.extend_from_slice(&[pixel[2], pixel[1], pixel[0], 255]);
+        }
+        assert_eq!(converted, expected);
+    }
+
+    #[test]
+    #[ignore = "manual timing comparison (--nocapture)"]
+    fn rgba_conversion_timing() {
+        let rgba = rgba_pixels(1920 * 1080, 17);
+        for _ in 0..3 {
+            let start = std::time::Instant::now();
+            for _ in 0..50 {
+                let Ok(converted) =
+                    pixels_to_premultiplied_bgra(&rgba, png::ColorType::Rgba, 1920, 1080)
+                else {
+                    panic!("conversion failed");
+                };
+                std::hint::black_box(&converted);
+            }
+            println!("rgba conversion 50 frames elapsed={:?}", start.elapsed());
         }
     }
 }

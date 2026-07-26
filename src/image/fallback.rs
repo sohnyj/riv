@@ -6,7 +6,8 @@ use std::path::Path;
 
 use super::decode::{
     DecodeError, DecodedImage, Frame, PixelStorage, animation_budget_exceeded, blend_over,
-    clear_rectangle, copy_rectangle, peak_luminance_from_half_pixels, uncoded_error,
+    clear_rectangle, copy_rectangle, peak_luminance_from_half_pixels, premultiplied_bgra_from_rgba,
+    uncoded_error,
 };
 
 /// Must match the built libwebpdemux ABI or WebPDemuxInternal returns null.
@@ -440,17 +441,12 @@ fn decode_heif_primary_image(
         unsafe { heif_image_release(image) };
         return Err(uncoded_error("HEIF image plane unavailable"));
     }
-    let mut pixels = Vec::with_capacity(width as usize * height as usize * 4);
-    for row in 0..height as usize {
+    let row_bytes = width as usize * 4;
+    let mut pixels = vec![0u8; row_bytes * height as usize];
+    for (row, output_row) in pixels.chunks_exact_mut(row_bytes).enumerate() {
         let row_pointer = unsafe { plane.add(row * stride as usize) };
-        let row_pixels = unsafe { std::slice::from_raw_parts(row_pointer, width as usize * 4) };
-        for pixel in row_pixels.chunks_exact(4) {
-            let alpha = u16::from(pixel[3]);
-            pixels.push((u16::from(pixel[2]) * alpha / 255) as u8);
-            pixels.push((u16::from(pixel[1]) * alpha / 255) as u8);
-            pixels.push((u16::from(pixel[0]) * alpha / 255) as u8);
-            pixels.push(pixel[3]);
-        }
+        let row_pixels = unsafe { std::slice::from_raw_parts(row_pointer, row_bytes) };
+        premultiplied_bgra_from_rgba(row_pixels, output_row);
     }
     unsafe { heif_image_release(image) };
     Ok(DecodedImage {
