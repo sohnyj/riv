@@ -1439,22 +1439,18 @@ pub fn blend_over(
     for row in 0..visible_height {
         let source_start = row * source_width as usize * 4;
         let canvas_start = ((top as usize + row) * canvas_width as usize + left as usize) * 4;
-        for column in 0..visible_width {
-            let source_pixel = &source[source_start + column * 4..source_start + column * 4 + 4];
-            let alpha = u32::from(source_pixel[3]);
-            if alpha == 0 {
-                continue;
-            }
-            let canvas_pixel =
-                &mut canvas[canvas_start + column * 4..canvas_start + column * 4 + 4];
-            if alpha == 255 {
-                canvas_pixel.copy_from_slice(source_pixel);
-                continue;
-            }
-            for channel in 0..4 {
-                let blended = u32::from(source_pixel[channel])
-                    + (u32::from(canvas_pixel[channel]) * (255 - alpha) + 127) / 255;
-                canvas_pixel[channel] = blended.min(255) as u8;
+        let source_row = &source[source_start..source_start + visible_width * 4];
+        let canvas_row = &mut canvas[canvas_start..canvas_start + visible_width * 4];
+        // Branch-free over-composite; premultiplied sources make the alpha 0/255 shortcuts redundant.
+        for (canvas_pixel, source_pixel) in canvas_row
+            .chunks_exact_mut(4)
+            .zip(source_row.chunks_exact(4))
+        {
+            let inverse_alpha = 255 - u32::from(source_pixel[3]);
+            for (canvas_channel, source_channel) in canvas_pixel.iter_mut().zip(source_pixel) {
+                let blended = u32::from(*source_channel)
+                    + (u32::from(*canvas_channel) * inverse_alpha + 127) / 255;
+                *canvas_channel = blended.min(255) as u8;
             }
         }
     }
@@ -2132,11 +2128,94 @@ mod peak_scan_tests {
 mod compositing_tests {
     use super::*;
 
+    /// Deterministic premultiplied BGRA with frequent fully transparent and opaque pixels.
+    fn premultiplied_pixels(count: usize, mut state: u32) -> Vec<u8> {
+        let mut pixels = Vec::with_capacity(count * 4);
+        for _ in 0..count {
+            state = state.wrapping_mul(1_664_525).wrapping_add(1_013_904_223);
+            let alpha = match state >> 30 {
+                0 => 0,
+                1 => 255,
+                _ => (state >> 8) as u8,
+            };
+            for shift in [0u32, 8, 16] {
+                let straight = (state >> shift) as u8;
+                pixels.push((u16::from(straight) * u16::from(alpha) / 255) as u8);
+            }
+            pixels.push(alpha);
+        }
+        pixels
+    }
+
+    fn blend_over_reference(canvas: &mut [u8], source: &[u8]) {
+        for (canvas_pixel, source_pixel) in canvas.chunks_exact_mut(4).zip(source.chunks_exact(4)) {
+            let alpha = u32::from(source_pixel[3]);
+            if alpha == 0 {
+                continue;
+            }
+            if alpha == 255 {
+                canvas_pixel.copy_from_slice(source_pixel);
+                continue;
+            }
+            for channel in 0..4 {
+                let blended = u32::from(source_pixel[channel])
+                    + (u32::from(canvas_pixel[channel]) * (255 - alpha) + 127) / 255;
+                canvas_pixel[channel] = blended.min(255) as u8;
+            }
+        }
+    }
+
+    #[test]
+    fn blend_over_matches_the_scalar_reference() {
+        let source = premultiplied_pixels(64 * 64, 7);
+        let mut canvas = premultiplied_pixels(64 * 64, 1234);
+        let mut expected = canvas.clone();
+        blend_over_reference(&mut expected, &source);
+        blend_over(&mut canvas, 64, 64, &source, 64, 64, 0, 0);
+        assert_eq!(canvas, expected);
+    }
+
+    #[test]
+    fn blend_over_clips_an_offset_frame_to_the_canvas() {
+        let source = premultiplied_pixels(8 * 8, 42);
+        let mut canvas = premultiplied_pixels(16 * 16, 9);
+        let mut expected = canvas.clone();
+        // Rows 0..4 of the visible 4x4 window, blended one pixel at a time.
+        for row in 0..4usize {
+            for column in 0..4usize {
+                let canvas_start = ((12 + row) * 16 + 12 + column) * 4;
+                let source_start = (row * 8 + column) * 4;
+                blend_over_reference(
+                    &mut expected[canvas_start..canvas_start + 4],
+                    &source[source_start..source_start + 4],
+                );
+            }
+        }
+        blend_over(&mut canvas, 16, 16, &source, 8, 8, 12, 12);
+        assert_eq!(canvas, expected);
+    }
+
     #[test]
     fn clear_rectangle_ignores_a_zero_width_canvas() {
         let mut canvas = Vec::new();
         clear_rectangle(&mut canvas, 0, 0, 0, 4, 4); // must not divide by zero
         assert!(canvas.is_empty());
+    }
+
+    #[test]
+    #[ignore = "manual timing comparison (--nocapture)"]
+    fn blend_over_timing() {
+        const WIDTH: u32 = 1920;
+        const HEIGHT: u32 = 1080;
+        let source = premultiplied_pixels((WIDTH * HEIGHT) as usize, 99);
+        let mut canvas = premultiplied_pixels((WIDTH * HEIGHT) as usize, 5);
+        for _ in 0..3 {
+            let start = std::time::Instant::now();
+            for _ in 0..50 {
+                blend_over(&mut canvas, WIDTH, HEIGHT, &source, WIDTH, HEIGHT, 0, 0);
+            }
+            println!("blend_over 50 frames elapsed={:?}", start.elapsed());
+        }
     }
 }
 

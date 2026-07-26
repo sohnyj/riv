@@ -196,13 +196,10 @@ fn compose_webp_frames(
 
 fn premultiply_bgra_in_place(pixels: &mut [u8]) {
     for pixel in pixels.chunks_exact_mut(4) {
-        let alpha = u16::from(pixel[3]);
-        if alpha == 255 {
-            continue;
-        }
-        let (color_channels, _) = pixel.split_at_mut(3);
-        for channel in color_channels {
-            *channel = (u16::from(*channel) * alpha / 255) as u8;
+        // Uniform four-lane multiply; the alpha lane's 255 factor leaves it unchanged.
+        let multipliers = [pixel[3], pixel[3], pixel[3], 255];
+        for (channel, multiplier) in pixel.iter_mut().zip(multipliers) {
+            *channel = (u16::from(*channel) * u16::from(multiplier) / 255) as u8;
         }
     }
 }
@@ -473,6 +470,60 @@ fn decode_heif_primary_image(
         }],
         frames_truncated: false,
     })
+}
+
+#[cfg(test)]
+mod premultiply_tests {
+    use super::*;
+
+    /// Deterministic straight-alpha BGRA with frequent fully transparent and opaque pixels.
+    fn bgra_pixels(count: usize, mut state: u32) -> Vec<u8> {
+        let mut pixels = Vec::with_capacity(count * 4);
+        for _ in 0..count {
+            state = state.wrapping_mul(1_664_525).wrapping_add(1_013_904_223);
+            for shift in [0u32, 8, 16] {
+                pixels.push((state >> shift) as u8);
+            }
+            pixels.push(match state >> 30 {
+                0 => 0,
+                1 => 255,
+                _ => (state >> 8) as u8,
+            });
+        }
+        pixels
+    }
+
+    #[test]
+    fn premultiply_matches_the_scalar_reference() {
+        let mut pixels = bgra_pixels(64 * 64, 13);
+        let mut expected = pixels.clone();
+        for pixel in expected.chunks_exact_mut(4) {
+            let alpha = u16::from(pixel[3]);
+            if alpha == 255 {
+                continue;
+            }
+            for channel in &mut pixel[..3] {
+                *channel = (u16::from(*channel) * alpha / 255) as u8;
+            }
+        }
+        premultiply_bgra_in_place(&mut pixels);
+        assert_eq!(pixels, expected);
+    }
+
+    #[test]
+    #[ignore = "manual timing comparison (--nocapture)"]
+    fn premultiply_timing() {
+        let pixels = bgra_pixels(1920 * 1080, 31);
+        for _ in 0..3 {
+            let mut scratch = pixels.clone();
+            let start = std::time::Instant::now();
+            for _ in 0..50 {
+                premultiply_bgra_in_place(&mut scratch);
+                std::hint::black_box(&scratch);
+            }
+            println!("premultiply 50 frames elapsed={:?}", start.elapsed());
+        }
+    }
 }
 
 /// A crafted near-SIZE_MAX scanline offset must error, not read out of bounds (SECURITY_AUDIT.md).
