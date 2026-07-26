@@ -7,7 +7,9 @@ use std::path::Path;
 use std::sync::OnceLock;
 use std::sync::atomic::{AtomicBool, Ordering};
 
-use windows::Win32::Foundation::{E_ABORT, GENERIC_READ, WINCODEC_ERR_COMPONENTNOTFOUND};
+use windows::Win32::Foundation::{
+    E_ABORT, GENERIC_READ, WINCODEC_ERR_COMPONENTINITIALIZEFAILURE, WINCODEC_ERR_COMPONENTNOTFOUND,
+};
 use windows::Win32::Graphics::Imaging::{
     CLSID_WICImagingFactory, GUID_WICPixelFormat32bppPBGRA, GUID_WICPixelFormat64bppPRGBAHalf,
     GUID_WICPixelFormat64bppRGBA, IWICBitmapDecoder, IWICBitmapFrameDecode, IWICBitmapSource,
@@ -18,6 +20,7 @@ use windows::Win32::Graphics::Imaging::{
     WICColorContextProfile, WICDecodeMetadataCacheOnDemand,
     WICPixelFormatNumericRepresentationFloat, WICRect,
 };
+use windows::Win32::Media::MediaFoundation::MF_E_TOPO_CODEC_NOT_FOUND;
 use windows::Win32::System::Com::StructuredStorage::{
     PROPVARIANT, PropVariantClear, PropVariantToDouble, PropVariantToFileTime,
     PropVariantToStringAlloc, PropVariantToUInt32,
@@ -492,6 +495,14 @@ impl DecodeInput<'_> {
     }
 }
 
+/// Failures meaning the codec is absent or broken, which the Store hint can remedy:
+/// unregistered, registered but failing to start, and a missing video decoder underneath.
+fn is_missing_codec_error(code: i32) -> bool {
+    code == WINCODEC_ERR_COMPONENTNOTFOUND.0
+        || code == WINCODEC_ERR_COMPONENTINITIALIZEFAILURE.0
+        || code == MF_E_TOPO_CODEC_NOT_FOUND.0
+}
+
 fn decode_input(
     input: &DecodeInput<'_>,
     cancellation: &AtomicBool,
@@ -506,7 +517,7 @@ fn decode_input(
     match adapter {
         Adapter::Wic | Adapter::WicRawTwoStage => {
             decode_with_wic(input, format_name, semantics, cancellation).map_err(|mut error| {
-                if error.code == WINCODEC_ERR_COMPONENTNOTFOUND.0
+                if is_missing_codec_error(error.code)
                     && let Some(descriptor) = descriptor
                 {
                     error.store_extension = descriptor.store_extension;
