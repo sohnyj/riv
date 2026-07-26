@@ -763,8 +763,11 @@ impl ImageCore {
                 JobKind::Preview,
                 true,
             );
+        } else if !raw_two_stage(location) {
+            // A cached animation first frame goes straight to the full decode.
+            self.submit_decode(location.clone(), file_size, modified, JobKind::Full, true);
         }
-        // A shown preview defers its full decode until navigation stops; the caller
+        // A RAW preview defers its full decode until navigation stops; the caller
         // schedules that through start_pending_full_decode.
         self.preload_neighbors();
         preview_shown
@@ -786,7 +789,7 @@ impl ImageCore {
             .submit(location, file_size, modified, cancellation, kind, awaited);
     }
 
-    /// A pending item is showing its preview and waits for the deferred full decode.
+    /// A pending RAW item is showing its preview and waits for the deferred full decode.
     pub fn full_decode_pending(&self) -> bool {
         self.pending_display.as_ref().is_some_and(|pending| {
             !self.in_flight.contains_key(pending)
@@ -987,20 +990,30 @@ impl ImageCore {
             && error.is_cancelled()
         {
             // Navigation can return to an item while its decode is cancelling. A cached
-            // preview stands in and its full decode waits for the deferral timer.
-            if is_pending
-                && !self
+            // RAW preview stands in for the deferral timer; other previews resume the
+            // full decode at once.
+            if is_pending {
+                let preview_standing = self
                     .cache
                     .get(&completion.location)
-                    .is_some_and(|entry| entry.preview && entry.file_size == completion.file_size)
-            {
-                self.submit_decode(
-                    completion.location,
-                    completion.file_size,
-                    completion.modified,
-                    JobKind::Preview,
-                    true,
-                );
+                    .is_some_and(|entry| entry.preview && entry.file_size == completion.file_size);
+                if !preview_standing {
+                    self.submit_decode(
+                        completion.location,
+                        completion.file_size,
+                        completion.modified,
+                        JobKind::Preview,
+                        true,
+                    );
+                } else if !raw_two_stage(&completion.location) {
+                    self.submit_decode(
+                        completion.location,
+                        completion.file_size,
+                        completion.modified,
+                        JobKind::Full,
+                        true,
+                    );
+                }
             }
             return false;
         }
@@ -1254,6 +1267,11 @@ fn preload_offsets(backward: usize, forward: usize) -> impl Iterator<Item = isiz
 
 /// Next/Previous candidates in walk order; an absent anchor starts at the matching end.
 /// One step from the anchor (or the matching end when absent); None past a non-looping end.
+/// A local RAW file on the embedded-preview two-stage path.
+fn raw_two_stage(location: &ItemLocation) -> bool {
+    matches!(location, ItemLocation::File(path) if decode::is_raw_two_stage(path))
+}
+
 fn step_index(
     anchor: Option<usize>,
     direction: isize,

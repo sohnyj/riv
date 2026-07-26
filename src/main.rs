@@ -653,7 +653,7 @@ impl Application {
         } else {
             self.freeze_animation_for_load(window);
         }
-        // A shown preview gets its full decode once navigation stops briefly.
+        // A RAW preview gets its full decode once navigation stops briefly.
         if self.image_core.full_decode_pending() {
             unsafe { SetTimer(Some(window), FULL_DECODE_TIMER, 250, None) };
         }
