@@ -1852,7 +1852,8 @@ fn decode_svg(data: &[u8], format_name: &'static str) -> Result<DecodedImage, De
     );
     let mut pixels = pixmap.take();
     for pixel in pixels.chunks_exact_mut(4) {
-        pixel.swap(0, 2);
+        let swapped = [pixel[2], pixel[1], pixel[0], pixel[3]];
+        pixel.copy_from_slice(&swapped);
     }
     Ok(DecodedImage {
         width: pixel_width,
@@ -1942,6 +1943,19 @@ fn copy_pixels(
         row += rows;
     }
     Ok(pixels)
+}
+
+#[cfg(test)]
+mod svg_tests {
+    use super::*;
+
+    #[test]
+    fn svg_pixels_come_out_premultiplied_bgra() {
+        let svg = br##"<svg xmlns="http://www.w3.org/2000/svg" width="4" height="4"><rect width="4" height="4" fill="#FF8000" fill-opacity="1.0"/></svg>"##;
+        let decoded = decode_svg(svg, "SVG").unwrap_or_else(|_| panic!("decode failed"));
+        let pixel = &decoded.frames[0].pixels[..4];
+        assert_eq!(pixel, [0x00, 0x80, 0xFF, 0xFF], "expected BGRA order");
+    }
 }
 
 #[cfg(test)]
