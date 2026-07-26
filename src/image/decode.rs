@@ -112,7 +112,7 @@ impl DecodedImage {
 pub struct DecodeError {
     pub code: i32,
     pub message: String,
-    pub store_extension: Option<&'static str>,
+    pub store_extensions: &'static [&'static str],
 }
 
 impl DecodeError {
@@ -120,7 +120,7 @@ impl DecodeError {
         Self {
             code: E_ABORT.0,
             message: "cancelled".to_string(),
-            store_extension: None,
+            store_extensions: &[],
         }
     }
 
@@ -130,7 +130,7 @@ impl DecodeError {
 
     /// True when no decoder recognized the data and no Store codec is named.
     pub fn is_unrecognized_format(&self) -> bool {
-        self.code == WINCODEC_ERR_COMPONENTNOTFOUND.0 && self.store_extension.is_none()
+        self.code == WINCODEC_ERR_COMPONENTNOTFOUND.0 && self.store_extensions.is_empty()
     }
 }
 
@@ -139,7 +139,7 @@ impl From<windows::core::Error> for DecodeError {
         Self {
             code: error.code().0,
             message: error.message(),
-            store_extension: None,
+            store_extensions: &[],
         }
     }
 }
@@ -182,7 +182,7 @@ pub struct FormatDescriptor {
     magic: &'static [MagicSignature],
     semantics: FrameSemantics,
     adapter: Adapter,
-    store_extension: Option<&'static str>,
+    store_extensions: &'static [&'static str],
 }
 
 /// Extensions, file filters, and association groups all derive from this registry.
@@ -193,7 +193,7 @@ static REGISTRY: &[FormatDescriptor] = &[
         magic: &[&[(0, b"\x89PNG\r\n\x1a\n")]],
         semantics: FrameSemantics::Single,
         adapter: Adapter::Wic,
-        store_extension: None,
+        store_extensions: &[],
     },
     FormatDescriptor {
         name: "APNG",
@@ -201,7 +201,7 @@ static REGISTRY: &[FormatDescriptor] = &[
         magic: &[],
         semantics: FrameSemantics::Animation,
         adapter: Adapter::Apng,
-        store_extension: None,
+        store_extensions: &[],
     },
     FormatDescriptor {
         name: "SVG",
@@ -209,7 +209,7 @@ static REGISTRY: &[FormatDescriptor] = &[
         magic: &[&[(0, b"<svg")]],
         semantics: FrameSemantics::Single,
         adapter: Adapter::Svg,
-        store_extension: None,
+        store_extensions: &[],
     },
     FormatDescriptor {
         name: "JPEG",
@@ -217,7 +217,7 @@ static REGISTRY: &[FormatDescriptor] = &[
         magic: &[&[(0, b"\xFF\xD8\xFF")]],
         semantics: FrameSemantics::Single,
         adapter: Adapter::Wic,
-        store_extension: None,
+        store_extensions: &[],
     },
     FormatDescriptor {
         name: "GIF",
@@ -225,7 +225,7 @@ static REGISTRY: &[FormatDescriptor] = &[
         magic: &[&[(0, b"GIF8")]],
         semantics: FrameSemantics::Animation,
         adapter: Adapter::Wic,
-        store_extension: None,
+        store_extensions: &[],
     },
     FormatDescriptor {
         name: "WebP",
@@ -233,7 +233,7 @@ static REGISTRY: &[FormatDescriptor] = &[
         magic: &[&[(0, b"RIFF"), (8, b"WEBP")]],
         semantics: FrameSemantics::Single,
         adapter: Adapter::Wic,
-        store_extension: Some("WebP Image Extensions"),
+        store_extensions: &["WebP Image Extensions"],
     },
     FormatDescriptor {
         name: "BMP",
@@ -241,7 +241,7 @@ static REGISTRY: &[FormatDescriptor] = &[
         magic: &[&[(0, b"BM")]],
         semantics: FrameSemantics::Single,
         adapter: Adapter::Wic,
-        store_extension: None,
+        store_extensions: &[],
     },
     FormatDescriptor {
         name: "ICO",
@@ -249,7 +249,7 @@ static REGISTRY: &[FormatDescriptor] = &[
         magic: &[&[(0, &[0x00, 0x00, 0x01, 0x00])]],
         semantics: FrameSemantics::SizeVariants,
         adapter: Adapter::Wic,
-        store_extension: None,
+        store_extensions: &[],
     },
     FormatDescriptor {
         name: "TIFF",
@@ -257,7 +257,7 @@ static REGISTRY: &[FormatDescriptor] = &[
         magic: &[&[(0, b"II*\x00")], &[(0, b"MM\x00*")]],
         semantics: FrameSemantics::Single,
         adapter: Adapter::Wic,
-        store_extension: None,
+        store_extensions: &[],
     },
     FormatDescriptor {
         name: "DDS",
@@ -265,7 +265,7 @@ static REGISTRY: &[FormatDescriptor] = &[
         magic: &[&[(0, b"DDS ")]],
         semantics: FrameSemantics::Single,
         adapter: Adapter::Wic,
-        store_extension: None,
+        store_extensions: &[],
     },
     FormatDescriptor {
         name: "HEIF",
@@ -279,7 +279,7 @@ static REGISTRY: &[FormatDescriptor] = &[
         ],
         semantics: FrameSemantics::Single,
         adapter: Adapter::HeifWithWicPreferred,
-        store_extension: None,
+        store_extensions: &[],
     },
     FormatDescriptor {
         name: "EXR",
@@ -287,7 +287,7 @@ static REGISTRY: &[FormatDescriptor] = &[
         magic: &[&[(0, b"\x76\x2F\x31\x01")]],
         semantics: FrameSemantics::Single,
         adapter: Adapter::Exr,
-        store_extension: None,
+        store_extensions: &[],
     },
     FormatDescriptor {
         name: "AVIF",
@@ -295,7 +295,7 @@ static REGISTRY: &[FormatDescriptor] = &[
         magic: &[&[(4, b"ftypavif")], &[(4, b"ftypavis")]],
         semantics: FrameSemantics::Single,
         adapter: Adapter::Wic,
-        store_extension: Some("AV1 Video Extension"),
+        store_extensions: &["HEIF Image Extension", "AV1 Video Extension"],
     },
     FormatDescriptor {
         name: "JPEG XL",
@@ -306,7 +306,7 @@ static REGISTRY: &[FormatDescriptor] = &[
         ],
         semantics: FrameSemantics::Single,
         adapter: Adapter::Wic,
-        store_extension: Some("JPEG XL Image Extension"),
+        store_extensions: &["JPEG XL Image Extension"],
     },
     FormatDescriptor {
         name: "RAW",
@@ -317,7 +317,7 @@ static REGISTRY: &[FormatDescriptor] = &[
         magic: &[],
         semantics: FrameSemantics::Single,
         adapter: Adapter::WicRawTwoStage,
-        store_extension: Some("Raw Image Extension"),
+        store_extensions: &["Raw Image Extension"],
     },
 ];
 
@@ -384,7 +384,7 @@ static ANIMATED_WEBP: FormatDescriptor = FormatDescriptor {
     magic: &[],
     semantics: FrameSemantics::Animation,
     adapter: Adapter::WebPAnimation,
-    store_extension: None,
+    store_extensions: &[],
 };
 
 /// PNG + acTL = APNG; WebP + VP8X ANIM flag = animated WebP.
@@ -520,7 +520,7 @@ fn decode_input(
                 if is_missing_codec_error(error.code)
                     && let Some(descriptor) = descriptor
                 {
-                    error.store_extension = descriptor.store_extension;
+                    error.store_extensions = descriptor.store_extensions;
                 }
                 error
             })
@@ -1633,7 +1633,7 @@ pub fn uncoded_error(message: impl std::fmt::Display) -> DecodeError {
     DecodeError {
         code: 0,
         message: message.to_string(),
-        store_extension: None,
+        store_extensions: &[],
     }
 }
 

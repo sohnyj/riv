@@ -837,7 +837,7 @@ impl Application {
                     &location.display_name(),
                     &error.message,
                     error.code,
-                    error.store_extension,
+                    error.store_extensions,
                 )
             });
         // The pill borrows the top edge: the info panel yields while one shows.

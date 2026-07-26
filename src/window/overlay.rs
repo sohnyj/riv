@@ -526,7 +526,7 @@ pub fn build_error_text(
     file_name: &str,
     message: &str,
     code: i32,
-    store_extension: Option<&str>,
+    store_extensions: &[&str],
 ) -> String {
     let reason = if message.is_empty() {
         "Decode failed".to_string()
@@ -544,9 +544,14 @@ pub fn build_error_text(
     } else {
         format!("Error occurred opening\n{file_name}\n{reason}")
     };
-    if let Some(extension_name) = store_extension {
+    if !store_extensions.is_empty() {
+        let extension_names = store_extensions
+            .iter()
+            .map(|name| format!("\"{name}\""))
+            .collect::<Vec<_>>()
+            .join(" and ");
         text.push_str(&format!(
-            "\nInstall \"{extension_name}\" (Microsoft Corporation)\nfrom the Microsoft Store to view this file."
+            "\nInstall {extension_names} (Microsoft Corporation)\nfrom the Microsoft Store to view this file."
         ));
     }
     text
@@ -1070,21 +1075,38 @@ mod error_text_tests {
 
     #[test]
     fn an_empty_name_drops_its_line() {
-        let text = build_error_text("", "no URL in the clipboard", 0, None);
+        let text = build_error_text("", "no URL in the clipboard", 0, &[]);
         assert_eq!(text, "Error occurred opening\nno URL in the clipboard");
     }
 
     #[test]
     fn code_zero_drops_the_error_suffix() {
-        let uncoded = build_error_text("a.png", "unsupported URL protocol", 0, None);
+        let uncoded = build_error_text("a.png", "unsupported URL protocol", 0, &[]);
         assert_eq!(
             uncoded,
             "Error occurred opening\na.png\nunsupported URL protocol"
         );
-        let coded = build_error_text("a.png", "no image at this URL", 0x88982F50u32 as i32, None);
+        let coded = build_error_text("a.png", "no image at this URL", 0x88982F50u32 as i32, &[]);
         assert_eq!(
             coded,
             "Error occurred opening\na.png\nno image at this URL (Error 0x88982F50)"
         );
+    }
+
+    #[test]
+    fn store_extensions_are_named_together() {
+        let single = build_error_text("a.jxl", "decode failed", 0, &["JPEG XL Image Extension"]);
+        assert!(single.ends_with(
+            "\nInstall \"JPEG XL Image Extension\" (Microsoft Corporation)\nfrom the Microsoft Store to view this file."
+        ));
+        let paired = build_error_text(
+            "a.avif",
+            "decode failed",
+            0,
+            &["HEIF Image Extension", "AV1 Video Extension"],
+        );
+        assert!(paired.ends_with(
+            "\nInstall \"HEIF Image Extension\" and \"AV1 Video Extension\" (Microsoft Corporation)\nfrom the Microsoft Store to view this file."
+        ));
     }
 }

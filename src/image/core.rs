@@ -684,7 +684,7 @@ impl ImageCore {
                 DecodeError {
                     code: 0,
                     message: message.to_string(),
-                    store_extension: None,
+                    store_extensions: &[],
                 },
             ));
             return false;
@@ -702,7 +702,7 @@ impl ImageCore {
                         DecodeError {
                             code: error.raw_os_error().unwrap_or(0),
                             message: error.to_string(),
-                            store_extension: None,
+                            store_extensions: &[],
                         },
                     ));
                     return false;
@@ -720,7 +720,7 @@ impl ImageCore {
                         DecodeError {
                             code: 0,
                             message: "member no longer exists in the archive".to_string(),
-                            store_extension: None,
+                            store_extensions: &[],
                         },
                     ));
                     return false;
@@ -1556,7 +1556,7 @@ impl From<archive_reader::ArchiveError> for DecodeError {
             Self {
                 code: error.code,
                 message: error.message,
-                store_extension: None,
+                store_extensions: &[],
             }
         }
     }
@@ -1570,7 +1570,7 @@ impl From<curl::NetworkError> for DecodeError {
             Self {
                 code: error.code,
                 message: error.message,
-                store_extension: None,
+                store_extensions: &[],
             }
         }
     }
@@ -1965,7 +1965,7 @@ mod url_session_state_tests {
         DecodeError {
             code: 0,
             message: message.to_string(),
-            store_extension: None,
+            store_extensions: &[],
         }
     }
 
@@ -2045,7 +2045,7 @@ mod url_session_state_tests {
             DecodeError {
                 code: 0,
                 message: "download failed".to_string(),
-                store_extension: None,
+                store_extensions: &[],
             },
         ));
         assert!(!core.reload_current());
@@ -2059,19 +2059,16 @@ mod url_session_state_tests {
     #[test]
     fn unrecognized_url_bytes_read_as_no_image() {
         use windows::Win32::Foundation::WINCODEC_ERR_COMPONENTNOTFOUND;
-        let error = |store_extension| DecodeError {
+        let error = |store_extensions| DecodeError {
             code: WINCODEC_ERR_COMPONENTNOTFOUND.0,
             message: "component not found".to_string(),
-            store_extension,
+            store_extensions,
         };
-        assert_eq!(
-            url_decode_error(error(None)).message,
-            "no image at this URL"
-        );
+        assert_eq!(url_decode_error(error(&[])).message, "no image at this URL");
         // A failure that names a Store codec keeps its install hint.
-        let store_hinted = url_decode_error(error(Some("avif")));
+        let store_hinted = url_decode_error(error(&["avif"]));
         assert_eq!(store_hinted.message, "component not found");
-        assert_eq!(store_hinted.store_extension, Some("avif"));
+        assert_eq!(store_hinted.store_extensions, ["avif"]);
     }
 
     #[test]
