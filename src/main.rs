@@ -662,7 +662,7 @@ impl Application {
 
     fn clear_displayed_image(&mut self, window: HWND) {
         let _ = unsafe { KillTimer(Some(window), ANIMATION_TIMER) };
-        self.dismiss_sticky_status();
+        self.dismiss_status_text(window);
         self.animation = None;
         self.displayed_image = None;
         self.displayed_location = None;
@@ -749,8 +749,7 @@ impl Application {
         unsafe { SetTimer(Some(window), STATUS_TEXT_TIMER, 1000, None) };
     }
 
-    /// Drops the frame-step pill; returns whether one was showing.
-    /// Clears any status pill; moving to another item changes its context.
+    /// Drops any status pill; moving to another item ends its context.
     fn dismiss_status_text(&mut self, window: HWND) {
         if self.status_text.take().is_some() {
             let _ = unsafe { KillTimer(Some(window), STATUS_TEXT_TIMER) };
@@ -758,6 +757,7 @@ impl Application {
         }
     }
 
+    /// Drops the frame-step pill; returns whether one was showing.
     fn dismiss_sticky_status(&mut self) -> bool {
         let showing = matches!(self.status_text, Some(StatusText::Sticky(_)));
         if showing {
