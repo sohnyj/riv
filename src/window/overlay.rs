@@ -21,7 +21,7 @@ use crate::image::color;
 use crate::image::decode::{DecodedImage, PixelStorage};
 use crate::view::renderer::ToneMapInfo;
 
-/// Lucida Console design metrics: ascent 1616/2048 em, natural line exactly 1 em (R12).
+/// Lucida Console design metrics: ascent 1616/2048 em, natural line exactly 1 em.
 const FONT_ASCENT_RATIO: f32 = 1616.0 / 2048.0;
 /// Roomier than the font's tight single-em natural line.
 const LINE_SPACING_RATIO: f32 = 1.3;

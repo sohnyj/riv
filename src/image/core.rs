@@ -548,7 +548,7 @@ impl ImageCore {
             });
             return false;
         }
-        // A reload re-decodes the item; the listing snapshot stays put (SPEC section 4.4).
+        // A reload re-decodes the item; the listing snapshot stays put.
         self.load_item(&location)
     }
 
@@ -1015,14 +1015,14 @@ impl ImageCore {
         self.listing_scope = Some(scan.scope);
     }
 
-    /// Drops a deleted item from the listing snapshot; no rescan (SPEC section 4.3).
+    /// Drops a deleted item from the listing snapshot; no rescan.
     pub fn remove_listing_entry(&mut self, location: &ItemLocation) {
         if let Some(index) = self.position_of(location) {
             self.entries.remove(index);
         }
     }
 
-    /// Synchronous by design (SPEC section 4.3); only opens enumerate off the UI thread.
+    /// Synchronous by design; only opens enumerate off the UI thread.
     pub fn rescan_listing(&mut self) {
         match &self.listing_scope {
             Some(ListingScope::Directory(directory)) => self.rescan_folder(&directory.clone()),

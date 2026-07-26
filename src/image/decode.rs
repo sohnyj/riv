@@ -804,7 +804,7 @@ fn decode_single_frame(
     let exif = read_exif(&frame);
     let (native_bits_per_channel, float_native) = frame_pixel_format_info(factory, &frame);
     let high_depth = native_bits_per_channel > 8;
-    // PQ/HLG integers bypass WIC's sRGB-assuming float conversion (SPEC section 7).
+    // PQ/HLG integers bypass WIC's sRGB-assuming float conversion.
     let hdr_encoding = if float_native {
         None
     } else {
