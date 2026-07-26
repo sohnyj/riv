@@ -63,6 +63,8 @@ pub struct DecodedImage {
     /// Content peak (nits) of FP16 sources; pixels are linear scRGB (1.0 = 80 nits).
     pub peak_luminance_nits: Option<f32>,
     pub frames: Vec<Frame>,
+    /// Expanding the animation would pass the byte limit; only the first frame is kept.
+    pub frames_over_limit: bool,
 }
 
 pub struct ExifInfo {
@@ -147,6 +149,9 @@ enum FrameSemantics {
 
 /// D3D11 FL11 texture limit; larger sources are downscaled before upload.
 const MAXIMUM_TEXTURE_DIMENSION: u32 = 16384;
+
+/// Cap on an animation's expanded frames; past it only the first frame is kept.
+pub(crate) const ANIMATION_FRAMES_BYTE_LIMIT: u64 = 1 << 30;
 
 /// 100 ns intervals from 1601-01-01 (FILETIME zero) to the UNIX epoch.
 pub const FILETIME_UNIX_EPOCH: u64 = 116_444_736_000_000_000;
@@ -622,6 +627,7 @@ pub fn decode_raw_preview(path: &Path, cancellation: &AtomicBool) -> Option<Deco
                 pixels,
                 delay_milliseconds: 0,
             }],
+            frames_over_limit: false,
         })
     })
     .ok()?;
@@ -657,6 +663,7 @@ struct DecodedFrames {
     source_bits_per_channel: u32,
     peak_luminance_nits: Option<f32>,
     frames: Vec<Frame>,
+    frames_over_limit: bool,
 }
 
 impl DecodedFrames {
@@ -673,6 +680,7 @@ impl DecodedFrames {
             source_bits_per_channel: self.source_bits_per_channel,
             peak_luminance_nits: self.peak_luminance_nits,
             frames: self.frames,
+            frames_over_limit: self.frames_over_limit,
         }
     }
 }
@@ -885,6 +893,7 @@ fn decode_single_frame(
             pixels,
             delay_milliseconds: 0,
         }],
+        frames_over_limit: false,
     })
 }
 
@@ -1337,10 +1346,17 @@ fn decode_animation(
 
     let mut canvas: Vec<u8> = Vec::new();
     let mut frames = Vec::with_capacity(frame_count as usize);
+    let mut frames_over_limit = false;
     let mut icc_profile = None;
     for index in 0..frame_count {
         if cancellation.load(Ordering::Relaxed) {
             return Err(E_ABORT.into());
+        }
+        if !frames.is_empty()
+            && (frames.len() as u64 + 1) * canvas.len() as u64 > ANIMATION_FRAMES_BYTE_LIMIT
+        {
+            frames_over_limit = true;
+            break;
         }
         let frame = unsafe { decoder.GetFrame(index)? };
         if index == 0 {
@@ -1387,6 +1403,9 @@ fn decode_animation(
             _ => {}
         }
     }
+    if frames_over_limit {
+        frames.truncate(1);
+    }
     Ok(DecodedFrames {
         width: canvas_width,
         height: canvas_height,
@@ -1398,6 +1417,7 @@ fn decode_animation(
         source_bits_per_channel: 8,
         peak_luminance_nits: None,
         frames,
+        frames_over_limit,
     })
 }
 
@@ -1644,9 +1664,16 @@ fn decode_apng<Input: BufRead + Seek>(
     let mut canvas = vec![0u8; canvas_width as usize * canvas_height as usize * 4];
     // The png crate accepts acTL num_frames up to i32::MAX; cap the reservation.
     let mut frames = Vec::with_capacity((animation_frame_count as usize).min(4096));
+    let mut frames_over_limit = false;
     for index in 0..animation_frame_count {
         if cancellation.load(Ordering::Relaxed) {
             return Err(DecodeError::cancelled());
+        }
+        if !frames.is_empty()
+            && (frames.len() as u64 + 1) * canvas.len() as u64 > ANIMATION_FRAMES_BYTE_LIMIT
+        {
+            frames_over_limit = true;
+            break;
         }
         if !(index == 0 && (default_image_is_first_frame || !has_animation)) {
             reader.next_frame_info().map_err(uncoded_error)?;
@@ -1713,6 +1740,9 @@ fn decode_apng<Input: BufRead + Seek>(
             _ => {}
         }
     }
+    if frames_over_limit {
+        frames.truncate(1);
+    }
     Ok(DecodedImage {
         width: canvas_width,
         height: canvas_height,
@@ -1725,6 +1755,7 @@ fn decode_apng<Input: BufRead + Seek>(
         source_bits_per_channel: 8,
         peak_luminance_nits: None,
         frames,
+        frames_over_limit,
     })
 }
 
@@ -1821,6 +1852,7 @@ fn decode_svg(data: &[u8], format_name: &'static str) -> Result<DecodedImage, De
             pixels,
             delay_milliseconds: 0,
         }],
+        frames_over_limit: false,
     })
 }
 

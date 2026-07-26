@@ -5,8 +5,8 @@ use std::os::windows::ffi::OsStrExt;
 use std::path::Path;
 
 use super::decode::{
-    DecodeError, DecodedImage, Frame, PixelStorage, blend_over, clear_rectangle, copy_rectangle,
-    peak_luminance_from_half_pixels, uncoded_error,
+    ANIMATION_FRAMES_BYTE_LIMIT, DecodeError, DecodedImage, Frame, PixelStorage, blend_over,
+    clear_rectangle, copy_rectangle, peak_luminance_from_half_pixels, uncoded_error,
 };
 
 /// Must match the built libwebpdemux ABI or WebPDemuxInternal returns null.
@@ -109,6 +109,7 @@ fn compose_webp_frames(
     }
     let mut canvas = vec![0u8; canvas_width as usize * canvas_height as usize * 4];
     let mut frames = Vec::with_capacity(iterator.frame_count.max(1) as usize);
+    let mut frames_over_limit = false;
     loop {
         let frame_width = iterator.width.max(0) as u32;
         let frame_height = iterator.height.max(0) as u32;
@@ -165,11 +166,18 @@ fn compose_webp_frames(
                 frame_height,
             );
         }
+        if (frames.len() as u64 + 1) * canvas.len() as u64 > ANIMATION_FRAMES_BYTE_LIMIT {
+            frames_over_limit = true;
+            break;
+        }
         if frames.len() >= frame_limit || unsafe { WebPDemuxNextFrame(&raw mut iterator) } == 0 {
             break;
         }
     }
     unsafe { WebPDemuxReleaseIterator(&raw mut iterator) };
+    if frames_over_limit {
+        frames.truncate(1);
+    }
     Ok(DecodedImage {
         width: canvas_width,
         height: canvas_height,
@@ -182,6 +190,7 @@ fn compose_webp_frames(
         source_bits_per_channel: 8,
         peak_luminance_nits: None,
         frames,
+        frames_over_limit,
     })
 }
 
@@ -301,6 +310,7 @@ fn decode_exr_with(
             pixels,
             delay_milliseconds: 0,
         }],
+        frames_over_limit: false,
     })
 }
 
@@ -461,6 +471,7 @@ fn decode_heif_primary_image(
             pixels,
             delay_milliseconds: 0,
         }],
+        frames_over_limit: false,
     })
 }
 

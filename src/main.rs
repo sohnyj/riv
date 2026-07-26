@@ -611,6 +611,16 @@ impl Application {
                 )
             };
         }
+        if self
+            .displayed_image
+            .as_ref()
+            .is_some_and(|image| image.frames_over_limit)
+        {
+            self.show_status_text(
+                window,
+                "Animation: First frame only (over 1 GiB)".to_string(),
+            );
+        }
         if self.slideshow_active {
             self.slideshow_item_shown_at = Some(std::time::Instant::now());
         }
