@@ -584,7 +584,13 @@ impl Application {
             Some(renderer) => renderer.set_image(&frame.pixels, texture.as_ref(), &image),
             None => Err(windows::core::Error::empty()),
         };
-        self.displayed_image = Some(image);
+        // Once the texture is on screen, the pixels have no reader left.
+        let displayed = if matches!(upload, Ok(true)) {
+            self.image_core.release_current_pixels().unwrap_or(image)
+        } else {
+            image
+        };
+        self.displayed_image = Some(displayed);
         self.displayed_location = Some(location.clone());
         if !same_view {
             let transform = &mut self.view_transform;
@@ -801,6 +807,7 @@ impl Application {
     }
 
     fn rebuild_renderer(&mut self, window: HWND) -> Result<()> {
+        self.recover_current_pixels();
         // The old swapchain must release the window first: DXGI allows one per window.
         self.renderer = None;
         self.register_upload_device();
@@ -812,6 +819,32 @@ impl Application {
         self.renderer = Some(create_renderer(window, &capabilities, display_profile)?);
         self.register_upload_device();
         self.apply_renderer_state()
+    }
+
+    /// Before a planned rebuild, a texture-only current returns to the pixel class
+    /// by reading the texture back while its device is still alive. A dead device
+    /// (loss) fails here and the caller falls back to a fresh decode of the file.
+    fn recover_current_pixels(&mut self) {
+        let Some(renderer) = &self.renderer else {
+            return;
+        };
+        let Some(current) = &self.image_core.current else {
+            return;
+        };
+        if current.image.pixel_bytes() > 0 {
+            return;
+        }
+        let Some(uploaded) = &current.texture else {
+            return;
+        };
+        if let Ok(pixels) = renderer.read_back_texture(uploaded, &current.image) {
+            self.image_core.restore_current_pixels(pixels);
+            self.displayed_image = self
+                .image_core
+                .current
+                .as_ref()
+                .map(|current| current.image.clone());
+        }
     }
 
     /// Hands the workers the current device; the core retires other generations.
@@ -832,7 +865,16 @@ impl Application {
                 .animation
                 .as_ref()
                 .map_or(0, |animation| animation.frame_index);
-            renderer.set_image(&image.frames[frame_index].pixels, None, image)?;
+            if image
+                .frames
+                .get(frame_index)
+                .is_some_and(|frame| !frame.pixels.is_empty())
+            {
+                renderer.set_image(&image.frames[frame_index].pixels, None, image)?;
+            } else {
+                // The texture died with its device; the file is the master copy.
+                self.image_core.reload_current();
+            }
         }
         Ok(())
     }

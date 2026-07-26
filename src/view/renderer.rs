@@ -30,9 +30,10 @@ use windows::Win32::Graphics::Direct3D::{
     D3D_FEATURE_LEVEL_11_0, D3D_FEATURE_LEVEL_12_0,
 };
 use windows::Win32::Graphics::Direct3D11::{
-    D3D11_CREATE_DEVICE_BGRA_SUPPORT, D3D11_SDK_VERSION, D3D11_TEXTURE2D_DESC, D3D11CreateDevice,
-    ID3D11Device, ID3D11DeviceContext, ID3D11RenderTargetView, ID3D11ShaderResourceView,
-    ID3D11Texture2D,
+    D3D11_CPU_ACCESS_READ, D3D11_CREATE_DEVICE_BGRA_SUPPORT, D3D11_MAP_READ,
+    D3D11_MAPPED_SUBRESOURCE, D3D11_SDK_VERSION, D3D11_TEXTURE2D_DESC, D3D11_USAGE_STAGING,
+    D3D11CreateDevice, ID3D11Device, ID3D11DeviceContext, ID3D11RenderTargetView,
+    ID3D11ShaderResourceView, ID3D11Texture2D,
 };
 use windows::Win32::Graphics::Dxgi::Common::{
     DXGI_ALPHA_MODE_IGNORE, DXGI_COLOR_SPACE_RGB_FULL_G10_NONE_P709,
@@ -986,17 +987,23 @@ impl Renderer {
     }
 
     /// A matching worker texture wraps without an upload; anything else re-uploads.
+    /// Ok(true) means the texture was adopted and the pixels have no reader left.
     pub fn set_image(
         &mut self,
         frame_pixels: &[u8],
         texture: Option<&UploadedTexture>,
         image: &DecodedImage,
-    ) -> Result<()> {
+    ) -> Result<bool> {
         if let Some(uploaded) = texture
             && uploaded.generation == self.upload_device_generation
             && self.wrap_uploaded_texture(uploaded, image).is_ok()
         {
-            return Ok(());
+            return Ok(true);
+        }
+        let pitch = image.pixel_width * image.storage.bytes_per_pixel();
+        if frame_pixels.len() != pitch as usize * image.pixel_height as usize {
+            // A slimmed image has no pixels to upload; the caller recovers elsewhere.
+            return Err(windows::core::Error::empty());
         }
         let properties = image_bitmap_properties(image.storage);
         let bitmap = unsafe {
@@ -1006,12 +1013,12 @@ impl Renderer {
                     height: image.pixel_height,
                 },
                 Some(frame_pixels.as_ptr().cast()),
-                image.pixel_width * image.storage.bytes_per_pixel(),
+                pitch,
                 &raw const properties,
             )?
         };
         self.adopt_image_bitmap(bitmap, image);
-        Ok(())
+        Ok(false)
     }
 
     fn wrap_uploaded_texture(
@@ -1027,6 +1034,53 @@ impl Renderer {
         };
         self.adopt_image_bitmap(bitmap, image);
         Ok(())
+    }
+
+    /// Copies a worker texture back to CPU pixels; only this build's textures qualify.
+    /// Used before a planned rebuild, while this device is still alive.
+    pub fn read_back_texture(
+        &self,
+        uploaded: &UploadedTexture,
+        image: &DecodedImage,
+    ) -> Result<Vec<u8>> {
+        if uploaded.generation != self.upload_device_generation {
+            return Err(windows::core::Error::empty());
+        }
+        let description = D3D11_TEXTURE2D_DESC {
+            Width: image.pixel_width,
+            Height: image.pixel_height,
+            MipLevels: 1,
+            ArraySize: 1,
+            Format: image.storage.dxgi_format(),
+            SampleDesc: DXGI_SAMPLE_DESC {
+                Count: 1,
+                Quality: 0,
+            },
+            Usage: D3D11_USAGE_STAGING,
+            CPUAccessFlags: D3D11_CPU_ACCESS_READ.0 as u32,
+            ..Default::default()
+        };
+        let mut staging = None;
+        unsafe {
+            self.d3d_device
+                .CreateTexture2D(&raw const description, None, Some(&raw mut staging))?
+        };
+        let staging = staging.ok_or_else(windows::core::Error::empty)?;
+        let pitch = (image.pixel_width * image.storage.bytes_per_pixel()) as usize;
+        let mut pixels = vec![0u8; pitch * image.pixel_height as usize];
+        unsafe {
+            self.d3d_context.CopyResource(&staging, &uploaded.texture);
+            let mut mapped = D3D11_MAPPED_SUBRESOURCE::default();
+            self.d3d_context
+                .Map(&staging, 0, D3D11_MAP_READ, 0, Some(&raw mut mapped))?;
+            let source = mapped.pData.cast::<u8>();
+            for (row_index, row) in pixels.chunks_exact_mut(pitch).enumerate() {
+                let offset = row_index * mapped.RowPitch as usize;
+                row.copy_from_slice(std::slice::from_raw_parts(source.add(offset), pitch));
+            }
+            self.d3d_context.Unmap(&staging, 0);
+        }
+        Ok(pixels)
     }
 
     /// What the workers upload with; the generation ties their textures to this build.

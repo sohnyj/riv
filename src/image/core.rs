@@ -876,22 +876,75 @@ impl ImageCore {
 
     /// Hands the workers the device they upload with (None while the renderer is
     /// gone) and drops every texture from another generation; its device is going.
+    /// A slimmed entry holds nothing but its texture, so it goes with it.
     pub fn set_upload_device(&mut self, upload_device: Option<UploadDevice>) {
         let generation = upload_device
             .as_ref()
             .map(|upload_device| upload_device.generation);
         self.pool.set_upload_device(upload_device);
-        for texture in self
+        let stale: Vec<ItemLocation> = self
             .cache
-            .values_mut()
-            .map(|entry| &mut entry.texture)
-            .chain(self.current.as_mut().map(|current| &mut current.texture))
-        {
-            texture.take_if(|uploaded| Some(uploaded.generation) != generation);
+            .iter()
+            .filter(|(_, entry)| {
+                entry
+                    .texture
+                    .as_ref()
+                    .is_some_and(|uploaded| Some(uploaded.generation) != generation)
+            })
+            .map(|(location, _)| location.clone())
+            .collect();
+        for location in stale {
+            let Some(entry) = self.cache.get_mut(&location) else {
+                continue;
+            };
+            if entry.image.pixel_bytes() == 0 {
+                if let Some(entry) = self.cache.remove(&location) {
+                    self.reaper.reap(entry.image);
+                }
+            } else {
+                entry.texture = None;
+            }
+        }
+        if let Some(current) = self.current.as_mut() {
+            current
+                .texture
+                .take_if(|uploaded| Some(uploaded.generation) != generation);
         }
     }
 
     /// Replaces the displayed image, freeing the outgoing buffer off the UI thread.
+    /// After the texture display is confirmed, the pixels have no remaining reader.
+    /// Returns the slimmed image so the caller can synchronize its own handle.
+    pub fn release_current_pixels(&mut self) -> Option<Arc<DecodedImage>> {
+        let current = self.current.as_mut()?;
+        if current.texture.is_none() || current.image.pixel_bytes() == 0 {
+            return None;
+        }
+        let slim = Arc::new(current.image.without_pixels());
+        let full = std::mem::replace(&mut current.image, slim.clone());
+        self.reaper.reap(full);
+        if let Some(entry) = self.cache.get_mut(&current.location)
+            && entry.texture.is_some()
+            && entry.image.pixel_bytes() > 0
+        {
+            let replaced = std::mem::replace(&mut entry.image, slim.clone());
+            self.reaper.reap(replaced);
+        }
+        Some(slim)
+    }
+
+    /// Read-back recovery: the current item returns to the pixel class.
+    pub fn restore_current_pixels(&mut self, pixels: Vec<u8>) {
+        if let Some(current) = self.current.as_mut() {
+            let mut restored = current.image.without_pixels();
+            if let Some(frame) = restored.frames.first_mut() {
+                frame.pixels = pixels;
+            }
+            current.image = Arc::new(restored);
+            current.texture = None;
+        }
+    }
+
     fn show_image(&mut self, current: CurrentImage) {
         if let Some(previous) = self.current.take() {
             self.reaper.reap(previous.image);
@@ -1036,13 +1089,19 @@ impl ImageCore {
         }
         match completion.result {
             Ok(image) => {
+                // A textured entry keeps no pixels: the texture is the only copy.
+                let cached_image = if completion.texture.is_some() {
+                    Arc::new(image.without_pixels())
+                } else {
+                    image.clone()
+                };
                 self.cache_image(
                     completion.location.clone(),
                     CacheEntry {
                         file_size: completion.file_size,
                         modified: completion.modified,
                         preview: false,
-                        image: image.clone(),
+                        image: cached_image,
                         texture: completion.texture.clone(),
                     },
                 );
@@ -1218,15 +1277,21 @@ impl ImageCore {
             preload_priorities(anchor, backward, forward, length, loop_enabled)
         });
         if textures_resident {
-            // Textures live only inside the preload neighborhood; outside, CPU pixels remain.
+            // A textured entry has no pixels; leaving the neighborhood removes it whole.
             let mut resident: HashSet<&ItemLocation> = priorities
                 .keys()
                 .map(|index| &self.entries[*index].location)
                 .collect();
             resident.extend(anchor.as_ref());
-            for (location, entry) in &mut self.cache {
-                if !resident.contains(location) {
-                    entry.texture = None;
+            let departed: Vec<ItemLocation> = self
+                .cache
+                .iter()
+                .filter(|(location, entry)| entry.texture.is_some() && !resident.contains(location))
+                .map(|(location, _)| location.clone())
+                .collect();
+            for location in departed {
+                if let Some(entry) = self.cache.remove(&location) {
+                    self.reaper.reap(entry.image);
                 }
             }
         }
@@ -1259,6 +1324,9 @@ impl ImageCore {
         for (location, cost, _) in ranked {
             if total <= budget {
                 break;
+            }
+            if cost == 0 {
+                continue; // textured entries hold no pixels; removing them frees nothing
             }
             if let Some(entry) = self.cache.remove(&location) {
                 self.reaper.reap(entry.image);

@@ -85,6 +85,7 @@ pub struct DecodedImage {
     pub frames_truncated: bool,
 }
 
+#[derive(Clone)]
 pub struct ExifInfo {
     pub date_taken: Option<std::time::SystemTime>,
     pub rating: Option<u32>,
@@ -120,6 +121,31 @@ impl ExifInfo {
 impl DecodedImage {
     pub fn pixel_bytes(&self) -> usize {
         self.frames.iter().map(|frame| frame.pixels.len()).sum()
+    }
+
+    /// The metadata with pixels released; a texture is the only copy afterward.
+    pub fn without_pixels(&self) -> Self {
+        Self {
+            width: self.width,
+            height: self.height,
+            pixel_width: self.pixel_width,
+            pixel_height: self.pixel_height,
+            format_name: self.format_name,
+            icc_profile: self.icc_profile.clone(),
+            exif: self.exif.clone(),
+            storage: self.storage,
+            source_bits_per_channel: self.source_bits_per_channel,
+            peak_luminance_nits: self.peak_luminance_nits,
+            frames: self
+                .frames
+                .iter()
+                .map(|frame| Frame {
+                    pixels: Vec::new(),
+                    delay_milliseconds: frame.delay_milliseconds,
+                })
+                .collect(),
+            frames_truncated: self.frames_truncated,
+        }
     }
 }
 
