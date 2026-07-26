@@ -1097,10 +1097,57 @@ fn hdr_transfer_lookup_table(transfer: HdrTransfer) -> &'static [f32; 65536] {
     })
 }
 
+/// Pixels per worker block; smaller buffers stay on one thread.
+const PARALLEL_BLOCK_MINIMUM_PIXELS: usize = 262_144;
+
+/// Block size in bytes: up to one block per core, each a whole number of pixels.
+fn parallel_block_bytes(total_bytes: usize, bytes_per_pixel: usize) -> usize {
+    let pixel_count = total_bytes / bytes_per_pixel;
+    let cores = std::thread::available_parallelism().map_or(1, |count| count.get());
+    let blocks = cores
+        .min(pixel_count / PARALLEL_BLOCK_MINIMUM_PIXELS)
+        .max(1);
+    pixel_count.div_ceil(blocks) * bytes_per_pixel
+}
+
+/// Runs `work` over disjoint pixel blocks on all cores, collecting results in order.
+fn map_pixel_blocks<Output: Send>(
+    pixels: &mut [u8],
+    bytes_per_pixel: usize,
+    work: impl Fn(&mut [u8]) -> Output + Sync,
+) -> Vec<Output> {
+    let block_bytes = parallel_block_bytes(pixels.len(), bytes_per_pixel);
+    if block_bytes >= pixels.len() {
+        return vec![work(pixels)];
+    }
+    std::thread::scope(|scope| {
+        let work = &work;
+        let handles: Vec<_> = pixels
+            .chunks_mut(block_bytes)
+            .map(|block| scope.spawn(move || work(block)))
+            .collect();
+        handles
+            .into_iter()
+            .map(|handle| handle.join().expect("pixel block worker panicked"))
+            .collect()
+    })
+}
+
 /// Converts 16-bit PQ/HLG pixels (straight alpha) in place to premultiplied scRGB halves.
 fn linearize_hdr_pixels(pixels: &mut [u8], encoding: HdrEncoding) {
     let matrix = encoding.primaries.bt709_conversion();
     let transfer_table = hdr_transfer_lookup_table(encoding.transfer);
+    map_pixel_blocks(pixels, 8, |block| {
+        linearize_block(block, &matrix, transfer_table, encoding)
+    });
+}
+
+fn linearize_block(
+    pixels: &mut [u8],
+    matrix: &[[f32; 3]; 3],
+    transfer_table: &[f32; 65536],
+    encoding: HdrEncoding,
+) {
     for pixel in pixels.chunks_exact_mut(8) {
         let mut channel_nits = [0.0f32; 3];
         for (channel, nits) in channel_nits.iter_mut().enumerate() {
@@ -1164,14 +1211,7 @@ pub fn peak_luminance_from_half_pixels(pixels: &[u8]) -> Option<f32> {
     if pixels.len() < 8 {
         return None;
     }
-    // Four uniform lanes; the discarded alpha keeps the stride pattern regular.
-    let mut channel_maxima = [0u16; 4];
-    for pixel in pixels.chunks_exact(8) {
-        for (channel, maximum) in channel_maxima.iter_mut().enumerate() {
-            let bits = u16::from_le_bytes([pixel[channel * 2], pixel[channel * 2 + 1]]);
-            *maximum = (*maximum).max(positive_normal_half_bits(bits));
-        }
-    }
+    let channel_maxima = channel_maxima_from_half_pixels(pixels);
     let maximum_linear = half_to_f32(
         channel_maxima[0]
             .max(channel_maxima[1])
@@ -1220,6 +1260,19 @@ pub fn peak_luminance_from_half_pixels(pixels: &[u8]) -> Option<f32> {
     }
     let code = (percentile_bin as f32 + 1.0) / PEAK_HISTOGRAM_BINS as f32;
     Some(perceptual_quantizer_nits(code.min(1.0)))
+}
+
+/// Per-channel maxima. Four uniform lanes; the discarded alpha keeps the
+/// stride pattern regular.
+fn channel_maxima_from_half_pixels(pixels: &[u8]) -> [u16; 4] {
+    let mut channel_maxima = [0u16; 4];
+    for pixel in pixels.chunks_exact(8) {
+        for (channel, maximum) in channel_maxima.iter_mut().enumerate() {
+            let bits = u16::from_le_bytes([pixel[channel * 2], pixel[channel * 2 + 1]]);
+            *maximum = (*maximum).max(positive_normal_half_bits(bits));
+        }
+    }
+    channel_maxima
 }
 
 /// Bits of a positive normal half (others map to 0); valid bits order like their values.
@@ -2164,6 +2217,20 @@ mod hdr_linearization_tests {
     }
 
     #[test]
+    fn parallel_linearization_matches_the_sequential_reference() {
+        // Above the block threshold the buffer splits across worker threads.
+        let encoding = HdrEncoding {
+            transfer: HdrTransfer::PerceptualQuantizer,
+            primaries: HdrPrimaries::Bt2020,
+        };
+        let mut pixels = coded_pixels(600_000, 5);
+        let mut expected = pixels.clone();
+        linearize_hdr_pixels_reference(&mut expected, encoding);
+        linearize_hdr_pixels(&mut pixels, encoding);
+        assert_eq!(pixels, expected);
+    }
+
+    #[test]
     #[ignore = "manual timing comparison (--nocapture)"]
     fn half_encode_timing() {
         let mut state = 1u32;
@@ -2258,6 +2325,18 @@ mod peak_scan_tests {
     #[test]
     fn empty_input_yields_none() {
         assert!(peak_luminance_from_half_pixels(&[]).is_none());
+    }
+
+    #[test]
+    #[ignore = "manual timing comparison (--nocapture)"]
+    fn maximum_scan_timing() {
+        // All-SDR content returns right after the maximum pass, timing it alone.
+        let pixels = half_pixels(&vec![(0.25f32, 0.5, 0.75); 16_000_000]);
+        for _ in 0..3 {
+            let start = std::time::Instant::now();
+            let peak = peak_luminance_from_half_pixels(&pixels).unwrap();
+            println!("maximum scan peak={peak} elapsed={:?}", start.elapsed());
+        }
     }
 
     #[test]
