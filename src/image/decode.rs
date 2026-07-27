@@ -1313,6 +1313,8 @@ fn hdr_transfer_lookup_table(transfer: HdrTransfer) -> &'static [f32; 65536] {
 pub struct UploadDevice {
     pub device: ID3D11Device,
     pub generation: u64,
+    /// This adapter's per-resource ceiling; larger frames stay on the UI-thread path.
+    pub maximum_frame_bytes: u64,
 }
 
 /// A texture uploaded off the UI thread, usable only while its generation is current.
@@ -1322,9 +1324,11 @@ pub struct UploadedTexture {
     pub generation: u64,
 }
 
-/// Frames above this stay on the UI-thread upload path, so the worst case is
-/// one texture per preload target at this bound.
-const UPLOAD_MAXIMUM_FRAME_BYTES: usize = 256 * 1024 * 1024;
+/// The documented D3D11 resource limit: min(max(128, 0.25 x dedicated VRAM), 2048) MB.
+pub fn maximum_resource_bytes(dedicated_video_memory: u64) -> u64 {
+    const MEGABYTE: u64 = 1024 * 1024;
+    (dedicated_video_memory / 4).clamp(128 * MEGABYTE, 2048 * MEGABYTE)
+}
 
 /// Uploads a still frame on the worker; None leaves the UI-thread upload path.
 pub fn upload_still_texture(
@@ -1336,7 +1340,7 @@ pub fn upload_still_texture(
         _ => return None,
     };
     if frame.pixels.len() != image.frame_byte_length()
-        || frame.pixels.len() > UPLOAD_MAXIMUM_FRAME_BYTES
+        || frame.pixels.len() as u64 > upload_device.maximum_frame_bytes
     {
         return None;
     }

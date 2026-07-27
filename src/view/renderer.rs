@@ -58,6 +58,7 @@ use std::sync::Arc;
 use crate::image::color::SDR_REFERENCE_WHITE_NITS;
 use crate::image::decode::{
     DecodedImage, PixelStorage, UploadDevice, UploadedTexture, icc_gamut_label,
+    maximum_resource_bytes,
 };
 use crate::view::dither::DitherMode;
 use crate::view::quantize::QuantizePass;
@@ -1075,9 +1076,17 @@ impl Renderer {
 
     /// What the workers upload with; the generation ties their textures to this build.
     pub fn upload_device(&self) -> UploadDevice {
+        let dedicated_video_memory = self
+            .d3d_device
+            .cast::<IDXGIDevice>()
+            .ok()
+            .and_then(|device| unsafe { device.GetAdapter() }.ok())
+            .and_then(|adapter| unsafe { adapter.GetDesc() }.ok())
+            .map_or(0, |description| description.DedicatedVideoMemory as u64);
         UploadDevice {
             device: self.d3d_device.clone(),
             generation: self.upload_device_generation,
+            maximum_frame_bytes: maximum_resource_bytes(dedicated_video_memory),
         }
     }
 
