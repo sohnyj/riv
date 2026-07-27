@@ -1195,12 +1195,15 @@ impl ImageCore {
             for (_, entry) in self.cache.drain() {
                 self.reaper.reap(entry.image);
             }
-        } else if let Some(anchor_index) = self
-            .navigation_anchor()
-            .and_then(|location| self.position_of(location))
-        {
-            self.drop_departed_textures(anchor_index, backward, forward);
-            if !awaiting_first_view {
+        } else {
+            let anchor = self.navigation_anchor().cloned();
+            let anchor_index = anchor
+                .as_ref()
+                .and_then(|location| self.position_of(location));
+            self.drop_departed_entries(anchor.as_ref(), anchor_index, backward, forward);
+            if let Some(anchor_index) = anchor_index
+                && !awaiting_first_view
+            {
                 self.submit_neighbor_decodes(anchor_index, backward, forward, budget);
             }
         }
@@ -1292,21 +1295,30 @@ impl ImageCore {
         }
     }
 
-    /// A textured entry has no pixels, so leaving the preload neighborhood removes
-    /// it whole; returning is a fresh preload.
-    fn drop_departed_textures(&mut self, anchor_index: usize, backward: usize, forward: usize) {
+    /// The neighborhood is the whole residency rule: leaving it removes the entry,
+    /// returning is a fresh preload. The budget is a ceiling over what stays, not a
+    /// quota to fill. An anchor the listing does not hold (URL) keeps only itself.
+    fn drop_departed_entries(
+        &mut self,
+        anchor: Option<&ItemLocation>,
+        anchor_index: Option<usize>,
+        backward: usize,
+        forward: usize,
+    ) {
         let length = self.entries.len();
         let loop_enabled = self.options.loop_within_folder;
-        let mut resident: HashSet<&ItemLocation> = preload_offsets(backward, forward)
-            .filter_map(|offset| neighbor_index(anchor_index, offset, length, loop_enabled))
-            .map(|index| &self.entries[index].location)
-            .collect();
-        resident.insert(&self.entries[anchor_index].location);
+        let mut resident: HashSet<&ItemLocation> = anchor_index
+            .map(|anchor_index| {
+                preload_offsets(backward, forward)
+                    .filter_map(|offset| neighbor_index(anchor_index, offset, length, loop_enabled))
+                    .map(|index| &self.entries[index].location)
+                    .collect()
+            })
+            .unwrap_or_default();
+        resident.extend(anchor);
         let cache = &mut self.cache;
         let reaper = &self.reaper;
-        for (_, entry) in cache
-            .extract_if(|location, entry| entry.texture.is_some() && !resident.contains(location))
-        {
+        for (_, entry) in cache.extract_if(|location, _| !resident.contains(location)) {
             reaper.reap(entry.image);
         }
     }
