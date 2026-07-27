@@ -797,8 +797,7 @@ impl ImageCore {
             self.submit_pending_decode(location.clone(), file_size, modified, preview_shown);
         }
         // A RAW preview defers its full decode until navigation stops; the caller
-        // schedules that through start_pending_full_decode. Speculation for the new
-        // neighborhood waits for the display, but the sweeps retire what it left.
+        // schedules that through start_pending_full_decode. This call is for the sweeps.
         self.preload_neighbors();
         preview_shown
     }
@@ -1180,8 +1179,7 @@ impl ImageCore {
             .position(|entry| entry.location == *location)
     }
 
-    /// Speculation waits while the window has nothing to show for the awaited item;
-    /// the cancel and evict sweeps run either way. The display path restarts it.
+    /// Speculation waits for the display; the cancel and evict sweeps do not.
     pub fn preload_neighbors(&mut self) {
         // A pending upgrade of what is already on screen (RAW, animation) still speculates.
         let awaiting_first_view = self.pending_display.as_ref().is_some_and(|pending| {
@@ -1190,25 +1188,53 @@ impl ImageCore {
                 .is_none_or(|current| current.location != *pending)
         });
         let (backward, forward, budget) = self.preload_plan();
+        let anchor_index = self
+            .navigation_anchor()
+            .and_then(|location| self.position_of(location));
+        let resident = self.resident_locations(anchor_index, backward, forward);
         if backward == 0 && forward == 0 {
             // preloading off: drop the cache
             for (_, entry) in self.cache.drain() {
                 self.reaper.reap(entry.image);
             }
         } else {
-            let anchor = self.navigation_anchor().cloned();
-            let anchor_index = anchor
-                .as_ref()
-                .and_then(|location| self.position_of(location));
-            self.drop_departed_entries(anchor.as_ref(), anchor_index, backward, forward);
+            self.drop_entries_outside(&resident);
             if let Some(anchor_index) = anchor_index
                 && !awaiting_first_view
             {
                 self.submit_neighbor_decodes(anchor_index, backward, forward, budget);
             }
         }
-        self.cancel_irrelevant_decodes();
+        self.cancel_decodes_outside(&resident);
         self.evict_cache();
+    }
+
+    /// What the cache and the decode queue may hold: the neighborhood, the navigation
+    /// baseline, and what is on screen. A listing without the anchor (a URL) leaves
+    /// just the last two.
+    fn resident_locations(
+        &self,
+        anchor_index: Option<usize>,
+        backward: usize,
+        forward: usize,
+    ) -> HashSet<ItemLocation> {
+        let length = self.entries.len();
+        let loop_enabled = self.options.loop_within_folder;
+        let mut resident: HashSet<ItemLocation> = anchor_index
+            .map(|anchor_index| {
+                preload_offsets(backward, forward)
+                    .filter_map(|offset| neighbor_index(anchor_index, offset, length, loop_enabled))
+                    .map(|index| self.entries[index].location.clone())
+                    .collect()
+            })
+            .unwrap_or_default();
+        resident.extend(self.navigation_anchor().cloned());
+        resident.extend(
+            self.current
+                .as_ref()
+                .map(|current| current.location.clone()),
+        );
+        resident
     }
 
     /// Queues the neighbors the plan asks for, skipping what is cached or in flight.
@@ -1243,10 +1269,6 @@ impl ImageCore {
                     .cache
                     .get(&entry.location)
                     .is_some_and(|cached| cached.file_size == entry.file_size)
-                || self
-                    .pending_display
-                    .as_ref()
-                    .is_some_and(|pending| *pending == entry.location)
             {
                 continue;
             }
@@ -1259,63 +1281,20 @@ impl ImageCore {
         }
     }
 
-    /// Cancels queued or running decodes outside the preload neighborhood.
-    fn cancel_irrelevant_decodes(&mut self) {
-        let mut relevant: HashSet<ItemLocation> = HashSet::new();
-        if let Some(pending) = &self.pending_display {
-            relevant.insert(pending.clone());
-        }
-        if let Some(current) = &self.current {
-            relevant.insert(current.location.clone());
-        }
-        let (backward, forward, _) = self.preload_plan();
-        let anchor_index = self
-            .navigation_anchor()
-            .and_then(|location| self.position_of(location));
-        if let Some(anchor_index) = anchor_index {
-            let length = self.entries.len();
-            for offset in preload_offsets(backward, forward) {
-                if let Some(index) = neighbor_index(
-                    anchor_index,
-                    offset,
-                    length,
-                    self.options.loop_within_folder,
-                ) {
-                    relevant.insert(self.entries[index].location.clone());
-                }
-            }
-        }
-        for location in self.pool.remove_queued_except(&relevant) {
+    /// Cancels queued or running decodes for anything residency no longer covers.
+    fn cancel_decodes_outside(&mut self, resident: &HashSet<ItemLocation>) {
+        for location in self.pool.remove_queued_except(resident) {
             self.in_flight.remove(&location);
         }
         for (location, cancellation) in &self.in_flight {
-            if !relevant.contains(location) {
+            if !resident.contains(location) {
                 cancellation.store(true, Ordering::Relaxed);
             }
         }
     }
 
-    /// The neighborhood is the whole residency rule: leaving it removes the entry,
-    /// returning is a fresh preload. The budget is a ceiling over what stays, not a
-    /// quota to fill. An anchor the listing does not hold (URL) keeps only itself.
-    fn drop_departed_entries(
-        &mut self,
-        anchor: Option<&ItemLocation>,
-        anchor_index: Option<usize>,
-        backward: usize,
-        forward: usize,
-    ) {
-        let length = self.entries.len();
-        let loop_enabled = self.options.loop_within_folder;
-        let mut resident: HashSet<&ItemLocation> = anchor_index
-            .map(|anchor_index| {
-                preload_offsets(backward, forward)
-                    .filter_map(|offset| neighbor_index(anchor_index, offset, length, loop_enabled))
-                    .map(|index| &self.entries[index].location)
-                    .collect()
-            })
-            .unwrap_or_default();
-        resident.extend(anchor);
+    /// Leaving residency removes the entry whole; returning is a fresh preload.
+    fn drop_entries_outside(&mut self, resident: &HashSet<ItemLocation>) {
         let cache = &mut self.cache;
         let reaper = &self.reaper;
         for (_, entry) in cache.extract_if(|location, _| !resident.contains(location)) {
@@ -1338,30 +1317,28 @@ impl ImageCore {
         let anchor_index = anchor
             .as_ref()
             .and_then(|location| self.position_of(location));
-        let length = self.entries.len();
-        let loop_enabled = self.options.loop_within_folder;
         let priorities = anchor_index.map_or_else(HashMap::new, |anchor| {
-            preload_priorities(anchor, backward, forward, length, loop_enabled)
+            preload_priorities(
+                anchor,
+                backward,
+                forward,
+                self.entries.len(),
+                self.options.loop_within_folder,
+            )
         });
-        let mut ranked: Vec<(ItemLocation, u64, (u8, usize))> = self
+        let mut ranked: Vec<(ItemLocation, u64, usize)> = self
             .cache
             .iter()
             .filter(|(_, entry)| entry.image.pixel_bytes() > 0)
             .map(|(location, entry)| {
-                // The baseline item goes last even when unlisted (URL items).
+                // The baseline item goes last even when unlisted (URL items); anything
+                // residency no longer covers goes first, in no particular order.
                 let key = if anchor.as_ref() == Some(location) {
-                    (0, 0)
+                    0
                 } else {
-                    self.position_of(location).zip(anchor_index).map_or(
-                        UNLISTED_EVICTION_KEY,
-                        |(index, anchor)| match priorities.get(&index) {
-                            Some(priority) => (0, *priority),
-                            None => (
-                                1,
-                                ring_offset(index, anchor, length, loop_enabled).unsigned_abs(),
-                            ),
-                        },
-                    )
+                    self.position_of(location)
+                        .and_then(|index| priorities.get(&index).copied())
+                        .unwrap_or(usize::MAX)
                 };
                 (location.clone(), entry.image.pixel_bytes() as u64, key)
             })
@@ -1442,27 +1419,6 @@ fn step_index(
         (0..length).contains(&index).then_some(index as usize)
     }
 }
-
-/// Signed offset from anchor to index; the nearest way round when looping.
-fn ring_offset(index: usize, anchor: usize, length: usize, loop_enabled: bool) -> isize {
-    let direct = index as isize - anchor as isize;
-    if !loop_enabled || length == 0 {
-        return direct;
-    }
-    let alternate = if direct > 0 {
-        direct - length as isize
-    } else {
-        direct + length as isize
-    };
-    if alternate.abs() < direct.abs() {
-        alternate
-    } else {
-        direct
-    }
-}
-
-/// Cached items outside the listing; evicted before anything ranked by preload priority.
-const UNLISTED_EVICTION_KEY: (u8, usize) = (2, 0);
 
 /// Entry index -> preload priority (anchor 0, then submission order); shared with eviction.
 fn preload_priorities(
@@ -1923,22 +1879,6 @@ mod preload_geometry_tests {
     }
 
     #[test]
-    fn ring_offset_takes_the_nearest_way_round() {
-        assert_eq!(ring_offset(7, 2, 10, false), 5);
-        assert_eq!(ring_offset(0, 8, 10, false), -8);
-        // Looping: crossing the seam is nearer than walking back.
-        assert_eq!(ring_offset(0, 8, 10, true), 2);
-        assert_eq!(ring_offset(8, 0, 10, true), -2);
-        assert_eq!(ring_offset(2, 2, 10, true), 0);
-        // Exactly half way round: the direct reading wins the tie.
-        assert_eq!(ring_offset(5, 0, 10, true), 5);
-        assert_eq!(ring_offset(0, 5, 10, true), -5);
-        // Degenerate listings must not wrap into nonsense.
-        assert_eq!(ring_offset(0, 0, 1, true), 0);
-        assert_eq!(ring_offset(1, 0, 2, true), 1);
-    }
-
-    #[test]
     fn eviction_prefers_forward_over_backward_within_the_neighborhood() {
         let (backward, forward, _) = PRELOAD_SPECIFICATIONS[1];
         let priorities = preload_priorities(10, backward, forward, 100, false);
@@ -1955,11 +1895,9 @@ mod preload_geometry_tests {
     fn eviction_drops_outsiders_before_preload_targets() {
         let (backward, forward, _) = PRELOAD_SPECIFICATIONS[1];
         let priorities = preload_priorities(10, backward, forward, 100, false);
-        // The old -1 strands at -2, outside the map: (1, distance) keys evict first.
+        // Outside the map, so the eviction key is usize::MAX: they go first.
         assert!(!priorities.contains_key(&8));
         assert!(!priorities.contains_key(&14));
-        // Anything unlisted goes before even the farthest outsider.
-        assert!(UNLISTED_EVICTION_KEY > (1, usize::MAX));
     }
 
     #[test]
