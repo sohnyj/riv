@@ -306,21 +306,21 @@ impl CacheEntry {
 }
 
 /// Frees retired image buffers off the UI thread.
-struct ImageReaper {
+struct ImageReleaser {
     sender: mpsc::Sender<Arc<DecodedImage>>,
 }
 
-impl ImageReaper {
+impl ImageReleaser {
     fn new() -> Self {
         let (sender, receiver) = mpsc::channel::<Arc<DecodedImage>>();
-        // A spawn failure drops the receiver, so every reap frees inline instead.
+        // A spawn failure drops the receiver, so every release frees inline instead.
         let _ = std::thread::Builder::new()
-            .name("riv-image-reaper".to_string())
+            .name("riv-image-releaser".to_string())
             .spawn(move || receiver.iter().for_each(drop));
         Self { sender }
     }
 
-    fn reap(&self, image: Arc<DecodedImage>) {
+    fn release(&self, image: Arc<DecodedImage>) {
         let _ = self.sender.send(image);
     }
 }
@@ -343,11 +343,11 @@ pub struct ImageCore {
     cache: HashMap<ItemLocation, CacheEntry>,
     pub current: Option<CurrentImage>,
     pub load_error: Option<(ItemLocation, DecodeError)>,
-    /// Preload polarity: the deeper reach aims along the travel direction.
-    travel_backward: bool,
+    /// Preload polarity: the deeper reach aims along the navigation direction.
+    navigating_backward: bool,
     /// Consecutive steps against the polarity; the second one flips it.
     opposite_steps: u32,
-    reaper: ImageReaper,
+    releaser: ImageReleaser,
     /// Listing scan in flight (folder or archive), awaiting its ScannedListing.
     pending_scan: Option<PendingScan>,
     window: isize,
@@ -427,24 +427,24 @@ impl ImageCore {
             cache: HashMap::new(),
             current: None,
             load_error: None,
-            travel_backward: false,
+            navigating_backward: false,
             opposite_steps: 0,
-            reaper: ImageReaper::new(),
+            releaser: ImageReleaser::new(),
             pending_scan: None,
             window: window.0 as isize,
         }
     }
 
     /// Aims the preload polarity at a declared direction (slideshow start).
-    pub fn set_travel_direction(&mut self, backward: bool) {
-        self.travel_backward = backward;
+    pub fn set_navigation_direction(&mut self, backward: bool) {
+        self.navigating_backward = backward;
         self.opposite_steps = 0;
         self.refresh_preload();
     }
 
     /// A fresh listing starts with the forward default.
-    fn reset_travel_direction(&mut self) {
-        self.travel_backward = false;
+    fn reset_navigation_direction(&mut self) {
+        self.navigating_backward = false;
         self.opposite_steps = 0;
     }
 
@@ -452,11 +452,11 @@ impl ImageCore {
     fn note_navigation(&mut self, command: NavigationCommand) {
         match command {
             NavigationCommand::First => {
-                self.travel_backward = false;
+                self.navigating_backward = false;
                 self.opposite_steps = 0;
             }
             NavigationCommand::Last => {
-                self.travel_backward = true;
+                self.navigating_backward = true;
                 self.opposite_steps = 0;
             }
             NavigationCommand::Next => self.note_step(false),
@@ -465,22 +465,22 @@ impl ImageCore {
     }
 
     fn note_step(&mut self, backward: bool) {
-        if backward == self.travel_backward {
+        if backward == self.navigating_backward {
             self.opposite_steps = 0;
             return;
         }
         self.opposite_steps += 1;
         if self.opposite_steps >= 2 {
-            self.travel_backward = backward;
+            self.navigating_backward = backward;
             self.opposite_steps = 0;
         }
     }
 
-    /// Preload distances and budget, aimed along the current travel direction.
+    /// Preload distances and budget, aimed along the current navigation direction.
     fn preload_plan(&self) -> (usize, usize, u64) {
         let (backward, forward, budget) =
             PRELOAD_SPECIFICATIONS[self.options.preloading_mode.min(2)];
-        if self.travel_backward {
+        if self.navigating_backward {
             (forward, backward, budget)
         } else {
             (backward, forward, budget)
@@ -559,7 +559,7 @@ impl ImageCore {
             return false;
         };
         if let Some(entry) = self.cache.remove(&location) {
-            self.reaper.reap(entry.image);
+            self.releaser.release(entry.image);
         }
         if let ItemLocation::Url(url) = &location {
             // Back through load_url so validation errors reproduce on retry.
@@ -629,7 +629,7 @@ impl ImageCore {
     /// Clears the listing and enumerates the scope off the UI thread; it installs on arrival.
     fn submit_scan(&mut self, pending: PendingScan) {
         let scope = pending.scope.clone();
-        self.reset_travel_direction();
+        self.reset_navigation_direction();
         self.entries = Vec::new();
         self.listing_scope = None;
         self.pending_scan = Some(pending);
@@ -898,7 +898,7 @@ impl ImageCore {
         self.pending_display = None;
         self.load_error = None;
         if let Some(previous) = self.current.take() {
-            self.reaper.reap(previous.image);
+            self.releaser.release(previous.image);
         }
     }
 
@@ -915,7 +915,7 @@ impl ImageCore {
                 .as_ref()
                 .is_some_and(|uploaded| Some(uploaded.generation) != generation)
         }) {
-            self.reaper.reap(entry.image);
+            self.releaser.release(entry.image);
         }
         if let Some(current) = self.current.as_mut() {
             current
@@ -939,7 +939,7 @@ impl ImageCore {
             _ => Arc::new(current.image.without_pixels()),
         };
         let full = std::mem::replace(&mut current.image, slim.clone());
-        self.reaper.reap(full);
+        self.releaser.release(full);
         Some(slim)
     }
 
@@ -969,7 +969,7 @@ impl ImageCore {
     /// Replaces the displayed image, freeing the outgoing buffer off the UI thread.
     fn show_image(&mut self, current: CurrentImage) {
         if let Some(previous) = self.current.take() {
-            self.reaper.reap(previous.image);
+            self.releaser.release(previous.image);
         }
         self.current = Some(current);
     }
@@ -977,7 +977,7 @@ impl ImageCore {
     /// Caches an entry, freeing any replaced stand-in off the UI thread.
     fn cache_image(&mut self, location: ItemLocation, entry: CacheEntry) {
         if let Some(replaced) = self.cache.insert(location, entry) {
-            self.reaper.reap(replaced.image);
+            self.releaser.release(replaced.image);
         }
     }
 
@@ -1135,7 +1135,7 @@ impl ImageCore {
                     true
                 } else {
                     // The cache kept only the slim copy; free the decode buffer off-thread.
-                    self.reaper.reap(image);
+                    self.releaser.release(image);
                     self.evict_cache();
                     false
                 }
@@ -1199,7 +1199,7 @@ impl ImageCore {
         if backward == 0 && forward == 0 {
             // preloading off: drop the cache
             for (_, entry) in self.cache.drain() {
-                self.reaper.reap(entry.image);
+                self.releaser.release(entry.image);
             }
         } else {
             self.drop_entries_outside(&targets);
@@ -1296,9 +1296,9 @@ impl ImageCore {
     /// Leaving residency removes the entry whole; returning is a fresh preload.
     fn drop_entries_outside(&mut self, targets: &HashSet<ItemLocation>) {
         let cache = &mut self.cache;
-        let reaper = &self.reaper;
+        let releaser = &self.releaser;
         for (_, entry) in cache.extract_if(|location, _| !targets.contains(location)) {
-            reaper.reap(entry.image);
+            releaser.release(entry.image);
         }
     }
 
@@ -1349,7 +1349,7 @@ impl ImageCore {
                 break;
             }
             if let Some(entry) = self.cache.remove(&location) {
-                self.reaper.reap(entry.image);
+                self.releaser.release(entry.image);
             }
             total -= cost;
         }
@@ -2360,9 +2360,9 @@ mod listing_scan_tests {
     }
 }
 
-/// Preload polarity follows the travel direction with a one-step grace.
+/// Preload polarity follows the navigation direction with a one-step grace.
 #[cfg(test)]
-mod travel_direction_tests {
+mod navigation_direction_tests {
     use super::*;
 
     fn core() -> ImageCore {
@@ -2383,7 +2383,7 @@ mod travel_direction_tests {
     fn a_single_back_step_keeps_the_forward_polarity() {
         let mut core = core();
         core.note_navigation(NavigationCommand::Previous);
-        assert!(!core.travel_backward);
+        assert!(!core.navigating_backward);
         assert_eq!(core.preload_plan(), (1, 3, 1 << 30));
     }
 
@@ -2392,13 +2392,13 @@ mod travel_direction_tests {
         let mut core = core();
         core.note_navigation(NavigationCommand::Previous);
         core.note_navigation(NavigationCommand::Previous);
-        assert!(core.travel_backward);
+        assert!(core.navigating_backward);
         assert_eq!(core.preload_plan(), (3, 1, 1 << 30));
         // The way back flips with the same grace.
         core.note_navigation(NavigationCommand::Next);
-        assert!(core.travel_backward);
+        assert!(core.navigating_backward);
         core.note_navigation(NavigationCommand::Next);
-        assert!(!core.travel_backward);
+        assert!(!core.navigating_backward);
     }
 
     #[test]
@@ -2407,24 +2407,24 @@ mod travel_direction_tests {
         core.note_navigation(NavigationCommand::Previous);
         core.note_navigation(NavigationCommand::Next);
         core.note_navigation(NavigationCommand::Previous);
-        assert!(!core.travel_backward); // never two in a row
+        assert!(!core.navigating_backward); // never two in a row
     }
 
     #[test]
     fn jumps_declare_their_direction() {
         let mut core = core();
         core.note_navigation(NavigationCommand::Last);
-        assert!(core.travel_backward);
+        assert!(core.navigating_backward);
         core.note_navigation(NavigationCommand::First);
-        assert!(!core.travel_backward);
+        assert!(!core.navigating_backward);
     }
 
     #[test]
     fn a_declared_direction_aims_at_once() {
         let mut core = core();
-        core.set_travel_direction(true);
+        core.set_navigation_direction(true);
         assert_eq!(core.preload_plan(), (3, 1, 1 << 30));
-        core.reset_travel_direction();
+        core.reset_navigation_direction();
         assert_eq!(core.preload_plan(), (1, 3, 1 << 30));
     }
 }

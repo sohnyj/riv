@@ -791,7 +791,7 @@ impl Application {
             self.restart_slideshow_timer(window);
             // The declared direction aims the preload before the first tick.
             self.image_core
-                .set_travel_direction(self.settings.options.slideshow_reversed);
+                .set_navigation_direction(self.settings.options.slideshow_reversed);
             self.slideshow_active = true;
             self.slideshow_item_shown_at = Some(std::time::Instant::now());
             keep_system_awake(true);
