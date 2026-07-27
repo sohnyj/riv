@@ -633,6 +633,8 @@ impl ImageCore {
         self.entries = Vec::new();
         self.listing_scope = None;
         self.pending_scan = Some(pending);
+        // The old snapshot is gone, so nothing it held is reachable any more.
+        self.preload_neighbors();
         let options = self.options.clone();
         let window = self.window;
         let _ = std::thread::Builder::new()
@@ -718,6 +720,8 @@ impl ImageCore {
                     store_extensions: &[],
                 },
             ));
+            // A refused URL still leaves the single-item state; the listing is gone.
+            self.preload_neighbors();
             return false;
         }
         self.load_item(&location)
@@ -1209,9 +1213,8 @@ impl ImageCore {
         self.evict_cache();
     }
 
-    /// What the cache and the decode queue may hold: the neighborhood, the navigation
-    /// baseline, and what is on screen. A listing without the anchor (a URL) leaves
-    /// just the last two.
+    /// What the cache and the decode queue may hold: the neighborhood and the
+    /// navigation baseline. A listing without the anchor (a URL) leaves just the baseline.
     fn resident_locations(
         &self,
         anchor_index: Option<usize>,
@@ -1229,11 +1232,6 @@ impl ImageCore {
             })
             .unwrap_or_default();
         resident.extend(self.navigation_anchor().cloned());
-        resident.extend(
-            self.current
-                .as_ref()
-                .map(|current| current.location.clone()),
-        );
         resident
     }
 
