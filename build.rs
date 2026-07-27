@@ -2,7 +2,15 @@ use std::env;
 use std::path::PathBuf;
 use std::process::Command;
 
+#[path = "res/shaders/blue_noise.rs"]
+mod blue_noise;
+
 fn main() {
+    println!("cargo:rerun-if-changed=res/shaders");
+
+    let output_directory = PathBuf::from(env::var("OUT_DIR").unwrap());
+    blue_noise::write_table(&output_directory);
+
     if env::var("CARGO_CFG_TARGET_OS").as_deref() != Ok("windows") {
         return;
     }
@@ -12,7 +20,6 @@ fn main() {
     println!("cargo:rerun-if-changed=res/riv.manifest");
     println!("cargo:rerun-if-changed=res/riv.ico");
 
-    let output_directory = PathBuf::from(env::var("OUT_DIR").unwrap());
     let compiled_resource = output_directory.join("riv.res");
 
     // The package version is the single source: manifest substitution + VERSIONINFO.

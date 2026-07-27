@@ -12,8 +12,8 @@ use windows::Win32::Graphics::Dxgi::Common::{DXGI_FORMAT_R32_FLOAT, DXGI_SAMPLE_
 use windows::core::{Result, s};
 
 use crate::view::dither::{
-    BLUE_NOISE_SIZE, DITHER_SHADER_FUNCTIONS, DitherMode, FULLSCREEN_TRIANGLE_VERTEX_SHADER,
-    blue_noise_texels, compile_shader,
+    BLUE_NOISE_SIZE, BLUE_NOISE_TEXELS, DITHER_SHADER_FUNCTIONS, DitherMode,
+    FULLSCREEN_TRIANGLE_VERTEX_SHADER, compile_shader,
 };
 
 const SHADER_PROLOGUE: &str = "\
@@ -101,7 +101,7 @@ impl QuantizePass {
             ..Default::default()
         };
         let noise_data = D3D11_SUBRESOURCE_DATA {
-            pSysMem: blue_noise_texels().as_ptr().cast(),
+            pSysMem: BLUE_NOISE_TEXELS.as_ptr().cast(),
             SysMemPitch: BLUE_NOISE_SIZE * 4,
             ..Default::default()
         };

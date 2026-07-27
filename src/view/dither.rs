@@ -4,12 +4,13 @@
 //! (src/shaders/dithering.c, LGPL-2.1-or-later): ordered-fixed and
 //! blue-noise bias generation followed by a biased floor quantization.
 
-use std::sync::OnceLock;
-
 use windows::Win32::Graphics::Direct3D::Fxc::{D3DCOMPILE_OPTIMIZATION_LEVEL3, D3DCompile};
 use windows::core::{PCSTR, Result, s};
 
-pub const BLUE_NOISE_SIZE: u32 = super::blue_noise::SIZE as u32;
+pub const BLUE_NOISE_SIZE: u32 = 64;
+
+/// Single-channel f32 texels; the build script runs the void-and-cluster construction.
+pub const BLUE_NOISE_TEXELS: &[u8] = include_bytes!(concat!(env!("OUT_DIR"), "/blue_noise.bin"));
 
 /// Bias and quantization for the quantize-pass shaders; callers declare `quantization_steps`.
 pub const DITHER_SHADER_FUNCTIONS: &str = "\
@@ -75,17 +76,6 @@ pub fn compile_shader(source: &str, profile: PCSTR) -> Result<Vec<u8>> {
     Ok(bytes.to_vec())
 }
 
-/// Single-channel f32 texels, generated once per process.
-pub fn blue_noise_texels() -> &'static [u8] {
-    static TEXELS: OnceLock<Vec<u8>> = OnceLock::new();
-    TEXELS.get_or_init(|| {
-        super::blue_noise::generate()
-            .iter()
-            .flat_map(|value| value.to_ne_bytes())
-            .collect()
-    })
-}
-
 /// Settings-selected output dither (0 = None, 1 = Ordered, 2 = Fruit).
 #[derive(Clone, Copy, PartialEq, Eq)]
 pub enum DitherMode {
@@ -100,6 +90,25 @@ impl DitherMode {
             1 => Self::Ordered,
             2 => Self::Fruit,
             _ => Self::None,
+        }
+    }
+}
+
+#[cfg(test)]
+mod blue_noise_tests {
+    use super::{BLUE_NOISE_SIZE, BLUE_NOISE_TEXELS};
+
+    #[test]
+    fn the_built_matrix_is_a_permutation_of_all_ranks() {
+        let cell_count = (BLUE_NOISE_SIZE * BLUE_NOISE_SIZE) as usize;
+        assert_eq!(BLUE_NOISE_TEXELS.len(), cell_count * size_of::<f32>());
+        let mut seen = vec![false; cell_count];
+        for texel in BLUE_NOISE_TEXELS.chunks_exact(size_of::<f32>()) {
+            let value = f32::from_le_bytes(texel.try_into().expect("four byte texel"));
+            assert!((0.0..1.0).contains(&value));
+            let rank = (value * cell_count as f32) as usize;
+            assert!(!seen[rank], "duplicate rank {rank}");
+            seen[rank] = true;
         }
     }
 }

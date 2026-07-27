@@ -1,6 +1,18 @@
 //! Blue-noise dither matrix, ported from libplacebo src/dither.c
 //! (originally from mpv, Copyright 2013 Wessel Dankers, LGPL-2.1-or-later):
 //! void-and-cluster construction over a toroidal gaussian energy field.
+//! Deterministic, so the build bakes the table and the viewer reads bytes.
+
+use std::path::Path;
+
+/// Writes the matrix as little-endian f32 texels for the quantize pass to include.
+pub fn write_table(output_directory: &Path) {
+    let texels: Vec<u8> = generate()
+        .iter()
+        .flat_map(|value| value.to_le_bytes())
+        .collect();
+    std::fs::write(output_directory.join("blue_noise.bin"), texels).expect("blue noise writable");
+}
 
 const SIZE_BITS: usize = 6;
 pub const SIZE: usize = 1 << SIZE_BITS;
@@ -110,7 +122,7 @@ impl Generator {
 }
 
 /// 64x64 matrix of unique rank values in [0, 1), row-major.
-pub fn generate() -> Vec<f32> {
+fn generate() -> Vec<f32> {
     let mut generator = Generator::new();
     generator.fill_gaussian();
     for rank in 0..CELL_COUNT {
@@ -125,22 +137,4 @@ pub fn generate() -> Vec<f32> {
         }
     }
     matrix
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn matrix_is_a_permutation_of_all_ranks() {
-        let matrix = generate();
-        assert_eq!(matrix.len(), CELL_COUNT);
-        let mut seen = vec![false; CELL_COUNT];
-        for value in matrix {
-            assert!((0.0..1.0).contains(&value));
-            let rank = (value * CELL_COUNT as f32) as usize;
-            assert!(!seen[rank], "duplicate rank {rank}");
-            seen[rank] = true;
-        }
-    }
 }
