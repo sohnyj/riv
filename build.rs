@@ -4,12 +4,24 @@ use std::process::Command;
 
 #[path = "res/shaders/blue_noise.rs"]
 mod blue_noise;
+#[path = "res/shaders/compile.rs"]
+mod shaders;
 
 fn main() {
     println!("cargo:rerun-if-changed=res/shaders");
 
     let output_directory = PathBuf::from(env::var("OUT_DIR").unwrap());
     blue_noise::write_table(&output_directory);
+
+    // xwin CRT/SDK import libraries; override the splat location with XWIN_ROOT.
+    println!("cargo:rerun-if-env-changed=XWIN_ROOT");
+    let xwin_root = env::var("XWIN_ROOT").unwrap_or_else(|_| {
+        let home = env::var("HOME")
+            .or_else(|_| env::var("USERPROFILE"))
+            .expect("HOME or USERPROFILE set");
+        format!("{home}/.xwin")
+    });
+    shaders::compile_all(&output_directory, &xwin_root);
 
     if env::var("CARGO_CFG_TARGET_OS").as_deref() != Ok("windows") {
         return;
@@ -79,14 +91,6 @@ fn main() {
 
     println!("cargo:rustc-link-arg-bins={}", compiled_resource.display());
 
-    // xwin CRT/SDK import libraries; override the splat location with XWIN_ROOT.
-    println!("cargo:rerun-if-env-changed=XWIN_ROOT");
-    let xwin_root = env::var("XWIN_ROOT").unwrap_or_else(|_| {
-        let home = env::var("HOME")
-            .or_else(|_| env::var("USERPROFILE"))
-            .expect("HOME or USERPROFILE set");
-        format!("{home}/.xwin")
-    });
     for library_directory in ["crt/lib/x86_64", "sdk/lib/um/x86_64", "sdk/lib/ucrt/x86_64"] {
         println!("cargo:rustc-link-search=native={xwin_root}/{library_directory}");
     }
