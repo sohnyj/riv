@@ -97,7 +97,7 @@ struct Application {
     image_core: ImageCore,
     displayed_image: Option<Arc<DecodedImage>>,
     displayed_location: Option<ItemLocation>,
-    /// A new image is waiting for its first frame; the neighbors start after that.
+    /// A new image is waiting for its first frame; preloading starts after that.
     preload_after_display: bool,
     settings: SettingsFile,
     bindings: Bindings,
@@ -1025,7 +1025,7 @@ impl Application {
         // The image is on screen: speculation no longer competes with it.
         if self.preload_after_display {
             self.preload_after_display = false;
-            self.image_core.preload_neighbors();
+            self.image_core.refresh_preload();
         }
     }
 

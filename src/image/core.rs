@@ -439,7 +439,7 @@ impl ImageCore {
     pub fn set_travel_direction(&mut self, backward: bool) {
         self.travel_backward = backward;
         self.opposite_steps = 0;
-        self.preload_neighbors();
+        self.refresh_preload();
     }
 
     /// A fresh listing starts with the forward default.
@@ -499,7 +499,7 @@ impl ImageCore {
         if list_affected {
             self.rescan_listing();
         }
-        self.preload_neighbors();
+        self.refresh_preload();
     }
 
     pub fn listing_position(&self) -> Option<(usize, usize)> {
@@ -634,7 +634,7 @@ impl ImageCore {
         self.listing_scope = None;
         self.pending_scan = Some(pending);
         // The old snapshot is gone, so nothing it held is reachable any more.
-        self.preload_neighbors();
+        self.refresh_preload();
         let options = self.options.clone();
         let window = self.window;
         let _ = std::thread::Builder::new()
@@ -681,7 +681,7 @@ impl ImageCore {
                 displayed: self.load_item(&first),
             };
         }
-        self.preload_neighbors();
+        self.refresh_preload();
         ListingInstall::Installed
     }
 
@@ -721,7 +721,7 @@ impl ImageCore {
                 },
             ));
             // A refused URL still leaves the single-item state; the listing is gone.
-            self.preload_neighbors();
+            self.refresh_preload();
             return false;
         }
         self.load_item(&location)
@@ -802,7 +802,7 @@ impl ImageCore {
         }
         // A RAW preview defers its full decode until navigation stops; the caller
         // schedules that through start_pending_full_decode. This call is for the sweeps.
-        self.preload_neighbors();
+        self.refresh_preload();
         preview_shown
     }
 
@@ -1144,7 +1144,7 @@ impl ImageCore {
                 if is_pending {
                     self.pending_display = None;
                     self.load_error = Some((completion.location, error));
-                    self.preload_neighbors();
+                    self.refresh_preload();
                 }
                 is_pending
             }
@@ -1184,7 +1184,7 @@ impl ImageCore {
     }
 
     /// Speculation waits for the display; the cancel and evict sweeps do not.
-    pub fn preload_neighbors(&mut self) {
+    pub fn refresh_preload(&mut self) {
         // A pending upgrade of what is already on screen (RAW, animation) still speculates.
         let awaiting_first_view = self.pending_display.as_ref().is_some_and(|pending| {
             self.current
@@ -1195,27 +1195,27 @@ impl ImageCore {
         let anchor_index = self
             .navigation_anchor()
             .and_then(|location| self.position_of(location));
-        let resident = self.resident_locations(anchor_index, backward, forward);
+        let targets = self.preload_targets(anchor_index, backward, forward);
         if backward == 0 && forward == 0 {
             // preloading off: drop the cache
             for (_, entry) in self.cache.drain() {
                 self.reaper.reap(entry.image);
             }
         } else {
-            self.drop_entries_outside(&resident);
+            self.drop_entries_outside(&targets);
             if let Some(anchor_index) = anchor_index
                 && !awaiting_first_view
             {
-                self.submit_neighbor_decodes(anchor_index, backward, forward, budget);
+                self.submit_preload_decodes(anchor_index, backward, forward, budget);
             }
         }
-        self.cancel_decodes_outside(&resident);
+        self.cancel_decodes_outside(&targets);
         self.evict_cache();
     }
 
-    /// What the cache and the decode queue may hold: the neighborhood and the
-    /// navigation baseline. A listing without the anchor (a URL) leaves just the baseline.
-    fn resident_locations(
+    /// What the cache and the decode queue may hold: the plan's targets plus the
+    /// navigation baseline, which is all a listing without the anchor (a URL) leaves.
+    fn preload_targets(
         &self,
         anchor_index: Option<usize>,
         backward: usize,
@@ -1223,20 +1223,22 @@ impl ImageCore {
     ) -> HashSet<ItemLocation> {
         let length = self.entries.len();
         let loop_enabled = self.options.loop_within_folder;
-        let mut resident: HashSet<ItemLocation> = anchor_index
+        let mut targets: HashSet<ItemLocation> = anchor_index
             .map(|anchor_index| {
                 preload_offsets(backward, forward)
-                    .filter_map(|offset| neighbor_index(anchor_index, offset, length, loop_enabled))
+                    .filter_map(|offset| {
+                        index_at_offset(anchor_index, offset, length, loop_enabled)
+                    })
                     .map(|index| self.entries[index].location.clone())
                     .collect()
             })
             .unwrap_or_default();
-        resident.extend(self.navigation_anchor().cloned());
-        resident
+        targets.extend(self.navigation_anchor().cloned());
+        targets
     }
 
-    /// Queues the neighbors the plan asks for, skipping what is cached or in flight.
-    fn submit_neighbor_decodes(
+    /// Queues what the plan asks for, skipping whatever is cached or already in flight.
+    fn submit_preload_decodes(
         &mut self,
         anchor_index: usize,
         backward: usize,
@@ -1245,7 +1247,7 @@ impl ImageCore {
     ) {
         let length = self.entries.len();
         for offset in preload_offsets(backward, forward) {
-            let Some(index) = neighbor_index(
+            let Some(index) = index_at_offset(
                 anchor_index,
                 offset,
                 length,
@@ -1254,7 +1256,7 @@ impl ImageCore {
                 continue;
             };
             let entry = &self.entries[index];
-            // Cheap speculation: RAW neighbors get the preview; animations stop at frame one.
+            // Cheap speculation: RAW targets get the preview; animations stop at frame one.
             let kind = if is_raw_two_stage(&entry.location) {
                 JobKind::Preview
             } else {
@@ -1280,22 +1282,22 @@ impl ImageCore {
     }
 
     /// Cancels queued or running decodes for anything residency no longer covers.
-    fn cancel_decodes_outside(&mut self, resident: &HashSet<ItemLocation>) {
-        for location in self.pool.remove_queued_except(resident) {
+    fn cancel_decodes_outside(&mut self, targets: &HashSet<ItemLocation>) {
+        for location in self.pool.remove_queued_except(targets) {
             self.in_flight.remove(&location);
         }
         for (location, cancellation) in &self.in_flight {
-            if !resident.contains(location) {
+            if !targets.contains(location) {
                 cancellation.store(true, Ordering::Relaxed);
             }
         }
     }
 
     /// Leaving residency removes the entry whole; returning is a fresh preload.
-    fn drop_entries_outside(&mut self, resident: &HashSet<ItemLocation>) {
+    fn drop_entries_outside(&mut self, targets: &HashSet<ItemLocation>) {
         let cache = &mut self.cache;
         let reaper = &self.reaper;
-        for (_, entry) in cache.extract_if(|location, _| !resident.contains(location)) {
+        for (_, entry) in cache.extract_if(|location, _| !targets.contains(location)) {
             reaper.reap(entry.image);
         }
     }
@@ -1365,7 +1367,7 @@ fn playlist_window_start(total: usize, anchor: Option<usize>, capacity: usize) -
         .min(total - capacity)
 }
 
-fn neighbor_index(
+fn index_at_offset(
     anchor: usize,
     offset: isize,
     length: usize,
@@ -1428,7 +1430,7 @@ fn preload_priorities(
 ) -> HashMap<usize, usize> {
     let mut priorities = HashMap::from([(anchor, 0)]);
     for (rank, offset) in preload_offsets(backward, forward).enumerate() {
-        if let Some(index) = neighbor_index(anchor, offset, length, loop_enabled) {
+        if let Some(index) = index_at_offset(anchor, offset, length, loop_enabled) {
             priorities.entry(index).or_insert(rank + 1);
         }
     }
@@ -1877,7 +1879,7 @@ mod preload_geometry_tests {
     }
 
     #[test]
-    fn eviction_prefers_forward_over_backward_within_the_neighborhood() {
+    fn eviction_prefers_forward_over_backward_within_the_preload_targets() {
         let (backward, forward, _) = PRELOAD_SPECIFICATIONS[1];
         let priorities = preload_priorities(10, backward, forward, 100, false);
         // The anchor survives longest, then +1..+3, then -1.

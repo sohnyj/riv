@@ -1180,8 +1180,8 @@ pub struct UploadedTexture {
     pub generation: u64,
 }
 
-/// Frames above this stay on the UI-thread upload path; keeps worst-case
-/// texture residency at neighborhood size times this bound.
+/// Frames above this stay on the UI-thread upload path, so the worst case is
+/// one texture per preload target at this bound.
 const UPLOAD_MAXIMUM_FRAME_BYTES: usize = 256 * 1024 * 1024;
 
 /// Uploads a still frame on the worker; None leaves the UI-thread upload path.
