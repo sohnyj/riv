@@ -80,6 +80,24 @@ void write_error(char* error_message, size_t error_capacity, const char* text) {
     }
 }
 
+// Reads only the header; the caller computes the decode weight from the size.
+int probe_stream(Imf::IStream& stream, int* out_width, int* out_height) {
+    try {
+        Imf::RgbaInputFile file(stream);
+        const Imath::Box2i data_window = file.dataWindow();
+        const long long width = static_cast<long long>(data_window.max.x) - data_window.min.x + 1;
+        const long long height = static_cast<long long>(data_window.max.y) - data_window.min.y + 1;
+        if (width <= 0 || height <= 0 || width * height > (1LL << 30)) {
+            return 1;
+        }
+        *out_width = static_cast<int>(width);
+        *out_height = static_cast<int>(height);
+        return 0;
+    } catch (...) {
+        return 1;
+    }
+}
+
 int decode_stream(Imf::IStream& stream, int* out_width, int* out_height,
                   unsigned short** out_pixels, char* error_message, size_t error_capacity) {
     try {
@@ -148,6 +166,21 @@ int riv_exr_decode_memory(const unsigned char* data, size_t size, int* out_width
     MemoryStream stream(data, size);
     return decode_stream(stream, out_width, out_height, out_pixels, error_message,
                          error_capacity);
+}
+
+// Returns 0 on success with the data window size; no pixels are read.
+int riv_exr_probe(const wchar_t* path, int* out_width, int* out_height) {
+    WideFileStream stream(path);
+    if (!stream.valid()) {
+        return 1;
+    }
+    return probe_stream(stream, out_width, out_height);
+}
+
+int riv_exr_probe_memory(const unsigned char* data, size_t size, int* out_width,
+                         int* out_height) {
+    MemoryStream stream(data, size);
+    return probe_stream(stream, out_width, out_height);
 }
 
 void riv_exr_free(unsigned short* pixels) {

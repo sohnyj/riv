@@ -22,8 +22,8 @@ use image::animation::Animation;
 use image::color;
 use image::core::{
     CoreOptions, DecodeCompletion, DownloadProgress, ImageCore, ItemLocation, ListingInstall,
-    NavigationCommand, ScannedListing, SortMode, WM_APP_DECODE_COMPLETE, WM_APP_DOWNLOAD_PROGRESS,
-    WM_APP_LISTING_READY,
+    NavigationCommand, ProbeCompletion, ScannedListing, SortMode, WM_APP_DECODE_COMPLETE,
+    WM_APP_DOWNLOAD_PROGRESS, WM_APP_LISTING_READY, WM_APP_PROBE_COMPLETE,
 };
 use image::decode::DecodedImage;
 use network::curl;
@@ -2035,6 +2035,13 @@ extern "system" fn window_procedure(
             }
             LRESULT(0)
         }
+        WM_APP_PROBE_COMPLETE => {
+            let completion = unsafe { Box::from_raw(lparam.0 as *mut ProbeCompletion) };
+            if let Some(application) = application_from_window(window) {
+                application.image_core.on_probe_complete(*completion);
+            }
+            LRESULT(0)
+        }
         WM_APP_LISTING_READY => {
             let scan = unsafe { Box::from_raw(lparam.0 as *mut ScannedListing) };
             if let Some(application) = application_from_window(window) {
@@ -2425,6 +2432,8 @@ extern "system" fn window_procedure(
             // HDR/ACM toggle, bit depth, or monitor reconfigure: re-evaluate once.
             if let Some(application) = application_from_window(window) {
                 let _ = application.update_current_monitor(window);
+                // SVG rasters at the largest monitor's size, so its weights expire here.
+                application.image_core.invalidate_svg_weights();
                 application.refresh_display_state(window);
             }
             LRESULT(0)

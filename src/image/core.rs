@@ -26,6 +26,7 @@ use crate::network::curl;
 pub const WM_APP_DECODE_COMPLETE: u32 = WM_APP + 1;
 pub const WM_APP_DOWNLOAD_PROGRESS: u32 = WM_APP + 7;
 pub const WM_APP_LISTING_READY: u32 = WM_APP + 8;
+pub const WM_APP_PROBE_COMPLETE: u32 = WM_APP + 9;
 
 /// UI updates at most this often while a remote image downloads.
 const DOWNLOAD_PROGRESS_INTERVAL: Duration = Duration::from_millis(100);
@@ -236,6 +237,17 @@ pub struct ListingEntry {
     file_size: u64,
     modified: SystemTime,
     created: SystemTime,
+    /// Cache weight of the fully decoded item; a probe or an arrival records it.
+    weight: DecodedWeight,
+}
+
+/// The weight outlives the cache entry: eviction drops pixels, not this knowledge.
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum DecodedWeight {
+    Unknown,
+    Known(u64),
+    /// The probe failed; the item is never speculated on.
+    Unavailable,
 }
 
 pub enum DecodeStage {
@@ -261,6 +273,13 @@ pub struct DecodeCompletion {
 pub struct DownloadProgress {
     pub location: ItemLocation,
     pub received_bytes: u64,
+}
+
+/// A finished weight probe; a cancelled one records nothing.
+pub struct ProbeCompletion {
+    location: ItemLocation,
+    cancelled: bool,
+    weight: Option<u64>,
 }
 
 pub struct CurrentImage {
@@ -340,6 +359,8 @@ pub struct ImageCore {
     /// Item awaiting display; replacing it invalidates the previous load.
     pending_display: Option<ItemLocation>,
     in_flight: HashMap<ItemLocation, Arc<AtomicBool>>,
+    /// Separate from in_flight so a probe never reads as a decode already running.
+    probes_in_flight: HashMap<ItemLocation, Arc<AtomicBool>>,
     cache: HashMap<ItemLocation, CacheEntry>,
     pub current: Option<CurrentImage>,
     pub load_error: Option<(ItemLocation, DecodeError)>,
@@ -424,6 +445,7 @@ impl ImageCore {
             entries: Vec::new(),
             pending_display: None,
             in_flight: HashMap::new(),
+            probes_in_flight: HashMap::new(),
             cache: HashMap::new(),
             current: None,
             load_error: None,
@@ -1111,6 +1133,7 @@ impl ImageCore {
         }
         match completion.result {
             Ok(image) => {
+                self.record_arrived_weight(&completion.location, &image);
                 self.cache_image(
                     completion.location.clone(),
                     CacheEntry::new(
@@ -1237,7 +1260,8 @@ impl ImageCore {
         targets
     }
 
-    /// Queues what the plan asks for, skipping whatever is cached or already in flight.
+    /// Queues targets in priority order while their weights fit the budget;
+    /// unknown weights probe first and the pass re-runs when they settle.
     fn submit_preload_decodes(
         &mut self,
         anchor_index: usize,
@@ -1246,15 +1270,56 @@ impl ImageCore {
         budget: u64,
     ) {
         let length = self.entries.len();
-        for offset in preload_offsets(backward, forward) {
-            let Some(index) = index_at_offset(
-                anchor_index,
-                offset,
-                length,
-                self.options.loop_within_folder,
-            ) else {
+        let candidates: Vec<usize> = preload_offsets(backward, forward)
+            .filter_map(|offset| {
+                index_at_offset(
+                    anchor_index,
+                    offset,
+                    length,
+                    self.options.loop_within_folder,
+                )
+            })
+            .collect();
+        let mut awaiting_probes = false;
+        for &index in &candidates {
+            let entry = &self.entries[index];
+            if entry.weight != DecodedWeight::Unknown {
                 continue;
-            };
+            }
+            awaiting_probes = true;
+            if !self.probes_in_flight.contains_key(&entry.location) {
+                let (location, file_size, modified) =
+                    (entry.location.clone(), entry.file_size, entry.modified);
+                self.submit_probe(location, file_size, modified);
+            }
+        }
+        if awaiting_probes {
+            return; // one pass per settled target set, re-run by probe completions
+        }
+        let submittable: Vec<usize> = candidates
+            .into_iter()
+            .filter(|&index| {
+                let entry = &self.entries[index];
+                matches!(entry.weight, DecodedWeight::Known(_))
+                    && !self.in_flight.contains_key(&entry.location)
+                    && !self
+                        .cache
+                        .get(&entry.location)
+                        .is_some_and(|cached| cached.file_size == entry.file_size)
+            })
+            .collect();
+        let weights: Vec<u64> = submittable
+            .iter()
+            .map(|&index| match self.entries[index].weight {
+                DecodedWeight::Known(weight) => weight,
+                _ => unreachable!("submittable entries carry a known weight"),
+            })
+            .collect();
+        let selected = fits_in_budget(self.occupied_bytes(), budget, &weights);
+        for (&index, selected) in submittable.iter().zip(selected) {
+            if !selected {
+                continue;
+            }
             let entry = &self.entries[index];
             // Cheap speculation: RAW targets get the preview; animations stop at frame one.
             let kind = if is_raw_two_stage(&entry.location) {
@@ -1262,16 +1327,6 @@ impl ImageCore {
             } else {
                 JobKind::Full
             };
-            // The oversize gate is about decoded weight; previews stay cheap.
-            if (kind == JobKind::Full && entry.file_size > budget / 2)
-                || self.in_flight.contains_key(&entry.location)
-                || self
-                    .cache
-                    .get(&entry.location)
-                    .is_some_and(|cached| cached.file_size == entry.file_size)
-            {
-                continue;
-            }
             let (location, file_size, modified) = (
                 entry.location.clone(),
                 entry.file_size,
@@ -1281,12 +1336,104 @@ impl ImageCore {
         }
     }
 
-    /// Cancels queued or running decodes for anything residency no longer covers.
+    /// Registers the probe in flight and hands it to the pool.
+    fn submit_probe(&mut self, location: ItemLocation, file_size: u64, modified: SystemTime) {
+        let cancellation = Arc::new(AtomicBool::new(false));
+        self.probes_in_flight
+            .insert(location.clone(), cancellation.clone());
+        self.pool.submit(
+            location,
+            file_size,
+            Some(modified),
+            cancellation,
+            JobKind::Probe,
+            false,
+        );
+    }
+
+    /// Records an arrived probe; a stale location misses the listing lookup.
+    pub fn on_probe_complete(&mut self, completion: ProbeCompletion) {
+        self.probes_in_flight.remove(&completion.location);
+        if !completion.cancelled
+            && let Some(index) = self.position_of(&completion.location)
+        {
+            self.entries[index].weight = match completion.weight {
+                Some(weight) => DecodedWeight::Known(weight),
+                None => DecodedWeight::Unavailable,
+            };
+        }
+        self.refresh_preload();
+    }
+
+    /// SVG rasters at the largest monitor's size, so its weights expire with it.
+    pub fn invalidate_svg_weights(&mut self) {
+        for entry in &mut self.entries {
+            let is_svg = entry
+                .location
+                .extension_lowercase()
+                .and_then(|extension| decode::format_name_for_extension(&extension))
+                == Some("SVG");
+            if is_svg {
+                entry.weight = DecodedWeight::Unknown;
+            }
+        }
+    }
+
+    /// Bytes the budget already covers: cached items once, plus unarrived submissions.
+    fn occupied_bytes(&self) -> u64 {
+        let cached: u64 = self
+            .cache
+            .iter()
+            .map(|(location, entry)| self.cached_weight(location, entry))
+            .sum();
+        let submitted: u64 = self
+            .in_flight
+            .keys()
+            .filter(|location| !self.cache.contains_key(location))
+            .map(|location| self.listed_weight(location).unwrap_or(0))
+            .sum();
+        cached + submitted
+    }
+
+    /// A stand-in weighs its full decode; others weigh what they hold, pixels or texture.
+    fn cached_weight(&self, location: &ItemLocation, entry: &CacheEntry) -> u64 {
+        if entry.preview
+            && let Some(weight) = self.listed_weight(location)
+        {
+            return weight;
+        }
+        let pixels = entry.image.pixel_bytes() as u64;
+        if pixels > 0 {
+            pixels
+        } else if entry.texture.is_some() {
+            entry.image.frame_byte_length() as u64
+        } else {
+            0
+        }
+    }
+
+    fn listed_weight(&self, location: &ItemLocation) -> Option<u64> {
+        let index = self.position_of(location)?;
+        match self.entries[index].weight {
+            DecodedWeight::Known(weight) => Some(weight),
+            _ => None,
+        }
+    }
+
+    /// The actual bytes replace the prediction; eviction then trims any excess.
+    fn record_arrived_weight(&mut self, location: &ItemLocation, image: &DecodedImage) {
+        if let Some(index) = self.position_of(location) {
+            self.entries[index].weight = DecodedWeight::Known(image.pixel_bytes() as u64);
+        }
+    }
+
+    /// Cancels queued or running decodes and probes outside the residency set.
     fn cancel_decodes_outside(&mut self, targets: &HashSet<ItemLocation>) {
         for location in self.pool.remove_queued_except(targets) {
             self.in_flight.remove(&location);
+            self.probes_in_flight.remove(&location);
         }
-        for (location, cancellation) in &self.in_flight {
+        for (location, cancellation) in self.in_flight.iter().chain(&self.probes_in_flight) {
             if !targets.contains(location) {
                 cancellation.store(true, Ordering::Relaxed);
             }
@@ -1307,8 +1454,8 @@ impl ImageCore {
         let (backward, forward, budget) = self.preload_plan();
         let mut total: u64 = self
             .cache
-            .values()
-            .map(|entry| entry.image.pixel_bytes() as u64)
+            .iter()
+            .map(|(location, entry)| self.cached_weight(location, entry))
             .sum();
         if total <= budget {
             return;
@@ -1329,7 +1476,6 @@ impl ImageCore {
         let mut ranked: Vec<(ItemLocation, u64, usize)> = self
             .cache
             .iter()
-            .filter(|(_, entry)| entry.image.pixel_bytes() > 0)
             .map(|(location, entry)| {
                 // The baseline item goes last even when unlisted (URL items); anything
                 // residency no longer covers goes first, in no particular order.
@@ -1340,7 +1486,7 @@ impl ImageCore {
                         .and_then(|index| priorities.get(&index).copied())
                         .unwrap_or(usize::MAX)
                 };
-                (location.clone(), entry.image.pixel_bytes() as u64, key)
+                (location.clone(), self.cached_weight(location, entry), key)
             })
             .collect();
         ranked.sort_by_key(|(_, _, key)| std::cmp::Reverse(*key));
@@ -1390,6 +1536,21 @@ fn index_at_offset(
 /// Preload targets in priority order: forward first, nearest first.
 fn preload_offsets(backward: usize, forward: usize) -> impl Iterator<Item = isize> {
     (1..=forward as isize).chain((1..=backward as isize).map(|step| -step))
+}
+
+/// Marks candidate weights that fit, in order; a misfit is skipped, not a stop.
+fn fits_in_budget(occupied: u64, budget: u64, weights: &[u64]) -> Vec<bool> {
+    let mut used = occupied;
+    weights
+        .iter()
+        .map(|&weight| {
+            let fits = used.saturating_add(weight) <= budget;
+            if fits {
+                used += weight;
+            }
+            fits
+        })
+        .collect()
 }
 
 /// A local RAW file on the embedded-preview two-stage path.
@@ -1485,6 +1646,7 @@ fn scan_folder(directory: &Path, options: &CoreOptions) -> Vec<ListingEntry> {
             file_size: metadata.len(),
             modified: metadata.modified().unwrap_or(UNIX_EPOCH),
             created: metadata.created().unwrap_or(UNIX_EPOCH),
+            weight: DecodedWeight::Unknown,
         });
     }
     entries
@@ -1510,6 +1672,7 @@ fn member_entry(archive: &Path, member: archive_reader::MemberInfo) -> Option<Li
         file_size: member.size,
         modified: member.modified,
         created: member.modified, // archives do not record creation times
+        weight: DecodedWeight::Unknown,
     })
 }
 
@@ -1567,6 +1730,8 @@ enum JobKind {
     Full,
     /// Stops at a RAW's embedded preview when one exists; decodes fully otherwise.
     Preview,
+    /// Reads only the header and posts the decode weight; no pixels.
+    Probe,
 }
 
 struct DecodeJob {
@@ -1642,7 +1807,9 @@ impl DecodePool {
     /// A job a worker already took keeps its kind; PreviewFinal covers that arrival.
     fn promote(&self, location: &ItemLocation) {
         let mut queue = self.shared.queue.lock().expect("decode queue poisoned");
-        if let Some(position) = queue.iter().position(|job| job.location == *location)
+        if let Some(position) = queue
+            .iter()
+            .position(|job| job.kind != JobKind::Probe && job.location == *location)
             && let Some(mut job) = queue.remove(position)
         {
             job.speculative = false; // someone is waiting on it now
@@ -1708,6 +1875,10 @@ fn worker_loop(shared: &PoolShared, window: isize) {
                 queue = shared.available.wait(queue).expect("decode queue poisoned");
             }
         };
+        if job.kind == JobKind::Probe {
+            run_probe_job(&job, window);
+            continue;
+        }
         let mut file_size = job.file_size;
         let modified = job.modified;
         let result = match &job.location {
@@ -1805,6 +1976,42 @@ fn worker_loop(shared: &PoolShared, window: isize) {
             }),
         );
     }
+}
+
+/// Header-only weight probe on a worker; the result lands on the listing entry.
+fn run_probe_job(job: &DecodeJob, window: isize) {
+    let (cancelled, weight) = if job.cancellation.load(Ordering::Relaxed) {
+        (true, None)
+    } else {
+        match &job.location {
+            ItemLocation::File(path) => (false, decode::probe_file_weight(path)),
+            ItemLocation::ArchiveMember { archive, member } => {
+                // The member extraction repeats at decode time; only the pixel work is saved.
+                match archive_reader::read_member(archive, member, &job.cancellation) {
+                    Ok(data) => {
+                        let extension = Path::new(member)
+                            .extension()
+                            .map(|extension| extension.to_string_lossy().to_lowercase());
+                        (
+                            false,
+                            decode::probe_bytes_weight(&data, extension.as_deref()),
+                        )
+                    }
+                    Err(error) => (error.cancelled, None),
+                }
+            }
+            ItemLocation::Url(_) => (false, None), // URLs are never listed, never probed
+        }
+    };
+    post_boxed(
+        window,
+        WM_APP_PROBE_COMPLETE,
+        Box::new(ProbeCompletion {
+            location: job.location.clone(),
+            cancelled,
+            weight,
+        }),
+    );
 }
 
 /// Unrecognized downloaded bytes (an HTML page, most often) get a plain message.
@@ -1912,6 +2119,38 @@ mod preload_geometry_tests {
         let priorities = preload_priorities(0, backward, forward, 3, true);
         assert_eq!(priorities[&2], 2);
         assert_eq!(priorities.len(), 3);
+    }
+}
+
+#[cfg(test)]
+mod budget_selection_tests {
+    use super::*;
+
+    #[test]
+    fn candidates_land_in_priority_order_while_they_fit() {
+        assert_eq!(
+            fits_in_budget(0, 1000, &[400, 400, 400]),
+            [true, true, false]
+        );
+    }
+
+    #[test]
+    fn an_oversized_candidate_is_skipped_not_a_stopping_point() {
+        // The big +1 stays out, the cheap items behind it still land.
+        assert_eq!(
+            fits_in_budget(0, 500, &[800, 200, 200, 200]),
+            [false, true, true, false]
+        );
+    }
+
+    #[test]
+    fn occupied_bytes_shrink_the_remaining_budget() {
+        assert_eq!(fits_in_budget(722, 1024, &[173, 173]), [true, false]);
+    }
+
+    #[test]
+    fn a_full_budget_admits_nothing_but_zero_weights() {
+        assert_eq!(fits_in_budget(1024, 1024, &[1, 0]), [false, true]);
     }
 }
 
@@ -2064,6 +2303,7 @@ mod url_session_state_tests {
             file_size: 0,
             modified: UNIX_EPOCH,
             created: UNIX_EPOCH,
+            weight: DecodedWeight::Unknown,
         }];
     }
 
@@ -2101,6 +2341,7 @@ mod url_session_state_tests {
             file_size: 0,
             modified: UNIX_EPOCH,
             created: UNIX_EPOCH,
+            weight: DecodedWeight::Unknown,
         });
         core.load_error = Some((
             ItemLocation::File(PathBuf::from("C:\\pictures\\a.png")),
@@ -2455,6 +2696,7 @@ mod playlist_window_tests {
                 file_size: 0,
                 modified: UNIX_EPOCH,
                 created: UNIX_EPOCH,
+                weight: DecodedWeight::Unknown,
             })
             .collect();
         core.pending_display = anchor.map(|index| core.entries[index].location.clone());

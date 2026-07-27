@@ -224,6 +224,30 @@ unsafe extern "C" {
         error_capacity: usize,
     ) -> c_int;
     fn riv_exr_free(pixels: *mut u16);
+    fn riv_exr_probe(path: *const u16, out_width: *mut c_int, out_height: *mut c_int) -> c_int;
+    fn riv_exr_probe_memory(
+        data: *const u8,
+        size: usize,
+        out_width: *mut c_int,
+        out_height: *mut c_int,
+    ) -> c_int;
+}
+
+/// Header-only data window size; the decode is always RGBA half.
+pub fn probe_exr(path: &Path) -> Option<(u32, u32)> {
+    let wide_path: Vec<u16> = path.as_os_str().encode_wide().chain(Some(0)).collect();
+    let mut width: c_int = 0;
+    let mut height: c_int = 0;
+    let status = unsafe { riv_exr_probe(wide_path.as_ptr(), &raw mut width, &raw mut height) };
+    (status == 0).then_some((width as u32, height as u32))
+}
+
+pub fn probe_exr_bytes(data: &[u8]) -> Option<(u32, u32)> {
+    let mut width: c_int = 0;
+    let mut height: c_int = 0;
+    let status =
+        unsafe { riv_exr_probe_memory(data.as_ptr(), data.len(), &raw mut width, &raw mut height) };
+    (status == 0).then_some((width as u32, height as u32))
 }
 
 pub fn decode_exr(path: &Path, format_name: &'static str) -> Result<DecodedImage, DecodeError> {
@@ -377,6 +401,40 @@ unsafe extern "C" {
         handle: *const HeifImageHandle,
         out_data: *mut c_void,
     ) -> HeifError;
+    fn heif_image_handle_get_width(handle: *const HeifImageHandle) -> c_int;
+    fn heif_image_handle_get_height(handle: *const HeifImageHandle) -> c_int;
+}
+
+/// Container-parse size of the primary image; no pixel decode.
+pub fn probe_heif(data: &[u8]) -> Option<(u32, u32)> {
+    let context = unsafe { heif_context_alloc() };
+    if context.is_null() {
+        return None;
+    }
+    let size = probe_heif_primary_image(context, data);
+    unsafe { heif_context_free(context) };
+    size
+}
+
+fn probe_heif_primary_image(context: *mut HeifContext, data: &[u8]) -> Option<(u32, u32)> {
+    unsafe {
+        heif_context_read_from_memory_without_copy(
+            context,
+            data.as_ptr().cast(),
+            data.len(),
+            std::ptr::null(),
+        )
+    }
+    .into_result()
+    .ok()?;
+    let mut handle: *mut HeifImageHandle = std::ptr::null_mut();
+    unsafe { heif_context_get_primary_image_handle(context, &raw mut handle) }
+        .into_result()
+        .ok()?;
+    let width = unsafe { heif_image_handle_get_width(handle) };
+    let height = unsafe { heif_image_handle_get_height(handle) };
+    unsafe { heif_image_handle_release(handle) };
+    (width > 0 && height > 0).then_some((width as u32, height as u32))
 }
 
 pub fn decode_heif(data: &[u8], format_name: &'static str) -> Result<DecodedImage, DecodeError> {

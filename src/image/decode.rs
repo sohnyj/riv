@@ -666,6 +666,148 @@ pub fn decode_animation_first_frame(
     }
 }
 
+/// Bitmap bytes a full decode would produce; submission and eviction budget this number.
+pub fn decoded_weight(width: u32, height: u32, bytes_per_pixel: u32, frame_count: u64) -> u64 {
+    let frame_count = frame_count.max(1);
+    if frame_count > 1 {
+        // Animations are never downscaled; the compositor works at canvas size.
+        let frame_bytes = u64::from(width) * u64::from(height) * u64::from(bytes_per_pixel);
+        if animation_budget_exceeded(frame_count, frame_bytes as usize) {
+            frame_bytes
+        } else {
+            frame_count * frame_bytes
+        }
+    } else {
+        let longest = width.max(height);
+        let (width, height) = if longest > MAXIMUM_TEXTURE_DIMENSION {
+            let limit = u64::from(MAXIMUM_TEXTURE_DIMENSION);
+            (
+                (u64::from(width) * limit / u64::from(longest)).max(1) as u32,
+                (u64::from(height) * limit / u64::from(longest)).max(1) as u32,
+            )
+        } else {
+            (width, height)
+        };
+        u64::from(width) * u64::from(height) * u64::from(bytes_per_pixel)
+    }
+}
+
+/// Header-only weight probe; None when the header cannot be read or parsed.
+pub fn probe_file_weight(path: &Path) -> Option<u64> {
+    probe_weight(&DecodeInput::File(path))
+}
+
+/// Weight probe over extracted bytes (an archive member).
+pub fn probe_bytes_weight(data: &[u8], extension: Option<&str>) -> Option<u64> {
+    probe_weight(&DecodeInput::Memory { data, extension })
+}
+
+fn probe_weight(input: &DecodeInput<'_>) -> Option<u64> {
+    let descriptor = input.descriptor()?;
+    match descriptor.adapter {
+        Adapter::Wic | Adapter::WicRawTwoStage => probe_wic_weight(input, &descriptor.semantics),
+        Adapter::Apng => match input {
+            DecodeInput::File(path) => probe_apng_weight(BufReader::new(File::open(path).ok()?)),
+            DecodeInput::Memory { data, .. } => probe_apng_weight(Cursor::new(*data)),
+        },
+        Adapter::Svg => probe_svg_weight(&input.read_all().ok()?),
+        Adapter::WebPAnimation => probe_webp_weight(input),
+        Adapter::Exr => {
+            let (width, height) = match input {
+                DecodeInput::File(path) => super::fallback::probe_exr(path),
+                DecodeInput::Memory { data, .. } => super::fallback::probe_exr_bytes(data),
+            }?;
+            Some(decoded_weight(width, height, 8, 1))
+        }
+        Adapter::HeifWithWicPreferred => {
+            // Mirrors the decode dispatch: WIC first, the bundled decoder on failure.
+            probe_wic_weight(input, &descriptor.semantics).or_else(|| {
+                let (width, height) = super::fallback::probe_heif(&input.read_all().ok()?)?;
+                Some(decoded_weight(width, height, 4, 1))
+            })
+        }
+    }
+}
+
+fn probe_wic_weight(input: &DecodeInput<'_>, semantics: &FrameSemantics) -> Option<u64> {
+    with_wic_factory(|factory| {
+        let decoder = create_wic_decoder(factory, input)?;
+        let (index, frame_count) = match semantics {
+            // Counting animation frames walks the whole file; the first frame is the weight.
+            FrameSemantics::Animation => (0, 1),
+            FrameSemantics::SizeVariants => {
+                let frame_count = unsafe { decoder.GetFrameCount()? }.max(1);
+                let mut largest_index = 0;
+                let mut largest_pixels = 0u64;
+                for index in 0..frame_count {
+                    let frame = unsafe { decoder.GetFrame(index)? };
+                    let (width, height) = source_size(&frame.cast()?)?;
+                    let pixels = u64::from(width) * u64::from(height);
+                    if pixels > largest_pixels {
+                        largest_pixels = pixels;
+                        largest_index = index;
+                    }
+                }
+                (largest_index, 1)
+            }
+            FrameSemantics::Single => (0, 1),
+        };
+        let frame = unsafe { decoder.GetFrame(index)? };
+        let (width, height) = source_size(&frame.cast()?)?;
+        let (bits_per_channel, _) = frame_pixel_format_info(factory, &frame);
+        let bytes_per_pixel = if bits_per_channel > 8 { 8 } else { 4 };
+        Ok(decoded_weight(width, height, bytes_per_pixel, frame_count))
+    })
+    .ok()
+}
+
+/// IHDR and acTL sit before the image data, so this reads only the file head.
+fn probe_apng_weight<Input: BufRead + Seek>(input: Input) -> Option<u64> {
+    let decoder = png::Decoder::new(input);
+    let reader = decoder.read_info().ok()?;
+    let information = reader.info();
+    let frame_count = information
+        .animation_control
+        .map_or(1, |control| u64::from(control.num_frames));
+    Some(decoded_weight(
+        information.width,
+        information.height,
+        4,
+        frame_count,
+    ))
+}
+
+/// The raster size tracks the largest monitor, like decode_svg.
+fn probe_svg_weight(data: &[u8]) -> Option<u64> {
+    let options = resvg::usvg::Options {
+        fontdb: font_database().clone(),
+        ..Default::default()
+    };
+    let tree = resvg::usvg::Tree::from_data(data, &options).ok()?;
+    let size = tree.size();
+    if !(size.width() > 0.0 && size.height() > 0.0) {
+        return None;
+    }
+    let target = largest_monitor_long_side().min(MAXIMUM_TEXTURE_DIMENSION) as f32;
+    let scale = target / size.width().max(size.height());
+    let pixel_width = (size.width() * scale).round().max(1.0) as u32;
+    let pixel_height = (size.height() * scale).round().max(1.0) as u32;
+    Some(decoded_weight(pixel_width, pixel_height, 4, 1))
+}
+
+/// The VP8X canvas sits in the header; counting frames would walk the file.
+fn probe_webp_weight(input: &DecodeInput<'_>) -> Option<u64> {
+    let header = match input {
+        DecodeInput::File(path) => read_header(path)?,
+        DecodeInput::Memory { data, .. } => data[..data.len().min(30)].to_vec(),
+    };
+    let dimension = |offset: usize| -> Option<u32> {
+        let bytes = header.get(offset..offset + 3)?;
+        Some(1 + (u32::from(bytes[0]) | u32::from(bytes[1]) << 8 | u32::from(bytes[2]) << 16))
+    };
+    Some(decoded_weight(dimension(24)?, dimension(27)?, 4, 1))
+}
+
 /// Extension-only: magic probing never yields RAW, and this runs on the UI thread.
 pub fn is_raw_two_stage(path: &Path) -> bool {
     path.extension()
@@ -2729,5 +2871,42 @@ mod apng_tests {
         let cancellation = AtomicBool::new(false);
         // Frames run out after the first; decode errors without the huge reservation.
         assert!(decode_bytes(&data, Some("png"), &cancellation).is_err());
+    }
+}
+
+#[cfg(test)]
+mod decoded_weight_tests {
+    use super::*;
+
+    #[test]
+    fn a_single_frame_weighs_its_pixel_bytes() {
+        assert_eq!(decoded_weight(6000, 4000, 4, 1), 96_000_000);
+        assert_eq!(decoded_weight(6000, 4000, 8, 1), 192_000_000);
+    }
+
+    #[test]
+    fn an_oversized_single_downscales_before_weighing() {
+        // 17000x6000 exceeds the texture limit; the decode lands at 16384x5782.
+        let expected = 16384u64 * (6000 * 16384 / 17000) * 8;
+        assert_eq!(decoded_weight(17000, 6000, 8, 1), expected);
+    }
+
+    #[test]
+    fn an_animation_within_the_cap_counts_every_frame() {
+        let frame_bytes = 748u64 * 418 * 4;
+        assert_eq!(decoded_weight(748, 418, 4, 400), frame_bytes * 400);
+    }
+
+    #[test]
+    fn an_animation_past_the_cap_weighs_its_first_frame() {
+        let frame_bytes = 1920u64 * 1080 * 4;
+        assert_eq!(decoded_weight(1920, 1080, 4, 2000), frame_bytes);
+    }
+
+    #[test]
+    fn a_claimed_first_frame_past_the_cap_keeps_its_claimed_size() {
+        // A forged canvas is never capped: the weight blocks speculation instead.
+        let frame_bytes = 60000u64 * 60000 * 4;
+        assert_eq!(decoded_weight(60000, 60000, 4, 10), frame_bytes);
     }
 }
