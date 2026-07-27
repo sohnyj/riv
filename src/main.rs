@@ -573,14 +573,16 @@ impl Application {
         };
         let image = current.image.clone();
         let location = current.location.clone();
-        // Same item at the same logical size (RAW preview swap, reload): keep the view.
-        let same_view = self
-            .displayed_location
+        // The same item keeps its view (RAW preview swap, reload). A stand-in of another
+        // size keeps its on-screen size instead: the zoom is per image pixel.
+        let same_view = self.displayed_location.as_ref() == Some(&location);
+        let previous_width = self
+            .displayed_image
             .as_ref()
-            .is_some_and(|displayed| *displayed == location)
-            && self.displayed_image.as_ref().is_some_and(|previous| {
-                previous.width == image.width && previous.height == image.height
-            });
+            .map_or(0, |previous| previous.width);
+        if same_view && previous_width > 0 && image.width > 0 && previous_width != image.width {
+            self.view_transform.scale *= previous_width as f32 / image.width as f32;
+        }
         let texture = current.texture.clone();
         let frame = &image.frames[0];
         let upload = match &mut self.renderer {
