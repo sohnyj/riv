@@ -97,6 +97,8 @@ struct Application {
     image_core: ImageCore,
     displayed_image: Option<Arc<DecodedImage>>,
     displayed_location: Option<ItemLocation>,
+    /// A new image is waiting for its first frame; the neighbors start after that.
+    preload_after_display: bool,
     settings: SettingsFile,
     bindings: Bindings,
     preserve_zoom: bool,
@@ -239,6 +241,7 @@ impl Application {
             image_core: ImageCore::new(window, core_options(&settings.options)),
             displayed_image: None,
             displayed_location: None,
+            preload_after_display: false,
             settings,
             bindings,
             preserve_zoom: false,
@@ -642,6 +645,7 @@ impl Application {
                 unsafe { SetTimer(Some(window), OPEN_WITH_TIMER, 250, None) };
             }
         }
+        self.preload_after_display = true;
         self.update_window_title(window);
         self.request_render(window);
     }
@@ -1017,6 +1021,11 @@ impl Application {
                     overlay.draw(context, viewport.width, viewport.height, &content)
                 });
             }
+        }
+        // The image is on screen: speculation no longer competes with it.
+        if self.preload_after_display && self.displayed_image.is_some() {
+            self.preload_after_display = false;
+            self.image_core.preload_neighbors();
         }
     }
 

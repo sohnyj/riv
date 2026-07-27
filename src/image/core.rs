@@ -781,7 +781,7 @@ impl ImageCore {
             self.load_error = None;
             if !preview {
                 self.pending_display = None;
-                self.preload_neighbors();
+                // Preload starts once this image is on screen.
                 return true;
             }
             preview_shown = true;
@@ -798,7 +798,6 @@ impl ImageCore {
         }
         // A RAW preview defers its full decode until navigation stops; the caller
         // schedules that through start_pending_full_decode.
-        self.preload_neighbors();
         preview_shown
     }
 
@@ -1127,7 +1126,7 @@ impl ImageCore {
                     });
                     self.pending_display = None;
                     self.load_error = None;
-                    self.preload_neighbors();
+                    // Preload starts once this image is on screen.
                     true
                 } else {
                     // The cache kept only the slim copy; free the decode buffer off-thread.
@@ -1179,7 +1178,11 @@ impl ImageCore {
             .position(|entry| entry.location == *location)
     }
 
-    fn preload_neighbors(&mut self) {
+    /// No speculation while an item is awaited; the display path restarts it.
+    pub fn preload_neighbors(&mut self) {
+        if self.pending_display.is_some() {
+            return;
+        }
         let (backward, forward, budget) = self.preload_plan();
         if backward == 0 && forward == 0 {
             // preloading off: drop the cache
