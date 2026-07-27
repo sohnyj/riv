@@ -7,6 +7,10 @@ mod blue_noise;
 #[path = "res/shaders/compile.rs"]
 mod shaders;
 
+/// xwin splat layout, shared by the crate link search and the shader compiler build.
+const XWIN_LIBRARY_DIRECTORIES: [&str; 3] =
+    ["crt/lib/x86_64", "sdk/lib/um/x86_64", "sdk/lib/ucrt/x86_64"];
+
 fn main() {
     println!("cargo:rerun-if-changed=res/shaders");
 
@@ -91,7 +95,7 @@ fn main() {
 
     println!("cargo:rustc-link-arg-bins={}", compiled_resource.display());
 
-    for library_directory in ["crt/lib/x86_64", "sdk/lib/um/x86_64", "sdk/lib/ucrt/x86_64"] {
+    for library_directory in XWIN_LIBRARY_DIRECTORIES {
         println!("cargo:rustc-link-search=native={xwin_root}/{library_directory}");
     }
 

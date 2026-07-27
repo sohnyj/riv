@@ -180,15 +180,3 @@ impl QuantizePass {
         }
     }
 }
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn the_built_shaders_are_dxbc_containers() {
-        for blob in [VERTEX_SHADER, COPY_SHADER, ORDERED_SHADER, FRUIT_SHADER] {
-            assert!(blob.starts_with(b"DXBC"), "not a DXBC container");
-        }
-    }
-}

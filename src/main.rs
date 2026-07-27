@@ -1023,7 +1023,7 @@ impl Application {
             }
         }
         // The image is on screen: speculation no longer competes with it.
-        if self.preload_after_display && self.displayed_image.is_some() {
+        if self.preload_after_display {
             self.preload_after_display = false;
             self.image_core.preload_neighbors();
         }

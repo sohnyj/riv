@@ -797,7 +797,9 @@ impl ImageCore {
             self.submit_pending_decode(location.clone(), file_size, modified, preview_shown);
         }
         // A RAW preview defers its full decode until navigation stops; the caller
-        // schedules that through start_pending_full_decode.
+        // schedules that through start_pending_full_decode. Speculation for the new
+        // neighborhood waits for the display, but the sweeps retire what it left.
+        self.preload_neighbors();
         preview_shown
     }
 
@@ -1178,11 +1180,15 @@ impl ImageCore {
             .position(|entry| entry.location == *location)
     }
 
-    /// No speculation while an item is awaited; the display path restarts it.
+    /// Speculation waits while the window has nothing to show for the awaited item;
+    /// the cancel and evict sweeps run either way. The display path restarts it.
     pub fn preload_neighbors(&mut self) {
-        if self.pending_display.is_some() {
-            return;
-        }
+        // A pending upgrade of what is already on screen (RAW, animation) still speculates.
+        let awaiting_first_view = self.pending_display.as_ref().is_some_and(|pending| {
+            self.current
+                .as_ref()
+                .is_none_or(|current| current.location != *pending)
+        });
         let (backward, forward, budget) = self.preload_plan();
         if backward == 0 && forward == 0 {
             // preloading off: drop the cache
@@ -1194,47 +1200,60 @@ impl ImageCore {
             .and_then(|location| self.position_of(location))
         {
             self.drop_departed_textures(anchor_index, backward, forward);
-            let length = self.entries.len();
-            for offset in preload_offsets(backward, forward) {
-                let Some(index) = neighbor_index(
-                    anchor_index,
-                    offset,
-                    length,
-                    self.options.loop_within_folder,
-                ) else {
-                    continue;
-                };
-                let entry = &self.entries[index];
-                // Cheap speculation: RAW neighbors get the preview; animations stop at frame one.
-                let kind = if is_raw_two_stage(&entry.location) {
-                    JobKind::Preview
-                } else {
-                    JobKind::Full
-                };
-                // The oversize gate is about decoded weight; previews stay cheap.
-                if (kind == JobKind::Full && entry.file_size > budget / 2)
-                    || self.in_flight.contains_key(&entry.location)
-                    || self
-                        .cache
-                        .get(&entry.location)
-                        .is_some_and(|cached| cached.file_size == entry.file_size)
-                    || self
-                        .pending_display
-                        .as_ref()
-                        .is_some_and(|pending| *pending == entry.location)
-                {
-                    continue;
-                }
-                let (location, file_size, modified) = (
-                    entry.location.clone(),
-                    entry.file_size,
-                    Some(entry.modified),
-                );
-                self.submit_decode(location, file_size, modified, kind, false);
+            if !awaiting_first_view {
+                self.submit_neighbor_decodes(anchor_index, backward, forward, budget);
             }
         }
         self.cancel_irrelevant_decodes();
         self.evict_cache();
+    }
+
+    /// Queues the neighbors the plan asks for, skipping what is cached or in flight.
+    fn submit_neighbor_decodes(
+        &mut self,
+        anchor_index: usize,
+        backward: usize,
+        forward: usize,
+        budget: u64,
+    ) {
+        let length = self.entries.len();
+        for offset in preload_offsets(backward, forward) {
+            let Some(index) = neighbor_index(
+                anchor_index,
+                offset,
+                length,
+                self.options.loop_within_folder,
+            ) else {
+                continue;
+            };
+            let entry = &self.entries[index];
+            // Cheap speculation: RAW neighbors get the preview; animations stop at frame one.
+            let kind = if is_raw_two_stage(&entry.location) {
+                JobKind::Preview
+            } else {
+                JobKind::Full
+            };
+            // The oversize gate is about decoded weight; previews stay cheap.
+            if (kind == JobKind::Full && entry.file_size > budget / 2)
+                || self.in_flight.contains_key(&entry.location)
+                || self
+                    .cache
+                    .get(&entry.location)
+                    .is_some_and(|cached| cached.file_size == entry.file_size)
+                || self
+                    .pending_display
+                    .as_ref()
+                    .is_some_and(|pending| *pending == entry.location)
+            {
+                continue;
+            }
+            let (location, file_size, modified) = (
+                entry.location.clone(),
+                entry.file_size,
+                Some(entry.modified),
+            );
+            self.submit_decode(location, file_size, modified, kind, false);
+        }
     }
 
     /// Cancels queued or running decodes outside the preload neighborhood.

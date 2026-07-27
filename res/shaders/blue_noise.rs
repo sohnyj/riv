@@ -15,7 +15,7 @@ pub fn write_table(output_directory: &Path) {
 }
 
 const SIZE_BITS: usize = 6;
-pub const SIZE: usize = 1 << SIZE_BITS;
+const SIZE: usize = 1 << SIZE_BITS;
 const CELL_COUNT: usize = SIZE * SIZE;
 
 fn cell_index(x: usize, y: usize) -> usize {

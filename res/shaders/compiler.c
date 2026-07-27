@@ -33,7 +33,8 @@ int main(int argc, char **argv)
 
     ID3DBlob *code = NULL;
     ID3DBlob *errors = NULL;
-    HRESULT result = D3DCompile(source, (SIZE_T)length, source_path, NULL, NULL, "main", profile,
+    HRESULT result = D3DCompile(source, (SIZE_T)length, source_path, NULL,
+                                D3D_COMPILE_STANDARD_FILE_INCLUDE, "main", profile,
                                 D3DCOMPILE_OPTIMIZATION_LEVEL3, 0, &code, &errors);
     if (errors) {
         fprintf(stderr, "%.*s\n", (int)errors->lpVtbl->GetBufferSize(errors),

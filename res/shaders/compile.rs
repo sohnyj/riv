@@ -3,37 +3,17 @@
 use std::path::{Path, PathBuf};
 use std::process::Command;
 
-/// Pixel shaders, each compiled as the shared source followed by its body.
+/// Pixel shaders; each includes ps_shared.hlsl for the bindings and dither math.
 const PIXEL_SHADERS: [&str; 3] = ["copy", "ordered", "fruit"];
 const VERTEX_SHADER: &str = "fullscreen_triangle";
+const SHADER_DIRECTORY: &str = "res/shaders";
 
 pub fn compile_all(output_directory: &Path, xwin_root: &str) {
     let compiler = build_compiler(output_directory, xwin_root);
-    compile(
-        &compiler,
-        &source_path(&format!("{VERTEX_SHADER}.hlsl")),
-        "vs_5_0",
-        &output_directory.join(format!("{VERTEX_SHADER}.dxbc")),
-    );
-
-    let shared =
-        std::fs::read_to_string(source_path("ps_shared.hlsl")).expect("shared source readable");
+    compile(&compiler, VERTEX_SHADER, "vs_5_0", output_directory);
     for name in PIXEL_SHADERS {
-        let body =
-            std::fs::read_to_string(source_path(&format!("{name}.hlsl"))).expect("body readable");
-        let combined = output_directory.join(format!("{name}.hlsl"));
-        std::fs::write(&combined, format!("{shared}{body}")).expect("combined source writable");
-        compile(
-            &compiler,
-            &combined,
-            "ps_5_0",
-            &output_directory.join(format!("{name}.dxbc")),
-        );
+        compile(&compiler, name, "ps_5_0", output_directory);
     }
-}
-
-fn source_path(name: &str) -> PathBuf {
-    PathBuf::from("res/shaders").join(name)
 }
 
 /// Builds the helper against the xwin SDK; d3dcompiler_47 resolves under wine.
@@ -53,15 +33,14 @@ fn build_compiler(output_directory: &Path, xwin_root: &str) -> PathBuf {
             format!("-imsvc{xwin_root}/sdk/include/um"),
             format!("-imsvc{xwin_root}/sdk/include/shared"),
         ])
-        .arg("res/shaders/compiler.c")
+        .arg(format!("{SHADER_DIRECTORY}/compiler.c"))
         .arg(format!("/Fo{}\\", output_directory.display()))
         .arg(format!("/Fe{}", executable.display()))
         .arg("/link")
-        .args([
-            format!("/libpath:{xwin_root}/crt/lib/x86_64"),
-            format!("/libpath:{xwin_root}/sdk/lib/um/x86_64"),
-            format!("/libpath:{xwin_root}/sdk/lib/ucrt/x86_64"),
-        ])
+        .args(
+            crate::XWIN_LIBRARY_DIRECTORIES
+                .map(|directory| format!("/libpath:{xwin_root}/{directory}")),
+        )
         .arg("d3dcompiler.lib")
         .status()
         .expect("failed to run clang-cl for the shader compiler");
@@ -72,23 +51,26 @@ fn build_compiler(output_directory: &Path, xwin_root: &str) -> PathBuf {
     executable
 }
 
-fn compile(compiler: &Path, source: &Path, profile: &str, output: &Path) {
-    let output_result = Command::new("wine")
+/// Runs from the shader directory so `#include` resolves against it.
+fn compile(compiler: &Path, name: &str, profile: &str, output_directory: &Path) {
+    let source = format!("{name}.hlsl");
+    let output = output_directory.join(format!("{name}.dxbc"));
+    let result = Command::new("wine")
         .arg(compiler)
-        .arg(source)
+        .arg(&source)
         .arg(profile)
-        .arg(output)
+        .arg(&output)
+        .current_dir(SHADER_DIRECTORY)
         .env("WINEDEBUG", "-all")
         .output()
         .expect("failed to run the shader compiler under wine");
-    if !output_result.status.success() {
+    if !result.status.success() {
         panic!(
-            "{} failed to compile as {profile}:\n{}",
-            source.display(),
-            String::from_utf8_lossy(&output_result.stderr)
+            "{source} failed to compile as {profile}:\n{}",
+            String::from_utf8_lossy(&result.stderr)
         );
     }
-    let blob = std::fs::read(output).expect("compiled blob readable");
+    let blob = std::fs::read(&output).expect("compiled blob readable");
     assert!(
         blob.starts_with(b"DXBC"),
         "{} did not produce a DXBC container",
