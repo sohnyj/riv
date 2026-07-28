@@ -31,41 +31,46 @@ Running as administrator is blocked at startup.
 
 ## Supported formats
 
-Some formats need a codec extension from the Microsoft Store. Only those
-files fail without it; the error names the one to install:
+Formats that need a codec extension from the Microsoft Store:
 
 | Format | Required extension |
 |---|---|
-| HEIC † | HEVC Video Extensions (Microsoft Corporation) |
-| HEIF ‡ | HEIF Image Extension (Microsoft Corporation) |
-| AVIF ‡ | HEIF Image Extension + AV1 Video Extension (Microsoft Corporation) |
-| JPEG XL ‡ | JPEG XL Image Extension (Microsoft Corporation) |
-| WebP (still) ‡ | WebP Image Extensions (Microsoft Corporation) |
-| Camera RAW ‡ | Raw Image Extension (Microsoft Corporation) |
+| AVIF | HEIF Image Extension + AV1 Video Extension (Microsoft Corporation) |
+| JPEG XL | JPEG XL Image Extension (Microsoft Corporation) |
+| WebP (still) | WebP Image Extensions (Microsoft Corporation) |
+| Camera RAW | Raw Image Extension (Microsoft Corporation) |
 
-† paid · ‡ free, no sign-in required
+Only these files fail without the extension, and the error names the ones to
+install. **All of them are free and need no sign-in.**
 
-HEVC Video Extensions is optional; without it, the app uses its built-in decoder.
+Formats that open without an extension, but decode better with one:
+
+| Format | Optional extension |
+|---|---|
+| HEIC / HEIF | HEIF Image Extension + HEVC Video Extensions (Microsoft Corporation) |
+
+**HEVC Video Extensions is paid.**
 
 Decoded by built-in codecs:
 
 | Format | Decoder |
 |---|---|
-| HEIC / HEIF | libheif + libde265 § |
+| HEIC / HEIF | libheif + libde265 |
 | SVG / SVGZ | resvg |
 | EXR | OpenEXR |
 | APNG | png |
 | Animated WebP | libwebp |
 
-§ 8-bit output: 10-bit and HDR HEIC still decode, reduced to 8-bit.
-By contrast, HEVC Video Extensions keeps the full depth.
+libheif + libde265 decode HEIC and HEIF at 8 bits, with no tone mapping, so
+HDR files lose their range. HEIF Image Extension + HEVC Video Extensions
+decode them instead, at full bit depth.
 
 Decoded by Windows Imaging Component codecs:
 
 | Format | Notes |
 |---|---|
 | PNG, JPEG, GIF, BMP, ICO, TIFF | |
-| DDS | BC1–BC3 |
+| DDS | BC1-BC3 |
 
 Archives browsable as image folders:
 zip, 7z, rar, tar, and cbz / cbr / cb7 / cbt.

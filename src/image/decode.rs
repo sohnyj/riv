@@ -305,7 +305,8 @@ static REGISTRY: &[FormatDescriptor] = &[
     FormatDescriptor {
         name: "BMP",
         extensions: &["bmp", "dib"],
-        magic: &[&[(0, b"BM")]],
+        // The two reserved fields at offset 6 must be zero.
+        magic: &[&[(0, b"BM"), (6, &[0, 0, 0, 0])]],
         semantics: FrameSemantics::Single,
         adapter: Adapter::Wic,
         store_extensions: &[],
@@ -454,7 +455,7 @@ static ANIMATED_WEBP: FormatDescriptor = FormatDescriptor {
     store_extensions: &[],
 };
 
-/// PNG + acTL = APNG; WebP + VP8X ANIM flag = animated WebP.
+/// PNG + acTL = APNG; WebP + VP8X ANIM flag = animated WebP; HEIF + avif brand = AVIF.
 fn refine_by_content(
     descriptor: &'static FormatDescriptor,
     header: &[u8],
@@ -465,7 +466,26 @@ fn refine_by_content(
     if descriptor.name == "WebP" && webp_has_animation_flag(header) {
         return &ANIMATED_WEBP;
     }
+    if descriptor.name == "HEIF"
+        && (ftyp_has_brand(header, b"avif") || ftyp_has_brand(header, b"avis"))
+    {
+        return descriptor_for_extension("avif").unwrap_or(descriptor);
+    }
     descriptor
+}
+
+/// True when the ftyp box lists a brand as the major brand or a compatible one.
+fn ftyp_has_brand(header: &[u8], brand: &[u8; 4]) -> bool {
+    if header.get(4..8) != Some(b"ftyp") {
+        return false;
+    }
+    let box_size = read_u32_be(header, 0).unwrap_or(0) as usize;
+    header.get(8..12) == Some(brand)
+        || header
+            .get(16..box_size.min(header.len()))
+            .unwrap_or_default()
+            .chunks_exact(4)
+            .any(|compatible| compatible == brand)
 }
 
 fn webp_has_animation_flag(header: &[u8]) -> bool {
@@ -1168,9 +1188,9 @@ struct HdrEncoding {
 }
 
 /// Big-endian u32 at the offset, when in bounds.
-fn read_u32_be(icc: &[u8], offset: usize) -> Option<u32> {
+fn read_u32_be(bytes: &[u8], offset: usize) -> Option<u32> {
     Some(u32::from_be_bytes(
-        icc.get(offset..offset + 4)?.try_into().ok()?,
+        bytes.get(offset..offset + 4)?.try_into().ok()?,
     ))
 }
 
@@ -2424,6 +2444,44 @@ mod descriptor_probe_tests {
     fn unknown_bytes_yield_none() {
         assert!(descriptor_for_bytes(b"plain text", None).is_none());
         assert!(descriptor_for_bytes(&[], None).is_none());
+    }
+
+    #[test]
+    fn reserved_bytes_tell_a_bitmap_from_text() {
+        assert!(descriptor_for_bytes(b"BMW service manual, page 6", None).is_none());
+        let mut bitmap = b"BM".to_vec();
+        bitmap.extend_from_slice(&64u32.to_le_bytes());
+        bitmap.extend_from_slice(&[0u8; 4]); // the two reserved fields
+        bitmap.extend_from_slice(&54u32.to_le_bytes());
+        let descriptor = descriptor_for_bytes(&bitmap, None).expect("descriptor");
+        assert_eq!(descriptor.name, "BMP");
+    }
+
+    /// Box size, "ftyp", the major brand, the minor version, the compatible brands.
+    fn ftyp_header(major_brand: &[u8; 4], compatible_brands: &[&[u8; 4]]) -> Vec<u8> {
+        let box_size = 16 + 4 * compatible_brands.len();
+        let mut header = (box_size as u32).to_be_bytes().to_vec();
+        header.extend_from_slice(b"ftyp");
+        header.extend_from_slice(major_brand);
+        header.extend_from_slice(&[0u8; 4]);
+        for brand in compatible_brands {
+            header.extend_from_slice(*brand);
+        }
+        header
+    }
+
+    #[test]
+    fn content_refinement_promotes_avif() {
+        let header = ftyp_header(b"mif1", &[b"mif1", b"avif"]);
+        let descriptor = descriptor_for_bytes(&header, None).expect("descriptor");
+        assert_eq!(descriptor.name, "AVIF");
+    }
+
+    #[test]
+    fn a_heif_without_an_avif_brand_stays_heif() {
+        let header = ftyp_header(b"heic", &[b"heic"]);
+        let descriptor = descriptor_for_bytes(&header, None).expect("descriptor");
+        assert_eq!(descriptor.name, "HEIF");
     }
 }
 
