@@ -1,7 +1,5 @@
 //! Open With handler enumeration (SHAssocEnumHandlers) on a background thread.
 
-use std::os::windows::ffi::OsStrExt;
-
 use std::path::{Path, PathBuf};
 
 use windows::Win32::Foundation::{HWND, LPARAM, WPARAM};
@@ -113,11 +111,7 @@ pub fn invoke(path: &Path, executable_path: &str) -> Result<()> {
 }
 
 pub fn show_open_with_dialog(window: HWND, path: &Path) {
-    let wide: Vec<u16> = path
-        .as_os_str()
-        .encode_wide()
-        .chain(std::iter::once(0))
-        .collect();
+    let wide = crate::text::wide(path);
     let information = OPENASINFO {
         pcszFile: PCWSTR(wide.as_ptr()),
         pcszClass: PCWSTR::null(),

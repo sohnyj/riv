@@ -154,7 +154,7 @@ pub fn rename_file(path: &Path, new_name: &str) -> std::io::Result<PathBuf> {
 }
 
 pub fn show_rename_error(window: HWND, error: &std::io::Error) {
-    let content = crate::text::wide(&error.to_string());
+    let content = crate::text::wide(error.to_string());
     let configuration = TASKDIALOGCONFIG {
         cbSize: size_of::<TASKDIALOGCONFIG>() as u32,
         hwndParent: window,

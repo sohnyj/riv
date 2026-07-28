@@ -661,11 +661,15 @@ impl Application {
         } else {
             self.freeze_animation_for_load(window);
         }
-        // A RAW preview gets its full decode once navigation stops briefly.
+        self.schedule_deferred_full_decode(window);
+        self.update_window_title(window);
+    }
+
+    /// A shown RAW preview gets its full decode once navigation stops briefly.
+    fn schedule_deferred_full_decode(&self, window: HWND) {
         if self.image_core.full_decode_pending() {
             unsafe { SetTimer(Some(window), FULL_DECODE_TIMER, 250, None) };
         }
-        self.update_window_title(window);
     }
 
     fn clear_displayed_image(&mut self, window: HWND) {
@@ -2018,10 +2022,9 @@ extern "system" fn window_procedure(
                 if application.image_core.on_decode_complete(*completion) {
                     let displayed = application.image_core.load_error.is_none();
                     application.apply_load_outcome(window, displayed);
-                } else if application.image_core.full_decode_pending() {
-                    // A discarded arrival can leave a shown preview; only the timer
-                    // submits its full decode.
-                    unsafe { SetTimer(Some(window), FULL_DECODE_TIMER, 250, None) };
+                } else {
+                    // A discarded arrival can leave a shown preview needing the timer.
+                    application.schedule_deferred_full_decode(window);
                 }
             }
             LRESULT(0)
@@ -2430,7 +2433,6 @@ extern "system" fn window_procedure(
             // HDR/ACM toggle, bit depth, or monitor reconfigure: re-evaluate once.
             if let Some(application) = application_from_window(window) {
                 let _ = application.update_current_monitor(window);
-                // SVG rasters at the largest monitor's size, so its weights expire here.
                 application.image_core.invalidate_svg_weights();
                 application.refresh_display_state(window);
             }

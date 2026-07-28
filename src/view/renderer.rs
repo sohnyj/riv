@@ -124,6 +124,8 @@ pub struct Renderer {
     d3d_device: ID3D11Device,
     /// Minted per build; worker textures from other generations never wrap here.
     upload_device_generation: u64,
+    /// The adapter's per-resource ceiling, fixed per device; read once at build.
+    upload_maximum_frame_bytes: u64,
     d3d_context: ID3D11DeviceContext,
     d2d_context: ID2D1DeviceContext,
     /// Fullscreen quantizing copy for the 10-bit backbuffers D2D cannot target.
@@ -525,6 +527,11 @@ impl Renderer {
             create_d3d_device(D3D_DRIVER_TYPE_HARDWARE, &[D3D_FEATURE_LEVEL_12_0])
                 .or_else(|_| create_d3d_device(D3D_DRIVER_TYPE_WARP, &[D3D_FEATURE_LEVEL_11_0]))?;
         let dxgi_device: IDXGIDevice = d3d_device.cast()?;
+        let upload_maximum_frame_bytes = maximum_resource_bytes(
+            unsafe { dxgi_device.GetAdapter() }
+                .and_then(|adapter| unsafe { adapter.GetDesc() })
+                .map_or(0, |description| description.DedicatedVideoMemory as u64),
+        );
 
         // D2D precedes the swapchain: the PQ pipeline decides the backbuffer format.
         let d2d_factory: ID2D1Factory1 =
@@ -663,6 +670,7 @@ impl Renderer {
             output_mode,
             upload_device_generation: UPLOAD_DEVICE_GENERATIONS
                 .fetch_add(1, std::sync::atomic::Ordering::Relaxed),
+            upload_maximum_frame_bytes,
             hdr_mode,
             sdr_wide_gamut,
             bits_per_color,
@@ -1075,17 +1083,10 @@ impl Renderer {
 
     /// What the workers upload with; the generation ties their textures to this build.
     pub fn upload_device(&self) -> UploadDevice {
-        let dedicated_video_memory = self
-            .d3d_device
-            .cast::<IDXGIDevice>()
-            .ok()
-            .and_then(|device| unsafe { device.GetAdapter() }.ok())
-            .and_then(|adapter| unsafe { adapter.GetDesc() }.ok())
-            .map_or(0, |description| description.DedicatedVideoMemory as u64);
         UploadDevice {
             device: self.d3d_device.clone(),
             generation: self.upload_device_generation,
-            maximum_frame_bytes: maximum_resource_bytes(dedicated_video_memory),
+            maximum_frame_bytes: self.upload_maximum_frame_bytes,
         }
     }
 

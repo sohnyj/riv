@@ -678,18 +678,22 @@ pub fn decoded_weight(width: u32, height: u32, bytes_per_pixel: u32, frame_count
             frame_count * frame_bytes
         }
     } else {
-        let longest = width.max(height);
-        let (width, height) = if longest > MAXIMUM_TEXTURE_DIMENSION {
-            let limit = u64::from(MAXIMUM_TEXTURE_DIMENSION);
-            (
-                (u64::from(width) * limit / u64::from(longest)).max(1) as u32,
-                (u64::from(height) * limit / u64::from(longest)).max(1) as u32,
-            )
-        } else {
-            (width, height)
-        };
+        let (width, height) = device_limited_size(width, height);
         u64::from(width) * u64::from(height) * u64::from(bytes_per_pixel)
     }
+}
+
+/// KeepAspectRatio fit under the texture limit; identity when already within it.
+fn device_limited_size(width: u32, height: u32) -> (u32, u32) {
+    let longest = width.max(height);
+    if longest <= MAXIMUM_TEXTURE_DIMENSION {
+        return (width, height);
+    }
+    let limit = u64::from(MAXIMUM_TEXTURE_DIMENSION);
+    (
+        (u64::from(width) * limit / u64::from(longest)).max(1) as u32,
+        (u64::from(height) * limit / u64::from(longest)).max(1) as u32,
+    )
 }
 
 /// Header-only weight probe; None when the header cannot be read or parsed.
@@ -732,31 +736,19 @@ fn probe_weight(input: &DecodeInput<'_>) -> Option<u64> {
 fn probe_wic_weight(input: &DecodeInput<'_>, semantics: &FrameSemantics) -> Option<u64> {
     with_wic_factory(|factory| {
         let decoder = create_wic_decoder(factory, input)?;
-        let (index, frame_count) = match semantics {
-            // Counting animation frames walks the whole file; the first frame is the weight.
-            FrameSemantics::Animation => (0, 1),
+        let index = match semantics {
             FrameSemantics::SizeVariants => {
                 let frame_count = unsafe { decoder.GetFrameCount()? }.max(1);
-                let mut largest_index = 0;
-                let mut largest_pixels = 0u64;
-                for index in 0..frame_count {
-                    let frame = unsafe { decoder.GetFrame(index)? };
-                    let (width, height) = source_size(&frame.cast()?)?;
-                    let pixels = u64::from(width) * u64::from(height);
-                    if pixels > largest_pixels {
-                        largest_pixels = pixels;
-                        largest_index = index;
-                    }
-                }
-                (largest_index, 1)
+                largest_frame_index(&decoder, frame_count)?
             }
-            FrameSemantics::Single => (0, 1),
+            // Counting animation frames walks the whole file; the first frame is the weight.
+            FrameSemantics::Animation | FrameSemantics::Single => 0,
         };
         let frame = unsafe { decoder.GetFrame(index)? };
         let (width, height) = source_size(&frame.cast()?)?;
         let (bits_per_channel, _) = frame_pixel_format_info(factory, &frame);
         let bytes_per_pixel = if bits_per_channel > 8 { 8 } else { 4 };
-        Ok(decoded_weight(width, height, bytes_per_pixel, frame_count))
+        Ok(decoded_weight(width, height, bytes_per_pixel, 1))
     })
     .ok()
 }
@@ -779,27 +771,20 @@ fn probe_apng_weight<Input: BufRead + Seek>(input: Input) -> Option<u64> {
 
 /// The raster size tracks the largest monitor, like decode_svg.
 fn probe_svg_weight(data: &[u8]) -> Option<u64> {
-    let options = resvg::usvg::Options {
-        fontdb: font_database().clone(),
-        ..Default::default()
-    };
-    let tree = resvg::usvg::Tree::from_data(data, &options).ok()?;
-    let size = tree.size();
-    if !(size.width() > 0.0 && size.height() > 0.0) {
-        return None;
-    }
-    let target = largest_monitor_long_side().min(MAXIMUM_TEXTURE_DIMENSION) as f32;
-    let scale = target / size.width().max(size.height());
-    let pixel_width = (size.width() * scale).round().max(1.0) as u32;
-    let pixel_height = (size.height() * scale).round().max(1.0) as u32;
+    let tree = parse_svg_tree(data).ok()?;
+    let (pixel_width, pixel_height, _) = svg_raster_geometry(&tree)?;
     Some(decoded_weight(pixel_width, pixel_height, 4, 1))
 }
 
 /// The VP8X canvas sits in the header; counting frames would walk the file.
 fn probe_webp_weight(input: &DecodeInput<'_>) -> Option<u64> {
-    let header = match input {
-        DecodeInput::File(path) => read_header(path)?,
-        DecodeInput::Memory { data, .. } => data[..data.len().min(30)].to_vec(),
+    let owned;
+    let header: &[u8] = match input {
+        DecodeInput::File(path) => {
+            owned = read_header(path)?;
+            &owned
+        }
+        DecodeInput::Memory { data, .. } => data,
     };
     let dimension = |offset: usize| -> Option<u32> {
         let bytes = header.get(offset..offset + 3)?;
@@ -966,13 +951,10 @@ fn downscale_to_device_limit(
     width: u32,
     height: u32,
 ) -> WindowsResult<(IWICBitmapSource, u32, u32)> {
-    let longest = width.max(height);
-    if longest <= MAXIMUM_TEXTURE_DIMENSION {
+    let (scaled_width, scaled_height) = device_limited_size(width, height);
+    if (scaled_width, scaled_height) == (width, height) {
         return Ok((source, width, height));
     }
-    let limit = u64::from(MAXIMUM_TEXTURE_DIMENSION);
-    let scaled_width = (u64::from(width) * limit / u64::from(longest)).max(1) as u32;
-    let scaled_height = (u64::from(height) * limit / u64::from(longest)).max(1) as u32;
     let scaler = unsafe { factory.CreateBitmapScaler()? };
     unsafe {
         scaler.Initialize(
@@ -1655,6 +1637,12 @@ fn decode_largest_frame(
     frame_count: u32,
     cancellation: &AtomicBool,
 ) -> WindowsResult<DecodedFrames> {
+    let largest_index = largest_frame_index(decoder, frame_count)?;
+    decode_single_frame(factory, decoder, largest_index, cancellation)
+}
+
+/// Index of the frame with the most pixels; the size-variant display rule.
+fn largest_frame_index(decoder: &IWICBitmapDecoder, frame_count: u32) -> WindowsResult<u32> {
     let mut largest_index = 0;
     let mut largest_pixels = 0u64;
     for index in 0..frame_count {
@@ -1666,7 +1654,7 @@ fn decode_largest_frame(
             largest_index = index;
         }
     }
-    decode_single_frame(factory, decoder, largest_index, cancellation)
+    Ok(largest_index)
 }
 
 struct FrameMetadata {
@@ -2188,19 +2176,9 @@ pub fn copy_rectangle(
 }
 
 fn decode_svg(data: &[u8], format_name: &'static str) -> Result<DecodedImage, DecodeError> {
-    let options = resvg::usvg::Options {
-        fontdb: font_database().clone(),
-        ..Default::default()
-    };
-    let tree = resvg::usvg::Tree::from_data(data, &options).map_err(uncoded_error)?;
-    let size = tree.size();
-    if !(size.width() > 0.0 && size.height() > 0.0) {
-        return Err(uncoded_error("SVG has no intrinsic size"));
-    }
-    let target = largest_monitor_long_side().min(MAXIMUM_TEXTURE_DIMENSION) as f32;
-    let scale = target / size.width().max(size.height());
-    let pixel_width = (size.width() * scale).round().max(1.0) as u32;
-    let pixel_height = (size.height() * scale).round().max(1.0) as u32;
+    let tree = parse_svg_tree(data)?;
+    let (pixel_width, pixel_height, scale) =
+        svg_raster_geometry(&tree).ok_or_else(|| uncoded_error("SVG has no intrinsic size"))?;
     let mut pixmap = resvg::tiny_skia::Pixmap::new(pixel_width, pixel_height)
         .ok_or_else(|| uncoded_error("SVG raster target allocation failed"))?;
     resvg::render(
@@ -2230,6 +2208,28 @@ fn decode_svg(data: &[u8], format_name: &'static str) -> Result<DecodedImage, De
         }],
         frames_truncated: false,
     })
+}
+
+fn parse_svg_tree(data: &[u8]) -> Result<resvg::usvg::Tree, DecodeError> {
+    let options = resvg::usvg::Options {
+        fontdb: font_database().clone(),
+        ..Default::default()
+    };
+    resvg::usvg::Tree::from_data(data, &options).map_err(uncoded_error)
+}
+
+/// Raster size and scale at the largest monitor's long side; the probe weight
+/// and the decode must agree on this. None when the tree has no intrinsic size.
+fn svg_raster_geometry(tree: &resvg::usvg::Tree) -> Option<(u32, u32, f32)> {
+    let size = tree.size();
+    if !(size.width() > 0.0 && size.height() > 0.0) {
+        return None;
+    }
+    let target = largest_monitor_long_side().min(MAXIMUM_TEXTURE_DIMENSION) as f32;
+    let scale = target / size.width().max(size.height());
+    let pixel_width = (size.width() * scale).round().max(1.0) as u32;
+    let pixel_height = (size.height() * scale).round().max(1.0) as u32;
+    Some((pixel_width, pixel_height, scale))
 }
 
 fn font_database() -> &'static std::sync::Arc<resvg::usvg::fontdb::Database> {

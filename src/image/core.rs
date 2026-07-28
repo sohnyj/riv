@@ -3,7 +3,6 @@
 use std::collections::{HashMap, HashSet, VecDeque};
 use std::ffi::c_void;
 use std::hash::{Hash, Hasher};
-use std::os::windows::ffi::OsStrExt;
 use std::os::windows::fs::MetadataExt;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -361,7 +360,7 @@ pub struct ImageCore {
     in_flight: HashMap<ItemLocation, Arc<AtomicBool>>,
     /// Separate from in_flight so a probe never reads as a decode already running.
     probes_in_flight: HashMap<ItemLocation, Arc<AtomicBool>>,
-    /// The generation worker textures must carry to be adopted; None without a renderer.
+    /// The generation arrivals must carry; mirrored here so checks skip the pool lock.
     upload_device_generation: Option<u64>,
     cache: HashMap<ItemLocation, CacheEntry>,
     pub current: Option<CurrentImage>,
@@ -847,6 +846,21 @@ impl ImageCore {
             .submit(location, file_size, modified, cancellation, kind, awaited);
     }
 
+    /// A discarded arrival (cancelled, or a retired-generation texture) resubmits
+    /// what the waiting item still needs.
+    fn resubmit_pending_decode(
+        &mut self,
+        location: ItemLocation,
+        file_size: u64,
+        modified: Option<SystemTime>,
+    ) {
+        let preview_cached = self
+            .cache
+            .get(&location)
+            .is_some_and(|entry| entry.preview && entry.file_size == file_size);
+        self.submit_pending_decode(location, file_size, modified, preview_cached);
+    }
+
     /// Submits what a pending item still needs: the preview when none is cached, the
     /// full decode for a cached animation first frame, and nothing for a cached RAW
     /// preview, whose full decode waits on the deferral timer.
@@ -1087,15 +1101,10 @@ impl ImageCore {
                 self.record_arrived_weight(&completion.location, image);
             }
             if is_pending {
-                let preview_cached = self
-                    .cache
-                    .get(&completion.location)
-                    .is_some_and(|entry| entry.preview && entry.file_size == completion.file_size);
-                self.submit_pending_decode(
+                self.resubmit_pending_decode(
                     completion.location,
                     completion.file_size,
                     completion.modified,
-                    preview_cached,
                 );
             }
             return false;
@@ -1126,15 +1135,10 @@ impl ImageCore {
         {
             // Navigation can return to an item while its decode is cancelling.
             if is_pending {
-                let preview_cached = self
-                    .cache
-                    .get(&completion.location)
-                    .is_some_and(|entry| entry.preview && entry.file_size == completion.file_size);
-                self.submit_pending_decode(
+                self.resubmit_pending_decode(
                     completion.location,
                     completion.file_size,
                     completion.modified,
-                    preview_cached,
                 );
             }
             return false;
@@ -1165,8 +1169,6 @@ impl ImageCore {
                     // Preload starts once this image is on screen.
                     true
                 } else {
-                    // The cache kept only the slim copy; free the decode buffer off-thread.
-                    self.releaser.release(image);
                     self.evict_cache();
                     false
                 }
@@ -1226,7 +1228,28 @@ impl ImageCore {
         let anchor_index = self
             .navigation_anchor()
             .and_then(|location| self.position_of(location));
-        let targets = self.preload_targets(anchor_index, backward, forward);
+        // Candidate entries in priority order; the residency set adds the anchor,
+        // which is all a listing without it (a URL) leaves.
+        let candidates: Vec<usize> = anchor_index
+            .map(|anchor_index| {
+                let length = self.entries.len();
+                preload_offsets(backward, forward)
+                    .filter_map(|offset| {
+                        index_at_offset(
+                            anchor_index,
+                            offset,
+                            length,
+                            self.options.loop_within_folder,
+                        )
+                    })
+                    .collect()
+            })
+            .unwrap_or_default();
+        let mut targets: HashSet<ItemLocation> = candidates
+            .iter()
+            .map(|&index| self.entries[index].location.clone())
+            .collect();
+        targets.extend(self.navigation_anchor().cloned());
         if backward == 0 && forward == 0 {
             // preloading off: drop the cache
             for (_, entry) in self.cache.drain() {
@@ -1234,97 +1257,53 @@ impl ImageCore {
             }
         } else {
             self.drop_entries_outside(&targets);
-            if let Some(anchor_index) = anchor_index
-                && !awaiting_first_view
-            {
-                self.submit_preload_decodes(anchor_index, backward, forward, budget);
+            if !awaiting_first_view {
+                self.submit_preload_decodes(&candidates, budget);
             }
         }
         self.cancel_decodes_outside(&targets);
         self.evict_cache();
     }
 
-    /// What the cache and the decode queue may hold: the plan's targets plus the
-    /// navigation baseline, which is all a listing without the anchor (a URL) leaves.
-    fn preload_targets(
-        &self,
-        anchor_index: Option<usize>,
-        backward: usize,
-        forward: usize,
-    ) -> HashSet<ItemLocation> {
-        let length = self.entries.len();
-        let loop_enabled = self.options.loop_within_folder;
-        let mut targets: HashSet<ItemLocation> = anchor_index
-            .map(|anchor_index| {
-                preload_offsets(backward, forward)
-                    .filter_map(|offset| {
-                        index_at_offset(anchor_index, offset, length, loop_enabled)
-                    })
-                    .map(|index| self.entries[index].location.clone())
-                    .collect()
-            })
-            .unwrap_or_default();
-        targets.extend(self.navigation_anchor().cloned());
-        targets
-    }
-
-    /// Queues targets in priority order while their weights fit the budget;
+    /// Queues candidates in priority order while their weights fit the budget;
     /// unknown weights probe first and the pass re-runs when they settle.
-    fn submit_preload_decodes(
-        &mut self,
-        anchor_index: usize,
-        backward: usize,
-        forward: usize,
-        budget: u64,
-    ) {
-        let length = self.entries.len();
-        let candidates: Vec<usize> = preload_offsets(backward, forward)
-            .filter_map(|offset| {
-                index_at_offset(
-                    anchor_index,
-                    offset,
-                    length,
-                    self.options.loop_within_folder,
-                )
-            })
-            .collect();
+    fn submit_preload_decodes(&mut self, candidates: &[usize], budget: u64) {
         let mut awaiting_probes = false;
-        for &index in &candidates {
+        for &index in candidates {
             let entry = &self.entries[index];
             if entry.weight != DecodedWeight::Unknown {
                 continue;
             }
             awaiting_probes = true;
             if !self.probes_in_flight.contains_key(&entry.location) {
-                let (location, file_size, modified) =
-                    (entry.location.clone(), entry.file_size, entry.modified);
-                self.submit_probe(location, file_size, modified);
+                let location = entry.location.clone();
+                self.submit_probe(location);
             }
         }
         if awaiting_probes {
             return; // one pass per settled target set, re-run by probe completions
         }
-        let submittable: Vec<usize> = candidates
-            .into_iter()
-            .filter(|&index| {
-                let entry = &self.entries[index];
-                matches!(entry.weight, DecodedWeight::Known(_))
-                    && !self.in_flight.contains_key(&entry.location)
-                    && !self
-                        .cache
-                        .get(&entry.location)
-                        .is_some_and(|cached| cached.file_size == entry.file_size)
-            })
-            .collect();
-        let weights: Vec<u64> = submittable
+        let submittable: Vec<(usize, u64)> = candidates
             .iter()
-            .map(|&index| match self.entries[index].weight {
-                DecodedWeight::Known(weight) => weight,
-                _ => unreachable!("submittable entries carry a known weight"),
+            .filter_map(|&index| {
+                let entry = &self.entries[index];
+                match entry.weight {
+                    DecodedWeight::Known(weight)
+                        if !self.in_flight.contains_key(&entry.location)
+                            && !self
+                                .cache
+                                .get(&entry.location)
+                                .is_some_and(|cached| cached.file_size == entry.file_size) =>
+                    {
+                        Some((index, weight))
+                    }
+                    _ => None,
+                }
             })
             .collect();
+        let weights: Vec<u64> = submittable.iter().map(|&(_, weight)| weight).collect();
         let selected = fits_in_budget(self.occupied_bytes(), budget, &weights);
-        for (&index, selected) in submittable.iter().zip(selected) {
+        for (&(index, _), selected) in submittable.iter().zip(selected) {
             if !selected {
                 continue;
             }
@@ -1344,19 +1323,14 @@ impl ImageCore {
         }
     }
 
-    /// Registers the probe in flight and hands it to the pool.
-    fn submit_probe(&mut self, location: ItemLocation, file_size: u64, modified: SystemTime) {
+    /// Registers the probe in flight and hands it to the pool; a probe reads
+    /// only the header, so no size or time rides along.
+    fn submit_probe(&mut self, location: ItemLocation) {
         let cancellation = Arc::new(AtomicBool::new(false));
         self.probes_in_flight
             .insert(location.clone(), cancellation.clone());
-        self.pool.submit(
-            location,
-            file_size,
-            Some(modified),
-            cancellation,
-            JobKind::Probe,
-            false,
-        );
+        self.pool
+            .submit(location, 0, None, cancellation, JobKind::Probe, false);
     }
 
     /// Records an arrived probe; a stale location misses the listing lookup.
@@ -1370,18 +1344,16 @@ impl ImageCore {
                 None => DecodedWeight::Unavailable,
             };
         }
-        self.refresh_preload();
+        // The budget pass waits for the whole target set; sweep once it settles.
+        if self.probes_in_flight.is_empty() {
+            self.refresh_preload();
+        }
     }
 
     /// SVG rasters at the largest monitor's size, so its weights expire with it.
     pub fn invalidate_svg_weights(&mut self) {
         for entry in &mut self.entries {
-            let is_svg = entry
-                .location
-                .extension_lowercase()
-                .and_then(|extension| decode::format_name_for_extension(&extension))
-                == Some("SVG");
-            if is_svg {
+            if format_name_of(&entry.location) == "SVG" {
                 entry.weight = DecodedWeight::Unknown;
             }
         }
@@ -1465,11 +1437,12 @@ impl ImageCore {
     /// Evicts entries in reverse preload priority until within budget.
     fn evict_cache(&mut self) {
         let (backward, forward, budget) = self.preload_plan();
-        let mut total: u64 = self
+        let weighted: Vec<(ItemLocation, u64)> = self
             .cache
             .iter()
-            .map(|(location, entry)| self.cached_weight(location, entry))
-            .sum();
+            .map(|(location, entry)| (location.clone(), self.cached_weight(location, entry)))
+            .collect();
+        let mut total: u64 = weighted.iter().map(|(_, weight)| weight).sum();
         if total <= budget {
             return;
         }
@@ -1486,20 +1459,19 @@ impl ImageCore {
                 self.options.loop_within_folder,
             )
         });
-        let mut ranked: Vec<(ItemLocation, u64, usize)> = self
-            .cache
-            .iter()
-            .map(|(location, entry)| {
+        let mut ranked: Vec<(ItemLocation, u64, usize)> = weighted
+            .into_iter()
+            .map(|(location, weight)| {
                 // The baseline item goes last even when unlisted (URL items); anything
                 // residency no longer covers goes first, in no particular order.
-                let key = if anchor.as_ref() == Some(location) {
+                let key = if anchor.as_ref() == Some(&location) {
                     0
                 } else {
-                    self.position_of(location)
+                    self.position_of(&location)
                         .and_then(|index| priorities.get(&index).copied())
                         .unwrap_or(usize::MAX)
                 };
-                (location.clone(), self.cached_weight(location, entry), key)
+                (location, weight, key)
             })
             .collect();
         ranked.sort_by_key(|(_, _, key)| std::cmp::Reverse(*key));
@@ -1652,7 +1624,7 @@ fn scan_folder(directory: &Path, options: &CoreOptions) -> Vec<ListingEntry> {
         if !included {
             continue;
         }
-        let wide_name: Vec<u16> = file_name.encode_wide().chain(std::iter::once(0)).collect();
+        let wide_name = crate::text::wide(&file_name);
         entries.push(ListingEntry {
             location: ItemLocation::File(entry.path()),
             wide_name,
@@ -1671,11 +1643,7 @@ fn member_entry(archive: &Path, member: archive_reader::MemberInfo) -> Option<Li
         .extension()
         .map(|extension| extension.to_string_lossy().to_lowercase())
         .filter(|extension| decode::is_supported_extension(extension))?;
-    let wide_name: Vec<u16> = member
-        .name
-        .encode_utf16()
-        .chain(std::iter::once(0))
-        .collect();
+    let wide_name = crate::text::wide(&member.name);
     Some(ListingEntry {
         location: ItemLocation::ArchiveMember {
             archive: archive.to_path_buf(),
@@ -2008,9 +1976,7 @@ fn run_probe_job(job: &DecodeJob, window: isize) {
                 // The member extraction repeats at decode time; only the pixel work is saved.
                 match archive_reader::read_member(archive, member, &job.cancellation) {
                     Ok(data) => {
-                        let extension = Path::new(member)
-                            .extension()
-                            .map(|extension| extension.to_string_lossy().to_lowercase());
+                        let extension = job.location.extension_lowercase();
                         (
                             false,
                             decode::probe_bytes_weight(&data, extension.as_deref()),

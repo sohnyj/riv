@@ -80,14 +80,21 @@ void write_error(char* error_message, size_t error_capacity, const char* text) {
     }
 }
 
+// Size of the data window with the sanity bound both entry points share.
+bool data_window_size(const Imath::Box2i& data_window, long long* out_width,
+                      long long* out_height) {
+    *out_width = static_cast<long long>(data_window.max.x) - data_window.min.x + 1;
+    *out_height = static_cast<long long>(data_window.max.y) - data_window.min.y + 1;
+    return *out_width > 0 && *out_height > 0 && *out_width * *out_height <= (1LL << 30);
+}
+
 // Reads only the header; the caller computes the decode weight from the size.
 int probe_stream(Imf::IStream& stream, int* out_width, int* out_height) {
     try {
         Imf::RgbaInputFile file(stream);
-        const Imath::Box2i data_window = file.dataWindow();
-        const long long width = static_cast<long long>(data_window.max.x) - data_window.min.x + 1;
-        const long long height = static_cast<long long>(data_window.max.y) - data_window.min.y + 1;
-        if (width <= 0 || height <= 0 || width * height > (1LL << 30)) {
+        long long width = 0;
+        long long height = 0;
+        if (!data_window_size(file.dataWindow(), &width, &height)) {
             return 1;
         }
         *out_width = static_cast<int>(width);
@@ -109,9 +116,9 @@ int decode_stream(Imf::IStream& stream, int* out_width, int* out_height,
 
         Imf::RgbaInputFile file(stream);
         const Imath::Box2i data_window = file.dataWindow();
-        const long long width = static_cast<long long>(data_window.max.x) - data_window.min.x + 1;
-        const long long height = static_cast<long long>(data_window.max.y) - data_window.min.y + 1;
-        if (width <= 0 || height <= 0 || width * height > (1LL << 30)) {
+        long long width = 0;
+        long long height = 0;
+        if (!data_window_size(data_window, &width, &height)) {
             write_error(error_message, error_capacity, "invalid data window");
             return 1;
         }

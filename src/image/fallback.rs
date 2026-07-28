@@ -1,7 +1,6 @@
 //! Static C codec adapters: animated WebP, EXR, and HEIF fallback.
 
 use std::ffi::{CStr, c_char, c_int, c_void};
-use std::os::windows::ffi::OsStrExt;
 use std::path::Path;
 
 use super::decode::{
@@ -235,7 +234,7 @@ unsafe extern "C" {
 
 /// Header-only data window size; the decode is always RGBA half.
 pub fn probe_exr(path: &Path) -> Option<(u32, u32)> {
-    let wide_path: Vec<u16> = path.as_os_str().encode_wide().chain(Some(0)).collect();
+    let wide_path = crate::text::wide(path);
     let mut width: c_int = 0;
     let mut height: c_int = 0;
     let status = unsafe { riv_exr_probe(wide_path.as_ptr(), &raw mut width, &raw mut height) };
@@ -251,7 +250,7 @@ pub fn probe_exr_bytes(data: &[u8]) -> Option<(u32, u32)> {
 }
 
 pub fn decode_exr(path: &Path, format_name: &'static str) -> Result<DecodedImage, DecodeError> {
-    let wide_path: Vec<u16> = path.as_os_str().encode_wide().chain(Some(0)).collect();
+    let wide_path = crate::text::wide(path);
     decode_exr_with(
         format_name,
         |width, height, pixels, message, capacity| unsafe {

@@ -1,7 +1,6 @@
 //! Safe read-only archive access: enumerate members, extract one to memory.
 
 use std::ffi::CStr;
-use std::os::windows::ffi::OsStrExt;
 use std::path::Path;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
@@ -180,11 +179,7 @@ impl Reader<'_> {
                 return Err(reader.error("archive format registration failed"));
             }
         }
-        let wide_path: Vec<u16> = archive_path
-            .as_os_str()
-            .encode_wide()
-            .chain(std::iter::once(0))
-            .collect();
+        let wide_path = crate::text::wide(archive_path);
         if unsafe { (api.read_open_filename_w)(handle, wide_path.as_ptr(), OPEN_BLOCK_BYTES) }
             != ARCHIVE_OK
         {

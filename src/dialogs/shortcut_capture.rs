@@ -99,7 +99,7 @@ fn show_capture_dialog(
 }
 
 fn warn_conflict(dialog: HWND, encoding: &str, owner_label: &str) {
-    let content = crate::text::wide(&format!(
+    let content = crate::text::wide(format!(
         "\"{encoding}\" is already bound to \"{owner_label}\""
     ));
     let configuration = TASKDIALOGCONFIG {
