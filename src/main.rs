@@ -589,13 +589,7 @@ impl Application {
             Some(renderer) => renderer.set_image(&frame.pixels, texture.as_ref(), &image),
             None => Err(windows::core::Error::empty()),
         };
-        // Once the texture is on screen, the pixels have no reader left.
-        let displayed = if matches!(upload, Ok(true)) {
-            self.image_core.release_current_pixels().unwrap_or(image)
-        } else {
-            image
-        };
-        self.displayed_image = Some(displayed);
+        self.displayed_image = Some(image);
         self.displayed_location = Some(location.clone());
         if !same_view {
             let transform = &mut self.view_transform;

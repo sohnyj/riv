@@ -946,25 +946,6 @@ impl ImageCore {
         }
     }
 
-    /// After the texture display is confirmed, the pixels have no remaining reader.
-    /// Returns the slimmed image so the caller can synchronize its own handle.
-    pub fn release_current_pixels(&mut self) -> Option<Arc<DecodedImage>> {
-        let current = self.current.as_mut()?;
-        if current.texture.is_none() || current.image.pixel_bytes() == 0 {
-            return None;
-        }
-        // The cache already slimmed this completion; share that copy when it is there.
-        let slim = match self.cache.get(&current.location) {
-            Some(entry) if entry.texture.is_some() && entry.image.pixel_bytes() == 0 => {
-                entry.image.clone()
-            }
-            _ => Arc::new(current.image.without_pixels()),
-        };
-        let full = std::mem::replace(&mut current.image, slim.clone());
-        self.releaser.release(full);
-        Some(slim)
-    }
-
     /// Reads a texture-only current back to the pixel class through the supplied
     /// device copy. Returns the restored image so the caller can synchronize.
     pub fn recover_current_pixels(
@@ -1422,8 +1403,13 @@ impl ImageCore {
 
     /// The actual bytes replace the prediction; eviction then trims any excess.
     fn record_arrived_weight(&mut self, location: &ItemLocation, image: &DecodedImage) {
+        // A slimmed arrival keeps its geometry; the frame length is the texture's size.
+        let bytes = match image.pixel_bytes() {
+            0 => image.frame_byte_length(),
+            bytes => bytes,
+        };
         if let Some(index) = self.position_of(location) {
-            self.entries[index].weight = DecodedWeight::Known(image.pixel_bytes() as u64);
+            self.entries[index].weight = DecodedWeight::Known(bytes as u64);
         }
     }
 
@@ -1963,6 +1949,12 @@ fn worker_loop(shared: &PoolShared, window: isize) {
             let upload_device = shared.upload_device.lock().ok()?.clone()?;
             upload_still_texture(&upload_device, image)
         });
+        // The texture is the only copy: the decode buffer frees here at the source.
+        let result = if texture.is_some() {
+            result.map(|image| Arc::new(image.without_pixels()))
+        } else {
+            result
+        };
         post_boxed(
             window,
             WM_APP_DECODE_COMPLETE,

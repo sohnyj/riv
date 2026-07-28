@@ -988,18 +988,17 @@ impl Renderer {
     }
 
     /// A matching worker texture wraps without an upload; anything else re-uploads.
-    /// Ok(true) means the texture was adopted and the pixels have no reader left.
     pub fn set_image(
         &mut self,
         frame_pixels: &[u8],
         texture: Option<&UploadedTexture>,
         image: &DecodedImage,
-    ) -> Result<bool> {
+    ) -> Result<()> {
         if let Some(uploaded) = texture
             && uploaded.generation == self.upload_device_generation
             && self.wrap_uploaded_texture(uploaded, image).is_ok()
         {
-            return Ok(true);
+            return Ok(());
         }
         if frame_pixels.len() != image.frame_byte_length() {
             // A slimmed image has no pixels to upload; the caller recovers elsewhere.
@@ -1018,7 +1017,7 @@ impl Renderer {
             )?
         };
         self.adopt_image_bitmap(bitmap, image);
-        Ok(false)
+        Ok(())
     }
 
     fn wrap_uploaded_texture(
