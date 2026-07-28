@@ -36,7 +36,7 @@ use windows::Win32::System::Com::{CLSCTX_INPROC_SERVER, CoCreateInstance};
 use windows::core::{HSTRING, Interface, PCWSTR, Result as WindowsResult, w};
 
 use super::color::{
-    SDR_REFERENCE_WHITE_NITS, perceptual_quantizer_code, perceptual_quantizer_nits,
+    self, SDR_REFERENCE_WHITE_NITS, perceptual_quantizer_code, perceptual_quantizer_nits,
 };
 
 pub struct Frame {
@@ -749,9 +749,9 @@ fn probe_weight(input: &DecodeInput<'_>) -> Option<u64> {
         Adapter::HeifWithWicPreferred => {
             // Mirrors the decode dispatch: WIC first, the bundled decoder on failure.
             probe_wic_weight(input, &descriptor.semantics).or_else(|| {
-                let (width, height, bytes_per_pixel) =
+                let (width, height, storage) =
                     super::fallback::probe_heif(&input.read_all().ok()?)?;
-                Some(decoded_weight(width, height, bytes_per_pixel, 1))
+                Some(decoded_weight(width, height, storage.bytes_per_pixel(), 1))
             })
         }
     }
@@ -1176,17 +1176,6 @@ enum HdrPrimaries {
     DisplayP3,
 }
 
-impl HdrPrimaries {
-    /// CIE xy of the R, G, B primaries; all three color spaces are D65.
-    fn chromaticities(self) -> [[f32; 2]; 3] {
-        match self {
-            Self::Bt709 => [[0.640, 0.330], [0.300, 0.600], [0.150, 0.060]],
-            Self::Bt2020 => [[0.708, 0.292], [0.170, 0.797], [0.131, 0.046]],
-            Self::DisplayP3 => [[0.680, 0.320], [0.265, 0.690], [0.150, 0.060]],
-        }
-    }
-}
-
 #[derive(Clone, Copy)]
 pub(crate) struct HdrEncoding {
     transfer: HdrTransfer,
@@ -1194,9 +1183,13 @@ pub(crate) struct HdrEncoding {
 }
 
 impl HdrEncoding {
-    /// CIE xy of the primaries the linearized pixels keep.
+    /// CIE xy of the primaries the linearized pixels keep; all three are D65.
     pub(crate) fn source_primaries(self) -> [[f32; 2]; 3] {
-        self.primaries.chromaticities()
+        match self.primaries {
+            HdrPrimaries::Bt709 => color::BT709_PRIMARIES,
+            HdrPrimaries::Bt2020 => color::BT2020_PRIMARIES,
+            HdrPrimaries::DisplayP3 => color::DISPLAY_P3_PRIMARIES,
+        }
     }
 }
 

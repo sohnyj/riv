@@ -456,8 +456,8 @@ fn heif_pixel_target(encoding: Option<HdrEncoding>) -> (c_int, PixelStorage) {
     }
 }
 
-/// Container-parse size and bytes per pixel of the primary image; no pixel decode.
-pub fn probe_heif(data: &[u8]) -> Option<(u32, u32, u32)> {
+/// Container-parse size and storage of the primary image; no pixel decode.
+pub fn probe_heif(data: &[u8]) -> Option<(u32, u32, PixelStorage)> {
     let context = unsafe { heif_context_alloc() };
     if context.is_null() {
         return None;
@@ -467,7 +467,10 @@ pub fn probe_heif(data: &[u8]) -> Option<(u32, u32, u32)> {
     size
 }
 
-fn probe_heif_primary_image(context: *mut HeifContext, data: &[u8]) -> Option<(u32, u32, u32)> {
+fn probe_heif_primary_image(
+    context: *mut HeifContext,
+    data: &[u8],
+) -> Option<(u32, u32, PixelStorage)> {
     unsafe {
         heif_context_read_from_memory_without_copy(
             context,
@@ -487,7 +490,7 @@ fn probe_heif_primary_image(context: *mut HeifContext, data: &[u8]) -> Option<(u
     // The same gate the decode takes, so the budget matches the storage it will produce.
     let (_, storage) = heif_pixel_target(heif_hdr_encoding(handle));
     unsafe { heif_image_handle_release(handle) };
-    (width > 0 && height > 0).then_some((width as u32, height as u32, storage.bytes_per_pixel()))
+    (width > 0 && height > 0).then_some((width as u32, height as u32, storage))
 }
 
 pub fn decode_heif(data: &[u8], format_name: &'static str) -> Result<DecodedImage, DecodeError> {
@@ -549,11 +552,9 @@ fn decode_heif_primary_image(
     let width = unsafe { heif_image_get_width(image, HEIF_CHANNEL_INTERLEAVED) };
     let height = unsafe { heif_image_get_height(image, HEIF_CHANNEL_INTERLEAVED) };
     // The 16-bit words hold codes of the source depth, not of the full range.
-    let source_bits_per_channel = match storage {
-        PixelStorage::RgbaHalf => unsafe {
-            heif_image_get_bits_per_pixel_range(image, HEIF_CHANNEL_INTERLEAVED)
-        },
-        PixelStorage::Bgra8 => 8,
+    let source_bits_per_channel = match hdr_encoding {
+        Some(_) => unsafe { heif_image_get_bits_per_pixel_range(image, HEIF_CHANNEL_INTERLEAVED) },
+        None => 8,
     };
     let mut stride: c_int = 0;
     let plane =
@@ -609,10 +610,12 @@ fn decode_heif_primary_image(
 fn full_range_expansion(bits: u32) -> Box<[u16; 65536]> {
     let maximum = (1u32 << bits) - 1;
     let mut table = Box::new([0u16; 65536]);
-    for (code, expanded) in table.iter_mut().enumerate() {
-        let code = (code as u32).min(maximum);
-        *expanded = ((code * u32::from(u16::MAX) + maximum / 2) / maximum) as u16;
+    let declared = maximum as usize + 1;
+    for (code, expanded) in table[..declared].iter_mut().enumerate() {
+        *expanded = ((code as u32 * u32::from(u16::MAX) + maximum / 2) / maximum) as u16;
     }
+    // A broken decoder writing past the declared depth clamps rather than wrapping.
+    table[declared..].fill(u16::MAX);
     table
 }
 

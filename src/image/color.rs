@@ -220,17 +220,22 @@ impl DisplayGamut {
     }
 }
 
+/// R, G, B primaries (CIE xy) of the gamuts riv can name; sRGB shares BT.709's.
+pub(crate) const BT709_PRIMARIES: [[f32; 2]; 3] = [[0.640, 0.330], [0.300, 0.600], [0.150, 0.060]];
+pub(crate) const DISPLAY_P3_PRIMARIES: [[f32; 2]; 3] =
+    [[0.680, 0.320], [0.265, 0.690], [0.150, 0.060]];
+pub(crate) const BT2020_PRIMARIES: [[f32; 2]; 3] = [[0.708, 0.292], [0.170, 0.797], [0.131, 0.046]];
+
 /// Nearest reference gamut label by R/G/B primary (xy) distance.
 pub(crate) fn nearest_gamut_label(measured: [[f32; 2]; 3]) -> &'static str {
-    // R, G, B primaries (xy) of the reference gamuts.
     const REFERENCES: [(&str, [[f32; 2]; 3]); 4] = [
-        ("sRGB", [[0.640, 0.330], [0.300, 0.600], [0.150, 0.060]]),
+        ("sRGB", BT709_PRIMARIES),
         (
             "Adobe RGB",
             [[0.640, 0.330], [0.210, 0.710], [0.150, 0.060]],
         ),
-        ("DCI-P3", [[0.680, 0.320], [0.265, 0.690], [0.150, 0.060]]),
-        ("BT.2020", [[0.708, 0.292], [0.170, 0.797], [0.131, 0.046]]),
+        ("DCI-P3", DISPLAY_P3_PRIMARIES),
+        ("BT.2020", BT2020_PRIMARIES),
     ];
     let distance = |reference: &[[f32; 2]; 3]| -> f32 {
         reference

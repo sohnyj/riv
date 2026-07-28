@@ -56,7 +56,7 @@ use windows_numerics::{Matrix3x2, Vector2};
 use std::sync::Arc;
 use std::thread;
 
-use crate::image::color::SDR_REFERENCE_WHITE_NITS;
+use crate::image::color::{SDR_REFERENCE_WHITE_NITS, nearest_gamut_label};
 use crate::image::decode::{
     DecodedImage, PixelStorage, UploadDevice, UploadedTexture, icc_gamut_label,
     maximum_resource_bytes,
@@ -187,7 +187,6 @@ impl Drop for Renderer {
         self.tone_map_normalize_effect = None;
         self.output_color_management_effect = None;
         self.hdr_output_color_management_effect = None;
-        self.pq_color_context = None;
     }
 }
 
@@ -389,15 +388,6 @@ impl Renderer {
         .map(Into::into)
     }
 
-    /// scRGB -> PQ BT.2020 for the HDR10 backbuffer.
-    fn create_pq_output_effect(
-        d2d_context: &ID2D1DeviceContext,
-        scrgb_color_context: Option<&ID2D1ColorContext>,
-        pq_color_context: Option<&ID2D1ColorContext>,
-    ) -> Option<ID2D1Effect> {
-        Self::create_conversion_effect(d2d_context, scrgb_color_context, pq_color_context)
-    }
-
     /// Display-profile color context and its gamut label for ACM-off SDR; both None otherwise.
     fn display_context_and_label(
         d2d_context: &ID2D1DeviceContext,
@@ -421,8 +411,9 @@ impl Renderer {
         source: Option<&ID2D1ColorContext>,
         destination: Option<&ID2D1ColorContext>,
     ) -> Option<ID2D1Effect> {
+        let (source, destination) = (source?, destination?);
         let effect = Self::create_color_management_effect(d2d_context)?;
-        wire_color_management(&effect, source?, destination?).ok()?;
+        wire_color_management(&effect, source, destination).ok()?;
         Some(effect)
     }
 
@@ -614,18 +605,14 @@ impl Renderer {
         );
 
         // HDR encodes to PQ in the app so its 10-bit write is the only quantizer.
-        let pq_color_context =
-            (hdr_mode && ten_bit_target).then(|| Self::create_pq_color_context(&d2d_context));
-        let pq_color_context = pq_color_context.flatten();
-        let mut hdr_output_color_management_effect = (hdr_mode && ten_bit_target)
-            .then(|| {
-                Self::create_pq_output_effect(
-                    &d2d_context,
-                    scrgb_color_context.as_ref(),
-                    pq_color_context.as_ref(),
-                )
-            })
+        let pq_color_context = (hdr_mode && ten_bit_target)
+            .then(|| Self::create_pq_color_context(&d2d_context))
             .flatten();
+        let mut hdr_output_color_management_effect = Self::create_conversion_effect(
+            &d2d_context,
+            scrgb_color_context.as_ref(),
+            pq_color_context.as_ref(),
+        );
 
         let mut swap_chain_format = Self::preferred_swap_chain_format(
             hdr_mode,
@@ -988,18 +975,14 @@ impl Renderer {
         }
         let ten_bit_target = self.quantize_pass.is_some();
 
-        let pq_color_context =
-            (hdr_mode && ten_bit_target).then(|| Self::create_pq_color_context(&self.d2d_context));
-        let pq_color_context = pq_color_context.flatten();
-        let mut hdr_output_color_management_effect = (hdr_mode && ten_bit_target)
-            .then(|| {
-                Self::create_pq_output_effect(
-                    &self.d2d_context,
-                    self.scrgb_color_context.as_ref(),
-                    pq_color_context.as_ref(),
-                )
-            })
+        let pq_color_context = (hdr_mode && ten_bit_target)
+            .then(|| Self::create_pq_color_context(&self.d2d_context))
             .flatten();
+        let mut hdr_output_color_management_effect = Self::create_conversion_effect(
+            &self.d2d_context,
+            self.scrgb_color_context.as_ref(),
+            pq_color_context.as_ref(),
+        );
         let mut swap_chain_format = Self::preferred_swap_chain_format(
             hdr_mode,
             hdr_output_color_management_effect.is_some(),
@@ -1221,16 +1204,19 @@ impl Renderer {
         source_primaries: Option<[[f32; 2]; 3]>,
     ) {
         self.effect_output = None;
-        self.source_gamut_label = icc_profile.and_then(icc_gamut_label);
+        self.source_gamut_label = source_primaries
+            .map(nearest_gamut_label)
+            .or_else(|| icc_profile.and_then(icc_gamut_label));
         self.refresh_output_description();
         let Some(color_management) = &self.color_management_effect else {
             return;
         };
         // HDR passes through; SDR maps content above SDR white to the target.
+        let hdr_content = peak_luminance_nits.is_some_and(|peak| peak > SDR_REFERENCE_WHITE_NITS);
         let tone_map = self
             .hdr_tone_map_effect
             .as_ref()
-            .zip(peak_luminance_nits.filter(|peak| *peak > SDR_REFERENCE_WHITE_NITS));
+            .zip(peak_luminance_nits.filter(|_| hdr_content));
         let scrgb_destination = self.hdr_mode || self.sdr_wide_gamut || tone_map.is_some();
         // Untagged sRGB skips CM only when no scRGB output and no display profile needs a mapping.
         if storage == PixelStorage::Bgra8
@@ -1245,13 +1231,15 @@ impl Renderer {
         // FP16 pixels are linear light in the stated primaries; scRGB covers unknown ones.
         let dedicated_context = match storage {
             PixelStorage::RgbaHalf => {
-                if self.linear_source_primaries != source_primaries {
-                    self.linear_source_context = source_primaries
-                        .and_then(|primaries| self.create_linear_color_context(primaries));
-                    self.linear_source_primaries = source_primaries;
+                // A source that states nothing leaves the cached context alone.
+                if let Some(primaries) = source_primaries
+                    && self.linear_source_primaries != Some(primaries)
+                {
+                    self.linear_source_context = self.create_linear_color_context(primaries);
+                    self.linear_source_primaries = Some(primaries);
                 }
-                self.linear_source_context
-                    .as_ref()
+                source_primaries
+                    .and(self.linear_source_context.as_ref())
                     .or(self.scrgb_color_context.as_ref())
             }
             PixelStorage::Bgra8 => None,
@@ -1286,8 +1274,7 @@ impl Renderer {
             }
         };
         // HDR content needs no linear stage before the backbuffer, so it converts once.
-        let hdr_content = peak_luminance_nits.is_some_and(|peak| peak > SDR_REFERENCE_WHITE_NITS);
-        let direct_to_backbuffer = self.hdr_mode && hdr_content && self.pq_color_context.is_some();
+        let direct_to_backbuffer = hdr_content && self.pq_output();
         let destination_context = if direct_to_backbuffer {
             self.pq_color_context.as_ref()
         } else if scrgb_destination {
