@@ -144,6 +144,7 @@ pub struct Renderer {
     output_color_management_effect: Option<ID2D1Effect>,
     /// scRGB -> PQ BT.2020 for the HDR10 backbuffer; None on the FP16 fallback.
     hdr_output_color_management_effect: Option<ID2D1Effect>,
+    pq_color_context: Option<ID2D1ColorContext>,
     dither_mode: DitherMode,
     image_storage: PixelStorage,
     image_source_bits_per_channel: u32,
@@ -186,6 +187,7 @@ impl Drop for Renderer {
         self.tone_map_normalize_effect = None;
         self.output_color_management_effect = None;
         self.hdr_output_color_management_effect = None;
+        self.pq_color_context = None;
     }
 }
 
@@ -375,21 +377,25 @@ impl Renderer {
         Some(effect)
     }
 
-    /// scRGB -> PQ BT.2020 for the HDR10 backbuffer.
-    fn create_pq_output_effect(
-        d2d_context: &ID2D1DeviceContext,
-        scrgb_color_context: Option<&ID2D1ColorContext>,
-    ) -> Option<ID2D1Effect> {
-        let pq_color_context = unsafe {
+    /// The HDR10 backbuffer's own color space, as a context sources can convert into.
+    fn create_pq_color_context(d2d_context: &ID2D1DeviceContext) -> Option<ID2D1ColorContext> {
+        unsafe {
             d2d_context
                 .cast::<ID2D1DeviceContext5>()
                 .ok()?
                 .CreateColorContextFromDxgiColorSpace(DXGI_COLOR_SPACE_RGB_FULL_G2084_NONE_P2020)
-                .ok()?
-        };
-        let effect = Self::create_color_management_effect(d2d_context)?;
-        wire_color_management(&effect, scrgb_color_context?, &pq_color_context).ok()?;
-        Some(effect)
+        }
+        .ok()
+        .map(Into::into)
+    }
+
+    /// scRGB -> PQ BT.2020 for the HDR10 backbuffer.
+    fn create_pq_output_effect(
+        d2d_context: &ID2D1DeviceContext,
+        scrgb_color_context: Option<&ID2D1ColorContext>,
+        pq_color_context: Option<&ID2D1ColorContext>,
+    ) -> Option<ID2D1Effect> {
+        Self::create_conversion_effect(d2d_context, scrgb_color_context, pq_color_context)
     }
 
     /// Display-profile color context and its gamut label for ACM-off SDR; both None otherwise.
@@ -608,8 +614,17 @@ impl Renderer {
         );
 
         // HDR encodes to PQ in the app so its 10-bit write is the only quantizer.
+        let pq_color_context =
+            (hdr_mode && ten_bit_target).then(|| Self::create_pq_color_context(&d2d_context));
+        let pq_color_context = pq_color_context.flatten();
         let mut hdr_output_color_management_effect = (hdr_mode && ten_bit_target)
-            .then(|| Self::create_pq_output_effect(&d2d_context, scrgb_color_context.as_ref()))
+            .then(|| {
+                Self::create_pq_output_effect(
+                    &d2d_context,
+                    scrgb_color_context.as_ref(),
+                    pq_color_context.as_ref(),
+                )
+            })
             .flatten();
 
         let mut swap_chain_format = Self::preferred_swap_chain_format(
@@ -737,6 +752,7 @@ impl Renderer {
             tone_map_normalize_effect: mode_effects.tone_map_normalize_effect,
             output_color_management_effect: mode_effects.output_color_management_effect,
             hdr_output_color_management_effect,
+            pq_color_context,
             dither_mode: DitherMode::None,
             image_storage: PixelStorage::Bgra8,
             image_source_bits_per_channel: 8,
@@ -972,9 +988,16 @@ impl Renderer {
         }
         let ten_bit_target = self.quantize_pass.is_some();
 
+        let pq_color_context =
+            (hdr_mode && ten_bit_target).then(|| Self::create_pq_color_context(&self.d2d_context));
+        let pq_color_context = pq_color_context.flatten();
         let mut hdr_output_color_management_effect = (hdr_mode && ten_bit_target)
             .then(|| {
-                Self::create_pq_output_effect(&self.d2d_context, self.scrgb_color_context.as_ref())
+                Self::create_pq_output_effect(
+                    &self.d2d_context,
+                    self.scrgb_color_context.as_ref(),
+                    pq_color_context.as_ref(),
+                )
             })
             .flatten();
         let mut swap_chain_format = Self::preferred_swap_chain_format(
@@ -1041,6 +1064,7 @@ impl Renderer {
         self.tone_map_normalize_effect = mode_effects.tone_map_normalize_effect;
         self.output_color_management_effect = mode_effects.output_color_management_effect;
         self.hdr_output_color_management_effect = hdr_output_color_management_effect;
+        self.pq_color_context = pq_color_context;
         self.swap_chain_format = swap_chain_format;
         self.refresh_output_description();
         self.create_target()
@@ -1261,7 +1285,12 @@ impl Renderer {
                 source_context
             }
         };
-        let destination_context = if scrgb_destination {
+        // HDR content needs no linear stage before the backbuffer, so it converts once.
+        let hdr_content = peak_luminance_nits.is_some_and(|peak| peak > SDR_REFERENCE_WHITE_NITS);
+        let direct_to_backbuffer = self.hdr_mode && hdr_content && self.pq_color_context.is_some();
+        let destination_context = if direct_to_backbuffer {
+            self.pq_color_context.as_ref()
+        } else if scrgb_destination {
             self.scrgb_color_context.as_ref()
         } else {
             self.sdr_destination_context()
@@ -1326,8 +1355,6 @@ impl Renderer {
             }
             None => {
                 // SDR content takes the white-level boost; HDR content passes through.
-                let hdr_content =
-                    peak_luminance_nits.is_some_and(|peak| peak > SDR_REFERENCE_WHITE_NITS);
                 match &self.white_level_effect {
                     Some(white_level) if !hdr_content => {
                         unsafe { white_level.SetInput(0, &converted, true) };
@@ -1338,7 +1365,11 @@ impl Renderer {
             }
         };
         // The HDR10 backbuffer quantizes PQ; encode after every linear stage.
-        self.effect_output = match (&self.hdr_output_color_management_effect, scene) {
+        let output_encoding = self
+            .hdr_output_color_management_effect
+            .as_ref()
+            .filter(|_| !direct_to_backbuffer);
+        self.effect_output = match (output_encoding, scene) {
             (Some(output_encoding), Some(scene)) => {
                 unsafe { output_encoding.SetInput(0, &scene, true) };
                 unsafe { output_encoding.GetOutput() }.ok()
