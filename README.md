@@ -61,9 +61,9 @@ Decoded by built-in codecs:
 | APNG | png |
 | Animated WebP | libwebp |
 
-libheif + libde265 decode HEIC and HEIF at 8 bits, with no tone mapping, so
-HDR files lose their range. HEIF Image Extension + HEVC Video Extensions
-decode them instead, at full bit depth.
+libheif + libde265 decode a file that declares PQ or HLG in its container at
+full bit depth, with tone mapping. Every other file comes out at 8 bits.
+HEIF Image Extension + HEVC Video Extensions decode them all at full bit depth.
 
 Decoded by Windows Imaging Component codecs:
 

@@ -746,8 +746,9 @@ fn probe_weight(input: &DecodeInput<'_>) -> Option<u64> {
         Adapter::HeifWithWicPreferred => {
             // Mirrors the decode dispatch: WIC first, the bundled decoder on failure.
             probe_wic_weight(input, &descriptor.semantics).or_else(|| {
-                let (width, height) = super::fallback::probe_heif(&input.read_all().ok()?)?;
-                Some(decoded_weight(width, height, 4, 1))
+                let (width, height, bytes_per_pixel) =
+                    super::fallback::probe_heif(&input.read_all().ok()?)?;
+                Some(decoded_weight(width, height, bytes_per_pixel, 1))
             })
         }
     }
@@ -1182,7 +1183,7 @@ impl HdrPrimaries {
 }
 
 #[derive(Clone, Copy)]
-struct HdrEncoding {
+pub(crate) struct HdrEncoding {
     transfer: HdrTransfer,
     primaries: HdrPrimaries,
 }
@@ -1258,23 +1259,19 @@ pub fn icc_profile_description(icc: &[u8]) -> Option<String> {
     (!trimmed.is_empty()).then(|| trimmed.to_string())
 }
 
-/// ICC 'cicp' tag; Some for an HDR transfer (16 = PQ, 18 = HLG) with convertible primaries.
-fn icc_hdr_encoding(icc: &[u8]) -> Option<HdrEncoding> {
+/// CICP code points; Some for an HDR transfer (16 = PQ, 18 = HLG) with convertible primaries.
+pub(crate) fn cicp_hdr_encoding(primaries: u8, transfer: u8) -> Option<HdrEncoding> {
     const TRANSFER_PQ: u8 = 16;
     const TRANSFER_HLG: u8 = 18;
     const PRIMARIES_BT709: u8 = 1;
     const PRIMARIES_BT2020: u8 = 9;
     const PRIMARIES_P3_D65: u8 = 12;
-    let offset = icc_tag_offset(icc, b"cicp")?;
-    if icc.get(offset..offset + 4)? != b"cicp" {
-        return None;
-    }
-    let transfer = match *icc.get(offset + 9)? {
+    let transfer = match transfer {
         TRANSFER_PQ => HdrTransfer::PerceptualQuantizer,
         TRANSFER_HLG => HdrTransfer::HybridLogGamma,
         _ => return None,
     };
-    let primaries = match *icc.get(offset + 8)? {
+    let primaries = match primaries {
         PRIMARIES_BT709 => HdrPrimaries::Bt709,
         PRIMARIES_BT2020 => HdrPrimaries::Bt2020,
         PRIMARIES_P3_D65 => HdrPrimaries::DisplayP3,
@@ -1284,6 +1281,15 @@ fn icc_hdr_encoding(icc: &[u8]) -> Option<HdrEncoding> {
         transfer,
         primaries,
     })
+}
+
+/// ICC 'cicp' tag as an HDR encoding.
+fn icc_hdr_encoding(icc: &[u8]) -> Option<HdrEncoding> {
+    let offset = icc_tag_offset(icc, b"cicp")?;
+    if icc.get(offset..offset + 4)? != b"cicp" {
+        return None;
+    }
+    cicp_hdr_encoding(*icc.get(offset + 8)?, *icc.get(offset + 9)?)
 }
 
 /// Rec. 2100 nominal peak for the HLG OOTF (display-referred mapping).
@@ -1415,7 +1421,7 @@ fn map_pixel_blocks<Output: Send>(
 
 /// Converts 16-bit PQ/HLG pixels (straight alpha) in place to premultiplied scRGB
 /// halves, returning the maximum positive normal color half it wrote.
-fn linearize_hdr_pixels(pixels: &mut [u8], encoding: HdrEncoding) -> u16 {
+pub(crate) fn linearize_hdr_pixels(pixels: &mut [u8], encoding: HdrEncoding) -> u16 {
     let matrix = encoding.primaries.bt709_conversion();
     let transfer_table = hdr_transfer_lookup_table(encoding.transfer);
     map_pixel_blocks(pixels, 8, |block| {
@@ -1506,7 +1512,7 @@ pub fn peak_luminance_from_half_pixels(pixels: &[u8]) -> Option<f32> {
 }
 
 /// Peak from a known channel maximum, skipping the scan that would recompute it.
-fn peak_luminance_with_maximum_bits(pixels: &[u8], maximum_bits: u16) -> Option<f32> {
+pub(crate) fn peak_luminance_with_maximum_bits(pixels: &[u8], maximum_bits: u16) -> Option<f32> {
     if pixels.len() < 8 {
         return None;
     }

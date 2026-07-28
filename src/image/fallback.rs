@@ -4,9 +4,10 @@ use std::ffi::{CStr, c_char, c_int, c_void};
 use std::path::Path;
 
 use super::decode::{
-    DecodeError, DecodedImage, Frame, PixelStorage, animation_budget_exceeded, blend_over,
-    clear_rectangle, copy_rectangle, peak_luminance_from_half_pixels, premultiplied_bgra_from_rgba,
-    uncoded_error,
+    DecodeError, DecodedImage, Frame, HdrEncoding, PixelStorage, animation_budget_exceeded,
+    blend_over, cicp_hdr_encoding, clear_rectangle, copy_rectangle, linearize_hdr_pixels,
+    peak_luminance_from_half_pixels, peak_luminance_with_maximum_bits,
+    premultiplied_bgra_from_rgba, uncoded_error,
 };
 
 /// Must match the built libwebpdemux ABI or WebPDemuxInternal returns null.
@@ -337,6 +338,7 @@ fn decode_exr_with(
 
 const HEIF_COLORSPACE_RGB: c_int = 1;
 const HEIF_CHROMA_INTERLEAVED_RGBA: c_int = 11;
+const HEIF_CHROMA_INTERLEAVED_RRGGBBAA_LE: c_int = 15;
 const HEIF_CHANNEL_INTERLEAVED: c_int = 10;
 
 enum HeifContext {}
@@ -348,6 +350,24 @@ struct HeifError {
     code: c_int,
     subcode: c_int,
     message: *const c_char,
+}
+
+/// The colr box NCLX; the enum fields are C ints, so the layout has to match exactly.
+#[repr(C)]
+struct HeifColorProfileNclx {
+    version: u8,
+    color_primaries: c_int,
+    transfer_characteristics: c_int,
+    matrix_coefficients: c_int,
+    full_range_flag: u8,
+    color_primary_red_x: f32,
+    color_primary_red_y: f32,
+    color_primary_green_x: f32,
+    color_primary_green_y: f32,
+    color_primary_blue_x: f32,
+    color_primary_blue_y: f32,
+    color_primary_white_x: f32,
+    color_primary_white_y: f32,
 }
 
 impl HeifError {
@@ -395,17 +415,46 @@ unsafe extern "C" {
         channel: c_int,
         stride: *mut c_int,
     ) -> *const u8;
+    fn heif_image_get_bits_per_pixel_range(image: *const HeifImage, channel: c_int) -> c_int;
     fn heif_image_handle_get_raw_color_profile_size(handle: *const HeifImageHandle) -> usize;
     fn heif_image_handle_get_raw_color_profile(
         handle: *const HeifImageHandle,
         out_data: *mut c_void,
     ) -> HeifError;
+    fn heif_image_handle_get_nclx_color_profile(
+        handle: *const HeifImageHandle,
+        out_profile: *mut *mut HeifColorProfileNclx,
+    ) -> HeifError;
+    fn heif_nclx_color_profile_free(profile: *mut HeifColorProfileNclx);
     fn heif_image_handle_get_width(handle: *const HeifImageHandle) -> c_int;
     fn heif_image_handle_get_height(handle: *const HeifImageHandle) -> c_int;
 }
 
-/// Container-parse size of the primary image; no pixel decode.
-pub fn probe_heif(data: &[u8]) -> Option<(u32, u32)> {
+/// The primary image's NCLX as an HDR encoding; None for SDR transfers or no colr box.
+fn heif_hdr_encoding(handle: *const HeifImageHandle) -> Option<HdrEncoding> {
+    let mut profile: *mut HeifColorProfileNclx = std::ptr::null_mut();
+    unsafe { heif_image_handle_get_nclx_color_profile(handle, &raw mut profile) }
+        .into_result()
+        .ok()?;
+    if profile.is_null() {
+        return None;
+    }
+    let primaries = unsafe { (*profile).color_primaries };
+    let transfer = unsafe { (*profile).transfer_characteristics };
+    unsafe { heif_nclx_color_profile_free(profile) };
+    cicp_hdr_encoding(u8::try_from(primaries).ok()?, u8::try_from(transfer).ok()?)
+}
+
+/// The chroma to ask libheif for and the storage it produces; the two must stay paired.
+fn heif_pixel_target(encoding: Option<HdrEncoding>) -> (c_int, PixelStorage) {
+    match encoding {
+        Some(_) => (HEIF_CHROMA_INTERLEAVED_RRGGBBAA_LE, PixelStorage::RgbaHalf),
+        None => (HEIF_CHROMA_INTERLEAVED_RGBA, PixelStorage::Bgra8),
+    }
+}
+
+/// Container-parse size and bytes per pixel of the primary image; no pixel decode.
+pub fn probe_heif(data: &[u8]) -> Option<(u32, u32, u32)> {
     let context = unsafe { heif_context_alloc() };
     if context.is_null() {
         return None;
@@ -415,7 +464,7 @@ pub fn probe_heif(data: &[u8]) -> Option<(u32, u32)> {
     size
 }
 
-fn probe_heif_primary_image(context: *mut HeifContext, data: &[u8]) -> Option<(u32, u32)> {
+fn probe_heif_primary_image(context: *mut HeifContext, data: &[u8]) -> Option<(u32, u32, u32)> {
     unsafe {
         heif_context_read_from_memory_without_copy(
             context,
@@ -432,8 +481,10 @@ fn probe_heif_primary_image(context: *mut HeifContext, data: &[u8]) -> Option<(u
         .ok()?;
     let width = unsafe { heif_image_handle_get_width(handle) };
     let height = unsafe { heif_image_handle_get_height(handle) };
+    // The same gate the decode takes, so the budget matches the storage it will produce.
+    let (_, storage) = heif_pixel_target(heif_hdr_encoding(handle));
     unsafe { heif_image_handle_release(handle) };
-    (width > 0 && height > 0).then_some((width as u32, height as u32))
+    (width > 0 && height > 0).then_some((width as u32, height as u32, storage.bytes_per_pixel()))
 }
 
 pub fn decode_heif(data: &[u8], format_name: &'static str) -> Result<DecodedImage, DecodeError> {
@@ -463,13 +514,16 @@ fn decode_heif_primary_image(
     let mut handle: *mut HeifImageHandle = std::ptr::null_mut();
     unsafe { heif_context_get_primary_image_handle(context, &raw mut handle) }.into_result()?;
 
+    // PQ/HLG survives only a 16-bit request; libheif converts no transfer function.
+    let hdr_encoding = heif_hdr_encoding(handle);
+    let (chroma, storage) = heif_pixel_target(hdr_encoding);
     let mut image: *mut HeifImage = std::ptr::null_mut();
     let decode_result = unsafe {
         heif_decode_image(
             handle,
             &raw mut image,
             HEIF_COLORSPACE_RGB,
-            HEIF_CHROMA_INTERLEAVED_RGBA,
+            chroma,
             std::ptr::null(),
         )
     }
@@ -491,21 +545,43 @@ fn decode_heif_primary_image(
 
     let width = unsafe { heif_image_get_width(image, HEIF_CHANNEL_INTERLEAVED) };
     let height = unsafe { heif_image_get_height(image, HEIF_CHANNEL_INTERLEAVED) };
+    // The 16-bit words hold codes of the source depth, not of the full range.
+    let source_bits_per_channel = match storage {
+        PixelStorage::RgbaHalf => unsafe {
+            heif_image_get_bits_per_pixel_range(image, HEIF_CHANNEL_INTERLEAVED)
+        },
+        PixelStorage::Bgra8 => 8,
+    };
     let mut stride: c_int = 0;
     let plane =
         unsafe { heif_image_get_plane_readonly(image, HEIF_CHANNEL_INTERLEAVED, &raw mut stride) };
-    if plane.is_null() || width <= 0 || height <= 0 || i64::from(stride) < i64::from(width) * 4 {
+    let row_bytes = i64::from(width) * i64::from(storage.bytes_per_pixel());
+    if plane.is_null()
+        || width <= 0
+        || height <= 0
+        || !(1..=16).contains(&source_bits_per_channel)
+        || i64::from(stride) < row_bytes
+    {
         unsafe { heif_image_release(image) };
         return Err(uncoded_error("HEIF image plane unavailable"));
     }
-    let row_bytes = width as usize * 4;
+    let row_bytes = row_bytes as usize;
     let mut pixels = vec![0u8; row_bytes * height as usize];
+    let expansion = hdr_encoding.map(|_| full_range_expansion(source_bits_per_channel as u32));
     for (row, output_row) in pixels.chunks_exact_mut(row_bytes).enumerate() {
         let row_pointer = unsafe { plane.add(row * stride as usize) };
         let row_pixels = unsafe { std::slice::from_raw_parts(row_pointer, row_bytes) };
-        premultiplied_bgra_from_rgba(row_pixels, output_row);
+        match &expansion {
+            Some(table) => expand_to_full_range(row_pixels, output_row, table),
+            None => premultiplied_bgra_from_rgba(row_pixels, output_row),
+        }
     }
     unsafe { heif_image_release(image) };
+    // The expanded codes are still PQ/HLG; the shared pass turns them into premultiplied scRGB.
+    let peak_luminance_nits = hdr_encoding.and_then(|encoding| {
+        let maximum_bits = linearize_hdr_pixels(&mut pixels, encoding);
+        peak_luminance_with_maximum_bits(&pixels, maximum_bits)
+    });
     Ok(DecodedImage {
         width: width as u32,
         height: height as u32,
@@ -514,15 +590,77 @@ fn decode_heif_primary_image(
         format_name,
         icc_profile,
         exif: None,
-        storage: PixelStorage::Bgra8,
-        source_bits_per_channel: 8,
-        peak_luminance_nits: None,
+        storage,
+        source_bits_per_channel: source_bits_per_channel as u32,
+        peak_luminance_nits,
         frames: vec![Frame {
             pixels,
             delay_milliseconds: 0,
         }],
         frames_truncated: false,
     })
+}
+
+/// Full-range 16-bit code per source code; libheif leaves the value in the low bits of the depth.
+fn full_range_expansion(bits: u32) -> Box<[u16; 65536]> {
+    let maximum = (1u32 << bits) - 1;
+    let mut table = Box::new([0u16; 65536]);
+    for (code, expanded) in table.iter_mut().enumerate() {
+        let code = (code as u32).min(maximum);
+        *expanded = ((code * u32::from(u16::MAX) + maximum / 2) / maximum) as u16;
+    }
+    table
+}
+
+/// Rewrites 16-bit little-endian codes through the expansion table, lane for lane.
+fn expand_to_full_range(source: &[u8], output: &mut [u8], table: &[u16; 65536]) {
+    for (code, expanded) in source.chunks_exact(2).zip(output.chunks_exact_mut(2)) {
+        let value = table[usize::from(u16::from_le_bytes([code[0], code[1]]))];
+        expanded.copy_from_slice(&value.to_le_bytes());
+    }
+}
+
+#[cfg(test)]
+mod heif_range_tests {
+    use super::*;
+
+    #[test]
+    fn the_declared_depth_maps_onto_the_whole_16_bit_range() {
+        let table = full_range_expansion(10);
+        assert_eq!(table[0], 0);
+        assert_eq!(table[1023], u16::MAX);
+        // Scaling, not a shift: half the source range lands on half the full range.
+        assert_eq!(table[512], 32800);
+        assert!(table.windows(2).take(1024).all(|pair| pair[0] <= pair[1]));
+    }
+
+    #[test]
+    fn sixteen_bit_sources_pass_through_untouched() {
+        let table = full_range_expansion(16);
+        assert!(
+            table
+                .iter()
+                .enumerate()
+                .all(|(code, expanded)| usize::from(*expanded) == code)
+        );
+    }
+
+    #[test]
+    fn codes_above_the_declared_depth_clamp_to_white() {
+        // A broken decoder writing past the range must not wrap around to black.
+        let table = full_range_expansion(10);
+        assert_eq!(table[1024], u16::MAX);
+        assert_eq!(table[65535], u16::MAX);
+    }
+
+    #[test]
+    fn expansion_rewrites_little_endian_lanes_in_place_order() {
+        let table = full_range_expansion(10);
+        let source = [0x00, 0x00, 0xFF, 0x03, 0x00, 0x02, 0xFF, 0x03];
+        let mut output = [0u8; 8];
+        expand_to_full_range(&source, &mut output, &table);
+        assert_eq!(output, [0x00, 0x00, 0xFF, 0xFF, 0x20, 0x80, 0xFF, 0xFF]);
+    }
 }
 
 #[cfg(test)]

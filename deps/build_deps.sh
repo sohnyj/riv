@@ -46,17 +46,14 @@ configure_and_install libwebp \
     -DWEBP_BUILD_WEBPINFO=OFF \
     -DWEBP_BUILD_WEBPMUX=OFF
 
-# libde265 (HEVC for the HEIF fallback). ENABLE_DECODER only builds the dec265
-# CLI, which fails on MSVC targets without getopt; the library does not need it.
+# libde265 (HEVC for the HEIF fallback)
 clone libde265 https://github.com/strukturag/libde265.git master
 configure_and_install libde265 \
     -DENABLE_SDL=OFF \
     -DENABLE_DECODER=OFF \
     -DENABLE_ENCODER=OFF
 
-# libheif (HEIF runtime fallback). LIBDE265_STATIC_BUILD goes through the
-# environment so cmake merges it with the toolchain INIT flags instead of
-# overwriting them.
+# libheif (HEIF runtime fallback)
 clone libheif https://github.com/strukturag/libheif.git master
 (
     export CFLAGS="-DLIBDE265_STATIC_BUILD"
@@ -87,8 +84,6 @@ configure_and_install libdeflate \
     -DLIBDEFLATE_BUILD_GZIP=OFF \
     -DLIBDEFLATE_BUILD_TESTS=OFF
 
-# OpenEXR. clang-cl (MSVC target) already takes the Win32 semaphore branch,
-# so no patching is needed.
 clone openexr https://github.com/AcademySoftwareFoundation/openexr.git release
 configure_and_install openexr \
     -DBUILD_TESTING=OFF \
