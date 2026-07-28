@@ -15,11 +15,11 @@ use windows::Win32::Graphics::Direct2D::{
     D2D1_COLORMANAGEMENT_PROP_SOURCE_COLOR_CONTEXT,
     D2D1_COLORMANAGEMENT_PROP_SOURCE_RENDERING_INTENT, D2D1_COLORMANAGEMENT_QUALITY_BEST,
     D2D1_COLORMANAGEMENT_RENDERING_INTENT_RELATIVE_COLORIMETRIC, D2D1_DEVICE_CONTEXT_OPTIONS_NONE,
-    D2D1_FACTORY_TYPE_SINGLE_THREADED, D2D1_HDRTONEMAP_DISPLAY_MODE_HDR,
+    D2D1_FACTORY_TYPE_SINGLE_THREADED, D2D1_GAMMA1_G10, D2D1_HDRTONEMAP_DISPLAY_MODE_HDR,
     D2D1_HDRTONEMAP_PROP_DISPLAY_MODE, D2D1_HDRTONEMAP_PROP_INPUT_MAX_LUMINANCE,
     D2D1_HDRTONEMAP_PROP_OUTPUT_MAX_LUMINANCE, D2D1_INTERPOLATION_MODE,
     D2D1_INTERPOLATION_MODE_NEAREST_NEIGHBOR, D2D1_PROPERTY_TYPE_COLOR_CONTEXT,
-    D2D1_PROPERTY_TYPE_ENUM, D2D1_PROPERTY_TYPE_FLOAT,
+    D2D1_PROPERTY_TYPE_ENUM, D2D1_PROPERTY_TYPE_FLOAT, D2D1_SIMPLE_COLOR_PROFILE,
     D2D1_WHITELEVELADJUSTMENT_PROP_INPUT_WHITE_LEVEL,
     D2D1_WHITELEVELADJUSTMENT_PROP_OUTPUT_WHITE_LEVEL, D2D1CreateFactory, ID2D1Bitmap1,
     ID2D1ColorContext, ID2D1DeviceContext, ID2D1DeviceContext5, ID2D1Effect, ID2D1Factory1,
@@ -51,7 +51,7 @@ use windows::Win32::Graphics::Dxgi::{
 };
 use windows::Win32::System::Threading::WaitForSingleObjectEx;
 use windows::core::{Interface, Result};
-use windows_numerics::Matrix3x2;
+use windows_numerics::{Matrix3x2, Vector2};
 
 use std::sync::Arc;
 use std::thread;
@@ -159,6 +159,8 @@ pub struct Renderer {
     output_description: String,
     source_icc_profile: Option<Vec<u8>>,
     source_color_context: Option<ID2D1ColorContext>,
+    linear_source_primaries: Option<[[f32; 2]; 3]>,
+    linear_source_context: Option<ID2D1ColorContext>,
     image_display_size: (f32, f32),
     image_pixel_size: (f32, f32),
     /// What the last frame actually dithered with, for the info panel.
@@ -746,6 +748,8 @@ impl Renderer {
             output_description: String::new(),
             source_icc_profile: None,
             source_color_context: None,
+            linear_source_primaries: None,
+            linear_source_context: None,
             image_display_size: (0.0, 0.0),
             image_pixel_size: (0.0, 0.0),
             dither_description: "None",
@@ -803,6 +807,31 @@ impl Renderer {
         } else {
             self.sdr_output_description("8-bit")
         };
+    }
+
+    /// Linear light in the given primaries; D65, which every gamut riv can state uses.
+    fn create_linear_color_context(&self, primaries: [[f32; 2]; 3]) -> Option<ID2D1ColorContext> {
+        // D65 tristimulus, normalized to Y = 1, which is what whitePointXZ wants.
+        const D65_WHITE_POINT_XZ: Vector2 = Vector2 {
+            X: 0.9505,
+            Y: 1.0891,
+        };
+        let point = |xy: [f32; 2]| Vector2 { X: xy[0], Y: xy[1] };
+        let profile = D2D1_SIMPLE_COLOR_PROFILE {
+            redPrimary: point(primaries[0]),
+            greenPrimary: point(primaries[1]),
+            bluePrimary: point(primaries[2]),
+            whitePointXZ: D65_WHITE_POINT_XZ,
+            gamma: D2D1_GAMMA1_G10,
+        };
+        unsafe {
+            self.d2d_context
+                .cast::<ID2D1DeviceContext5>()
+                .ok()?
+                .CreateColorContextFromSimpleColorProfile(&raw const profile)
+        }
+        .ok()
+        .map(Into::into)
     }
 
     /// SDR destination color context: the display's own profile when mapping, else sRGB.
@@ -1140,6 +1169,7 @@ impl Renderer {
             image.icc_profile.as_deref(),
             image.storage,
             image.peak_luminance_nits,
+            image.source_primaries,
         );
         self.image = Some(bitmap);
     }
@@ -1164,6 +1194,7 @@ impl Renderer {
         icc_profile: Option<&[u8]>,
         storage: PixelStorage,
         peak_luminance_nits: Option<f32>,
+        source_primaries: Option<[[f32; 2]; 3]>,
     ) {
         self.effect_output = None;
         self.source_gamut_label = icc_profile.and_then(icc_gamut_label);
@@ -1187,9 +1218,18 @@ impl Renderer {
             unsafe { color_management.SetInput(0, None, true) };
             return;
         }
-        // FP16 pixels are linear scRGB; the embedded ICC does not describe them.
+        // FP16 pixels are linear light in the stated primaries; scRGB covers unknown ones.
         let dedicated_context = match storage {
-            PixelStorage::RgbaHalf => self.scrgb_color_context.as_ref(),
+            PixelStorage::RgbaHalf => {
+                if self.linear_source_primaries != source_primaries {
+                    self.linear_source_context = source_primaries
+                        .and_then(|primaries| self.create_linear_color_context(primaries));
+                    self.linear_source_primaries = source_primaries;
+                }
+                self.linear_source_context
+                    .as_ref()
+                    .or(self.scrgb_color_context.as_ref())
+            }
             PixelStorage::Bgra8 => None,
         };
         let source_context = match dedicated_context {

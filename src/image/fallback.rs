@@ -190,6 +190,7 @@ fn compose_webp_frames(
         storage: PixelStorage::Bgra8,
         source_bits_per_channel: 8,
         peak_luminance_nits: None,
+        source_primaries: None,
         frames,
         frames_truncated,
     })
@@ -328,6 +329,8 @@ fn decode_exr_with(
         storage: PixelStorage::RgbaHalf,
         source_bits_per_channel: 16,
         peak_luminance_nits,
+        // EXR chromaticities are ignored, so nothing states the primaries.
+        source_primaries: None,
         frames: vec![Frame {
             pixels,
             delay_milliseconds: 0,
@@ -577,7 +580,7 @@ fn decode_heif_primary_image(
         }
     }
     unsafe { heif_image_release(image) };
-    // The expanded codes are still PQ/HLG; the shared pass turns them into premultiplied scRGB.
+    // The expanded codes are still PQ/HLG; the shared pass makes them premultiplied linear.
     let peak_luminance_nits = hdr_encoding.and_then(|encoding| {
         let maximum_bits = linearize_hdr_pixels(&mut pixels, encoding);
         peak_luminance_with_maximum_bits(&pixels, maximum_bits)
@@ -593,6 +596,7 @@ fn decode_heif_primary_image(
         storage,
         source_bits_per_channel: source_bits_per_channel as u32,
         peak_luminance_nits,
+        source_primaries: hdr_encoding.map(HdrEncoding::source_primaries),
         frames: vec![Frame {
             pixels,
             delay_milliseconds: 0,

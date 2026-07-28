@@ -78,8 +78,10 @@ pub struct DecodedImage {
     pub storage: PixelStorage,
     /// Meaningful bits per channel of the decoded pixels (8 for Bgra8 storage).
     pub source_bits_per_channel: u32,
-    /// Content peak (nits) of FP16 sources; pixels are linear scRGB (1.0 = 80 nits).
+    /// Content peak (nits) of FP16 sources; 1.0 = 80 nits in the source primaries.
     pub peak_luminance_nits: Option<f32>,
+    /// CIE xy of the source R, G, B primaries when the file states them; None means unknown.
+    pub source_primaries: Option<[[f32; 2]; 3]>,
     pub frames: Vec<Frame>,
     /// The animation would expand past the byte limit; only the first frame is kept.
     pub frames_truncated: bool,
@@ -162,6 +164,7 @@ impl DecodedImage {
             storage: self.storage,
             source_bits_per_channel: self.source_bits_per_channel,
             peak_luminance_nits: self.peak_luminance_nits,
+            source_primaries: self.source_primaries,
             frames: self
                 .frames
                 .iter()
@@ -856,6 +859,7 @@ pub fn decode_raw_preview(path: &Path, cancellation: &AtomicBool) -> Option<Deco
             storage: PixelStorage::Bgra8,
             source_bits_per_channel: 8,
             peak_luminance_nits: None,
+            source_primaries: None,
             frames: vec![Frame {
                 pixels,
                 delay_milliseconds: 0,
@@ -895,6 +899,7 @@ struct DecodedFrames {
     storage: PixelStorage,
     source_bits_per_channel: u32,
     peak_luminance_nits: Option<f32>,
+    source_primaries: Option<[[f32; 2]; 3]>,
     frames: Vec<Frame>,
     frames_truncated: bool,
 }
@@ -912,6 +917,7 @@ impl DecodedFrames {
             storage: self.storage,
             source_bits_per_channel: self.source_bits_per_channel,
             peak_luminance_nits: self.peak_luminance_nits,
+            source_primaries: self.source_primaries,
             frames: self.frames,
             frames_truncated: self.frames_truncated,
         }
@@ -1098,7 +1104,7 @@ fn decode_single_frame(
     )?;
     let linearized_maximum_bits =
         hdr_encoding.map(|encoding| linearize_hdr_pixels(&mut pixels, encoding));
-    // Half-stored pixels are linear scRGB regardless of the conversion route.
+    // Half-stored pixels are linear light regardless of the conversion route.
     let peak_luminance_nits = (storage == PixelStorage::RgbaHalf)
         .then(|| match linearized_maximum_bits {
             Some(maximum_bits) => peak_luminance_with_maximum_bits(&pixels, maximum_bits),
@@ -1111,6 +1117,12 @@ fn decode_single_frame(
     } else {
         8
     };
+    // FP16 drops the profile's transfer curve, but its primaries still describe the pixels.
+    let source_primaries = match hdr_encoding {
+        Some(encoding) => Some(encoding.source_primaries()),
+        None if storage == PixelStorage::RgbaHalf => icc_profile.as_deref().and_then(icc_primaries),
+        None => None,
+    };
     Ok(DecodedFrames {
         width,
         height,
@@ -1121,6 +1133,7 @@ fn decode_single_frame(
         storage,
         source_bits_per_channel,
         peak_luminance_nits,
+        source_primaries,
         frames: vec![Frame {
             pixels,
             delay_milliseconds: 0,
@@ -1164,20 +1177,12 @@ enum HdrPrimaries {
 }
 
 impl HdrPrimaries {
-    /// Linear RGB conversion into BT.709 primaries (rows are output channels).
-    fn bt709_conversion(self) -> [[f32; 3]; 3] {
+    /// CIE xy of the R, G, B primaries; all three color spaces are D65.
+    fn chromaticities(self) -> [[f32; 2]; 3] {
         match self {
-            Self::Bt709 => [[1.0, 0.0, 0.0], [0.0, 1.0, 0.0], [0.0, 0.0, 1.0]],
-            Self::Bt2020 => [
-                [1.66049, -0.58764, -0.07285],
-                [-0.12455, 1.13290, -0.00835],
-                [-0.01815, -0.10058, 1.11873],
-            ],
-            Self::DisplayP3 => [
-                [1.22494, -0.22494, 0.0],
-                [-0.04206, 1.04206, 0.0],
-                [-0.01964, -0.07863, 1.09827],
-            ],
+            Self::Bt709 => [[0.640, 0.330], [0.300, 0.600], [0.150, 0.060]],
+            Self::Bt2020 => [[0.708, 0.292], [0.170, 0.797], [0.131, 0.046]],
+            Self::DisplayP3 => [[0.680, 0.320], [0.265, 0.690], [0.150, 0.060]],
         }
     }
 }
@@ -1186,6 +1191,13 @@ impl HdrPrimaries {
 pub(crate) struct HdrEncoding {
     transfer: HdrTransfer,
     primaries: HdrPrimaries,
+}
+
+impl HdrEncoding {
+    /// CIE xy of the primaries the linearized pixels keep.
+    pub(crate) fn source_primaries(self) -> [[f32; 2]; 3] {
+        self.primaries.chromaticities()
+    }
 }
 
 /// Big-endian u32 at the offset, when in bounds.
@@ -1209,6 +1221,13 @@ fn icc_tag_offset(icc: &[u8], signature: &[u8; 4]) -> Option<usize> {
 
 /// Nearest gamut label from an ICC's matrix primaries; None for non-matrix profiles.
 pub fn icc_gamut_label(icc: &[u8]) -> Option<&'static str> {
+    Some(crate::image::color::nearest_gamut_label(icc_primaries(
+        icc,
+    )?))
+}
+
+/// CIE xy of an ICC's matrix primaries; None for non-matrix profiles.
+pub fn icc_primaries(icc: &[u8]) -> Option<[[f32; 2]; 3]> {
     let primary_xy = |tag: &[u8; 4]| -> Option<[f32; 2]> {
         let offset = icc_tag_offset(icc, tag)?;
         if icc.get(offset..offset + 4)? != b"XYZ " {
@@ -1223,10 +1242,11 @@ pub fn icc_gamut_label(icc: &[u8]) -> Option<&'static str> {
         let sum = x + y + z;
         (sum > 0.0).then_some([x / sum, y / sum])
     };
-    let red = primary_xy(b"rXYZ")?;
-    let green = primary_xy(b"gXYZ")?;
-    let blue = primary_xy(b"bXYZ")?;
-    Some(crate::image::color::nearest_gamut_label([red, green, blue]))
+    Some([
+        primary_xy(b"rXYZ")?,
+        primary_xy(b"gXYZ")?,
+        primary_xy(b"bXYZ")?,
+    ])
 }
 
 /// Human-readable profile name from the ICC 'desc' tag (v2 text or v4 mluc).
@@ -1419,25 +1439,18 @@ fn map_pixel_blocks<Output: Send>(
     })
 }
 
-/// Converts 16-bit PQ/HLG pixels (straight alpha) in place to premultiplied scRGB
-/// halves, returning the maximum positive normal color half it wrote.
+/// PQ/HLG codes to premultiplied linear halves; returns the maximum color half written.
 pub(crate) fn linearize_hdr_pixels(pixels: &mut [u8], encoding: HdrEncoding) -> u16 {
-    let matrix = encoding.primaries.bt709_conversion();
     let transfer_table = hdr_transfer_lookup_table(encoding.transfer);
     map_pixel_blocks(pixels, 8, |block| {
-        linearize_block(block, &matrix, transfer_table, encoding)
+        linearize_block(block, transfer_table, encoding)
     })
     .into_iter()
     .max()
     .unwrap_or(0)
 }
 
-fn linearize_block(
-    pixels: &mut [u8],
-    matrix: &[[f32; 3]; 3],
-    transfer_table: &[f32; 65536],
-    encoding: HdrEncoding,
-) -> u16 {
+fn linearize_block(pixels: &mut [u8], transfer_table: &[f32; 65536], encoding: HdrEncoding) -> u16 {
     let mut maximum_bits = 0u16;
     for pixel in pixels.chunks_exact_mut(8) {
         let mut channel_nits = [0.0f32; 3];
@@ -1455,14 +1468,11 @@ fn linearize_block(
             }
         }
         let alpha = f32::from(u16::from_le_bytes([pixel[6], pixel[7]])) / f32::from(u16::MAX);
-        for (row, coefficients) in matrix.iter().enumerate() {
-            let bt709_nits = coefficients[0] * channel_nits[0]
-                + coefficients[1] * channel_nits[1]
-                + coefficients[2] * channel_nits[2];
-            let premultiplied = bt709_nits / SDR_REFERENCE_WHITE_NITS * alpha;
+        for (channel, nits) in channel_nits.iter().enumerate() {
+            let premultiplied = nits / SDR_REFERENCE_WHITE_NITS * alpha;
             let half = f32_to_half(premultiplied);
             maximum_bits = maximum_bits.max(positive_normal_half_bits(half));
-            pixel[row * 2..row * 2 + 2].copy_from_slice(&half.to_le_bytes());
+            pixel[channel * 2..channel * 2 + 2].copy_from_slice(&half.to_le_bytes());
         }
         pixel[6..8].copy_from_slice(&f32_to_half(alpha).to_le_bytes());
     }
@@ -1500,7 +1510,7 @@ fn peak_histogram_bin_table() -> &'static [u16; 65536] {
     })
 }
 
-/// Content peak of linear scRGB halves: 99.9th-percentile max channel, binned in PQ codes.
+/// Content peak of linear halves: 99.9th-percentile max channel, binned in PQ codes.
 pub fn peak_luminance_from_half_pixels(pixels: &[u8]) -> Option<f32> {
     let channel_maxima = channel_maxima_from_half_pixels(pixels);
     peak_luminance_with_maximum_bits(
@@ -1789,6 +1799,7 @@ fn decode_animation(
         storage: PixelStorage::Bgra8,
         source_bits_per_channel: 8,
         peak_luminance_nits: None,
+        source_primaries: None,
         frames,
         frames_truncated,
     })
@@ -2122,6 +2133,7 @@ fn decode_apng<Input: BufRead + Seek>(
         storage: PixelStorage::Bgra8,
         source_bits_per_channel: 8,
         peak_luminance_nits: None,
+        source_primaries: None,
         frames,
         frames_truncated,
     })
@@ -2228,6 +2240,7 @@ fn decode_svg(data: &[u8], format_name: &'static str) -> Result<DecodedImage, De
         storage: PixelStorage::Bgra8,
         source_bits_per_channel: 8,
         peak_luminance_nits: None,
+        source_primaries: None,
         frames: vec![Frame {
             pixels,
             delay_milliseconds: 0,
@@ -2525,7 +2538,6 @@ mod hdr_linearization_tests {
     }
 
     fn linearize_hdr_pixels_reference(pixels: &mut [u8], encoding: HdrEncoding) {
-        let matrix = encoding.primaries.bt709_conversion();
         let transfer_table = hdr_transfer_lookup_table(encoding.transfer);
         for pixel in pixels.chunks_exact_mut(8) {
             let mut channel_nits = [0.0f32; 3];
@@ -2542,12 +2554,9 @@ mod hdr_linearization_tests {
                 }
             }
             let alpha = f32::from(u16::from_le_bytes([pixel[6], pixel[7]])) / f32::from(u16::MAX);
-            for (row, coefficients) in matrix.iter().enumerate() {
-                let bt709_nits = coefficients[0] * channel_nits[0]
-                    + coefficients[1] * channel_nits[1]
-                    + coefficients[2] * channel_nits[2];
-                let premultiplied = bt709_nits / SDR_REFERENCE_WHITE_NITS * alpha;
-                pixel[row * 2..row * 2 + 2]
+            for (channel, nits) in channel_nits.iter().enumerate() {
+                let premultiplied = nits / SDR_REFERENCE_WHITE_NITS * alpha;
+                pixel[channel * 2..channel * 2 + 2]
                     .copy_from_slice(&f32_to_half(premultiplied).to_le_bytes());
             }
             pixel[6..8].copy_from_slice(&f32_to_half(alpha).to_le_bytes());
