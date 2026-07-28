@@ -2014,11 +2014,15 @@ extern "system" fn window_procedure(
         }
         WM_APP_DECODE_COMPLETE => {
             let completion = unsafe { Box::from_raw(lparam.0 as *mut DecodeCompletion) };
-            if let Some(application) = application_from_window(window)
-                && application.image_core.on_decode_complete(*completion)
-            {
-                let displayed = application.image_core.load_error.is_none();
-                application.apply_load_outcome(window, displayed);
+            if let Some(application) = application_from_window(window) {
+                if application.image_core.on_decode_complete(*completion) {
+                    let displayed = application.image_core.load_error.is_none();
+                    application.apply_load_outcome(window, displayed);
+                } else if application.image_core.full_decode_pending() {
+                    // A discarded arrival can leave a shown preview; only the timer
+                    // submits its full decode.
+                    unsafe { SetTimer(Some(window), FULL_DECODE_TIMER, 250, None) };
+                }
             }
             LRESULT(0)
         }
