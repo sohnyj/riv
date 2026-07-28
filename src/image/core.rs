@@ -361,6 +361,8 @@ pub struct ImageCore {
     in_flight: HashMap<ItemLocation, Arc<AtomicBool>>,
     /// Separate from in_flight so a probe never reads as a decode already running.
     probes_in_flight: HashMap<ItemLocation, Arc<AtomicBool>>,
+    /// The generation worker textures must carry to be adopted; None without a renderer.
+    upload_device_generation: Option<u64>,
     cache: HashMap<ItemLocation, CacheEntry>,
     pub current: Option<CurrentImage>,
     pub load_error: Option<(ItemLocation, DecodeError)>,
@@ -446,6 +448,7 @@ impl ImageCore {
             pending_display: None,
             in_flight: HashMap::new(),
             probes_in_flight: HashMap::new(),
+            upload_device_generation: None,
             cache: HashMap::new(),
             current: None,
             load_error: None,
@@ -930,6 +933,7 @@ impl ImageCore {
         let generation = upload_device
             .as_ref()
             .map(|upload_device| upload_device.generation);
+        self.upload_device_generation = generation;
         self.pool.set_upload_device(upload_device);
         for (_, entry) in self.cache.extract_if(|_, entry| {
             entry
@@ -1073,6 +1077,29 @@ impl ImageCore {
             .pending_display
             .as_ref()
             .is_some_and(|pending| *pending == completion.location);
+        // A retired generation never wraps and carries no pixels; redo like a cancelled decode.
+        if completion
+            .texture
+            .as_ref()
+            .is_some_and(|uploaded| Some(uploaded.generation) != self.upload_device_generation)
+        {
+            if let Ok(image) = &completion.result {
+                self.record_arrived_weight(&completion.location, image);
+            }
+            if is_pending {
+                let preview_cached = self
+                    .cache
+                    .get(&completion.location)
+                    .is_some_and(|entry| entry.preview && entry.file_size == completion.file_size);
+                self.submit_pending_decode(
+                    completion.location,
+                    completion.file_size,
+                    completion.modified,
+                    preview_cached,
+                );
+            }
+            return false;
+        }
         // Preview stages always post Ok; an Err would fall through to Final's failure paths.
         if matches!(completion.stage, DecodeStage::PreviewFinal)
             && let Ok(image) = &completion.result
