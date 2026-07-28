@@ -1221,21 +1221,30 @@ pub fn icc_gamut_label(icc: &[u8]) -> Option<&'static str> {
     )?))
 }
 
-/// CIE xy of an ICC's matrix primaries; None for non-matrix profiles.
+/// Bradford adaptation out of the ICC PCS white (D50) into the D65 named gamuts use.
+const D50_TO_D65: [[f32; 3]; 3] = [
+    [0.955_577, -0.023_039, 0.063_164],
+    [-0.028_290, 1.009_942, 0.021_008],
+    [0.012_298, -0.020_483, 1.329_91],
+];
+
+/// CIE xy of an ICC's matrix primaries, D65 referred; None for non-matrix profiles.
 pub fn icc_primaries(icc: &[u8]) -> Option<[[f32; 2]; 3]> {
     let primary_xy = |tag: &[u8; 4]| -> Option<[f32; 2]> {
         let offset = icc_tag_offset(icc, tag)?;
         if icc.get(offset..offset + 4)? != b"XYZ " {
             return None;
         }
-        // s15Fixed16 X, Y, Z; PCS is D50, but the small D50/D65 shift keeps the class.
+        // s15Fixed16 X, Y, Z, adapted out of the D50 PCS the colorants are stored in.
         let value =
             |at: usize| -> Option<f32> { Some(read_u32_be(icc, at)? as i32 as f32 / 65536.0) };
-        let x = value(offset + 8)?;
-        let y = value(offset + 12)?;
-        let z = value(offset + 16)?;
-        let sum = x + y + z;
-        (sum > 0.0).then_some([x / sum, y / sum])
+        let stored = [value(offset + 8)?, value(offset + 12)?, value(offset + 16)?];
+        let mut adapted = [0.0f32; 3];
+        for (row, channel) in D50_TO_D65.iter().zip(&mut adapted) {
+            *channel = row[0] * stored[0] + row[1] * stored[1] + row[2] * stored[2];
+        }
+        let sum = adapted[0] + adapted[1] + adapted[2];
+        (sum > 0.0).then_some([adapted[0] / sum, adapted[1] / sum])
     };
     Some([
         primary_xy(b"rXYZ")?,
