@@ -1117,10 +1117,12 @@ fn decode_single_frame(
     } else {
         8
     };
-    // FP16 drops the profile's transfer curve, but its primaries still describe the pixels.
+    // Only a conversion riv drove keeps the source primaries; a float native is scRGB already.
     let source_primaries = match hdr_encoding {
         Some(encoding) => Some(encoding.source_primaries()),
-        None if storage == PixelStorage::RgbaHalf => icc_profile.as_deref().and_then(icc_primaries),
+        None if storage == PixelStorage::RgbaHalf && !float_native => {
+            icc_profile.as_deref().and_then(icc_primaries)
+        }
         None => None,
     };
     Ok(DecodedFrames {
