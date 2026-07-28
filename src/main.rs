@@ -32,7 +32,9 @@ use shell::drag_drop::{self, WM_APP_DROP_PATHS};
 use shell::open_with::{self, OpenWithList, WM_APP_OPEN_WITH_LIST};
 use shell::{clipboard, file_ops, open_dialog};
 use view::dither::DitherMode;
-use view::renderer::{OutputMode, Renderer, ToneMapInfo};
+use view::renderer::{
+    GraphicsDevice, OutputMode, PendingDevice, Renderer, ToneMapInfo, create_device,
+};
 use view::transform::{FitMode, Size, ViewTransform};
 use window::context_menu::{self, MenuSelection, MenuState};
 use window::dwm;
@@ -207,6 +209,7 @@ fn create_renderer(
     window: HWND,
     capabilities: &color::DisplayCapabilities,
     display_profile: Option<Arc<Vec<u8>>>,
+    device: GraphicsDevice,
 ) -> Result<Renderer> {
     let (width, height) = client_size(window);
     let (target_nits, full_frame_nits) = tone_map_targets(capabilities);
@@ -217,17 +220,27 @@ fn create_renderer(
         output_mode(capabilities, display_profile),
         target_nits,
         full_frame_nits,
+        device,
     )
 }
 
 impl Application {
-    fn new(window: HWND, initial_path: Option<&Path>) -> Result<Self> {
+    fn new(
+        window: HWND,
+        initial_path: Option<&Path>,
+        pending_device: PendingDevice,
+    ) -> Result<Self> {
         let color::DisplayColorInfo {
             capabilities,
             gamut,
             display_profile,
         } = color::display_color_info(window);
-        let renderer = create_renderer(window, &capabilities, display_profile)?;
+        let renderer = create_renderer(
+            window,
+            &capabilities,
+            display_profile,
+            pending_device.wait()?,
+        )?;
         let device_pixel_ratio = unsafe { GetDpiForWindow(window) } as f32 / 96.0;
         let settings = SettingsFile::load();
         let bindings =
@@ -820,7 +833,12 @@ impl Application {
             display_profile,
             ..
         } = color::display_color_info(window);
-        self.renderer = Some(create_renderer(window, &capabilities, display_profile)?);
+        self.renderer = Some(create_renderer(
+            window,
+            &capabilities,
+            display_profile,
+            create_device()?,
+        )?);
         self.register_upload_device();
         self.apply_renderer_state()
     }
@@ -1825,6 +1843,9 @@ fn main() -> Result<()> {
         return Ok(());
     }
 
+    // The device needs nothing from the window, so it builds while the window comes up.
+    let pending_device = PendingDevice::start();
+
     window::menu_theme::enable_dark_menus();
 
     let argument_path = std::env::args_os().nth(1).map(std::path::PathBuf::from);
@@ -1849,7 +1870,7 @@ fn main() -> Result<()> {
     let class_atom = unsafe { RegisterClassExW(&raw const window_class) };
     assert!(class_atom != 0, "RegisterClassExW failed");
 
-    create_main_window(argument_path.as_deref())?;
+    create_main_window(argument_path.as_deref(), pending_device)?;
 
     let mut message = MSG::default();
     loop {
@@ -1864,7 +1885,7 @@ fn main() -> Result<()> {
     Ok(())
 }
 
-fn create_main_window(initial_path: Option<&Path>) -> Result<()> {
+fn create_main_window(initial_path: Option<&Path>, pending_device: PendingDevice) -> Result<()> {
     let instance = unsafe { GetModuleHandleW(None)? };
     let (default_x, default_y) =
         window::work_area_centered_origin(640, 480).unwrap_or((CW_USEDEFAULT, CW_USEDEFAULT));
@@ -1885,7 +1906,7 @@ fn create_main_window(initial_path: Option<&Path>) -> Result<()> {
         )?
     };
 
-    let application = Box::new(Application::new(window, initial_path)?);
+    let application = Box::new(Application::new(window, initial_path, pending_device)?);
     unsafe {
         SetWindowLongPtrW(window, GWLP_USERDATA, Box::into_raw(application) as isize);
     }

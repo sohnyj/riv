@@ -54,6 +54,7 @@ use windows::core::{Interface, Result};
 use windows_numerics::Matrix3x2;
 
 use std::sync::Arc;
+use std::thread;
 
 use crate::image::color::SDR_REFERENCE_WHITE_NITS;
 use crate::image::decode::{
@@ -186,10 +187,37 @@ impl Drop for Renderer {
     }
 }
 
+/// A D3D11 device with its immediate context.
+#[derive(Clone)]
+pub struct GraphicsDevice {
+    pub device: ID3D11Device,
+    pub context: ID3D11DeviceContext,
+}
+
+/// Hardware when available, WARP otherwise.
+pub fn create_device() -> Result<GraphicsDevice> {
+    // D3D11 WARP is documented only through 11_1; shader model 5.0 needs no more.
+    create_d3d_device(D3D_DRIVER_TYPE_HARDWARE, &[D3D_FEATURE_LEVEL_12_0])
+        .or_else(|_| create_d3d_device(D3D_DRIVER_TYPE_WARP, &[D3D_FEATURE_LEVEL_11_0]))
+}
+
+/// A device being built off the UI thread, waited for where the renderer needs it.
+pub struct PendingDevice(thread::JoinHandle<Result<GraphicsDevice>>);
+
+impl PendingDevice {
+    pub fn start() -> Self {
+        Self(thread::spawn(create_device))
+    }
+
+    pub fn wait(self) -> Result<GraphicsDevice> {
+        self.0.join().expect("device thread panicked")
+    }
+}
+
 fn create_d3d_device(
     driver_type: D3D_DRIVER_TYPE,
     feature_levels: &[D3D_FEATURE_LEVEL],
-) -> Result<(ID3D11Device, ID3D11DeviceContext)> {
+) -> Result<GraphicsDevice> {
     let mut device = None;
     let mut context = None;
     unsafe {
@@ -205,10 +233,10 @@ fn create_d3d_device(
             Some(&raw mut context),
         )?;
     }
-    Ok((
-        device.expect("D3D11CreateDevice succeeded without device"),
-        context.expect("D3D11CreateDevice succeeded without context"),
-    ))
+    Ok(GraphicsDevice {
+        device: device.expect("D3D11CreateDevice succeeded without device"),
+        context: context.expect("D3D11CreateDevice succeeded without context"),
+    })
 }
 
 /// Declares only with reported PRESENT support; an undeclared surface stays sRGB.
@@ -294,14 +322,25 @@ impl Renderer {
         mode: OutputMode,
         tone_map_target_nits: f32,
         full_frame_nits: f32,
+        device: GraphicsDevice,
     ) -> Result<Self> {
         let target = ToneMapTarget {
             peak_nits: tone_map_target_nits,
             full_frame_nits,
         };
         // A deep-color failure downgrades to the proven formats, never blocks launch.
-        Self::build(window, width, height, mode.clone(), target, true)
-            .or_else(|_| Self::build(window, width, height, mode, target, false))
+        Self::build(window, width, height, mode.clone(), target, true, &device).or_else(|_| {
+            // A fresh device for the retry: DXGI allows one flip swapchain per window.
+            Self::build(
+                window,
+                width,
+                height,
+                mode,
+                target,
+                false,
+                &create_device()?,
+            )
+        })
     }
 
     fn create_color_management_effect(d2d_context: &ID2D1DeviceContext) -> Option<ID2D1Effect> {
@@ -511,6 +550,7 @@ impl Renderer {
         mode: OutputMode,
         target: ToneMapTarget,
         deep_color: bool,
+        device: &GraphicsDevice,
     ) -> Result<Self> {
         let output_mode = mode.clone();
         let sdr_wide_gamut = mode.sdr_wide_gamut();
@@ -522,10 +562,10 @@ impl Renderer {
         let display_profile = mode.display_profile;
         let tone_map_target_nits = target.peak_nits;
         let full_frame_nits = target.full_frame_nits;
-        // D3D11 WARP is documented only through 11_1; shader model 5.0 needs no more.
-        let (d3d_device, d3d_context) =
-            create_d3d_device(D3D_DRIVER_TYPE_HARDWARE, &[D3D_FEATURE_LEVEL_12_0])
-                .or_else(|_| create_d3d_device(D3D_DRIVER_TYPE_WARP, &[D3D_FEATURE_LEVEL_11_0]))?;
+        let GraphicsDevice {
+            device: d3d_device,
+            context: d3d_context,
+        } = device.clone();
         let dxgi_device: IDXGIDevice = d3d_device.cast()?;
         let upload_maximum_frame_bytes = maximum_resource_bytes(
             unsafe { dxgi_device.GetAdapter() }
