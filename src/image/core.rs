@@ -1608,7 +1608,8 @@ fn scan_folder(directory: &Path, options: &CoreOptions) -> Vec<ListingEntry> {
             .map(|extension| extension.to_string_lossy().to_lowercase())
             .is_some_and(|extension| decode::is_supported_extension(&extension));
         let included = extension_matched
-            || (options.detect_format_by_content && decode::probe_file(&entry.path()).is_some());
+            || (options.detect_format_by_content
+                && decode::descriptor_for_content(&entry.path()).is_some());
         if !included {
             continue;
         }

@@ -235,7 +235,7 @@ unsafe extern "C" {
 }
 
 /// Header-only data window size; the decode is always RGBA half.
-pub fn probe_exr(path: &Path) -> Option<(u32, u32)> {
+pub fn probe_exr_dimensions(path: &Path) -> Option<(u32, u32)> {
     let wide_path = crate::text::wide(path);
     let mut width: c_int = 0;
     let mut height: c_int = 0;
@@ -243,7 +243,7 @@ pub fn probe_exr(path: &Path) -> Option<(u32, u32)> {
     (status == 0).then_some((width as u32, height as u32))
 }
 
-pub fn probe_exr_bytes(data: &[u8]) -> Option<(u32, u32)> {
+pub fn probe_exr_bytes_dimensions(data: &[u8]) -> Option<(u32, u32)> {
     let mut width: c_int = 0;
     let mut height: c_int = 0;
     let status =
@@ -457,7 +457,7 @@ fn heif_pixel_target(encoding: Option<HdrEncoding>) -> (c_int, PixelStorage) {
 }
 
 /// Container-parse size and storage of the primary image; no pixel decode.
-pub fn probe_heif(data: &[u8]) -> Option<(u32, u32, PixelStorage)> {
+pub fn probe_heif_dimensions_and_storage(data: &[u8]) -> Option<(u32, u32, PixelStorage)> {
     let context = unsafe { heif_context_alloc() };
     if context.is_null() {
         return None;

@@ -420,12 +420,12 @@ fn descriptor_for_extension(extension: &str) -> Option<&'static FormatDescriptor
         .find(|descriptor| descriptor.extensions.contains(&extension))
 }
 
-pub fn probe_file(path: &Path) -> Option<&'static FormatDescriptor> {
+pub fn descriptor_for_content(path: &Path) -> Option<&'static FormatDescriptor> {
     let header = read_header(path)?;
-    probe_magic(&header).map(|descriptor| refine_by_content(descriptor, &header))
+    descriptor_for_magic(&header).map(|descriptor| refine_by_content(descriptor, &header))
 }
 
-fn probe_magic(header: &[u8]) -> Option<&'static FormatDescriptor> {
+fn descriptor_for_magic(header: &[u8]) -> Option<&'static FormatDescriptor> {
     REGISTRY
         .iter()
         .find(|descriptor| {
@@ -519,7 +519,7 @@ fn descriptor_for_path(path: &Path) -> Option<&'static FormatDescriptor> {
         (Some(descriptor), Some(header)) => Some(refine_by_content(descriptor, &header)),
         (Some(descriptor), None) => Some(descriptor),
         (None, Some(header)) => {
-            probe_magic(&header).map(|descriptor| refine_by_content(descriptor, &header))
+            descriptor_for_magic(&header).map(|descriptor| refine_by_content(descriptor, &header))
         }
         (None, None) => None,
     }
@@ -532,7 +532,9 @@ fn descriptor_for_bytes(data: &[u8], extension: Option<&str>) -> Option<&'static
         .and_then(|extension| descriptor_for_extension(&extension))
     {
         Some(descriptor) => Some(refine_by_content(descriptor, header)),
-        None => probe_magic(header).map(|descriptor| refine_by_content(descriptor, header)),
+        None => {
+            descriptor_for_magic(header).map(|descriptor| refine_by_content(descriptor, header))
+        }
     }
 }
 
@@ -739,8 +741,10 @@ fn probe_weight(input: &DecodeInput<'_>) -> Option<u64> {
         Adapter::WebPAnimation => probe_webp_weight(input),
         Adapter::Exr => {
             let (width, height) = match input {
-                DecodeInput::File(path) => super::fallback::probe_exr(path),
-                DecodeInput::Memory { data, .. } => super::fallback::probe_exr_bytes(data),
+                DecodeInput::File(path) => super::fallback::probe_exr_dimensions(path),
+                DecodeInput::Memory { data, .. } => {
+                    super::fallback::probe_exr_bytes_dimensions(data)
+                }
             }?;
             Some(decoded_weight(width, height, 8, 1))
         }
@@ -748,7 +752,7 @@ fn probe_weight(input: &DecodeInput<'_>) -> Option<u64> {
             // Mirrors the decode dispatch: WIC first, the bundled decoder on failure.
             probe_wic_weight(input, &descriptor.semantics).or_else(|| {
                 let (width, height, storage) =
-                    super::fallback::probe_heif(&input.read_all().ok()?)?;
+                    super::fallback::probe_heif_dimensions_and_storage(&input.read_all().ok()?)?;
                 Some(decoded_weight(width, height, storage.bytes_per_pixel(), 1))
             })
         }
@@ -2774,11 +2778,14 @@ mod descriptor_probe_tests {
     #[test]
     fn xml_probes_as_svg_only_with_an_svg_tag() {
         let svg_document = b"<?xml version=\"1.0\"?>\n<svg xmlns=\"http://www.w3.org/2000/svg\"/>";
-        assert_eq!(probe_magic(svg_document).map(|d| d.name), Some("SVG"));
+        assert_eq!(
+            descriptor_for_magic(svg_document).map(|d| d.name),
+            Some("SVG")
+        );
         let plain_xml = b"<?xml version=\"1.0\"?>\n<note><to>reader</to></note>";
-        assert!(probe_magic(plain_xml).is_none());
+        assert!(descriptor_for_magic(plain_xml).is_none());
         let bare_svg = b"<svg xmlns=\"http://www.w3.org/2000/svg\"/>";
-        assert_eq!(probe_magic(bare_svg).map(|d| d.name), Some("SVG"));
+        assert_eq!(descriptor_for_magic(bare_svg).map(|d| d.name), Some("SVG"));
     }
 
     /// PNG signature + IHDR(13 bytes) + an acTL chunk header.
