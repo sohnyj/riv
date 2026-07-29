@@ -1018,24 +1018,27 @@ impl Application {
         let matrix = self.view_transform.matrix(viewport, image);
         let interpolation = self.interpolation_mode();
         let background = self.background_color();
+        // Decide first: the panel reports this frame, not the last one.
+        let decision = self
+            .renderer
+            .as_mut()
+            .map(|renderer| renderer.decide_frame(matrix, interpolation));
         let content = self.overlay_content(background);
         let clear_color = color::output_color(background, self.output_color_target());
         let overlay = &self.overlay;
         let draw = |context: &_| overlay.draw(context, viewport.width, viewport.height, &content);
-        let Some(renderer) = &mut self.renderer else {
+        let Some((decision, renderer)) = decision.zip(self.renderer.as_mut()) else {
             return;
         };
-        if renderer
-            .render(matrix, interpolation, clear_color, draw)
-            .is_err()
-        {
+        if renderer.render(decision, clear_color, draw).is_err() {
             // Device lost: drop the swapchain, rebuild once and retry.
             self.renderer = None;
             if self.rebuild_renderer(window).is_ok()
                 && let Some(renderer) = &mut self.renderer
             {
+                let decision = renderer.decide_frame(matrix, interpolation);
                 let overlay = &self.overlay;
-                let _ = renderer.render(matrix, interpolation, clear_color, |context| {
+                let _ = renderer.render(decision, clear_color, |context| {
                     overlay.draw(context, viewport.width, viewport.height, &content)
                 });
             }

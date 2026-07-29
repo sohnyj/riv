@@ -164,10 +164,21 @@ pub struct Renderer {
     linear_source_context: Option<ID2D1ColorContext>,
     image_display_size: (f32, f32),
     image_pixel_size: (f32, f32),
-    /// What the last frame actually dithered with, for the info panel.
+    /// What this frame dithers with, for the info panel.
     dither_description: &'static str,
-    /// The last frame drew at a 1:1 placement (no resampling), for the info panel.
+    /// This frame draws at a 1:1 placement (no resampling), for the info panel.
     identity_draw: bool,
+}
+
+/// What `render` draws the frame with, decided before the overlay is built.
+#[derive(Clone, Copy)]
+pub struct FrameDecision {
+    transform: Matrix3x2,
+    /// The requested filter, or NEAREST where the placement resamples nothing.
+    draw_interpolation: D2D1_INTERPOLATION_MODE,
+    dither: DitherMode,
+    /// None when the backbuffer is not one the app quantizes.
+    quantization_steps: Option<u32>,
 }
 
 impl Drop for Renderer {
@@ -1371,17 +1382,12 @@ impl Renderer {
         self.effect_output = None;
     }
 
-    pub fn render(
+    /// Decides the frame's placement and quantization; the info panel reads it.
+    pub fn decide_frame(
         &mut self,
         matrix: [f32; 6],
         interpolation: D2D1_INTERPOLATION_MODE,
-        clear_color: D2D1_COLOR_F,
-        draw_overlay: impl FnOnce(&ID2D1DeviceContext) -> Result<()>,
-    ) -> Result<()> {
-        // Wait for present-queue room first, so the frame draws the freshest state.
-        if let Some(handle) = self.frame_latency_waitable {
-            let _ = unsafe { WaitForSingleObjectEx(handle, 1000, false) };
-        }
+    ) -> FrameDecision {
         // DrawImage has no destination rect; fold the display scale into the matrix.
         let scale_x = self.image_display_size.0 / self.image_pixel_size.0.max(1.0);
         let scale_y = self.image_display_size.1 / self.image_pixel_size.1.max(1.0);
@@ -1420,23 +1426,40 @@ impl Renderer {
             DitherMode::Fruit => "Fruit",
         };
         self.identity_draw = identity_placement;
-        // Force NEAREST so a 1:1 placement stays pixel-exact, whatever the filter.
-        let draw_interpolation = if identity_placement {
-            D2D1_INTERPOLATION_MODE_NEAREST_NEIGHBOR
-        } else {
-            interpolation
-        };
+        FrameDecision {
+            transform,
+            // Force NEAREST so a 1:1 placement stays pixel-exact, whatever the filter.
+            draw_interpolation: if identity_placement {
+                D2D1_INTERPOLATION_MODE_NEAREST_NEIGHBOR
+            } else {
+                interpolation
+            },
+            dither: pass_dither,
+            quantization_steps,
+        }
+    }
+
+    pub fn render(
+        &mut self,
+        decision: FrameDecision,
+        clear_color: D2D1_COLOR_F,
+        draw_overlay: impl FnOnce(&ID2D1DeviceContext) -> Result<()>,
+    ) -> Result<()> {
+        // Wait for present-queue room first, so the frame draws the freshest state.
+        if let Some(handle) = self.frame_latency_waitable {
+            let _ = unsafe { WaitForSingleObjectEx(handle, 1000, false) };
+        }
         unsafe {
             self.d2d_context.BeginDraw();
             self.d2d_context.Clear(Some(&raw const clear_color));
             if let Some(image) = &self.image {
-                self.d2d_context.SetTransform(&raw const transform);
+                self.d2d_context.SetTransform(&raw const decision.transform);
                 match &self.effect_output {
                     Some(output) => self.d2d_context.DrawImage(
                         output,
                         None,
                         None,
-                        draw_interpolation,
+                        decision.draw_interpolation,
                         D2D1_COMPOSITE_MODE_SOURCE_OVER,
                     ),
                     // Untouched pixels, or no effect support.
@@ -1451,7 +1474,7 @@ impl Renderer {
                             image,
                             Some(&raw const destination),
                             1.0,
-                            draw_interpolation,
+                            decision.draw_interpolation,
                             None,
                             None,
                         );
@@ -1464,7 +1487,7 @@ impl Renderer {
             self.d2d_context.EndDraw(None, None)?;
             if let (Some(quantize_pass), Some(quantization_steps), Some(scene), Some(backbuffer)) = (
                 &self.quantize_pass,
-                quantization_steps,
+                decision.quantization_steps,
                 &self.scene_shader_resource_view,
                 &self.backbuffer_render_target_view,
             ) {
@@ -1473,7 +1496,7 @@ impl Renderer {
                     scene,
                     backbuffer,
                     self.backbuffer_size,
-                    pass_dither,
+                    decision.dither,
                     quantization_steps,
                 );
             }
@@ -1490,12 +1513,12 @@ impl Renderer {
             && (offset_y - offset_y.round()).abs() < 1e-4
     }
 
-    /// Whether the last frame drew at a 1:1 placement, for the info panel.
+    /// Whether this frame draws at a 1:1 placement, for the info panel.
     pub fn is_identity_draw(&self) -> bool {
         self.identity_draw
     }
 
-    /// What dithering the last frame actually got, for the info panel.
+    /// What dithering this frame gets, for the info panel.
     pub fn dither_description(&self) -> &'static str {
         self.dither_description
     }
