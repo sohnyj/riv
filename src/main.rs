@@ -131,7 +131,6 @@ struct Application {
     current_monitor: HMONITOR,
     /// Last-applied dark title bar; a WM_SETTINGCHANGE reapplies only when it flips.
     title_bar_dark: Option<bool>,
-    /// File size and modified time, snapshotted when the item is drawn (never re-statted).
     /// Received bytes of the pending URL download the view reports on.
     download_progress: Option<(ItemLocation, u64)>,
     slideshow_active: bool,
@@ -582,8 +581,7 @@ impl Application {
         };
         let image = current.image.clone();
         let location = current.location.clone();
-        // The same item keeps its view (RAW preview swap, reload). A stand-in of another
-        // size keeps its on-screen size instead: the zoom is per image pixel.
+        // The same item keeps its view; a stand-in of another size keeps its on-screen size.
         let same_view = self.displayed_location.as_ref() == Some(&location);
         let previous_width = self
             .displayed_image
@@ -655,12 +653,12 @@ impl Application {
         self.request_render(window);
     }
 
+    /// Drops the image so only centered overlay text (error, download) shows.
     fn apply_load_error(&mut self, window: HWND) {
         self.download_progress = None;
         self.clear_displayed_image(window);
     }
 
-    /// Drop the image so only centered overlay text (error, download) shows.
     /// Applies a load's outcome: the display, the error, or the in-flight freeze; then the title.
     fn apply_load_outcome(&mut self, window: HWND, displayed: bool) {
         if displayed {
@@ -839,8 +837,7 @@ impl Application {
         self.apply_renderer_state()
     }
 
-    /// Planned rebuilds read the current texture back while its device is alive;
-    /// a dead device fails here and the rebuild falls back to a fresh decode.
+    /// Reads the current texture back while its device is alive; a dead one falls through.
     fn recover_current_pixels(&mut self) {
         let Some(renderer) = &self.renderer else {
             return;

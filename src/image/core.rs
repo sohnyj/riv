@@ -429,8 +429,7 @@ fn enumerate_archive(
     Ok(entries)
 }
 
-/// What an arrived scan did: nothing (stale), the listing alone, or an open that
-/// displayed or errored.
+/// What an arrived scan did: nothing (stale), the listing alone, or an open.
 pub enum ListingInstall {
     Discarded,
     Installed,
@@ -824,8 +823,7 @@ impl ImageCore {
         } else {
             self.submit_pending_decode(location.clone(), file_size, modified, preview_shown);
         }
-        // A RAW preview defers its full decode until navigation stops; the caller
-        // schedules that through start_pending_full_decode. This call is for the sweeps.
+        // The deferral timer submits a RAW full decode; this call is for the sweeps.
         self.refresh_preload();
         preview_shown
     }
@@ -846,8 +844,7 @@ impl ImageCore {
             .submit(location, file_size, modified, cancellation, kind, awaited);
     }
 
-    /// A discarded arrival (cancelled, or a retired-generation texture) resubmits
-    /// what the waiting item still needs.
+    /// A discarded arrival resubmits what the waiting item still needs.
     fn resubmit_pending_decode(
         &mut self,
         location: ItemLocation,
@@ -861,9 +858,7 @@ impl ImageCore {
         self.submit_pending_decode(location, file_size, modified, preview_cached);
     }
 
-    /// Submits what a pending item still needs: the preview when none is cached, the
-    /// full decode for a cached animation first frame, and nothing for a cached RAW
-    /// preview, whose full decode waits on the deferral timer.
+    /// Submits what a pending item still needs; a cached RAW preview waits on the timer.
     fn submit_pending_decode(
         &mut self,
         location: ItemLocation,
@@ -941,8 +936,7 @@ impl ImageCore {
         }
     }
 
-    /// Hands the workers the device they upload with (None while the renderer is
-    /// gone) and retires every other generation's texture together with its entry.
+    /// Hands the workers their upload device and retires every other generation's entry.
     pub fn set_upload_device(&mut self, upload_device: Option<UploadDevice>) {
         let generation = upload_device
             .as_ref()
@@ -964,8 +958,7 @@ impl ImageCore {
         }
     }
 
-    /// Reads a texture-only current back to the pixel class through the supplied
-    /// device copy. Returns the restored image so the caller can synchronize.
+    /// Reads a texture-only current back to pixels; returns the restored image.
     pub fn recover_current_pixels(
         &mut self,
         read_back: impl FnOnce(&UploadedTexture, &DecodedImage) -> windows::core::Result<Vec<u8>>,
@@ -1228,8 +1221,7 @@ impl ImageCore {
         let anchor_index = self
             .navigation_anchor()
             .and_then(|location| self.position_of(location));
-        // Candidate entries in priority order; the residency set adds the anchor,
-        // which is all a listing without it (a URL) leaves.
+        // Candidates in priority order; a listing without the anchor (a URL) leaves only it.
         let candidates: Vec<usize> = anchor_index
             .map(|anchor_index| {
                 let length = self.entries.len();
@@ -1265,8 +1257,7 @@ impl ImageCore {
         self.evict_cache();
     }
 
-    /// Queues candidates in priority order while their weights fit the budget;
-    /// unknown weights probe first and the pass re-runs when they settle.
+    /// Queues candidates while their weights fit the budget; unknown weights probe first.
     fn submit_preload_decodes(&mut self, candidates: &[usize], budget: u64) {
         let mut awaiting_probes = false;
         for &index in candidates {
@@ -1323,8 +1314,7 @@ impl ImageCore {
         }
     }
 
-    /// Registers the probe in flight and hands it to the pool; a probe reads
-    /// only the header, so no size or time rides along.
+    /// Registers the probe in flight; it reads only the header.
     fn submit_probe(&mut self, location: ItemLocation) {
         let cancellation = Arc::new(AtomicBool::new(false));
         self.probes_in_flight
@@ -1462,8 +1452,7 @@ impl ImageCore {
         let mut ranked: Vec<(ItemLocation, u64, usize)> = weighted
             .into_iter()
             .map(|(location, weight)| {
-                // The baseline item goes last even when unlisted (URL items); anything
-                // residency no longer covers goes first, in no particular order.
+                // The baseline goes last even when unlisted; what residency dropped goes first.
                 let key = if anchor.as_ref() == Some(&location) {
                     0
                 } else {
@@ -1543,7 +1532,6 @@ fn is_raw_two_stage(location: &ItemLocation) -> bool {
     matches!(location, ItemLocation::File(path) if decode::is_raw_two_stage(path))
 }
 
-/// Next/Previous candidates in walk order; an absent anchor starts at the matching end.
 /// One step from the anchor (or the matching end when absent); None past a non-looping end.
 fn step_index(
     anchor: Option<usize>,

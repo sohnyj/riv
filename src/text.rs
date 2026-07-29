@@ -3,8 +3,7 @@
 use std::ffi::OsStr;
 use std::os::windows::ffi::OsStrExt;
 
-/// A null-terminated UTF-16 buffer for Win32 wide-string APIs; OS strings
-/// (paths, file names) keep their unpaired surrogates.
+/// A null-terminated UTF-16 buffer for Win32 wide-string APIs.
 pub fn wide(text: impl AsRef<OsStr>) -> Vec<u16> {
     text.as_ref()
         .encode_wide()

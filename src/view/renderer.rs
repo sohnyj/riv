@@ -1154,7 +1154,6 @@ impl Renderer {
     }
 
     /// Copies a worker texture back to CPU pixels; only this build's textures qualify.
-    /// Used before a planned rebuild, while this device is still alive.
     pub fn read_back_texture(
         &self,
         uploaded: &UploadedTexture,

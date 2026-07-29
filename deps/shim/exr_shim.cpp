@@ -1,5 +1,4 @@
 // Static shim exposing the OpenEXR RgbaInputFile path through extern "C".
-// Output stays raw RGBA half; tone mapping happens on the Rust side.
 
 #include <ImathBox.h>
 #include <ImfIO.h>

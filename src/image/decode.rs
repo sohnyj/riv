@@ -585,8 +585,7 @@ impl DecodeInput<'_> {
     }
 }
 
-/// Failures meaning the codec is absent or broken, which the Store hint can remedy:
-/// unregistered, registered but failing to start, and a missing video decoder underneath.
+/// Failures the Store hint can remedy: the codec is absent, or registered but broken.
 fn is_missing_codec_error(code: i32) -> bool {
     code == WINCODEC_ERR_COMPONENTNOTFOUND.0
         || code == WINCODEC_ERR_COMPONENTINITIALIZEFAILURE.0
@@ -637,8 +636,7 @@ fn decode_input(
         .and_then(|decoded| enforce_device_limit(decoded, cancellation)),
         Adapter::HeifWithWicPreferred => {
             decode_with_wic(input, format_name, semantics, cancellation).or_else(|error| {
-                // Any WIC failure tries the bundled decoder; a registered codec can
-                // still fail to initialize when its video decoder dependency is broken.
+                // Any WIC failure tries the bundled decoder, not just an unregistered codec.
                 if error.is_cancelled() {
                     Err(error)
                 } else {
@@ -1495,8 +1493,7 @@ fn icc_hdr_encoding(icc: &[u8]) -> Option<HdrEncoding> {
 /// Rec. 2100 nominal peak for the HLG OOTF (display-referred mapping).
 const HLG_PEAK_NITS: f32 = 1000.0;
 
-/// Exact code lookup per source depth; the transfer functions cost two powf per entry.
-/// The full-range expansion is folded in, so no separate pass rewrites the codes.
+/// Exact code lookup per source depth, with the full-range expansion folded in.
 fn hdr_transfer_lookup_table(transfer: HdrTransfer, source_bits: u32) -> &'static [f32; 65536] {
     // One table per source depth, 1 through 16.
     type TablesByDepth = [OnceLock<Box<[f32; 65536]>>; 17];
@@ -1626,7 +1623,6 @@ fn map_pixel_blocks<Output: Send>(
 }
 
 /// PQ/HLG codes to premultiplied linear halves; returns the maximum color half written.
-/// Codes occupy the low `source_bits` bits; the transfer table and alpha divisor expand them.
 pub(crate) fn linearize_hdr_pixels(
     pixels: &mut [u8],
     encoding: HdrEncoding,
@@ -1770,8 +1766,7 @@ pub(crate) fn peak_luminance_with_maximum_bits(pixels: &[u8], maximum_bits: u16)
     Some(perceptual_quantizer_nits(code.min(1.0)))
 }
 
-/// Per-channel maxima. Four uniform lanes; the discarded alpha keeps the
-/// stride pattern regular.
+/// Per-channel maxima; the discarded alpha lane keeps the stride regular.
 fn channel_maxima_from_half_pixels(pixels: &[u8]) -> [u16; 4] {
     let mut channel_maxima = [0u16; 4];
     for pixel in pixels.chunks_exact(8) {
@@ -2455,8 +2450,7 @@ fn parse_svg_tree(data: &[u8]) -> Result<resvg::usvg::Tree, DecodeError> {
     resvg::usvg::Tree::from_data(data, &options).map_err(uncoded_error)
 }
 
-/// Raster size and scale at the largest monitor's long side; the probe weight
-/// and the decode must agree on this. None when the tree has no intrinsic size.
+/// Raster size and scale at the largest monitor's long side; probe and decode must agree.
 fn svg_raster_geometry(tree: &resvg::usvg::Tree) -> Option<(u32, u32, f32)> {
     let size = tree.size();
     if !(size.width() > 0.0 && size.height() > 0.0) {
