@@ -145,7 +145,7 @@ pub struct Renderer {
     /// scRGB -> PQ BT.2020 for the HDR10 backbuffer; None on the FP16 fallback.
     hdr_output_color_management_effect: Option<ID2D1Effect>,
     pq_color_context: Option<ID2D1ColorContext>,
-    dither_mode: DitherMode,
+    dither_setting: DitherMode,
     image_storage: PixelStorage,
     image_source_bits_per_channel: u32,
     scrgb_color_context: Option<ID2D1ColorContext>,
@@ -751,7 +751,7 @@ impl Renderer {
             output_color_management_effect: mode_effects.output_color_management_effect,
             hdr_output_color_management_effect,
             pq_color_context,
-            dither_mode: DitherMode::None,
+            dither_setting: DitherMode::None,
             image_storage: PixelStorage::Bgra8,
             image_source_bits_per_channel: 8,
             scrgb_color_context,
@@ -1192,8 +1192,8 @@ impl Renderer {
         self.image = Some(bitmap);
     }
 
-    pub fn set_dither_mode(&mut self, mode: DitherMode) {
-        self.dither_mode = mode;
+    pub fn set_dither_setting(&mut self, mode: DitherMode) {
+        self.dither_setting = mode;
     }
 
     /// Reuses the current bitmap wiring; callers fall back to set_image when there is none.
@@ -1535,6 +1535,6 @@ impl Renderer {
         if identity_placement && within_depth {
             return DitherMode::None;
         }
-        self.dither_mode
+        self.dither_setting
     }
 }

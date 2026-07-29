@@ -288,7 +288,7 @@ impl Application {
         };
         if let Some(renderer) = &mut application.renderer {
             renderer.set_sdr_white_boost(application.sdr_white_boost);
-            renderer.set_dither_mode(DitherMode::from_setting(
+            renderer.set_dither_setting(DitherMode::from_setting(
                 application.settings.options.dither_mode,
             ));
         }
@@ -869,7 +869,7 @@ impl Application {
             return Ok(());
         };
         renderer.set_sdr_white_boost(self.sdr_white_boost);
-        renderer.set_dither_mode(DitherMode::from_setting(self.settings.options.dither_mode));
+        renderer.set_dither_setting(DitherMode::from_setting(self.settings.options.dither_mode));
         if let Some(image) = &self.displayed_image {
             let frame_index = self
                 .animation
@@ -1067,7 +1067,8 @@ impl Application {
         );
         self.view_transform.fit_mode = FitMode::from_setting(self.settings.options.fit_mode);
         if let Some(renderer) = &mut self.renderer {
-            renderer.set_dither_mode(DitherMode::from_setting(self.settings.options.dither_mode));
+            renderer
+                .set_dither_setting(DitherMode::from_setting(self.settings.options.dither_mode));
         }
         self.image_core
             .update_options(core_options(&self.settings.options));
