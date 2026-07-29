@@ -2223,7 +2223,7 @@ mod item_location_tests {
         assert!(location != url("https://a.com/b/C.png?width=1"));
         assert!(location != ItemLocation::File(PathBuf::from("https://a.com/b/c.png?width=1")));
         let mut cache = HashMap::new();
-        cache.insert(location.clone(), "decoded");
+        cache.insert(location, "decoded");
         assert_eq!(
             cache.get(&url("https://a.com/b/c.png?width=1")),
             Some(&"decoded")

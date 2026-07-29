@@ -614,7 +614,7 @@ mod heif_range_tests {
     /// Full-range 16-bit code per source code; the reference the fused table is checked against.
     fn full_range_expansion(source_bits: u32) -> Box<[u16; 65536]> {
         let maximum = (1u32 << source_bits) - 1;
-        let mut table = Box::new([0u16; 65536]);
+        let mut table = crate::image::decode::boxed_lookup_table::<u16>();
         let declared = maximum as usize + 1;
         for (code, expanded) in table[..declared].iter_mut().enumerate() {
             *expanded = ((code as u32 * u32::from(u16::MAX) + maximum / 2) / maximum) as u16;

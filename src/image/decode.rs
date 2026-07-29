@@ -1497,6 +1497,14 @@ fn icc_hdr_encoding(icc: &[u8]) -> Option<HdrEncoding> {
 /// Rec. 2100 nominal peak for the HLG OOTF (display-referred mapping).
 const HLG_PEAK_NITS: f32 = 1000.0;
 
+/// One entry per 16-bit code, allocated on the heap instead of moved from the stack.
+pub(crate) fn boxed_lookup_table<T: Copy + Default + std::fmt::Debug>() -> Box<[T; 65536]> {
+    vec![T::default(); 65536]
+        .into_boxed_slice()
+        .try_into()
+        .expect("65536 entries")
+}
+
 /// Exact code lookup per source depth, with the full-range expansion folded in.
 fn hdr_transfer_lookup_table(transfer: HdrTransfer, source_bits: u32) -> &'static [f32; 65536] {
     // One table per source depth, 1 through 16.
@@ -1511,7 +1519,7 @@ fn hdr_transfer_lookup_table(transfer: HdrTransfer, source_bits: u32) -> &'stati
     };
     tables[source_bits as usize].get_or_init(|| {
         let maximum = (1u32 << source_bits) - 1;
-        let mut table = Box::new([0.0f32; 65536]);
+        let mut table = boxed_lookup_table::<f32>();
         let declared = maximum as usize + 1;
         for (code, value) in table[..declared].iter_mut().enumerate() {
             let expanded = (code as u32 * u32::from(u16::MAX) + maximum / 2) / maximum;
@@ -1697,7 +1705,7 @@ const PEAK_HISTOGRAM_BINS: usize = 4096;
 fn peak_histogram_bin_table() -> &'static [u16; 65536] {
     static TABLE: OnceLock<Box<[u16; 65536]>> = OnceLock::new();
     TABLE.get_or_init(|| {
-        let mut table = Box::new([0u16; 65536]);
+        let mut table = boxed_lookup_table::<u16>();
         for (bits, bin) in table.iter_mut().enumerate() {
             let code =
                 perceptual_quantizer_code(half_to_f32(bits as u16) * SDR_REFERENCE_WHITE_NITS);

@@ -56,9 +56,10 @@ fn dropped_paths(data_object: Option<&IDataObject>) -> Vec<PathBuf> {
     let drop_handle = HDROP(unsafe { medium.u.hGlobal }.0);
     let count = unsafe { DragQueryFileW(drop_handle, 0xFFFF_FFFF, None) };
     let mut paths = Vec::new();
+    // One buffer for the whole drop; a long path can reach 32767 wide characters.
+    let mut buffer = vec![0u16; 32768];
     for index in 0..count {
-        let mut buffer = [0u16; 32768];
-        let length = unsafe { DragQueryFileW(drop_handle, index, Some(&mut buffer)) };
+        let length = unsafe { DragQueryFileW(drop_handle, index, Some(buffer.as_mut_slice())) };
         if length > 0 {
             paths.push(PathBuf::from(String::from_utf16_lossy(
                 &buffer[..length as usize],
