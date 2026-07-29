@@ -15,10 +15,10 @@ use crate::archive::reader as archive_reader;
 use crate::image::decode;
 
 pub fn show(window: HWND, initial_directory: Option<&str>) -> Vec<PathBuf> {
-    show_inner(window, initial_directory).unwrap_or_default()
+    select_files(window, initial_directory).unwrap_or_default()
 }
 
-fn show_inner(
+fn select_files(
     window: HWND,
     initial_directory: Option<&str>,
 ) -> windows::core::Result<Vec<PathBuf>> {

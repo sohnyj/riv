@@ -1225,7 +1225,7 @@ fn read_s15_fixed16(bytes: &[u8], offset: usize) -> Option<f32> {
 }
 
 /// True when two runs of floats agree everywhere within the tolerance.
-fn all_within<'a>(
+fn all_pairs_within<'a>(
     one: impl IntoIterator<Item = &'a f32>,
     other: impl IntoIterator<Item = &'a f32>,
     tolerance: f32,
@@ -1254,7 +1254,7 @@ pub fn icc_is_srgb(icc: &[u8]) -> bool {
     let Some(primaries) = icc_primaries(icc) else {
         return false;
     };
-    if !all_within(
+    if !all_pairs_within(
         primaries.iter().flatten(),
         color::BT709_PRIMARIES.iter().flatten(),
         PRIMARY_TOLERANCE,
@@ -1266,7 +1266,7 @@ pub fn icc_is_srgb(icc: &[u8]) -> bool {
     icc_tone_curves(icc).is_some_and(|curves| {
         curves
             .iter()
-            .all(|curve| all_within(curve, &reference, TONE_CURVE_TOLERANCE))
+            .all(|curve| all_pairs_within(curve, &reference, TONE_CURVE_TOLERANCE))
     })
 }
 
@@ -1277,7 +1277,7 @@ pub fn icc_same_space(one: &[u8], other: &[u8]) -> bool {
     else {
         return false;
     };
-    if !all_within(
+    if !all_pairs_within(
         one_colorants.iter().flatten(),
         other_colorants.iter().flatten(),
         COLORANT_TOLERANCE,
@@ -1287,7 +1287,7 @@ pub fn icc_same_space(one: &[u8], other: &[u8]) -> bool {
     let (Some(one), Some(other)) = (icc_tone_curves(one), icc_tone_curves(other)) else {
         return false;
     };
-    all_within(
+    all_pairs_within(
         one.iter().flatten(),
         other.iter().flatten(),
         TONE_CURVE_TOLERANCE,
