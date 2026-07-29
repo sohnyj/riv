@@ -3293,6 +3293,27 @@ mod premultiplied_conversion_tests {
             println!("rgba conversion 50 frames elapsed={:?}", start.elapsed());
         }
     }
+
+    #[test]
+    #[ignore = "manual timing comparison (--nocapture)"]
+    fn rgb_conversion_timing() {
+        let rgb: Vec<u8> = rgba_pixels(1920 * 1080, 23)
+            .chunks_exact(4)
+            .flat_map(|pixel| [pixel[0], pixel[1], pixel[2]])
+            .collect();
+        for _ in 0..3 {
+            let start = std::time::Instant::now();
+            for _ in 0..50 {
+                let Ok(converted) =
+                    pixels_to_premultiplied_bgra(&rgb, png::ColorType::Rgb, 1920, 1080)
+                else {
+                    panic!("conversion failed");
+                };
+                std::hint::black_box(&converted);
+            }
+            println!("rgb conversion 50 frames elapsed={:?}", start.elapsed());
+        }
+    }
 }
 
 /// A huge declared acTL num_frames must not drive the reservation (fixture: SECURITY_AUDIT.md).
