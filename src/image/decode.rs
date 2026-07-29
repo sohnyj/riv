@@ -1103,7 +1103,7 @@ fn decode_single_frame(
         cancellation,
     )?;
     let linearized_maximum_bits =
-        hdr_encoding.map(|encoding| linearize_hdr_pixels(&mut pixels, encoding));
+        hdr_encoding.map(|encoding| linearize_hdr_pixels(&mut pixels, encoding, 16));
     // Half-stored pixels are linear light regardless of the conversion route.
     let peak_luminance_nits = (storage == PixelStorage::RgbaHalf)
         .then(|| match linearized_maximum_bits {
@@ -1495,23 +1495,29 @@ fn icc_hdr_encoding(icc: &[u8]) -> Option<HdrEncoding> {
 /// Rec. 2100 nominal peak for the HLG OOTF (display-referred mapping).
 const HLG_PEAK_NITS: f32 = 1000.0;
 
-/// Exact 16-bit code lookup; the transfer functions cost two powf per call.
-fn hdr_transfer_lookup_table(transfer: HdrTransfer) -> &'static [f32; 65536] {
-    static PERCEPTUAL_QUANTIZER_TABLE: OnceLock<Box<[f32; 65536]>> = OnceLock::new();
-    static HYBRID_LOG_GAMMA_TABLE: OnceLock<Box<[f32; 65536]>> = OnceLock::new();
-    let (slot, function): (_, fn(f32) -> f32) = match transfer {
+/// Exact code lookup per source depth; the transfer functions cost two powf per entry.
+/// The full-range expansion is folded in, so no separate pass rewrites the codes.
+fn hdr_transfer_lookup_table(transfer: HdrTransfer, source_bits: u32) -> &'static [f32; 65536] {
+    // One table per source depth, 1 through 16.
+    type TablesByDepth = [OnceLock<Box<[f32; 65536]>>; 17];
+    static PERCEPTUAL_QUANTIZER_TABLES: TablesByDepth = [const { OnceLock::new() }; 17];
+    static HYBRID_LOG_GAMMA_TABLES: TablesByDepth = [const { OnceLock::new() }; 17];
+    let (tables, function): (&TablesByDepth, fn(f32) -> f32) = match transfer {
         HdrTransfer::PerceptualQuantizer => {
-            (&PERCEPTUAL_QUANTIZER_TABLE, perceptual_quantizer_nits as _)
+            (&PERCEPTUAL_QUANTIZER_TABLES, perceptual_quantizer_nits)
         }
-        HdrTransfer::HybridLogGamma => {
-            (&HYBRID_LOG_GAMMA_TABLE, hybrid_log_gamma_scene_linear as _)
-        }
+        HdrTransfer::HybridLogGamma => (&HYBRID_LOG_GAMMA_TABLES, hybrid_log_gamma_scene_linear),
     };
-    slot.get_or_init(|| {
+    tables[source_bits as usize].get_or_init(|| {
+        let maximum = (1u32 << source_bits) - 1;
         let mut table = Box::new([0.0f32; 65536]);
-        for (code, value) in table.iter_mut().enumerate() {
-            *value = function(code as f32 / f32::from(u16::MAX));
+        let declared = maximum as usize + 1;
+        for (code, value) in table[..declared].iter_mut().enumerate() {
+            let expanded = (code as u32 * u32::from(u16::MAX) + maximum / 2) / maximum;
+            *value = function(expanded as f32 / f32::from(u16::MAX));
         }
+        // A broken decoder writing past the declared depth clamps rather than wrapping.
+        table[declared..].fill(function(1.0));
         table
     })
 }
@@ -1620,17 +1626,29 @@ fn map_pixel_blocks<Output: Send>(
 }
 
 /// PQ/HLG codes to premultiplied linear halves; returns the maximum color half written.
-pub(crate) fn linearize_hdr_pixels(pixels: &mut [u8], encoding: HdrEncoding) -> u16 {
-    let transfer_table = hdr_transfer_lookup_table(encoding.transfer);
+/// Codes occupy the low `source_bits` bits; the transfer table and alpha divisor expand them.
+pub(crate) fn linearize_hdr_pixels(
+    pixels: &mut [u8],
+    encoding: HdrEncoding,
+    source_bits: u32,
+) -> u16 {
+    let source_bits = source_bits.clamp(1, 16);
+    let transfer_table = hdr_transfer_lookup_table(encoding.transfer, source_bits);
+    let source_maximum = ((1u32 << source_bits) - 1) as f32;
     map_pixel_blocks(pixels, 8, |block| {
-        linearize_block(block, transfer_table, encoding)
+        linearize_block(block, transfer_table, encoding, source_maximum)
     })
     .into_iter()
     .max()
     .unwrap_or(0)
 }
 
-fn linearize_block(pixels: &mut [u8], transfer_table: &[f32; 65536], encoding: HdrEncoding) -> u16 {
+fn linearize_block(
+    pixels: &mut [u8],
+    transfer_table: &[f32; 65536],
+    encoding: HdrEncoding,
+    source_maximum: f32,
+) -> u16 {
     let mut maximum_bits = 0u16;
     for pixel in pixels.chunks_exact_mut(8) {
         let mut channel_nits = [0.0f32; 3];
@@ -1647,7 +1665,7 @@ fn linearize_block(pixels: &mut [u8], transfer_table: &[f32; 65536], encoding: H
                 *nits *= display_scale;
             }
         }
-        let alpha = f32::from(u16::from_le_bytes([pixel[6], pixel[7]])) / f32::from(u16::MAX);
+        let alpha = f32::from(u16::from_le_bytes([pixel[6], pixel[7]])) / source_maximum;
         for (channel, nits) in channel_nits.iter().enumerate() {
             let premultiplied = nits / SDR_REFERENCE_WHITE_NITS * alpha;
             let half = f32_to_half(premultiplied);
@@ -2858,7 +2876,7 @@ mod hdr_linearization_tests {
             (HdrTransfer::HybridLogGamma, hybrid_log_gamma_scene_linear),
         ];
         for (transfer, function) in cases {
-            let table = hdr_transfer_lookup_table(transfer);
+            let table = hdr_transfer_lookup_table(transfer, 16);
             for code in [0u16, 1, 255, 12345, 32767, 32768, 65534, 65535] {
                 let direct = function(f32::from(code) / f32::from(u16::MAX));
                 assert_eq!(table[usize::from(code)], direct, "code={code}");
@@ -2879,7 +2897,7 @@ mod hdr_linearization_tests {
     }
 
     fn linearize_hdr_pixels_reference(pixels: &mut [u8], encoding: HdrEncoding) {
-        let transfer_table = hdr_transfer_lookup_table(encoding.transfer);
+        let transfer_table = hdr_transfer_lookup_table(encoding.transfer, 16);
         for pixel in pixels.chunks_exact_mut(8) {
             let mut channel_nits = [0.0f32; 3];
             for (channel, nits) in channel_nits.iter_mut().enumerate() {
@@ -2917,7 +2935,7 @@ mod hdr_linearization_tests {
             let mut pixels = coded_pixels(4096, 21);
             let mut expected = pixels.clone();
             linearize_hdr_pixels_reference(&mut expected, encoding);
-            linearize_hdr_pixels(&mut pixels, encoding);
+            linearize_hdr_pixels(&mut pixels, encoding, 16);
             assert_eq!(pixels, expected);
         }
     }
@@ -2932,7 +2950,7 @@ mod hdr_linearization_tests {
         let mut pixels = coded_pixels(600_000, 5);
         let mut expected = pixels.clone();
         linearize_hdr_pixels_reference(&mut expected, encoding);
-        linearize_hdr_pixels(&mut pixels, encoding);
+        linearize_hdr_pixels(&mut pixels, encoding, 16);
         assert_eq!(pixels, expected);
     }
 
@@ -2949,7 +2967,7 @@ mod hdr_linearization_tests {
                 primaries: HdrPrimaries::Bt2020,
             };
             let mut pixels = coded_pixels(count, 31);
-            let maximum_bits = linearize_hdr_pixels(&mut pixels, encoding);
+            let maximum_bits = linearize_hdr_pixels(&mut pixels, encoding, 16);
             assert_eq!(
                 peak_luminance_with_maximum_bits(&pixels, maximum_bits),
                 peak_luminance_from_half_pixels(&pixels),
@@ -2969,7 +2987,7 @@ mod hdr_linearization_tests {
         for _ in 0..3 {
             let mut scratch = pixels.clone();
             let start = std::time::Instant::now();
-            let maximum_bits = linearize_hdr_pixels(&mut scratch, encoding);
+            let maximum_bits = linearize_hdr_pixels(&mut scratch, encoding, 16);
             let fused = peak_luminance_with_maximum_bits(&scratch, maximum_bits);
             let fused_elapsed = start.elapsed();
             let start = std::time::Instant::now();
@@ -3021,7 +3039,7 @@ mod hdr_linearization_tests {
             for _ in 0..3 {
                 let mut scratch = pixels.clone();
                 let start = std::time::Instant::now();
-                linearize_hdr_pixels(&mut scratch, encoding);
+                linearize_hdr_pixels(&mut scratch, encoding, 16);
                 println!("{label} 16M pixels elapsed={:?}", start.elapsed());
             }
         }

@@ -571,19 +571,20 @@ fn decode_heif_primary_image(
     }
     let row_bytes = row_bytes as usize;
     let mut pixels = vec![0u8; row_bytes * height as usize];
-    let expansion = hdr_encoding.map(|_| full_range_expansion(source_bits_per_channel as u32));
     for (row, output_row) in pixels.chunks_exact_mut(row_bytes).enumerate() {
         let row_pointer = unsafe { plane.add(row * stride as usize) };
         let row_pixels = unsafe { std::slice::from_raw_parts(row_pointer, row_bytes) };
-        match &expansion {
-            Some(table) => expand_to_full_range(row_pixels, output_row, table),
+        match hdr_encoding {
+            // The codes stay as libheif wrote them; the transfer table expands them.
+            Some(_) => output_row.copy_from_slice(row_pixels),
             None => premultiplied_bgra_from_rgba(row_pixels, output_row),
         }
     }
     unsafe { heif_image_release(image) };
-    // The expanded codes are still PQ/HLG; the shared pass makes them premultiplied linear.
+    // The copied codes are still PQ/HLG; the shared pass makes them premultiplied linear.
     let peak_luminance_nits = hdr_encoding.and_then(|encoding| {
-        let maximum_bits = linearize_hdr_pixels(&mut pixels, encoding);
+        let maximum_bits =
+            linearize_hdr_pixels(&mut pixels, encoding, source_bits_per_channel as u32);
         peak_luminance_with_maximum_bits(&pixels, maximum_bits)
     });
     Ok(DecodedImage {
@@ -606,30 +607,30 @@ fn decode_heif_primary_image(
     })
 }
 
-/// Full-range 16-bit code per source code; libheif leaves the value in the low bits of the depth.
-fn full_range_expansion(bits: u32) -> Box<[u16; 65536]> {
-    let maximum = (1u32 << bits) - 1;
-    let mut table = Box::new([0u16; 65536]);
-    let declared = maximum as usize + 1;
-    for (code, expanded) in table[..declared].iter_mut().enumerate() {
-        *expanded = ((code as u32 * u32::from(u16::MAX) + maximum / 2) / maximum) as u16;
-    }
-    // A broken decoder writing past the declared depth clamps rather than wrapping.
-    table[declared..].fill(u16::MAX);
-    table
-}
-
-/// Rewrites 16-bit little-endian codes through the expansion table, lane for lane.
-fn expand_to_full_range(source: &[u8], output: &mut [u8], table: &[u16; 65536]) {
-    for (code, expanded) in source.chunks_exact(2).zip(output.chunks_exact_mut(2)) {
-        let value = table[usize::from(u16::from_le_bytes([code[0], code[1]]))];
-        expanded.copy_from_slice(&value.to_le_bytes());
-    }
-}
-
 #[cfg(test)]
 mod heif_range_tests {
     use super::*;
+
+    /// Full-range 16-bit code per source code; the reference the fused table is checked against.
+    fn full_range_expansion(source_bits: u32) -> Box<[u16; 65536]> {
+        let maximum = (1u32 << source_bits) - 1;
+        let mut table = Box::new([0u16; 65536]);
+        let declared = maximum as usize + 1;
+        for (code, expanded) in table[..declared].iter_mut().enumerate() {
+            *expanded = ((code as u32 * u32::from(u16::MAX) + maximum / 2) / maximum) as u16;
+        }
+        // A broken decoder writing past the declared depth clamps rather than wrapping.
+        table[declared..].fill(u16::MAX);
+        table
+    }
+
+    /// Rewrites 16-bit little-endian codes through the expansion table, code for code.
+    fn expand_to_full_range(source: &[u8], output: &mut [u8], table: &[u16; 65536]) {
+        for (code, expanded) in source.chunks_exact(2).zip(output.chunks_exact_mut(2)) {
+            let value = table[usize::from(u16::from_le_bytes([code[0], code[1]]))];
+            expanded.copy_from_slice(&value.to_le_bytes());
+        }
+    }
 
     #[test]
     fn the_declared_depth_maps_onto_the_whole_16_bit_range() {
@@ -667,6 +668,109 @@ mod heif_range_tests {
         let mut output = [0u8; 8];
         expand_to_full_range(&source, &mut output, &table);
         assert_eq!(output, [0x00, 0x00, 0xFF, 0xFF, 0x20, 0x80, 0xFF, 0xFF]);
+    }
+
+    /// Deterministic RGBA codes of the given depth, as libheif writes them (low bits).
+    fn coded_pixels(count: usize, bits: u32, mut state: u32) -> Vec<u8> {
+        let maximum = (1u32 << bits) - 1;
+        let mut pixels = Vec::with_capacity(count * 8);
+        for _ in 0..count {
+            for channel in 0..4 {
+                state = state.wrapping_mul(1_664_525).wrapping_add(1_013_904_223);
+                // Opaque alpha is the common case in this path; keep some partial ones.
+                let code = match (channel, state >> 30) {
+                    (3, 0..=2) => maximum,
+                    _ => (state >> 8) % (maximum + 1),
+                };
+                pixels.extend_from_slice(&(code as u16).to_le_bytes());
+            }
+        }
+        pixels
+    }
+
+    /// Two-pass shape: expand every code, then linearize with the full-range table.
+    fn expand_then_linearize(source: &[u8], bits: u32, encoding: HdrEncoding) -> (Vec<u8>, u16) {
+        let table = full_range_expansion(bits);
+        let mut pixels = vec![0u8; source.len()];
+        expand_to_full_range(source, &mut pixels, &table);
+        let maximum_bits = linearize_hdr_pixels(&mut pixels, encoding, 16);
+        (pixels, maximum_bits)
+    }
+
+    /// Fused shape: copy the codes, then linearize with the depth's transfer table.
+    fn copy_then_linearize(source: &[u8], bits: u32, encoding: HdrEncoding) -> (Vec<u8>, u16) {
+        let mut pixels = vec![0u8; source.len()];
+        pixels.copy_from_slice(source);
+        let maximum_bits = linearize_hdr_pixels(&mut pixels, encoding, bits);
+        (pixels, maximum_bits)
+    }
+
+    #[test]
+    fn the_fused_table_matches_the_separate_expansion_pass() {
+        for bits in [8u32, 10, 12, 16] {
+            for transfer in [16u8, 18] {
+                let encoding = cicp_hdr_encoding(9, transfer).expect("cicp encoding");
+                let source = coded_pixels(600_000, bits, 97);
+                let (expanded, expanded_maximum) = expand_then_linearize(&source, bits, encoding);
+                let (fused, fused_maximum) = copy_then_linearize(&source, bits, encoding);
+                let mut differing = 0usize;
+                let mut widest_gap = 0u16;
+                for (left, right) in expanded.chunks_exact(2).zip(fused.chunks_exact(2)) {
+                    let left = u16::from_le_bytes([left[0], left[1]]);
+                    let right = u16::from_le_bytes([right[0], right[1]]);
+                    if left != right {
+                        differing += 1;
+                        widest_gap = widest_gap.max(left.abs_diff(right));
+                    }
+                }
+                println!(
+                    "bits={bits} transfer={transfer} differing={differing} of {} widest_gap={widest_gap} ulp",
+                    expanded.len() / 2
+                );
+                // 255 and 65535 divide the full range exactly, so those depths must not move.
+                if u32::from(u16::MAX) % ((1u32 << bits) - 1) == 0 {
+                    assert_eq!(expanded, fused, "bits={bits}");
+                }
+                // Elsewhere only alpha moves, and the fused divisor is the more exact of the two.
+                assert!(widest_gap <= 2, "bits={bits} widest_gap={widest_gap}");
+                assert_eq!(expanded_maximum, fused_maximum, "bits={bits}");
+            }
+        }
+    }
+
+    #[test]
+    #[ignore = "manual timing comparison (--nocapture)"]
+    fn heif_expansion_timing() {
+        const BITS: u32 = 10;
+        let encoding = cicp_hdr_encoding(9, 16).expect("cicp encoding");
+        let source = coded_pixels(12_000_000, BITS, 41);
+        let table = full_range_expansion(BITS);
+        // Both destinations are allocated and touched once, so neither pays for first-touch.
+        let mut expanded = vec![0u8; source.len()];
+        let mut copied = vec![0u8; source.len()];
+        expand_to_full_range(&source, &mut expanded, &table);
+        copied.copy_from_slice(&source);
+        for _ in 0..5 {
+            let start = std::time::Instant::now();
+            expand_to_full_range(&source, &mut expanded, &table);
+            let expand_elapsed = start.elapsed();
+            let start = std::time::Instant::now();
+            copied.copy_from_slice(&source);
+            let copy_elapsed = start.elapsed();
+            let mut scratch = expanded.clone();
+            let start = std::time::Instant::now();
+            let full_range_maximum = linearize_hdr_pixels(&mut scratch, encoding, 16);
+            let full_range_elapsed = start.elapsed();
+            let mut scratch = copied.clone();
+            let start = std::time::Instant::now();
+            let coded_maximum = linearize_hdr_pixels(&mut scratch, encoding, BITS);
+            let coded_elapsed = start.elapsed();
+            assert_eq!(full_range_maximum, coded_maximum);
+            println!(
+                "expand={expand_elapsed:?} copy={copy_elapsed:?} \
+                 linearize(16)={full_range_elapsed:?} linearize({BITS})={coded_elapsed:?}"
+            );
+        }
     }
 }
 
