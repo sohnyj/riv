@@ -40,16 +40,14 @@ Formats that need a codec extension from the Microsoft Store:
 | WebP (still) | WebP Image Extensions (Microsoft Corporation) |
 | Camera RAW | Raw Image Extension (Microsoft Corporation) |
 
-Only these files fail without the extension, and the error names the ones to
-install. **All of them are free and need no sign-in.**
-
-Formats that open without an extension, but decode better with one:
+**Required extensions are free and need no sign-in.**
 
 | Format | Optional extension |
 |---|---|
 | HEIC / HEIF | HEIF Image Extension + HEVC Video Extensions (Microsoft Corporation) |
 
-**HEVC Video Extensions is paid.**
+**HEVC Video Extensions is paid.** Without it, these files fall back to the
+built-in decoder.
 
 Decoded by built-in codecs:
 
@@ -61,9 +59,8 @@ Decoded by built-in codecs:
 | APNG | png |
 | Animated WebP | libwebp |
 
-libheif + libde265 decode a file that declares PQ or HLG in its container at
-full bit depth, with tone mapping. Every other file comes out at 8 bits.
-HEIF Image Extension + HEVC Video Extensions decode them all at full bit depth.
+The built-in decoder matches Store extensions except for 10-bit SDR files,
+which it reads at 8 bits.
 
 Decoded by Windows Imaging Component codecs:
 
