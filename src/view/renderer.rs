@@ -1413,11 +1413,17 @@ impl Renderer {
         } else {
             false
         };
+        // Force NEAREST so a 1:1 placement stays pixel-exact, whatever the filter.
+        let draw_interpolation = if identity_placement {
+            D2D1_INTERPOLATION_MODE_NEAREST_NEIGHBOR
+        } else {
+            interpolation
+        };
         let backbuffer_bits = Self::backbuffer_bits_for(self.swap_chain_format)
             .filter(|_| self.quantize_pass.is_some());
         let quantization_steps = backbuffer_bits.map(|bits| (1 << bits) - 1);
         let pass_dither = match backbuffer_bits {
-            Some(bits) if self.image.is_some() => self.active_dither_mode(identity_placement, bits),
+            Some(bits) if self.image.is_some() => self.active_dither_mode(draw_interpolation, bits),
             _ => DitherMode::None,
         };
         self.dither_description = match pass_dither {
@@ -1428,12 +1434,7 @@ impl Renderer {
         self.identity_draw = identity_placement;
         FrameDecision {
             transform,
-            // Force NEAREST so a 1:1 placement stays pixel-exact, whatever the filter.
-            draw_interpolation: if identity_placement {
-                D2D1_INTERPOLATION_MODE_NEAREST_NEIGHBOR
-            } else {
-                interpolation
-            },
+            draw_interpolation,
             dither: pass_dither,
             quantization_steps,
         }
@@ -1523,8 +1524,14 @@ impl Renderer {
         self.dither_description
     }
 
-    /// The frame's output dither; a 1:1 draw skips it while the source fits the backbuffer depth.
-    fn active_dither_mode(&self, identity_placement: bool, backbuffer_bits: u32) -> DitherMode {
+    /// The frame's output dither; a draw that makes no new values has nothing to dither.
+    fn active_dither_mode(
+        &self,
+        draw_interpolation: D2D1_INTERPOLATION_MODE,
+        backbuffer_bits: u32,
+    ) -> DitherMode {
+        // Nearest copies source texels, so it makes no value the source did not already hold.
+        let resamples = draw_interpolation != D2D1_INTERPOLATION_MODE_NEAREST_NEIGHBOR;
         let source_bits = self.image_source_bits_per_channel;
         // Pass-through is exact at equal depth; a color transform can band there.
         let within_depth = if self.effect_output.is_none() {
@@ -1532,7 +1539,7 @@ impl Renderer {
         } else {
             source_bits < backbuffer_bits
         };
-        if identity_placement && within_depth {
+        if !resamples && within_depth {
             return DitherMode::None;
         }
         self.dither_setting
