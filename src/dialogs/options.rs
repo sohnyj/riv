@@ -116,7 +116,7 @@ impl OptionsState {
     }
 
     /// Apply enables when the transient state differs from the saved state.
-    fn dirty(&self) -> bool {
+    fn is_dirty(&self) -> bool {
         self.transient_options != self.saved_options
             || self.transient_shortcuts != self.saved_shortcuts
             || self.desired_associations() != self.saved_associations
@@ -428,12 +428,12 @@ fn update_buttons(state: &OptionsState) {
             let _ = unsafe { EnableWindow(button, enabled) };
         }
     };
-    enable(IDC_APPLY, state.dirty());
+    enable(IDC_APPLY, state.is_dirty());
     enable(IDC_RESTORE_DEFAULTS, state.differs_from_defaults());
 }
 
 fn apply(state: &mut OptionsState) {
-    if !state.dirty() {
+    if !state.is_dirty() {
         return;
     }
     let desired = state.desired_associations();

@@ -472,7 +472,7 @@ impl ImageCore {
     }
 
     /// Jumps declare their direction; steps flip the polarity on the second one in a row.
-    fn note_navigation(&mut self, command: NavigationCommand) {
+    fn record_navigation(&mut self, command: NavigationCommand) {
         match command {
             NavigationCommand::First => {
                 self.navigating_backward = false;
@@ -482,12 +482,12 @@ impl ImageCore {
                 self.navigating_backward = true;
                 self.opposite_steps = 0;
             }
-            NavigationCommand::Next => self.note_step(false),
-            NavigationCommand::Previous => self.note_step(true),
+            NavigationCommand::Next => self.record_step(false),
+            NavigationCommand::Previous => self.record_step(true),
         }
     }
 
-    fn note_step(&mut self, backward: bool) {
+    fn record_step(&mut self, backward: bool) {
         if backward == self.navigating_backward {
             self.opposite_steps = 0;
             return;
@@ -906,7 +906,7 @@ impl ImageCore {
         if anchor.is_some_and(|anchor| anchor == &target) {
             return None; // same item, nothing to do
         }
-        self.note_navigation(command);
+        self.record_navigation(command);
         Some(self.load_item(&target))
     }
 
@@ -2596,7 +2596,7 @@ mod navigation_direction_tests {
     #[test]
     fn a_single_back_step_keeps_the_forward_polarity() {
         let mut core = core();
-        core.note_navigation(NavigationCommand::Previous);
+        core.record_navigation(NavigationCommand::Previous);
         assert!(!core.navigating_backward);
         assert_eq!(core.preload_plan(), (1, 3, 1 << 30));
     }
@@ -2604,32 +2604,32 @@ mod navigation_direction_tests {
     #[test]
     fn two_consecutive_back_steps_flip_the_polarity() {
         let mut core = core();
-        core.note_navigation(NavigationCommand::Previous);
-        core.note_navigation(NavigationCommand::Previous);
+        core.record_navigation(NavigationCommand::Previous);
+        core.record_navigation(NavigationCommand::Previous);
         assert!(core.navigating_backward);
         assert_eq!(core.preload_plan(), (3, 1, 1 << 30));
         // The way back flips with the same grace.
-        core.note_navigation(NavigationCommand::Next);
+        core.record_navigation(NavigationCommand::Next);
         assert!(core.navigating_backward);
-        core.note_navigation(NavigationCommand::Next);
+        core.record_navigation(NavigationCommand::Next);
         assert!(!core.navigating_backward);
     }
 
     #[test]
     fn an_interrupted_run_starts_over() {
         let mut core = core();
-        core.note_navigation(NavigationCommand::Previous);
-        core.note_navigation(NavigationCommand::Next);
-        core.note_navigation(NavigationCommand::Previous);
+        core.record_navigation(NavigationCommand::Previous);
+        core.record_navigation(NavigationCommand::Next);
+        core.record_navigation(NavigationCommand::Previous);
         assert!(!core.navigating_backward); // never two in a row
     }
 
     #[test]
     fn jumps_declare_their_direction() {
         let mut core = core();
-        core.note_navigation(NavigationCommand::Last);
+        core.record_navigation(NavigationCommand::Last);
         assert!(core.navigating_backward);
-        core.note_navigation(NavigationCommand::First);
+        core.record_navigation(NavigationCommand::First);
         assert!(!core.navigating_backward);
     }
 
