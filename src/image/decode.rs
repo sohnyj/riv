@@ -1227,6 +1227,8 @@ const TONE_CURVE_SAMPLES: usize = 33;
 const TONE_CURVE_TOLERANCE: f32 = 1e-3;
 /// Primaries this close in xy describe one gamut; the nearest named gamuts sit 0.04 apart.
 const PRIMARY_TOLERANCE: f32 = 2e-3;
+/// Colorants this close describe one space, scale included.
+const COLORANT_TOLERANCE: f32 = 1e-3;
 
 fn tone_curve_input(index: usize) -> f32 {
     index as f32 / (TONE_CURVE_SAMPLES - 1) as f32
@@ -1234,6 +1236,7 @@ fn tone_curve_input(index: usize) -> f32 {
 
 /// True when the profile describes the space sRGB does.
 pub fn icc_is_srgb(icc: &[u8]) -> bool {
+    // Chromaticity, not the stored colorants: two vendors round their sRGB differently.
     if !same_primaries(icc_primaries(icc), Some(color::BT709_PRIMARIES)) {
         return false;
     }
@@ -1247,7 +1250,17 @@ pub fn icc_is_srgb(icc: &[u8]) -> bool {
 
 /// True when both profiles describe one space, so converting between them changes nothing.
 pub fn icc_same_space(one: &[u8], other: &[u8]) -> bool {
-    if !same_primaries(icc_primaries(one), icc_primaries(other)) {
+    // Both sides sit in the D50 connection space, and their scale carries the medium white.
+    let (Some(one_colorants), Some(other_colorants)) = (icc_colorants(one), icc_colorants(other))
+    else {
+        return false;
+    };
+    let same_colorants = one_colorants
+        .iter()
+        .flatten()
+        .zip(other_colorants.iter().flatten())
+        .all(|(one, other): (&f32, &f32)| (one - other).abs() < COLORANT_TOLERANCE);
+    if !same_colorants {
         return false;
     }
     let (Some(one), Some(other)) = (icc_tone_curves(one), icc_tone_curves(other)) else {
@@ -1269,7 +1282,7 @@ fn same_primaries(one: Option<[[f32; 2]; 3]>, other: Option<[[f32; 2]; 3]>) -> b
         .all(|(one, other): (&f32, &f32)| (one - other).abs() < PRIMARY_TOLERANCE)
 }
 
-/// R, G, B tone curves sampled over [0, 1]; None when one is missing or of an unread form.
+/// R, G, B tone curves sampled over [0, 1]; None when one is missing or of a form riv cannot read.
 fn icc_tone_curves(icc: &[u8]) -> Option<[[f32; TONE_CURVE_SAMPLES]; 3]> {
     Some([
         icc_tone_curve(icc, b"rTRC")?,
@@ -1377,29 +1390,37 @@ const D50_TO_D65: [[f32; 3]; 3] = [
     [0.012_298, -0.020_483, 1.329_91],
 ];
 
-/// CIE xy of an ICC's matrix primaries, D65 referred; None for non-matrix profiles.
-pub fn icc_primaries(icc: &[u8]) -> Option<[[f32; 2]; 3]> {
-    let primary_xy = |tag: &[u8; 4]| -> Option<[f32; 2]> {
+/// R, G, B colorants as the profile stores them, in the D50 PCS; None for non-matrix profiles.
+fn icc_colorants(icc: &[u8]) -> Option<[[f32; 3]; 3]> {
+    let column = |tag: &[u8; 4]| -> Option<[f32; 3]> {
         let offset = icc_tag_offset(icc, tag)?;
         if icc.get(offset..offset + 4)? != b"XYZ " {
             return None;
         }
-        // s15Fixed16 X, Y, Z, adapted out of the D50 PCS the colorants are stored in.
+        // s15Fixed16 X, Y, Z.
         let value =
             |at: usize| -> Option<f32> { Some(read_u32_be(icc, at)? as i32 as f32 / 65536.0) };
-        let stored = [value(offset + 8)?, value(offset + 12)?, value(offset + 16)?];
+        Some([value(offset + 8)?, value(offset + 12)?, value(offset + 16)?])
+    };
+    Some([column(b"rXYZ")?, column(b"gXYZ")?, column(b"bXYZ")?])
+}
+
+/// CIE xy of an ICC's matrix primaries, D65 referred; None for non-matrix profiles.
+pub fn icc_primaries(icc: &[u8]) -> Option<[[f32; 2]; 3]> {
+    let mut primaries = [[0.0f32; 2]; 3];
+    for (stored, primary) in icc_colorants(icc)?.iter().zip(&mut primaries) {
+        // The colorants are stored against the D50 PCS; adapt out of it to name the gamut.
         let mut adapted = [0.0f32; 3];
         for (row, channel) in D50_TO_D65.iter().zip(&mut adapted) {
             *channel = row[0] * stored[0] + row[1] * stored[1] + row[2] * stored[2];
         }
         let sum = adapted[0] + adapted[1] + adapted[2];
-        (sum > 0.0).then_some([adapted[0] / sum, adapted[1] / sum])
-    };
-    Some([
-        primary_xy(b"rXYZ")?,
-        primary_xy(b"gXYZ")?,
-        primary_xy(b"bXYZ")?,
-    ])
+        if sum <= 0.0 {
+            return None;
+        }
+        *primary = [adapted[0] / sum, adapted[1] / sum];
+    }
+    Some(primaries)
 }
 
 /// Human-readable profile name from the ICC 'desc' tag (v2 text or v4 mluc).
@@ -2650,7 +2671,7 @@ mod icc_space_tests {
 
     #[test]
     fn a_pure_gamma_is_not_the_srgb_curve() {
-        // The two part company below the toe, which is exactly where the eye is most sensitive.
+        // The two part company below the toe.
         assert!(!icc_is_srgb(&profile(SRGB_COLORANTS, &gamma_curve(2.2))));
         assert!(!icc_is_srgb(&profile(
             SRGB_COLORANTS,
@@ -2682,6 +2703,31 @@ mod icc_space_tests {
         let version4 = profile(SRGB_COLORANTS, &parametric_srgb_curve());
         assert!(icc_same_space(&version2, &version4));
         assert!(icc_same_space(&version4, &version2));
+    }
+
+    #[test]
+    fn one_gamut_at_two_white_points_compares_unequal() {
+        // Scaling a colorant keeps its chromaticity and moves the white the three add up to.
+        let scaled = |column: [f32; 3], by: f32| column.map(|value| value * by);
+        let shifted = [
+            scaled(SRGB_COLORANTS[0], 0.94),
+            scaled(SRGB_COLORANTS[1], 1.05),
+            SRGB_COLORANTS[2],
+        ];
+        let one = profile(SRGB_COLORANTS, &parametric_srgb_curve());
+        let other = profile(shifted, &parametric_srgb_curve());
+        let (Some(one_xy), Some(other_xy)) = (icc_primaries(&one), icc_primaries(&other)) else {
+            panic!("both profiles carry matrix primaries");
+        };
+        assert!(
+            one_xy
+                .iter()
+                .flatten()
+                .zip(other_xy.iter().flatten())
+                .all(|(one, other)| (one - other).abs() < 1e-4),
+            "the chromaticities are the same, so they alone cannot separate the two"
+        );
+        assert!(!icc_same_space(&one, &other));
     }
 
     #[test]
