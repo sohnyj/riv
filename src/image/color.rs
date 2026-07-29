@@ -37,19 +37,21 @@ pub fn output_color(color: D2D1_COLOR_F, target: OutputColorTarget) -> D2D1_COLO
     }
 }
 
+/// The sRGB electro-optical transfer function: encoded value to linear light.
+pub(crate) fn srgb_to_linear(encoded: f32) -> f32 {
+    if encoded <= 0.04045 {
+        encoded / 12.92
+    } else {
+        ((encoded + 0.055) / 1.055).powf(2.4)
+    }
+}
+
 /// sRGB-encoded color to linear scRGB, times the SDR white boost.
 fn srgb_color_to_scrgb(color: D2D1_COLOR_F, sdr_white_boost: f32) -> D2D1_COLOR_F {
-    let linearize = |encoded: f32| {
-        if encoded <= 0.04045 {
-            encoded / 12.92
-        } else {
-            ((encoded + 0.055) / 1.055).powf(2.4)
-        }
-    };
     D2D1_COLOR_F {
-        r: linearize(color.r) * sdr_white_boost,
-        g: linearize(color.g) * sdr_white_boost,
-        b: linearize(color.b) * sdr_white_boost,
+        r: srgb_to_linear(color.r) * sdr_white_boost,
+        g: srgb_to_linear(color.g) * sdr_white_boost,
+        b: srgb_to_linear(color.b) * sdr_white_boost,
         a: color.a,
     }
 }

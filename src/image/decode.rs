@@ -1214,6 +1214,155 @@ fn icc_tag_offset(icc: &[u8], signature: &[u8; 4]) -> Option<usize> {
     None
 }
 
+/// Big-endian u16 at the offset, when in bounds.
+fn read_u16_be(bytes: &[u8], offset: usize) -> Option<u16> {
+    Some(u16::from_be_bytes(
+        bytes.get(offset..offset + 2)?.try_into().ok()?,
+    ))
+}
+
+/// Points where tone curves are compared; close enough to separate the sRGB toe from a gamma.
+const TONE_CURVE_SAMPLES: usize = 33;
+/// Curves this close describe one response; a pure gamma 2.2 leaves the sRGB curve by 4e-3.
+const TONE_CURVE_TOLERANCE: f32 = 1e-3;
+/// Primaries this close in xy describe one gamut; the nearest named gamuts sit 0.04 apart.
+const PRIMARY_TOLERANCE: f32 = 2e-3;
+
+fn tone_curve_input(index: usize) -> f32 {
+    index as f32 / (TONE_CURVE_SAMPLES - 1) as f32
+}
+
+/// True when the profile describes the space sRGB does.
+pub fn icc_is_srgb(icc: &[u8]) -> bool {
+    if !same_primaries(icc_primaries(icc), Some(color::BT709_PRIMARIES)) {
+        return false;
+    }
+    icc_tone_curves(icc).is_some_and(|curves| {
+        curves.iter().flatten().enumerate().all(|(index, value)| {
+            let input = tone_curve_input(index % TONE_CURVE_SAMPLES);
+            (value - color::srgb_to_linear(input)).abs() < TONE_CURVE_TOLERANCE
+        })
+    })
+}
+
+/// True when both profiles describe one space, so converting between them changes nothing.
+pub fn icc_same_space(one: &[u8], other: &[u8]) -> bool {
+    if !same_primaries(icc_primaries(one), icc_primaries(other)) {
+        return false;
+    }
+    let (Some(one), Some(other)) = (icc_tone_curves(one), icc_tone_curves(other)) else {
+        return false;
+    };
+    one.iter()
+        .flatten()
+        .zip(other.iter().flatten())
+        .all(|(one, other)| (one - other).abs() < TONE_CURVE_TOLERANCE)
+}
+
+fn same_primaries(one: Option<[[f32; 2]; 3]>, other: Option<[[f32; 2]; 3]>) -> bool {
+    let (Some(one), Some(other)) = (one, other) else {
+        return false;
+    };
+    one.iter()
+        .flatten()
+        .zip(other.iter().flatten())
+        .all(|(one, other): (&f32, &f32)| (one - other).abs() < PRIMARY_TOLERANCE)
+}
+
+/// R, G, B tone curves sampled over [0, 1]; None when one is missing or of an unread form.
+fn icc_tone_curves(icc: &[u8]) -> Option<[[f32; TONE_CURVE_SAMPLES]; 3]> {
+    Some([
+        icc_tone_curve(icc, b"rTRC")?,
+        icc_tone_curve(icc, b"gTRC")?,
+        icc_tone_curve(icc, b"bTRC")?,
+    ])
+}
+
+fn icc_tone_curve(icc: &[u8], tag: &[u8; 4]) -> Option<[f32; TONE_CURVE_SAMPLES]> {
+    let offset = icc_tag_offset(icc, tag)?;
+    let mut samples = [0.0f32; TONE_CURVE_SAMPLES];
+    match icc.get(offset..offset + 4)? {
+        b"curv" => {
+            let count = read_u32_be(icc, offset + 8)? as usize;
+            let entry = |index: usize| -> Option<f32> {
+                Some(f32::from(read_u16_be(icc, offset + 12 + index * 2)?) / 65535.0)
+            };
+            match count {
+                // No entries is the identity; one entry is a u8Fixed8 gamma.
+                0 => samples
+                    .iter_mut()
+                    .enumerate()
+                    .for_each(|(index, sample)| *sample = tone_curve_input(index)),
+                1 => {
+                    let gamma = f32::from(read_u16_be(icc, offset + 12)?) / 256.0;
+                    for (index, sample) in samples.iter_mut().enumerate() {
+                        *sample = tone_curve_input(index).powf(gamma);
+                    }
+                }
+                _ => {
+                    entry(count - 1)?;
+                    for (index, sample) in samples.iter_mut().enumerate() {
+                        let position = tone_curve_input(index) * (count - 1) as f32;
+                        let below = position.floor() as usize;
+                        let above = (below + 1).min(count - 1);
+                        let fraction = position - below as f32;
+                        *sample = entry(below)? * (1.0 - fraction) + entry(above)? * fraction;
+                    }
+                }
+            }
+        }
+        b"para" => {
+            let parameter = |index: usize| -> Option<f32> {
+                Some(read_u32_be(icc, offset + 12 + index * 4)? as i32 as f32 / 65536.0)
+            };
+            let gamma = parameter(0)?;
+            // Every function is (a*x + b)^g + e above d, and c*x + f below it.
+            let (a, b, slope, split, above, below) = match read_u16_be(icc, offset + 8)? {
+                0 => (1.0, 0.0, 0.0, f32::MIN, 0.0, 0.0),
+                1 | 2 => {
+                    let (a, b) = (parameter(1)?, parameter(2)?);
+                    if a == 0.0 {
+                        return None;
+                    }
+                    let constant = if read_u16_be(icc, offset + 8)? == 2 {
+                        parameter(3)?
+                    } else {
+                        0.0
+                    };
+                    (a, b, 0.0, -b / a, constant, constant)
+                }
+                3 => (
+                    parameter(1)?,
+                    parameter(2)?,
+                    parameter(3)?,
+                    parameter(4)?,
+                    0.0,
+                    0.0,
+                ),
+                4 => (
+                    parameter(1)?,
+                    parameter(2)?,
+                    parameter(3)?,
+                    parameter(4)?,
+                    parameter(5)?,
+                    parameter(6)?,
+                ),
+                _ => return None,
+            };
+            for (index, sample) in samples.iter_mut().enumerate() {
+                let input = tone_curve_input(index);
+                *sample = if input >= split {
+                    (a * input + b).max(0.0).powf(gamma) + above
+                } else {
+                    slope * input + below
+                };
+            }
+        }
+        _ => return None,
+    }
+    Some(samples)
+}
+
 /// Nearest gamut label from an ICC's matrix primaries; None for non-matrix profiles.
 pub fn icc_gamut_label(icc: &[u8]) -> Option<&'static str> {
     Some(crate::image::color::nearest_gamut_label(icc_primaries(
@@ -2407,6 +2556,142 @@ mod icc_description_tests {
     fn garbage_profiles_yield_none() {
         assert_eq!(icc_profile_description(&[0u8; 16]), None);
         assert_eq!(icc_profile_description(b"not an icc profile"), None);
+    }
+}
+
+#[cfg(test)]
+mod icc_space_tests {
+    use super::*;
+
+    /// sRGB colorants as a profile stores them, in the D50 connection space.
+    const SRGB_COLORANTS: [[f32; 3]; 3] = [
+        [0.4360, 0.2225, 0.0139],
+        [0.3851, 0.7169, 0.0971],
+        [0.1431, 0.0606, 0.7141],
+    ];
+    /// Display P3 colorants, likewise D50 referred.
+    const DISPLAY_P3_COLORANTS: [[f32; 3]; 3] = [
+        [0.5151, 0.2412, -0.0011],
+        [0.2920, 0.6922, 0.0419],
+        [0.1571, 0.0666, 0.7841],
+    ];
+
+    fn fixed(value: f32) -> [u8; 4] {
+        ((value * 65536.0).round() as i32).to_be_bytes()
+    }
+
+    fn profile(colorants: [[f32; 3]; 3], curve: &[u8]) -> Vec<u8> {
+        let names: [&[u8; 4]; 6] = [b"rXYZ", b"gXYZ", b"bXYZ", b"rTRC", b"gTRC", b"bTRC"];
+        let payloads: Vec<Vec<u8>> = colorants
+            .iter()
+            .map(|values| {
+                let mut tag = b"XYZ \0\0\0\0".to_vec();
+                values.iter().for_each(|value| tag.extend(fixed(*value)));
+                tag
+            })
+            .chain(std::iter::repeat_n(curve.to_vec(), 3))
+            .collect();
+        let mut icc = vec![0u8; 128];
+        icc.extend_from_slice(&(names.len() as u32).to_be_bytes());
+        let mut offset = 132 + names.len() * 12;
+        for (name, payload) in names.iter().zip(&payloads) {
+            icc.extend_from_slice(*name);
+            icc.extend_from_slice(&(offset as u32).to_be_bytes());
+            icc.extend_from_slice(&(payload.len() as u32).to_be_bytes());
+            offset += payload.len();
+        }
+        payloads
+            .iter()
+            .for_each(|payload| icc.extend_from_slice(payload));
+        icc
+    }
+
+    /// Parametric curve type 3, which is how a version 4 profile writes sRGB.
+    fn parametric_srgb_curve() -> Vec<u8> {
+        let mut tag = b"para\0\0\0\0".to_vec();
+        tag.extend_from_slice(&3u16.to_be_bytes());
+        tag.extend_from_slice(&[0u8; 2]);
+        for value in [2.4, 1.0 / 1.055, 0.055 / 1.055, 1.0 / 12.92, 0.04045] {
+            tag.extend(fixed(value));
+        }
+        tag
+    }
+
+    /// Sampled curve, which is how a version 2 profile writes the same response.
+    fn sampled_curve(shape: impl Fn(f32) -> f32) -> Vec<u8> {
+        const ENTRIES: usize = 1024;
+        let mut tag = b"curv\0\0\0\0".to_vec();
+        tag.extend_from_slice(&(ENTRIES as u32).to_be_bytes());
+        for index in 0..ENTRIES {
+            let value = shape(index as f32 / (ENTRIES - 1) as f32);
+            tag.extend_from_slice(&((value * 65535.0).round() as u16).to_be_bytes());
+        }
+        tag
+    }
+
+    fn gamma_curve(gamma: f32) -> Vec<u8> {
+        let mut tag = b"curv\0\0\0\0".to_vec();
+        tag.extend_from_slice(&1u32.to_be_bytes());
+        tag.extend_from_slice(&((gamma * 256.0).round() as u16).to_be_bytes());
+        tag
+    }
+
+    #[test]
+    fn both_ways_of_writing_srgb_read_as_srgb() {
+        assert!(icc_is_srgb(&profile(
+            SRGB_COLORANTS,
+            &parametric_srgb_curve()
+        )));
+        assert!(icc_is_srgb(&profile(
+            SRGB_COLORANTS,
+            &sampled_curve(color::srgb_to_linear)
+        )));
+    }
+
+    #[test]
+    fn a_pure_gamma_is_not_the_srgb_curve() {
+        // The two part company below the toe, which is exactly where the eye is most sensitive.
+        assert!(!icc_is_srgb(&profile(SRGB_COLORANTS, &gamma_curve(2.2))));
+        assert!(!icc_is_srgb(&profile(
+            SRGB_COLORANTS,
+            &sampled_curve(|value| value.powf(2.2))
+        )));
+    }
+
+    #[test]
+    fn a_wider_gamut_is_not_srgb_whatever_its_curve() {
+        assert!(!icc_is_srgb(&profile(
+            DISPLAY_P3_COLORANTS,
+            &parametric_srgb_curve()
+        )));
+    }
+
+    #[test]
+    fn a_profile_riv_cannot_read_is_never_srgb() {
+        assert!(!icc_is_srgb(&[0u8; 16]));
+        assert!(!icc_is_srgb(b"not an icc profile"));
+        // Matrix primaries but no tone curves.
+        let mut without_curves = profile(SRGB_COLORANTS, &parametric_srgb_curve());
+        without_curves[128..132].copy_from_slice(&3u32.to_be_bytes());
+        assert!(!icc_is_srgb(&without_curves));
+    }
+
+    #[test]
+    fn one_space_written_two_ways_compares_equal() {
+        let version2 = profile(SRGB_COLORANTS, &sampled_curve(color::srgb_to_linear));
+        let version4 = profile(SRGB_COLORANTS, &parametric_srgb_curve());
+        assert!(icc_same_space(&version2, &version4));
+        assert!(icc_same_space(&version4, &version2));
+    }
+
+    #[test]
+    fn a_different_gamut_or_curve_compares_unequal() {
+        let srgb = profile(SRGB_COLORANTS, &parametric_srgb_curve());
+        let wide = profile(DISPLAY_P3_COLORANTS, &parametric_srgb_curve());
+        let gamma = profile(SRGB_COLORANTS, &gamma_curve(2.2));
+        assert!(!icc_same_space(&srgb, &wide));
+        assert!(!icc_same_space(&srgb, &gamma));
+        assert!(icc_same_space(&wide, &wide));
     }
 }
 

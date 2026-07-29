@@ -58,8 +58,8 @@ use std::thread;
 
 use crate::image::color::{SDR_REFERENCE_WHITE_NITS, nearest_gamut_label};
 use crate::image::decode::{
-    DecodedImage, PixelStorage, UploadDevice, UploadedTexture, icc_gamut_label,
-    maximum_resource_bytes,
+    DecodedImage, PixelStorage, UploadDevice, UploadedTexture, icc_gamut_label, icc_is_srgb,
+    icc_same_space, maximum_resource_bytes,
 };
 use crate::view::dither::DitherMode;
 use crate::view::quantize::QuantizePass;
@@ -848,6 +848,22 @@ impl Renderer {
         .map(Into::into)
     }
 
+    /// Whether the SDR destination is the space the source already carries.
+    fn source_is_destination(&self, icc_profile: Option<&[u8]>) -> bool {
+        // Only a context riv managed to build stands in as the destination; the rest read sRGB.
+        let destination = self
+            .display_color_context
+            .as_ref()
+            .and(self.output_mode.display_profile.as_deref())
+            .map(Vec::as_slice);
+        match (icc_profile, destination) {
+            (None, None) => true,
+            (None, Some(display)) => icc_is_srgb(display),
+            (Some(source), None) => icc_is_srgb(source),
+            (Some(source), Some(display)) => icc_same_space(source, display),
+        }
+    }
+
     /// SDR destination color context: the display's own profile when mapping, else sRGB.
     fn sdr_destination_context(&self) -> Option<&ID2D1ColorContext> {
         sdr_destination(
@@ -1229,11 +1245,10 @@ impl Renderer {
             .as_ref()
             .zip(peak_luminance_nits.filter(|_| hdr_content));
         let scrgb_destination = self.hdr_mode || self.sdr_wide_gamut || tone_map.is_some();
-        // Untagged sRGB skips CM only when no scRGB output and no display profile needs a mapping.
+        // A source already in the destination space skips CM; the conversion would change nothing.
         if storage == PixelStorage::Bgra8
-            && icc_profile.is_none()
             && !scrgb_destination
-            && self.display_color_context.is_none()
+            && self.source_is_destination(icc_profile)
         {
             // Unwire the previous bitmap so the effect does not keep it alive.
             unsafe { color_management.SetInput(0, None, true) };
