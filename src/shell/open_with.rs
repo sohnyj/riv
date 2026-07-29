@@ -72,7 +72,7 @@ fn enumerate(path: &Path) -> OpenWithList {
             executable_path,
         });
     }
-    items.sort_by(|a, b| natural_compare(&a.display_name, &b.display_name));
+    items.sort_by(|a, b| compare_natural_text(&a.display_name, &b.display_name));
     let default_index = (!default_executable.is_empty())
         .then(|| {
             items.iter().position(|item| {
@@ -176,7 +176,7 @@ fn default_executable_for(path: &Path) -> Option<String> {
     (status.is_ok() && length > 1).then(|| String::from_utf16_lossy(&buffer[..length as usize - 1]))
 }
 
-fn natural_compare(a: &str, b: &str) -> std::cmp::Ordering {
+fn compare_natural_text(a: &str, b: &str) -> std::cmp::Ordering {
     let a_wide = crate::text::wide(a);
     let b_wide = crate::text::wide(b);
     crate::image::core::natural_order(&a_wide, &b_wide)
