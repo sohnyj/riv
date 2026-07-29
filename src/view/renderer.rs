@@ -855,8 +855,8 @@ impl Renderer {
         .map(Into::into)
     }
 
-    /// Whether the SDR destination is the space the source already carries.
-    fn source_is_destination(&self, icc_profile: Option<&[u8]>) -> bool {
+    /// Whether this source profile, or untagged sRGB, is already the SDR destination space.
+    fn is_destination_space(&self, icc_profile: Option<&[u8]>) -> bool {
         // Only a context riv managed to build stands in as the destination; the rest read sRGB.
         let destination = self
             .display_color_context
@@ -1255,7 +1255,7 @@ impl Renderer {
         // A source already in the destination space skips CM; the conversion would change nothing.
         if storage == PixelStorage::Bgra8
             && !scrgb_destination
-            && self.source_is_destination(icc_profile)
+            && self.is_destination_space(icc_profile)
         {
             // Unwire the previous bitmap so the effect does not keep it alive.
             unsafe { color_management.SetInput(0, None, true) };
