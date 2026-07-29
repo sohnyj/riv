@@ -1221,6 +1221,22 @@ fn read_u16_be(bytes: &[u8], offset: usize) -> Option<u16> {
     ))
 }
 
+/// The signed 16.16 fixed point every ICC numeric tag is written in.
+fn read_s15_fixed16(bytes: &[u8], offset: usize) -> Option<f32> {
+    Some(read_u32_be(bytes, offset)? as i32 as f32 / 65536.0)
+}
+
+/// True when two runs of floats agree everywhere within the tolerance.
+fn all_within<'a>(
+    one: impl IntoIterator<Item = &'a f32>,
+    other: impl IntoIterator<Item = &'a f32>,
+    tolerance: f32,
+) -> bool {
+    one.into_iter()
+        .zip(other)
+        .all(|(one, other)| (one - other).abs() < tolerance)
+}
+
 /// Points where tone curves are compared; close enough to separate the sRGB toe from a gamma.
 const TONE_CURVE_SAMPLES: usize = 33;
 /// Curves this close describe one response; a pure gamma 2.2 leaves the sRGB curve by 4e-3.
@@ -1237,14 +1253,22 @@ fn tone_curve_input(index: usize) -> f32 {
 /// True when the profile describes the space sRGB does.
 pub fn icc_is_srgb(icc: &[u8]) -> bool {
     // Chromaticity, not the stored colorants: two vendors round their sRGB differently.
-    if !same_primaries(icc_primaries(icc), Some(color::BT709_PRIMARIES)) {
+    let Some(primaries) = icc_primaries(icc) else {
+        return false;
+    };
+    if !all_within(
+        primaries.iter().flatten(),
+        color::BT709_PRIMARIES.iter().flatten(),
+        PRIMARY_TOLERANCE,
+    ) {
         return false;
     }
+    let reference: [f32; TONE_CURVE_SAMPLES] =
+        std::array::from_fn(|index| color::srgb_to_linear(tone_curve_input(index)));
     icc_tone_curves(icc).is_some_and(|curves| {
-        curves.iter().flatten().enumerate().all(|(index, value)| {
-            let input = tone_curve_input(index % TONE_CURVE_SAMPLES);
-            (value - color::srgb_to_linear(input)).abs() < TONE_CURVE_TOLERANCE
-        })
+        curves
+            .iter()
+            .all(|curve| all_within(curve, &reference, TONE_CURVE_TOLERANCE))
     })
 }
 
@@ -1255,31 +1279,21 @@ pub fn icc_same_space(one: &[u8], other: &[u8]) -> bool {
     else {
         return false;
     };
-    let same_colorants = one_colorants
-        .iter()
-        .flatten()
-        .zip(other_colorants.iter().flatten())
-        .all(|(one, other): (&f32, &f32)| (one - other).abs() < COLORANT_TOLERANCE);
-    if !same_colorants {
+    if !all_within(
+        one_colorants.iter().flatten(),
+        other_colorants.iter().flatten(),
+        COLORANT_TOLERANCE,
+    ) {
         return false;
     }
     let (Some(one), Some(other)) = (icc_tone_curves(one), icc_tone_curves(other)) else {
         return false;
     };
-    one.iter()
-        .flatten()
-        .zip(other.iter().flatten())
-        .all(|(one, other)| (one - other).abs() < TONE_CURVE_TOLERANCE)
-}
-
-fn same_primaries(one: Option<[[f32; 2]; 3]>, other: Option<[[f32; 2]; 3]>) -> bool {
-    let (Some(one), Some(other)) = (one, other) else {
-        return false;
-    };
-    one.iter()
-        .flatten()
-        .zip(other.iter().flatten())
-        .all(|(one, other): (&f32, &f32)| (one - other).abs() < PRIMARY_TOLERANCE)
+    all_within(
+        one.iter().flatten(),
+        other.iter().flatten(),
+        TONE_CURVE_TOLERANCE,
+    )
 }
 
 /// R, G, B tone curves sampled over [0, 1]; None when one is missing or of a form riv cannot read.
@@ -1293,55 +1307,47 @@ fn icc_tone_curves(icc: &[u8]) -> Option<[[f32; TONE_CURVE_SAMPLES]; 3]> {
 
 fn icc_tone_curve(icc: &[u8], tag: &[u8; 4]) -> Option<[f32; TONE_CURVE_SAMPLES]> {
     let offset = icc_tag_offset(icc, tag)?;
-    let mut samples = [0.0f32; TONE_CURVE_SAMPLES];
     match icc.get(offset..offset + 4)? {
         b"curv" => {
             let count = read_u32_be(icc, offset + 8)? as usize;
-            let entry = |index: usize| -> Option<f32> {
-                Some(f32::from(read_u16_be(icc, offset + 12 + index * 2)?) / 65535.0)
-            };
             match count {
                 // No entries is the identity; one entry is a u8Fixed8 gamma.
-                0 => samples
-                    .iter_mut()
-                    .enumerate()
-                    .for_each(|(index, sample)| *sample = tone_curve_input(index)),
+                0 => Some(std::array::from_fn(tone_curve_input)),
                 1 => {
                     let gamma = f32::from(read_u16_be(icc, offset + 12)?) / 256.0;
-                    for (index, sample) in samples.iter_mut().enumerate() {
-                        *sample = tone_curve_input(index).powf(gamma);
-                    }
+                    Some(std::array::from_fn(|index| {
+                        tone_curve_input(index).powf(gamma)
+                    }))
                 }
                 _ => {
-                    entry(count - 1)?;
+                    let entry = |index: usize| -> Option<f32> {
+                        Some(f32::from(read_u16_be(icc, offset + 12 + index * 2)?) / 65535.0)
+                    };
+                    let mut samples = [0.0f32; TONE_CURVE_SAMPLES];
                     for (index, sample) in samples.iter_mut().enumerate() {
                         let position = tone_curve_input(index) * (count - 1) as f32;
-                        let below = position.floor() as usize;
-                        let above = (below + 1).min(count - 1);
-                        let fraction = position - below as f32;
-                        *sample = entry(below)? * (1.0 - fraction) + entry(above)? * fraction;
+                        let low = position.floor() as usize;
+                        let high = (low + 1).min(count - 1);
+                        let fraction = position - low as f32;
+                        *sample = entry(low)? * (1.0 - fraction) + entry(high)? * fraction;
                     }
+                    Some(samples)
                 }
             }
         }
         b"para" => {
-            let parameter = |index: usize| -> Option<f32> {
-                Some(read_u32_be(icc, offset + 12 + index * 4)? as i32 as f32 / 65536.0)
-            };
+            let parameter = |index: usize| read_s15_fixed16(icc, offset + 12 + index * 4);
             let gamma = parameter(0)?;
+            let function = read_u16_be(icc, offset + 8)?;
             // Every function is (a*x + b)^g + e above d, and c*x + f below it.
-            let (a, b, slope, split, above, below) = match read_u16_be(icc, offset + 8)? {
+            let (a, b, slope, split, above, below) = match function {
                 0 => (1.0, 0.0, 0.0, f32::MIN, 0.0, 0.0),
                 1 | 2 => {
                     let (a, b) = (parameter(1)?, parameter(2)?);
                     if a == 0.0 {
                         return None;
                     }
-                    let constant = if read_u16_be(icc, offset + 8)? == 2 {
-                        parameter(3)?
-                    } else {
-                        0.0
-                    };
+                    let constant = if function == 2 { parameter(3)? } else { 0.0 };
                     (a, b, 0.0, -b / a, constant, constant)
                 }
                 3 => (
@@ -1362,18 +1368,17 @@ fn icc_tone_curve(icc: &[u8], tag: &[u8; 4]) -> Option<[f32; TONE_CURVE_SAMPLES]
                 ),
                 _ => return None,
             };
-            for (index, sample) in samples.iter_mut().enumerate() {
+            Some(std::array::from_fn(|index| {
                 let input = tone_curve_input(index);
-                *sample = if input >= split {
+                if input >= split {
                     (a * input + b).max(0.0).powf(gamma) + above
                 } else {
                     slope * input + below
-                };
-            }
+                }
+            }))
         }
-        _ => return None,
+        _ => None,
     }
-    Some(samples)
 }
 
 /// Nearest gamut label from an ICC's matrix primaries; None for non-matrix profiles.
@@ -1397,10 +1402,11 @@ fn icc_colorants(icc: &[u8]) -> Option<[[f32; 3]; 3]> {
         if icc.get(offset..offset + 4)? != b"XYZ " {
             return None;
         }
-        // s15Fixed16 X, Y, Z.
-        let value =
-            |at: usize| -> Option<f32> { Some(read_u32_be(icc, at)? as i32 as f32 / 65536.0) };
-        Some([value(offset + 8)?, value(offset + 12)?, value(offset + 16)?])
+        Some([
+            read_s15_fixed16(icc, offset + 8)?,
+            read_s15_fixed16(icc, offset + 12)?,
+            read_s15_fixed16(icc, offset + 16)?,
+        ])
     };
     Some([column(b"rXYZ")?, column(b"gXYZ")?, column(b"bXYZ")?])
 }

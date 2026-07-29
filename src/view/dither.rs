@@ -21,6 +21,15 @@ impl DitherMode {
             _ => Self::None,
         }
     }
+
+    /// Name for the info panel.
+    pub fn description(self) -> &'static str {
+        match self {
+            Self::None => "None",
+            Self::Ordered => "Ordered",
+            Self::Fruit => "Fruit",
+        }
+    }
 }
 
 #[cfg(test)]

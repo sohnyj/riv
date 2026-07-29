@@ -33,7 +33,7 @@ use shell::open_with::{self, OpenWithList, WM_APP_OPEN_WITH_LIST};
 use shell::{clipboard, file_ops, open_dialog};
 use view::dither::DitherMode;
 use view::renderer::{
-    GraphicsDevice, OutputMode, PendingDevice, Renderer, ToneMapInfo, create_device,
+    FrameDecision, GraphicsDevice, OutputMode, PendingDevice, Renderer, ToneMapInfo, create_device,
 };
 use view::transform::{FitMode, Size, ViewTransform};
 use window::context_menu::{self, MenuSelection, MenuState};
@@ -443,13 +443,9 @@ impl Application {
         }
     }
 
-    fn scaling_description(&self) -> &'static str {
+    fn scaling_description(&self, frame: Option<FrameDecision>) -> &'static str {
         // A 1:1 placement resamples nothing, whatever the filter.
-        if self
-            .renderer
-            .as_ref()
-            .is_some_and(Renderer::is_identity_draw)
-        {
+        if frame.is_some_and(FrameDecision::is_identity_draw) {
             return "None (1:1)";
         }
         match self.settings.options.scaling_filter {
@@ -890,7 +886,11 @@ impl Application {
         Ok(())
     }
 
-    fn overlay_content(&mut self, background: D2D1_COLOR_F) -> OverlayContent {
+    fn overlay_content(
+        &mut self,
+        background: D2D1_COLOR_F,
+        frame: Option<FrameDecision>,
+    ) -> OverlayContent {
         let error_text = self
             .image_core
             .load_error
@@ -905,7 +905,7 @@ impl Application {
             });
         // The pill borrows the top edge: the info panel yields while one shows.
         let info_text = if self.show_file_info && self.status_text.is_none() {
-            self.cached_info_text()
+            self.cached_info_text(frame)
         } else {
             None
         };
@@ -939,16 +939,13 @@ impl Application {
     }
 
     /// Info panel text, rebuilt only when a display input changes (else the cached copy).
-    fn cached_info_text(&mut self) -> Option<String> {
+    fn cached_info_text(&mut self, frame: Option<FrameDecision>) -> Option<String> {
         let output_description = self
             .renderer
             .as_ref()
             .map_or("", |renderer| renderer.output_description());
-        let scaling_description = self.scaling_description();
-        let dither_description = self
-            .renderer
-            .as_ref()
-            .map_or("None", |renderer| renderer.dither_description());
+        let scaling_description = self.scaling_description(frame);
+        let dither_description = frame.map_or("None", FrameDecision::dither_description);
         let tone_map = self.renderer.as_ref().map(Renderer::tone_map_info);
         // Size and modified time were carried by the load; nothing re-stats here.
         let (file_size, modified) = self.image_core.current_item_metadata().unwrap_or((0, None));
@@ -1021,9 +1018,9 @@ impl Application {
         // Decide first: the panel reports this frame, not the last one.
         let decision = self
             .renderer
-            .as_mut()
+            .as_ref()
             .map(|renderer| renderer.decide_frame(matrix, interpolation));
-        let content = self.overlay_content(background);
+        let content = self.overlay_content(background, decision);
         let clear_color = color::output_color(background, self.output_color_target());
         let overlay = &self.overlay;
         let draw = |context: &_| overlay.draw(context, viewport.width, viewport.height, &content);

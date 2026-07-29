@@ -164,13 +164,9 @@ pub struct Renderer {
     linear_source_context: Option<ID2D1ColorContext>,
     image_display_size: (f32, f32),
     image_pixel_size: (f32, f32),
-    /// What this frame dithers with, for the info panel.
-    dither_description: &'static str,
-    /// This frame draws at a 1:1 placement (no resampling), for the info panel.
-    identity_draw: bool,
 }
 
-/// What `render` draws the frame with, decided before the overlay is built.
+/// What `render` draws the frame with, decided before the overlay reports it.
 #[derive(Clone, Copy)]
 pub struct FrameDecision {
     transform: Matrix3x2,
@@ -179,6 +175,19 @@ pub struct FrameDecision {
     dither: DitherMode,
     /// None when the backbuffer is not one the app quantizes.
     quantization_steps: Option<u32>,
+    identity_placement: bool,
+}
+
+impl FrameDecision {
+    /// Whether the frame draws at a 1:1 placement, for the info panel.
+    pub fn is_identity_draw(self) -> bool {
+        self.identity_placement
+    }
+
+    /// What dithering the frame gets, for the info panel.
+    pub fn dither_description(self) -> &'static str {
+        self.dither.description()
+    }
 }
 
 impl Drop for Renderer {
@@ -766,8 +775,6 @@ impl Renderer {
             linear_source_context: None,
             image_display_size: (0.0, 0.0),
             image_pixel_size: (0.0, 0.0),
-            dither_description: "None",
-            identity_draw: false,
         };
         renderer.refresh_output_description();
         renderer.create_target()?;
@@ -857,9 +864,9 @@ impl Renderer {
             .and(self.output_mode.display_profile.as_deref())
             .map(Vec::as_slice);
         match (icc_profile, destination) {
+            // Untagged stands for sRGB, so one side present means that side must be sRGB.
             (None, None) => true,
-            (None, Some(display)) => icc_is_srgb(display),
-            (Some(source), None) => icc_is_srgb(source),
+            (None, Some(profile)) | (Some(profile), None) => icc_is_srgb(profile),
             (Some(source), Some(display)) => icc_same_space(source, display),
         }
     }
@@ -1399,7 +1406,7 @@ impl Renderer {
 
     /// Decides the frame's placement and quantization; the info panel reads it.
     pub fn decide_frame(
-        &mut self,
+        &self,
         matrix: [f32; 6],
         interpolation: D2D1_INTERPOLATION_MODE,
     ) -> FrameDecision {
@@ -1441,17 +1448,12 @@ impl Renderer {
             Some(bits) if self.image.is_some() => self.active_dither_mode(draw_interpolation, bits),
             _ => DitherMode::None,
         };
-        self.dither_description = match pass_dither {
-            DitherMode::None => "None",
-            DitherMode::Ordered => "Ordered",
-            DitherMode::Fruit => "Fruit",
-        };
-        self.identity_draw = identity_placement;
         FrameDecision {
             transform,
             draw_interpolation,
             dither: pass_dither,
             quantization_steps,
+            identity_placement,
         }
     }
 
@@ -1527,16 +1529,6 @@ impl Renderer {
             && (scale_y.abs() - 1.0).abs() < 1e-6
             && (offset_x - offset_x.round()).abs() < 1e-4
             && (offset_y - offset_y.round()).abs() < 1e-4
-    }
-
-    /// Whether this frame draws at a 1:1 placement, for the info panel.
-    pub fn is_identity_draw(&self) -> bool {
-        self.identity_draw
-    }
-
-    /// What dithering this frame gets, for the info panel.
-    pub fn dither_description(&self) -> &'static str {
-        self.dither_description
     }
 
     /// The frame's output dither; a draw that makes no new values has nothing to dither.
