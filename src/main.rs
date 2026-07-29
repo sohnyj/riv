@@ -575,7 +575,7 @@ impl Application {
 
     fn apply_current_image(&mut self, window: HWND) {
         self.download_progress = None;
-        self.dismiss_sticky_status();
+        self.dismiss_sticky_status_text();
         let Some(current) = &self.image_core.current else {
             return;
         };
@@ -668,12 +668,12 @@ impl Application {
         } else {
             self.freeze_animation_for_load(window);
         }
-        self.schedule_deferred_full_decode(window);
+        self.schedule_full_decode(window);
         self.update_window_title(window);
     }
 
     /// A shown RAW preview gets its full decode once navigation stops briefly.
-    fn schedule_deferred_full_decode(&self, window: HWND) {
+    fn schedule_full_decode(&self, window: HWND) {
         if self.image_core.full_decode_pending() {
             unsafe { SetTimer(Some(window), FULL_DECODE_TIMER, 250, None) };
         }
@@ -777,7 +777,7 @@ impl Application {
     }
 
     /// Drops the frame-step pill; returns whether one was showing.
-    fn dismiss_sticky_status(&mut self) -> bool {
+    fn dismiss_sticky_status_text(&mut self) -> bool {
         let showing = matches!(self.status_text, Some(StatusText::Sticky(_)));
         if showing {
             self.status_text = None;
@@ -1551,7 +1551,7 @@ fn dispatch_action(application: &mut Application, window: HWND, action: Action) 
                     unsafe { SetTimer(Some(window), ANIMATION_TIMER, delay, None) };
                 }
                 // Resuming drops the frame-step pill left by a manual step.
-                if !paused && application.dismiss_sticky_status() {
+                if !paused && application.dismiss_sticky_status_text() {
                     application.request_render(window);
                 }
             }
@@ -2043,7 +2043,7 @@ extern "system" fn window_procedure(
                     application.apply_load_outcome(window, displayed);
                 } else {
                     // A discarded arrival can leave a shown preview needing the timer.
-                    application.schedule_deferred_full_decode(window);
+                    application.schedule_full_decode(window);
                 }
             }
             LRESULT(0)
