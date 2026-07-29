@@ -157,7 +157,7 @@ pub struct Renderer {
     /// Nearest gamut label of a tagged source; None when untagged (output names the gamut only).
     source_gamut_label: Option<&'static str>,
     /// Cached backbuffer label for the info overlay, refreshed on format/mode/gamut change.
-    output_description: String,
+    output_label: String,
     source_icc_profile: Option<Vec<u8>>,
     source_color_context: Option<ID2D1ColorContext>,
     linear_source_primaries: Option<[[f32; 2]; 3]>,
@@ -768,7 +768,7 @@ impl Renderer {
             display_color_context,
             destination_gamut_label,
             source_gamut_label: None,
-            output_description: String::new(),
+            output_label: String::new(),
             source_icc_profile: None,
             source_color_context: None,
             linear_source_primaries: None,
@@ -776,7 +776,7 @@ impl Renderer {
             image_display_size: (0.0, 0.0),
             image_pixel_size: (0.0, 0.0),
         };
-        renderer.refresh_output_description();
+        renderer.refresh_output_label();
         renderer.create_target()?;
         Ok(renderer)
     }
@@ -811,22 +811,22 @@ impl Renderer {
     }
 
     /// Active backbuffer, for the info overlay. ACM-off SDR names the gamut it maps into.
-    pub fn output_description(&self) -> &str {
-        &self.output_description
+    pub fn output_label(&self) -> &str {
+        &self.output_label
     }
 
     /// Recomputes the cached output label after a format, mode, or gamut change.
-    fn refresh_output_description(&mut self) {
-        self.output_description = if self.swap_chain_format == DXGI_FORMAT_R16G16B16A16_FLOAT {
+    fn refresh_output_label(&mut self) {
+        self.output_label = if self.swap_chain_format == DXGI_FORMAT_R16G16B16A16_FLOAT {
             "FP16 scRGB".to_string()
         } else if self.swap_chain_format == DXGI_FORMAT_R10G10B10A2_UNORM {
             if self.hdr_mode {
                 "10-bit HDR10 (PQ)".to_string()
             } else {
-                self.sdr_output_description("10-bit")
+                self.sdr_output_label("10-bit")
             }
         } else {
-            self.sdr_output_description("8-bit")
+            self.sdr_output_label("8-bit")
         };
     }
 
@@ -880,7 +880,7 @@ impl Renderer {
     }
 
     /// SDR output label; ACM-off profile mapping appends the destination gamut.
-    fn sdr_output_description(&self, bits: &str) -> String {
+    fn sdr_output_label(&self, bits: &str) -> String {
         let destination = self.destination_gamut_label.unwrap_or("sRGB");
         match self.source_gamut_label {
             Some(source) if source != destination => format!("{bits} {source} in {destination}"),
@@ -1083,7 +1083,7 @@ impl Renderer {
         self.hdr_output_color_management_effect = hdr_output_color_management_effect;
         self.pq_color_context = pq_color_context;
         self.swap_chain_format = swap_chain_format;
-        self.refresh_output_description();
+        self.refresh_output_label();
         self.create_target()
     }
 
@@ -1240,7 +1240,7 @@ impl Renderer {
         self.source_gamut_label = source_primaries
             .map(nearest_gamut_label)
             .or_else(|| icc_profile.and_then(icc_gamut_label));
-        self.refresh_output_description();
+        self.refresh_output_label();
         let Some(color_management) = &self.color_management_effect else {
             return;
         };

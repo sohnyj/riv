@@ -124,7 +124,7 @@ struct Application {
     /// Memoized info panel text, rebuilt only when a display input changes.
     info_text_cache: Option<InfoTextCache>,
     /// Advanced-color state and EDID gamut for the info overlay; refreshed on display change.
-    display_description: DisplayDescription,
+    display_labels: DisplayLabels,
     /// The last title set, so unchanged rebuilds skip the caption write.
     window_title: String,
     /// The window's current monitor; a WM_MOVE re-evaluates color only when it changes.
@@ -159,17 +159,17 @@ impl StatusText {
 struct InfoTextCache {
     location: ItemLocation,
     image_id: usize,
-    output_description: String,
+    output_label: String,
     scaling_description: &'static str,
     dither_description: &'static str,
     tone_map: Option<ToneMapInfo>,
-    display_description: DisplayDescription,
+    display_labels: DisplayLabels,
     text: String,
 }
 
 /// Advanced-color mode and EDID gamut label of the window's display, for the info overlay.
 #[derive(Clone, Copy, PartialEq)]
-struct DisplayDescription {
+struct DisplayLabels {
     color_mode: &'static str,
     gamut: &'static str,
 }
@@ -187,10 +187,10 @@ fn output_mode(
     }
 }
 
-fn display_description(
+fn display_labels(
     capabilities: &color::DisplayCapabilities,
     gamut: Option<color::DisplayGamut>,
-) -> DisplayDescription {
+) -> DisplayLabels {
     // Matches DISPLAYCONFIG_ADVANCED_COLOR_MODE (SDR/WCG/HDR) from the existing signals.
     let color_mode = if capabilities.hdr {
         "HDR"
@@ -200,7 +200,7 @@ fn display_description(
         "SDR"
     };
     let gamut = gamut.map_or("unknown", |gamut| gamut.label());
-    DisplayDescription { color_mode, gamut }
+    DisplayLabels { color_mode, gamut }
 }
 
 /// Builds a window-sized renderer for the queried display state.
@@ -274,7 +274,7 @@ impl Application {
             show_file_info: false,
             status_text: None,
             info_text_cache: None,
-            display_description: display_description(&capabilities, gamut),
+            display_labels: display_labels(&capabilities, gamut),
             window_title: "riv".to_string(),
             current_monitor: unsafe { MonitorFromWindow(window, MONITOR_DEFAULTTONEAREST) },
             title_bar_dark: None,
@@ -323,7 +323,7 @@ impl Application {
             gamut,
             display_profile,
         } = color::display_color_info(window);
-        self.display_description = display_description(&capabilities, gamut);
+        self.display_labels = display_labels(&capabilities, gamut);
         if self.reconfigure_display_output(window, &capabilities, display_profile, false) {
             self.request_render(window);
             return;
@@ -937,10 +937,10 @@ impl Application {
 
     /// Info panel text, rebuilt only when a display input changes (else the cached copy).
     fn cached_info_text(&mut self, frame: Option<FrameDecision>) -> Option<String> {
-        let output_description = self
+        let output_label = self
             .renderer
             .as_ref()
-            .map_or("", |renderer| renderer.output_description());
+            .map_or("", |renderer| renderer.output_label());
         let scaling_description = self.scaling_description(frame);
         let dither_description = frame.map_or("None", FrameDecision::dither_description);
         let tone_map = self.renderer.as_ref().map(Renderer::tone_map_info);
@@ -951,11 +951,11 @@ impl Application {
         let reuse = self.info_text_cache.as_ref().is_some_and(|cache| {
             cache.location == current.location
                 && cache.image_id == image_id
-                && cache.output_description == output_description
+                && cache.output_label == output_label
                 && cache.scaling_description == scaling_description
                 && cache.dither_description == dither_description
                 && cache.tone_map == tone_map
-                && cache.display_description == self.display_description
+                && cache.display_labels == self.display_labels
         });
         if !reuse {
             let text = overlay::build_info_text(
@@ -964,22 +964,22 @@ impl Application {
                 &current.image,
                 file_size,
                 modified,
-                output_description,
+                output_label,
                 scaling_description,
                 dither_description,
                 tone_map,
-                self.display_description.color_mode,
-                self.display_description.gamut,
+                self.display_labels.color_mode,
+                self.display_labels.gamut,
             );
             let location = current.location.clone();
             self.info_text_cache = Some(InfoTextCache {
                 location,
                 image_id,
-                output_description: output_description.to_owned(),
+                output_label: output_label.to_owned(),
                 scaling_description,
                 dither_description,
                 tone_map,
-                display_description: self.display_description,
+                display_labels: self.display_labels,
                 text,
             });
         }

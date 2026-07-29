@@ -340,7 +340,7 @@ pub fn build_info_text(
     image: &DecodedImage,
     file_size: u64,
     modified: Option<SystemTime>,
-    output_description: &str,
+    output_label: &str,
     scaling_description: &str,
     dither_description: &str,
     tone_map: Option<ToneMapInfo>,
@@ -383,7 +383,7 @@ pub fn build_info_text(
     let display = vec![
         format!("Advanced color: {color_mode}"),
         format!("Display: {gamut}"),
-        format!("Output: {output_description}"),
+        format!("Output: {output_label}"),
     ];
 
     // Metrics: frame count and luminance figures, shown only when they apply.
