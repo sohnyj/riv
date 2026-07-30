@@ -609,8 +609,8 @@ fn handle_page_command(
         (IDC_IMAGE_CURSOR_ZOOM, BN_CLICKED) => {
             options.cursor_zoom = is_checked(page, control);
         }
-        (IDC_IMAGE_FRACTIONAL_ZOOM, BN_CLICKED) => {
-            options.fractional_zoom = is_checked(page, control);
+        (IDC_IMAGE_FRACTIONAL_WHEEL_ZOOM, BN_CLICKED) => {
+            options.fractional_wheel_zoom = is_checked(page, control);
         }
         (IDC_MISC_SORT, CBN_SELCHANGE) => options.sort_mode = combo_selection(page, control),
         (IDC_MISC_ASCENDING, BN_CLICKED) => options.sort_descending = false,
@@ -756,8 +756,8 @@ fn sync_all_pages(state: &mut OptionsState) {
     set_check(image_page, IDC_IMAGE_CURSOR_ZOOM, options.cursor_zoom);
     set_check(
         image_page,
-        IDC_IMAGE_FRACTIONAL_ZOOM,
-        options.fractional_zoom,
+        IDC_IMAGE_FRACTIONAL_WHEEL_ZOOM,
+        options.fractional_wheel_zoom,
     );
 
     let miscellaneous_page = state.pages[2];

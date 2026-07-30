@@ -1127,7 +1127,7 @@ impl Application {
 
     fn wheel_zoom(&mut self, window: HWND, wheel_delta: i16) {
         let step = 1.0 + self.settings.options.zoom_step_percent as f32 / 100.0;
-        let exponent = if self.settings.options.fractional_zoom {
+        let exponent = if self.settings.options.fractional_wheel_zoom {
             f32::from(wheel_delta) / 120.0
         } else {
             let notches = self.accumulate_wheel_notches(wheel_delta);
