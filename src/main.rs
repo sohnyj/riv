@@ -68,11 +68,11 @@ use windows::Win32::UI::WindowsAndMessaging::{
     SW_HIDE, SW_SHOW, SW_SHOWMAXIMIZED, SWP_FRAMECHANGED, SWP_NOACTIVATE, SWP_NOMOVE, SWP_NOSIZE,
     SWP_NOZORDER, SendMessageW, SetCursor, SetTimer, SetWindowLongPtrW, SetWindowPlacement,
     SetWindowPos, SetWindowTextW, ShowWindow, TranslateMessage, WINDOWPLACEMENT, WM_APP, WM_CLOSE,
-    WM_CONTEXTMENU, WM_DESTROY, WM_DISPLAYCHANGE, WM_DPICHANGED, WM_GESTURE, WM_KEYDOWN,
-    WM_LBUTTONDBLCLK, WM_LBUTTONDOWN, WM_LBUTTONUP, WM_MBUTTONDOWN, WM_MOUSEHWHEEL, WM_MOUSEMOVE,
-    WM_MOUSEWHEEL, WM_MOVE, WM_NCDESTROY, WM_NCLBUTTONDOWN, WM_PAINT, WM_SETCURSOR,
-    WM_SETTINGCHANGE, WM_SIZE, WM_SYSCHAR, WM_SYSCOMMAND, WM_SYSKEYDOWN, WM_TIMER, WM_XBUTTONDOWN,
-    WNDCLASSEXW, WS_OVERLAPPEDWINDOW, WindowFromPoint,
+    WM_CONTEXTMENU, WM_DESTROY, WM_DISPLAYCHANGE, WM_DPICHANGED, WM_ENTERSIZEMOVE, WM_EXITSIZEMOVE,
+    WM_GESTURE, WM_KEYDOWN, WM_LBUTTONDBLCLK, WM_LBUTTONDOWN, WM_LBUTTONUP, WM_MBUTTONDOWN,
+    WM_MOUSEHWHEEL, WM_MOUSEMOVE, WM_MOUSEWHEEL, WM_MOVE, WM_NCDESTROY, WM_NCLBUTTONDOWN, WM_PAINT,
+    WM_SETCURSOR, WM_SETTINGCHANGE, WM_SIZE, WM_SYSCHAR, WM_SYSCOMMAND, WM_SYSKEYDOWN, WM_TIMER,
+    WM_XBUTTONDOWN, WNDCLASSEXW, WS_OVERLAPPEDWINDOW, WindowFromPoint,
 };
 use windows::core::{PCWSTR, Result, w};
 
@@ -129,6 +129,10 @@ struct Application {
     window_title: String,
     /// The window's current monitor; a WM_MOVE re-evaluates color only when it changes.
     current_monitor: HMONITOR,
+    /// Inside a modal move loop, where the system invalidates but the content cannot change.
+    window_moving: bool,
+    /// Set when riv itself asked for new pixels, so a moving window still draws them.
+    render_requested: bool,
     /// Last-applied dark title bar; a WM_SETTINGCHANGE reapplies only when it flips.
     title_bar_dark: Option<bool>,
     /// Received bytes of the pending URL download the view reports on.
@@ -277,6 +281,8 @@ impl Application {
             display_labels: display_labels(&capabilities, gamut),
             window_title: "riv".to_string(),
             current_monitor: unsafe { MonitorFromWindow(window, MONITOR_DEFAULTTONEAREST) },
+            window_moving: false,
+            render_requested: false,
             title_bar_dark: None,
             download_progress: None,
             slideshow_active: false,
@@ -989,6 +995,8 @@ impl Application {
     }
 
     fn render(&mut self, window: HWND) {
+        // Cleared first: anything this frame requests belongs to the next one.
+        self.render_requested = false;
         let (width, height) = client_size(window);
         if width == 0 || height == 0 {
             return;
@@ -1044,7 +1052,8 @@ impl Application {
         }
     }
 
-    fn request_render(&self, window: HWND) {
+    fn request_render(&mut self, window: HWND) {
+        self.render_requested = true;
         let _ = unsafe { InvalidateRect(Some(window), None, false) };
     }
 
@@ -2005,8 +2014,23 @@ extern "system" fn window_procedure(
     lparam: LPARAM,
 ) -> LRESULT {
     match message {
+        WM_ENTERSIZEMOVE => {
+            if let Some(application) = application_from_window(window) {
+                application.window_moving = true;
+            }
+            LRESULT(0)
+        }
+        WM_EXITSIZEMOVE => {
+            if let Some(application) = application_from_window(window) {
+                application.window_moving = false;
+                application.request_render(window);
+            }
+            LRESULT(0)
+        }
         WM_SIZE => {
             if let Some(application) = application_from_window(window) {
+                // A size change inside the modal loop still needs every frame drawn.
+                application.window_moving = false;
                 let width = (lparam.0 & 0xFFFF) as u32;
                 let height = ((lparam.0 >> 16) & 0xFFFF) as u32;
                 if width > 0 && height > 0 {
@@ -2026,7 +2050,10 @@ extern "system" fn window_procedure(
         }
         WM_PAINT => {
             if let Some(application) = application_from_window(window) {
-                application.render(window);
+                // The system invalidates a moving window whose pixels did not change.
+                if !application.window_moving || application.render_requested {
+                    application.render(window);
+                }
             }
             let _ = unsafe { ValidateRect(Some(window), None) };
             LRESULT(0)
@@ -2440,6 +2467,8 @@ extern "system" fn window_procedure(
             if let Some(application) = application_from_window(window)
                 && application.update_current_monitor(window)
             {
+                // The output may be rebuilt, so this drag has to draw again after all.
+                application.window_moving = false;
                 application.refresh_display_state(window);
             }
             LRESULT(0)
