@@ -64,15 +64,16 @@ use windows::Win32::UI::WindowsAndMessaging::{
     DispatchMessageW, GWL_STYLE, GWLP_USERDATA, GetClientRect, GetCursorPos, GetMessageW,
     GetWindowLongPtrW, GetWindowPlacement, GetWindowRect, HCURSOR, HTCAPTION, HTCLIENT,
     HWND_NOTOPMOST, HWND_TOP, HWND_TOPMOST, IDC_ARROW, IDC_SIZEALL, IsZoomed, KillTimer,
-    LoadCursorW, LoadIconW, MSG, PostMessageW, PostQuitMessage, RegisterClassExW, SC_MONITORPOWER,
-    SW_HIDE, SW_SHOW, SW_SHOWMAXIMIZED, SWP_FRAMECHANGED, SWP_NOACTIVATE, SWP_NOMOVE, SWP_NOSIZE,
-    SWP_NOZORDER, SendMessageW, SetCursor, SetTimer, SetWindowLongPtrW, SetWindowPlacement,
-    SetWindowPos, SetWindowTextW, ShowWindow, TranslateMessage, WINDOWPLACEMENT, WM_APP, WM_CLOSE,
-    WM_CONTEXTMENU, WM_DESTROY, WM_DISPLAYCHANGE, WM_DPICHANGED, WM_ENTERSIZEMOVE, WM_EXITSIZEMOVE,
-    WM_GESTURE, WM_KEYDOWN, WM_LBUTTONDBLCLK, WM_LBUTTONDOWN, WM_LBUTTONUP, WM_MBUTTONDOWN,
-    WM_MOUSEHWHEEL, WM_MOUSEMOVE, WM_MOUSEWHEEL, WM_MOVE, WM_NCDESTROY, WM_NCLBUTTONDOWN, WM_PAINT,
-    WM_SETCURSOR, WM_SETTINGCHANGE, WM_SIZE, WM_SYSCHAR, WM_SYSCOMMAND, WM_SYSKEYDOWN, WM_TIMER,
-    WM_XBUTTONDOWN, WNDCLASSEXW, WS_OVERLAPPEDWINDOW, WindowFromPoint,
+    LoadCursorW, LoadIconW, MINMAXINFO, MSG, PostMessageW, PostQuitMessage, RegisterClassExW,
+    SC_MONITORPOWER, SW_HIDE, SW_SHOW, SW_SHOWMAXIMIZED, SWP_FRAMECHANGED, SWP_NOACTIVATE,
+    SWP_NOMOVE, SWP_NOSIZE, SWP_NOZORDER, SendMessageW, SetCursor, SetTimer, SetWindowLongPtrW,
+    SetWindowPlacement, SetWindowPos, SetWindowTextW, ShowWindow, TranslateMessage,
+    WINDOWPLACEMENT, WM_APP, WM_CLOSE, WM_CONTEXTMENU, WM_DESTROY, WM_DISPLAYCHANGE, WM_DPICHANGED,
+    WM_ENTERSIZEMOVE, WM_EXITSIZEMOVE, WM_GESTURE, WM_GETMINMAXINFO, WM_KEYDOWN, WM_LBUTTONDBLCLK,
+    WM_LBUTTONDOWN, WM_LBUTTONUP, WM_MBUTTONDOWN, WM_MOUSEHWHEEL, WM_MOUSEMOVE, WM_MOUSEWHEEL,
+    WM_MOVE, WM_NCDESTROY, WM_NCLBUTTONDOWN, WM_PAINT, WM_SETCURSOR, WM_SETTINGCHANGE, WM_SIZE,
+    WM_SYSCHAR, WM_SYSCOMMAND, WM_SYSKEYDOWN, WM_TIMER, WM_XBUTTONDOWN, WNDCLASSEXW,
+    WS_OVERLAPPEDWINDOW, WindowFromPoint,
 };
 use windows::core::{PCWSTR, Result, w};
 
@@ -89,6 +90,9 @@ const CURSOR_HIDE_TIMER: usize = 5;
 const FULL_DECODE_TIMER: usize = 6;
 
 const PAN_STEP: f32 = 64.0;
+
+/// Smallest client area a resize may reach, in logical pixels before DPI scaling.
+const MINIMUM_CLIENT_SIZE: (i32, i32) = (320, 240);
 
 struct Application {
     /// None between a device loss and the next successful rebuild.
@@ -2014,6 +2018,18 @@ extern "system" fn window_procedure(
     lparam: LPARAM,
 ) -> LRESULT {
     match message {
+        WM_GETMINMAXINFO => {
+            // Without this the window shrinks until only the caption and its buttons are left.
+            let (client_width, client_height) = MINIMUM_CLIENT_SIZE;
+            if let Some((width, height)) =
+                window::window_size_for_client(window, client_width, client_height)
+            {
+                let information = unsafe { &mut *(lparam.0 as *mut MINMAXINFO) };
+                information.ptMinTrackSize.x = width;
+                information.ptMinTrackSize.y = height;
+            }
+            LRESULT(0)
+        }
         WM_ENTERSIZEMOVE => {
             if let Some(application) = application_from_window(window) {
                 application.window_moving = true;
