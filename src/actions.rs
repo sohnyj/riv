@@ -19,6 +19,7 @@ pub enum ActivationGate {
 pub enum Action {
     Open,
     OpenUrl,
+    PasteUrl,
     Recent(u8),
     ClearRecents,
     OpenWith,
@@ -67,6 +68,12 @@ const ACTION_TABLE: &[(Action, &str, &str, ActivationGate)] = &[
         Action::OpenUrl,
         "openurl",
         "Open URL...",
+        ActivationGate::Window,
+    ),
+    (
+        Action::PasteUrl,
+        "pasteurl",
+        "Paste URL",
         ActivationGate::Window,
     ),
     (

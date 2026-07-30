@@ -1521,6 +1521,7 @@ fn dispatch_action(application: &mut Application, window: HWND, action: Action) 
                 open_external_url(application, window, &url);
             }
         }
+        Action::PasteUrl => paste_open_url(application, window),
         Action::OpenContainingFolder => {
             // The ContainingFile gate keeps URL items out of here.
             if let Some(file) = application.image_core.current_containing_file() {
@@ -1722,11 +1723,6 @@ fn handle_key(application: &mut Application, window: HWND, virtual_key: u16) -> 
     {
         toggle_fullscreen(application, window);
         application.request_render(window);
-        return true;
-    }
-    // Fixed paste-to-open key; user bindings on Ctrl+V take precedence above.
-    if modifiers == MODIFIER_CONTROL && virtual_key == u16::from(b'V') {
-        paste_open_url(application, window);
         return true;
     }
     false
