@@ -230,6 +230,22 @@ pub enum NavigationCommand {
     Last,
 }
 
+/// The place a dropped anchor held, named by the entry beside it so re-sorts carry it.
+enum MissingAnchor {
+    Front,
+    After(ItemLocation),
+}
+
+/// Where a step counts from: the anchor's own index, the one it left, or neither.
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum AnchorIndex {
+    Listed(usize),
+    /// The anchor is gone from the listing; it belonged just before this index.
+    Missing(usize),
+    /// Never listed at all (an anchor outside the listing); steps enter from the ends.
+    Unlisted,
+}
+
 pub struct ListingEntry {
     pub location: ItemLocation,
     wide_name: Vec<u16>,
@@ -321,6 +337,11 @@ impl CacheEntry {
             texture,
         }
     }
+
+    /// Cached pixels stand for a file of this size and modification time, nothing else.
+    fn matches(&self, file_size: u64, modified: Option<SystemTime>) -> bool {
+        self.file_size == file_size && self.modified == modified
+    }
 }
 
 /// Frees retired image buffers off the UI thread.
@@ -372,13 +393,26 @@ pub struct ImageCore {
     releaser: ImageReleaser,
     /// Listing scan in flight (folder or archive), awaiting its ScannedListing.
     pending_scan: Option<PendingScan>,
+    /// Place a vanished anchor left behind; steps continue from there, not from the ends.
+    missing_anchor: Option<MissingAnchor>,
     window: isize,
 }
 
-/// A scan request: the scope it awaits, and whether arrival opens the first entry.
+/// A scan request: the scope it awaits, and what its arrival is for.
 struct PendingScan {
     scope: ListingScope,
-    open_first_entry: bool,
+    purpose: ScanPurpose,
+}
+
+/// What an arriving listing does to the view.
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum ScanPurpose {
+    /// A folder or archive was the target: its first entry opens on arrival.
+    OpenFirstEntry,
+    /// The listing behind a directly opened file; the anchor is already loading.
+    CoverAnchor,
+    /// Re-collection of the scope in hand; the old listing serves until this lands.
+    Refresh,
 }
 
 /// A finished background scan, posted back as WM_APP_LISTING_READY.
@@ -454,6 +488,7 @@ impl ImageCore {
             opposite_steps: 0,
             releaser: ImageReleaser::new(),
             pending_scan: None,
+            missing_anchor: None,
             window: window.0 as isize,
         }
     }
@@ -535,22 +570,22 @@ impl ImageCore {
     pub fn has_navigation_targets(&self) -> bool {
         match self.entries.len() {
             0 => false,
-            // A single listed entry is a real target only for an unlisted anchor.
-            1 => self
-                .navigation_anchor()
-                .and_then(|anchor| self.position_of(anchor))
-                .is_none(),
+            // A single listed entry is a real target only for an anchor outside it.
+            1 => !matches!(self.anchor_index(), AnchorIndex::Listed(_)),
             _ => true,
         }
     }
 
     /// Listing window for the menu: `capacity` names centered on the anchor, the rest a count.
     pub fn playlist_window(&self, capacity: usize) -> PlaylistWindow {
-        let anchor_index = self
-            .navigation_anchor()
-            .and_then(|location| self.position_of(location));
         let total = self.entries.len();
-        let first_index = playlist_window_start(total, anchor_index, capacity);
+        let anchor = self.anchor_index();
+        // A vanished anchor still says where to look, even with no slot to mark.
+        let center = match anchor {
+            AnchorIndex::Listed(index) | AnchorIndex::Missing(index) => Some(index),
+            AnchorIndex::Unlisted => None,
+        };
+        let first_index = playlist_window_start(total, center, capacity);
         let end = (first_index + capacity).min(total);
         PlaylistWindow {
             names: self.entries[first_index..end]
@@ -558,9 +593,12 @@ impl ImageCore {
                 .map(|entry| entry.location.display_name())
                 .collect(),
             first_index,
-            current_slot: anchor_index
-                .filter(|index| (first_index..end).contains(index))
-                .map(|index| index - first_index),
+            current_slot: match anchor {
+                AnchorIndex::Listed(index) if (first_index..end).contains(&index) => {
+                    Some(index - first_index)
+                }
+                _ => None,
+            },
             hidden_count: total - (end - first_index),
         }
     }
@@ -598,12 +636,14 @@ impl ImageCore {
             let scope = ListingScope::Archive(path.clone());
             self.submit_scan(PendingScan {
                 scope,
-                open_first_entry: true,
+                purpose: ScanPurpose::OpenFirstEntry,
             });
             return false;
         }
-        // A reload re-decodes the item; the listing snapshot stays put.
-        self.load_item(&location)
+        // A reload re-decodes the item and re-collects the listing it sits in.
+        let displayed = self.load_item(&location);
+        self.submit_refresh_scan();
+        displayed
     }
 
     pub fn load_path(&mut self, path: &Path) -> bool {
@@ -613,7 +653,7 @@ impl ImageCore {
         if path.is_dir() {
             self.submit_scan(PendingScan {
                 scope: ListingScope::Directory(path),
-                open_first_entry: true,
+                purpose: ScanPurpose::OpenFirstEntry,
             });
             return false;
         }
@@ -626,7 +666,7 @@ impl ImageCore {
         {
             self.submit_scan(PendingScan {
                 scope: ListingScope::Archive(path),
-                open_first_entry: true,
+                purpose: ScanPurpose::OpenFirstEntry,
             });
             return false;
         }
@@ -636,7 +676,7 @@ impl ImageCore {
         {
             self.submit_scan(PendingScan {
                 scope: ListingScope::Directory(directory),
-                open_first_entry: false,
+                purpose: ScanPurpose::CoverAnchor,
             });
         }
         self.load_item(&ItemLocation::File(path))
@@ -655,9 +695,31 @@ impl ImageCore {
         self.reset_navigation_direction();
         self.entries = Vec::new();
         self.listing_scope = None;
+        self.missing_anchor = None;
         self.pending_scan = Some(pending);
         // The old snapshot is gone, so nothing it held is reachable any more.
         self.refresh_preload();
+        self.spawn_scan(scope);
+    }
+
+    /// Re-collects the current scope while the listing in hand stays usable until it lands.
+    fn submit_refresh_scan(&mut self) {
+        // A scan already in flight is the newer listing; leave it to arrive.
+        if self.listing_scan_pending() {
+            return;
+        }
+        let Some(scope) = self.listing_scope.clone() else {
+            return;
+        };
+        self.pending_scan = Some(PendingScan {
+            scope: scope.clone(),
+            purpose: ScanPurpose::Refresh,
+        });
+        self.spawn_scan(scope);
+    }
+
+    /// The worker half of a scan: enumerate off the UI thread and post the listing back.
+    fn spawn_scan(&self, scope: ListingScope) {
         let options = self.options.clone();
         let window = self.window;
         let _ = std::thread::Builder::new()
@@ -671,7 +733,30 @@ impl ImageCore {
             });
     }
 
-    /// Installs an arrived scan; a stale one is dropped, an archive failure becomes the error.
+    /// What an anchor the incoming listing dropped now sits behind, if it sat in it at all.
+    fn missing_anchor_for(&self, incoming: &[ListingEntry]) -> Option<MissingAnchor> {
+        let anchor = self.navigation_anchor()?;
+        let index = match self.anchor_index() {
+            AnchorIndex::Listed(index) | AnchorIndex::Missing(index) => index,
+            AnchorIndex::Unlisted => return None,
+        };
+        if incoming.iter().any(|entry| entry.location == *anchor) {
+            return None;
+        }
+        let arriving: HashSet<&ItemLocation> =
+            incoming.iter().map(|entry| &entry.location).collect();
+        // The nearest surviving predecessor keeps the place where it was, additions included.
+        let predecessor = self.entries[..index]
+            .iter()
+            .rev()
+            .find(|entry| arriving.contains(&entry.location));
+        Some(match predecessor {
+            Some(entry) => MissingAnchor::After(entry.location.clone()),
+            None => MissingAnchor::Front,
+        })
+    }
+
+    /// Installs an arrived scan; a stale one or a failed refresh is dropped.
     pub fn install_listing_scan(&mut self, scan: ScannedListing) -> ListingInstall {
         let Some(pending) = self
             .pending_scan
@@ -682,6 +767,10 @@ impl ImageCore {
         let mut entries = match scan.result {
             Ok(entries) => entries,
             Err(error) => {
+                // A refresh that failed to enumerate leaves the listing it was refreshing.
+                if pending.purpose == ScanPurpose::Refresh {
+                    return ListingInstall::Discarded;
+                }
                 self.pending_display = None;
                 self.load_error =
                     Some((ItemLocation::File(scan.scope.path().to_path_buf()), error));
@@ -694,9 +783,10 @@ impl ImageCore {
         {
             sort_entries(&mut entries, &self.options);
         }
+        self.missing_anchor = self.missing_anchor_for(&entries);
         self.entries = entries;
         self.listing_scope = Some(scan.scope);
-        if pending.open_first_entry {
+        if pending.purpose == ScanPurpose::OpenFirstEntry {
             let Some(first) = self.entries.first().map(|entry| entry.location.clone()) else {
                 return ListingInstall::Installed;
             };
@@ -751,6 +841,11 @@ impl ImageCore {
     }
 
     fn load_item(&mut self, location: &ItemLocation) -> bool {
+        // Another item becoming the anchor spends the place the last one left.
+        let same_anchor = self.navigation_anchor() == Some(location);
+        if !same_anchor {
+            self.missing_anchor = None;
+        }
         let (file_size, modified) = match location {
             ItemLocation::File(path) => match std::fs::metadata(path) {
                 Ok(metadata) => (metadata.len(), metadata.modified().ok()),
@@ -793,7 +888,7 @@ impl ImageCore {
         let cached = self
             .cache
             .get(location)
-            .filter(|entry| entry.file_size == file_size)
+            .filter(|entry| entry.matches(file_size, modified))
             .cloned();
         let mut preview_shown = false;
         if let Some(entry) = cached {
@@ -854,7 +949,7 @@ impl ImageCore {
         let preview_cached = self
             .cache
             .get(&location)
-            .is_some_and(|entry| entry.preview && entry.file_size == file_size);
+            .is_some_and(|entry| entry.preview && entry.matches(file_size, modified));
         self.submit_pending_decode(location, file_size, modified, preview_cached);
     }
 
@@ -1042,20 +1137,36 @@ impl ImageCore {
             .or_else(|| self.current.as_ref().map(|current| &current.location))
     }
 
+    /// The anchor's index in the listing; a listing that dropped it answers with its place.
+    fn anchor_index(&self) -> AnchorIndex {
+        if let Some(index) = self
+            .navigation_anchor()
+            .and_then(|location| self.position_of(location))
+        {
+            return AnchorIndex::Listed(index);
+        }
+        match &self.missing_anchor {
+            Some(MissingAnchor::Front) => AnchorIndex::Missing(0),
+            Some(MissingAnchor::After(location)) => match self.position_of(location) {
+                Some(index) => AnchorIndex::Missing(index + 1),
+                None => AnchorIndex::Unlisted,
+            },
+            None => AnchorIndex::Unlisted,
+        }
+    }
+
     fn navigation_target(&self, command: NavigationCommand) -> Option<ItemLocation> {
         if self.entries.is_empty() {
             return None;
         }
-        let anchor_index = self
-            .navigation_anchor()
-            .and_then(|location| self.position_of(location));
+        let anchor = self.anchor_index();
         let length = self.entries.len();
         let looped = self.options.loop_within_folder;
         let index = match command {
             NavigationCommand::First => 0,
             NavigationCommand::Last => length - 1,
-            NavigationCommand::Next => step_index(anchor_index, 1, length, looped)?,
-            NavigationCommand::Previous => step_index(anchor_index, -1, length, looped)?,
+            NavigationCommand::Next => step_index(anchor, 1, length, looped)?,
+            NavigationCommand::Previous => step_index(anchor, -1, length, looped)?,
         };
         Some(self.entries[index].location.clone())
     }
@@ -1281,10 +1392,9 @@ impl ImageCore {
                 match entry.weight {
                     DecodedWeight::Known(weight)
                         if !self.in_flight.contains_key(&entry.location)
-                            && !self
-                                .cache
-                                .get(&entry.location)
-                                .is_some_and(|cached| cached.file_size == entry.file_size) =>
+                            && !self.cache.get(&entry.location).is_some_and(|cached| {
+                                cached.matches(entry.file_size, Some(entry.modified))
+                            }) =>
                     {
                         Some((index, weight))
                     }
@@ -1532,20 +1642,24 @@ fn is_raw_two_stage(location: &ItemLocation) -> bool {
     matches!(location, ItemLocation::File(path) if decode::is_raw_two_stage(path))
 }
 
-/// One step from the anchor (or the matching end when absent); None past a non-looping end.
-fn step_index(
-    anchor: Option<usize>,
-    direction: isize,
-    length: usize,
-    looped: bool,
-) -> Option<usize> {
+/// One step from the anchor index; None past a non-looping end.
+fn step_index(anchor: AnchorIndex, direction: isize, length: usize, looped: bool) -> Option<usize> {
     if length == 0 {
         return None;
     }
     let length = length as isize;
-    let start = anchor.map_or(if direction > 0 { -1 } else { length }, |index| {
-        index as isize
-    });
+    let start = match anchor {
+        AnchorIndex::Listed(index) => index as isize,
+        // A missing anchor sits between its neighbors, so both directions land next to it.
+        AnchorIndex::Missing(index) => index as isize - isize::from(direction > 0),
+        AnchorIndex::Unlisted => {
+            if direction > 0 {
+                -1
+            } else {
+                length
+            }
+        }
+    };
     let index = start + direction;
     if looped {
         Some(index.rem_euclid(length) as usize)
@@ -2020,26 +2134,41 @@ mod step_index_tests {
     use super::*;
 
     #[test]
-    fn an_absent_anchor_starts_at_the_matching_end() {
-        assert_eq!(step_index(None, 1, 3, false), Some(0));
-        assert_eq!(step_index(None, -1, 3, false), Some(2));
+    fn an_unlisted_anchor_starts_at_the_matching_end() {
+        assert_eq!(step_index(AnchorIndex::Unlisted, 1, 3, false), Some(0));
+        assert_eq!(step_index(AnchorIndex::Unlisted, -1, 3, false), Some(2));
     }
 
     #[test]
     fn steps_move_one_entry_and_ends_obey_the_loop_option() {
-        assert_eq!(step_index(Some(1), 1, 4, false), Some(2));
-        assert_eq!(step_index(Some(3), 1, 4, false), None);
-        assert_eq!(step_index(Some(3), 1, 4, true), Some(0));
-        assert_eq!(step_index(Some(0), -1, 4, false), None);
-        assert_eq!(step_index(Some(0), -1, 4, true), Some(3));
+        assert_eq!(step_index(AnchorIndex::Listed(1), 1, 4, false), Some(2));
+        assert_eq!(step_index(AnchorIndex::Listed(3), 1, 4, false), None);
+        assert_eq!(step_index(AnchorIndex::Listed(3), 1, 4, true), Some(0));
+        assert_eq!(step_index(AnchorIndex::Listed(0), -1, 4, false), None);
+        assert_eq!(step_index(AnchorIndex::Listed(0), -1, 4, true), Some(3));
+    }
+
+    #[test]
+    fn a_missing_anchor_lands_on_both_of_its_neighbors() {
+        assert_eq!(step_index(AnchorIndex::Missing(2), 1, 4, false), Some(2));
+        assert_eq!(step_index(AnchorIndex::Missing(2), -1, 4, false), Some(1));
+        // The place after the last entry: forward runs out, backward keeps the last one.
+        assert_eq!(step_index(AnchorIndex::Missing(4), 1, 4, false), None);
+        assert_eq!(step_index(AnchorIndex::Missing(4), 1, 4, true), Some(0));
+        assert_eq!(step_index(AnchorIndex::Missing(4), -1, 4, false), Some(3));
+        // The place before the first entry mirrors it.
+        assert_eq!(step_index(AnchorIndex::Missing(0), -1, 4, false), None);
+        assert_eq!(step_index(AnchorIndex::Missing(0), -1, 4, true), Some(3));
+        assert_eq!(step_index(AnchorIndex::Missing(0), 1, 4, false), Some(0));
     }
 
     #[test]
     fn degenerate_lengths_stay_in_bounds() {
-        assert_eq!(step_index(None, 1, 0, true), None);
-        assert_eq!(step_index(None, 1, 1, false), Some(0));
-        assert_eq!(step_index(Some(0), 1, 1, true), Some(0));
-        assert_eq!(step_index(Some(0), 1, 1, false), None);
+        assert_eq!(step_index(AnchorIndex::Unlisted, 1, 0, true), None);
+        assert_eq!(step_index(AnchorIndex::Missing(0), 1, 0, true), None);
+        assert_eq!(step_index(AnchorIndex::Unlisted, 1, 1, false), Some(0));
+        assert_eq!(step_index(AnchorIndex::Listed(0), 1, 1, true), Some(0));
+        assert_eq!(step_index(AnchorIndex::Listed(0), 1, 1, false), None);
     }
 }
 
@@ -2553,6 +2682,70 @@ mod listing_scan_tests {
         ));
         assert!(core.load_error.is_some());
         assert!(!core.listing_scan_pending());
+    }
+
+    #[test]
+    fn a_reload_re_collects_the_listing_it_sits_in() {
+        let directory = std::env::temp_dir().join("riv-reload-refresh");
+        std::fs::create_dir_all(&directory).expect("fixture directory");
+        let first = directory.join("a.png");
+        std::fs::write(&first, b"listing only").expect("fixture file");
+        let mut core = core();
+        core.rescan_folder(&directory);
+        core.load_path(&first);
+        std::fs::write(directory.join("b.png"), b"listing only").expect("fixture file");
+        core.reload_current();
+        assert!(core.listing_scan_pending());
+        let scan = ScannedListing::of(ListingScope::Directory(directory.clone()), &core.options);
+        core.install_listing_scan(scan);
+        assert_eq!(core.entries.len(), 2); // the file added since the open is listed
+        assert_eq!(core.listing_position(), Some((1, 2))); // the anchor kept its place
+        let _ = std::fs::remove_dir_all(&directory);
+    }
+
+    #[test]
+    fn a_vanished_item_leaves_a_slot_its_neighbors_still_answer() {
+        let directory = std::env::temp_dir().join("riv-reload-vanished");
+        std::fs::create_dir_all(&directory).expect("fixture directory");
+        for name in ["a.png", "b.png", "c.png"] {
+            std::fs::write(directory.join(name), b"listing only").expect("fixture file");
+        }
+        let mut core = core();
+        core.rescan_folder(&directory);
+        let middle = directory.join("b.png");
+        // Anchored without a decode: a worker holding the file open would race the removal.
+        core.pending_display = Some(ItemLocation::File(middle.clone()));
+        std::fs::remove_file(&middle).expect("fixture removal");
+        assert!(!core.reload_current()); // nothing left to decode
+        let scan = ScannedListing::of(ListingScope::Directory(directory.clone()), &core.options);
+        core.install_listing_scan(scan);
+        assert_eq!(core.entries.len(), 2); // the listing dropped it
+        assert!(core.load_error.is_some()); // and the error stays on screen
+        fn target(core: &ImageCore, command: NavigationCommand) -> Option<PathBuf> {
+            core.navigation_target(command)
+                .and_then(|location| location.as_file().map(Path::to_path_buf))
+        }
+        let neighbors = |core: &ImageCore| {
+            (
+                target(core, NavigationCommand::Next),
+                target(core, NavigationCommand::Previous),
+            )
+        };
+        let expected = (Some(directory.join("c.png")), Some(directory.join("a.png")));
+        assert_eq!(neighbors(&core), expected);
+        // A second reload of the same missing item keeps the place it left.
+        assert!(!core.reload_current());
+        let scan = ScannedListing::of(ListingScope::Directory(directory.clone()), &core.options);
+        core.install_listing_scan(scan);
+        assert_eq!(neighbors(&core), expected);
+        // A file added ahead of it shifts every index; the place follows its neighbor.
+        std::fs::write(directory.join("a0.png"), b"listing only").expect("fixture file");
+        assert!(!core.reload_current());
+        let scan = ScannedListing::of(ListingScope::Directory(directory.clone()), &core.options);
+        core.install_listing_scan(scan);
+        assert_eq!(core.entries.len(), 3);
+        assert_eq!(neighbors(&core), expected);
+        let _ = std::fs::remove_dir_all(&directory);
     }
 
     #[test]
