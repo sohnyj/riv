@@ -223,6 +223,7 @@ impl MenuBuilder {
             self.state_snapshot.has_navigation_targets,
         )?;
         self.append_action(menu, Action::Loop)?;
+        self.append_separator(menu)?;
         self.append_action(menu, Action::PreviousFile)?;
         self.append_action(menu, Action::NextFile)?;
         let playback = unsafe { CreatePopupMenu()? };
@@ -556,6 +557,7 @@ mod menu_structure_tests {
             "", // separator
             "Playlist",
             "Loop",
+            "", // separator
             "Previous",
             "Next",
             "Playback",
