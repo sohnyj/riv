@@ -33,13 +33,16 @@ use shell::open_with::{self, OpenWithList, WM_APP_OPEN_WITH_LIST};
 use shell::{clipboard, file_ops, open_dialog};
 use view::dither::DitherMode;
 use view::renderer::{
-    FrameDecision, GraphicsDevice, OutputMode, PendingDevice, Renderer, ToneMapInfo, create_device,
+    self, FrameDecision, GraphicsDevice, OutputMode, PendingDevice, Renderer, ToneMapInfo,
+    create_device,
 };
 use view::transform::{FitMode, Size, ViewTransform};
 use window::context_menu::{self, MenuSelection, MenuState};
 use window::dwm;
 use window::overlay::{self, Overlay, OverlayContent};
-use windows::Win32::Foundation::{HWND, LPARAM, LRESULT, POINT, RECT, WPARAM};
+use windows::Win32::Foundation::{
+    HANDLE, HWND, LPARAM, LRESULT, POINT, RECT, WAIT_EVENT, WAIT_OBJECT_0, WPARAM,
+};
 use windows::Win32::Graphics::Direct2D::Common::D2D1_COLOR_F;
 use windows::Win32::Graphics::Direct2D::D2D1_INTERPOLATION_MODE;
 use windows::Win32::Graphics::Direct2D::{
@@ -55,6 +58,7 @@ use windows::Win32::System::Ole::{IDropTarget, OleInitialize, RevokeDragDrop};
 use windows::Win32::System::Power::{
     ES_CONTINUOUS, ES_DISPLAY_REQUIRED, ES_SYSTEM_REQUIRED, SetThreadExecutionState,
 };
+use windows::Win32::System::Threading::WaitForSingleObjectEx;
 use windows::Win32::UI::HiDpi::GetDpiForWindow;
 use windows::Win32::UI::Input::KeyboardAndMouse::{
     ReleaseCapture, SetCapture, VK_CONTROL, VK_ESCAPE, VK_LWIN, VK_MENU, VK_RWIN, VK_SHIFT,
@@ -64,16 +68,18 @@ use windows::Win32::UI::WindowsAndMessaging::{
     DispatchMessageW, GWL_STYLE, GWLP_USERDATA, GetClientRect, GetCursorPos, GetMessageW,
     GetWindowLongPtrW, GetWindowPlacement, GetWindowRect, HCURSOR, HTCAPTION, HTCLIENT,
     HWND_NOTOPMOST, HWND_TOP, HWND_TOPMOST, IDC_ARROW, IDC_SIZEALL, IsIconic, IsZoomed, KillTimer,
-    LoadCursorW, LoadIconW, MINMAXINFO, MSG, PostMessageW, PostQuitMessage, RegisterClassExW,
-    SC_MONITORPOWER, SW_HIDE, SW_SHOW, SW_SHOWMAXIMIZED, SWP_FRAMECHANGED, SWP_NOACTIVATE,
-    SWP_NOMOVE, SWP_NOSIZE, SWP_NOZORDER, SendMessageW, SetCursor, SetTimer, SetWindowLongPtrW,
-    SetWindowPlacement, SetWindowPos, SetWindowTextW, ShowWindow, TranslateMessage, WA_INACTIVE,
-    WINDOWPLACEMENT, WM_ACTIVATE, WM_APP, WM_CLOSE, WM_CONTEXTMENU, WM_DESTROY, WM_DISPLAYCHANGE,
-    WM_DPICHANGED, WM_ENTERSIZEMOVE, WM_EXITSIZEMOVE, WM_GESTURE, WM_GETMINMAXINFO, WM_KEYDOWN,
-    WM_LBUTTONDBLCLK, WM_LBUTTONDOWN, WM_LBUTTONUP, WM_MBUTTONDOWN, WM_MOUSEHWHEEL, WM_MOUSEMOVE,
-    WM_MOUSEWHEEL, WM_MOVE, WM_NCDESTROY, WM_NCLBUTTONDOWN, WM_PAINT, WM_SETCURSOR,
-    WM_SETTINGCHANGE, WM_SIZE, WM_SYSCHAR, WM_SYSCOMMAND, WM_SYSKEYDOWN, WM_TIMER, WM_XBUTTONDOWN,
-    WNDCLASSEXW, WS_OVERLAPPEDWINDOW, WindowFromPoint,
+    LoadCursorW, LoadIconW, MINMAXINFO, MSG, MWMO_INPUTAVAILABLE, MsgWaitForMultipleObjectsEx,
+    PM_REMOVE, PeekMessageW, PostMessageW, PostQuitMessage, QS_ALLINPUT, QS_PAINT,
+    QUEUE_STATUS_FLAGS, RegisterClassExW, SC_MONITORPOWER, SW_HIDE, SW_SHOW, SW_SHOWMAXIMIZED,
+    SWP_FRAMECHANGED, SWP_NOACTIVATE, SWP_NOMOVE, SWP_NOSIZE, SWP_NOZORDER, SendMessageW,
+    SetCursor, SetTimer, SetWindowLongPtrW, SetWindowPlacement, SetWindowPos, SetWindowTextW,
+    ShowWindow, TranslateMessage, WA_INACTIVE, WINDOWPLACEMENT, WM_ACTIVATE, WM_APP, WM_CLOSE,
+    WM_CONTEXTMENU, WM_DESTROY, WM_DISPLAYCHANGE, WM_DPICHANGED, WM_ENTERSIZEMOVE, WM_EXITSIZEMOVE,
+    WM_GESTURE, WM_GETMINMAXINFO, WM_KEYDOWN, WM_LBUTTONDBLCLK, WM_LBUTTONDOWN, WM_LBUTTONUP,
+    WM_MBUTTONDOWN, WM_MOUSEHWHEEL, WM_MOUSEMOVE, WM_MOUSEWHEEL, WM_MOVE, WM_NCDESTROY,
+    WM_NCLBUTTONDOWN, WM_PAINT, WM_QUIT, WM_SETCURSOR, WM_SETTINGCHANGE, WM_SIZE, WM_SYSCHAR,
+    WM_SYSCOMMAND, WM_SYSKEYDOWN, WM_TIMER, WM_XBUTTONDOWN, WNDCLASSEXW, WS_OVERLAPPEDWINDOW,
+    WindowFromPoint,
 };
 use windows::core::{PCWSTR, Result, w};
 
@@ -1099,6 +1105,18 @@ impl Application {
         let _ = unsafe { InvalidateRect(Some(window), None, false) };
     }
 
+    fn pending_frame_slot(&self) -> Option<HANDLE> {
+        self.renderer
+            .as_ref()
+            .and_then(Renderer::pending_frame_slot)
+    }
+
+    fn hold_frame_slot(&mut self) {
+        if let Some(renderer) = &mut self.renderer {
+            renderer.hold_frame_slot();
+        }
+    }
+
     /// Records the current options in the in-memory document (written at exit) and applies them.
     fn commit_options(&mut self, window: HWND) {
         self.settings.store_options();
@@ -1949,22 +1967,73 @@ fn main() -> Result<()> {
     let class_atom = unsafe { RegisterClassExW(&raw const window_class) };
     assert!(class_atom != 0, "RegisterClassExW failed");
 
-    create_main_window(argument_path.as_deref(), pending_device)?;
+    let window = create_main_window(argument_path.as_deref(), pending_device)?;
 
+    run_message_loop(window);
+    Ok(())
+}
+
+/// Pumps messages and waits for the swap chain outside the paint, so input keeps flowing.
+fn run_message_loop(window: HWND) {
     let mut message = MSG::default();
     loop {
-        // -1 is an error, not a message; as_bool would dispatch a stale MSG.
+        // Everything but the paint: these never wait on the swap chain.
+        while peek_except_paint(&raw mut message) {
+            if message.message == WM_QUIT {
+                return;
+            }
+            let _ = unsafe { TranslateMessage(&raw const message) };
+            unsafe { DispatchMessageW(&raw const message) };
+        }
+        // A handle means the next frame still owes a wait.
+        let slot_handle = application_from_window(window)
+            .and_then(|application| application.pending_frame_slot());
+        if let Some(handle) = slot_handle {
+            // The borrow ends before the wait: it dispatches sent messages, which reenter here.
+            if wait_for_frame_slot(handle)
+                && let Some(application) = application_from_window(window)
+            {
+                application.hold_frame_slot();
+            }
+            continue;
+        }
+        // Nothing left to wait for: block for the next message, the paint included.
         let result = unsafe { GetMessageW(&raw mut message, None, 0, 0) };
         if result.0 <= 0 {
-            break;
+            return;
         }
         let _ = unsafe { TranslateMessage(&raw const message) };
         unsafe { DispatchMessageW(&raw const message) };
     }
-    Ok(())
 }
 
-fn create_main_window(initial_path: Option<&Path>, pending_device: PendingDevice) -> Result<()> {
+/// The two ranges around WM_PAINT: only the paint is held back for a frame slot.
+fn peek_except_paint(message: *mut MSG) -> bool {
+    unsafe {
+        PeekMessageW(message, None, 0, WM_PAINT - 1, PM_REMOVE).as_bool()
+            || PeekMessageW(message, None, WM_PAINT + 1, u32::MAX, PM_REMOVE).as_bool()
+    }
+}
+
+/// Waits for the frame slot or the queue and reports whether the slot is in hand.
+fn wait_for_frame_slot(slot_handle: HANDLE) -> bool {
+    /// Handle count 1, so the queue reports one past the handle.
+    const MESSAGE_WAKE: WAIT_EVENT = WAIT_EVENT(WAIT_OBJECT_0.0 + 1);
+
+    let result = unsafe {
+        MsgWaitForMultipleObjectsEx(
+            Some(&[slot_handle]),
+            renderer::FRAME_SLOT_TIMEOUT_MS,
+            QUEUE_STATUS_FLAGS(QS_ALLINPUT.0 & !QS_PAINT.0),
+            MWMO_INPUTAVAILABLE,
+        )
+    };
+    // A queue wake can hide a ready slot: which one the wait reports is undocumented.
+    result != MESSAGE_WAKE
+        || unsafe { WaitForSingleObjectEx(slot_handle, 0, false) } == WAIT_OBJECT_0
+}
+
+fn create_main_window(initial_path: Option<&Path>, pending_device: PendingDevice) -> Result<HWND> {
     let instance = unsafe { GetModuleHandleW(None)? };
     let (default_x, default_y) =
         window::work_area_centered_origin(640, 480).unwrap_or((CW_USEDEFAULT, CW_USEDEFAULT));
@@ -2024,7 +2093,7 @@ fn create_main_window(initial_path: Option<&Path>, pending_device: PendingDevice
         // Presented before the first show, so the class brush never flashes.
         let _ = unsafe { PostMessageW(Some(window), WM_APP_SHOW_WINDOW, WPARAM(0), LPARAM(0)) };
     }
-    Ok(())
+    Ok(window)
 }
 
 fn open_in_new_window(path: &Path) {

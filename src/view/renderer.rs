@@ -67,6 +67,9 @@ use crate::view::quantize::QuantizePass;
 /// Creation and every ResizeBuffers must pass the same swap-chain flags.
 const SWAP_CHAIN_FLAGS: DXGI_SWAP_CHAIN_FLAG = DXGI_SWAP_CHAIN_FLAG_FRAME_LATENCY_WAITABLE_OBJECT;
 
+/// Frame-slot wait ceiling: a stalled present queue must not freeze the caller.
+pub const FRAME_SLOT_TIMEOUT_MS: u32 = 1000;
+
 struct ModeEffects {
     color_management_effect: Option<ID2D1Effect>,
     hdr_tone_map_effect: Option<ID2D1Effect>,
@@ -120,7 +123,7 @@ pub struct Renderer {
     /// Display's sustained full-frame luminance, shown in the overlay diagnostics.
     display_full_frame_nits: f32,
     swap_chain: IDXGISwapChain1,
-    /// Signals when the present queue (depth 1) has room; a render waits here first.
+    /// Signals when the present queue (depth 1) has room; the pump waits on it.
     frame_latency_waitable: Option<HANDLE>,
     d3d_device: ID3D11Device,
     /// Minted per build; worker textures from other generations never wrap here.
@@ -164,6 +167,8 @@ pub struct Renderer {
     linear_source_context: Option<ID2D1ColorContext>,
     image_display_size: (f32, f32),
     image_pixel_size: (f32, f32),
+    /// Set when the pump already waited for the next frame's present-queue room.
+    frame_slot_held: bool,
 }
 
 /// What `render` draws the frame with, decided before the overlay reports it.
@@ -777,6 +782,7 @@ impl Renderer {
             linear_source_context: None,
             image_display_size: (0.0, 0.0),
             image_pixel_size: (0.0, 0.0),
+            frame_slot_held: false,
         };
         renderer.refresh_output_label();
         renderer.create_target()?;
@@ -1458,16 +1464,34 @@ impl Renderer {
         }
     }
 
+    /// What the pump waits on; None when the next frame owes no wait or nothing signals one.
+    pub fn pending_frame_slot(&self) -> Option<HANDLE> {
+        if self.frame_slot_held {
+            return None;
+        }
+        self.frame_latency_waitable
+            .filter(|handle| !handle.is_invalid())
+    }
+
+    pub fn hold_frame_slot(&mut self) {
+        self.frame_slot_held = true;
+    }
+
+    /// Waits for present-queue room unless the pump already did.
+    fn consume_frame_slot(&mut self) {
+        if let Some(handle) = self.pending_frame_slot() {
+            let _ = unsafe { WaitForSingleObjectEx(handle, FRAME_SLOT_TIMEOUT_MS, false) };
+        }
+        self.frame_slot_held = false;
+    }
+
     pub fn render(
         &mut self,
         decision: FrameDecision,
         clear_color: D2D1_COLOR_F,
         draw_overlay: impl FnOnce(&ID2D1DeviceContext) -> Result<()>,
     ) -> Result<()> {
-        // Wait for present-queue room first, so the frame draws the freshest state.
-        if let Some(handle) = self.frame_latency_waitable {
-            let _ = unsafe { WaitForSingleObjectEx(handle, 1000, false) };
-        }
+        self.consume_frame_slot();
         unsafe {
             self.d2d_context.BeginDraw();
             self.d2d_context.Clear(Some(&raw const clear_color));
