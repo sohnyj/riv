@@ -93,8 +93,8 @@ pub struct OutputMode {
 }
 
 impl OutputMode {
-    /// True for SDR output with advanced color on (the wide-gamut path).
-    pub fn sdr_wide_gamut(&self) -> bool {
+    /// SDR output with advanced color on: the wide-gamut path.
+    pub fn is_sdr_wide_gamut(&self) -> bool {
         !self.hdr && self.advanced_color
     }
 }
@@ -111,9 +111,9 @@ pub struct ToneMapInfo {
 pub struct Renderer {
     /// The mode as built, so a caller can compare against a fresh display query.
     output_mode: OutputMode,
-    hdr_mode: bool,
+    is_hdr_output: bool,
     /// Advanced-color SDR: FP16 scRGB output so DWM color-manages the wide gamut.
-    sdr_wide_gamut: bool,
+    is_sdr_wide_gamut: bool,
     bits_per_color: u32,
     swap_chain_format: DXGI_FORMAT,
     tone_map_target_nits: f32,
@@ -411,11 +411,13 @@ impl Renderer {
     /// Display-profile color context and its gamut label for ACM-off SDR; both None otherwise.
     fn display_context_and_label(
         d2d_context: &ID2D1DeviceContext,
-        hdr_mode: bool,
-        sdr_wide_gamut: bool,
+        is_hdr_output: bool,
+        is_sdr_wide_gamut: bool,
         display_profile: Option<&Arc<Vec<u8>>>,
     ) -> (Option<ID2D1ColorContext>, Option<&'static str>) {
-        let Some(display_profile) = display_profile.filter(|_| !hdr_mode && !sdr_wide_gamut) else {
+        let Some(display_profile) =
+            display_profile.filter(|_| !is_hdr_output && !is_sdr_wide_gamut)
+        else {
             return (None, None);
         };
         let Ok(context) = (unsafe {
@@ -439,15 +441,15 @@ impl Renderer {
 
     fn create_mode_effects(
         d2d_context: &ID2D1DeviceContext,
-        hdr_mode: bool,
-        sdr_wide_gamut: bool,
+        is_hdr_output: bool,
+        is_sdr_wide_gamut: bool,
         tone_map_target_nits: f32,
         scrgb_color_context: Option<&ID2D1ColorContext>,
         sdr_destination_context: Option<&ID2D1ColorContext>,
     ) -> ModeEffects {
         let color_management_effect = Self::create_color_management_effect(d2d_context);
         // SDR only: HDR displays pass content through with no tone map.
-        let hdr_tone_map_effect = (!hdr_mode)
+        let hdr_tone_map_effect = (!is_hdr_output)
             .then_some(())
             .and(color_management_effect.as_ref())
             .and_then(|_| {
@@ -471,7 +473,7 @@ impl Renderer {
                 .ok()?;
                 Some(effect)
             });
-        let tone_map_normalize_effect = (!hdr_mode)
+        let tone_map_normalize_effect = (!is_hdr_output)
             .then_some(())
             .and(hdr_tone_map_effect.as_ref())
             .and_then(|_| {
@@ -481,7 +483,7 @@ impl Renderer {
                 Some(effect)
             });
         // The FP16 scRGB backbuffer of ACM-on SDR takes the tone-mapped scRGB with no re-encode.
-        let output_color_management_effect = (!hdr_mode && !sdr_wide_gamut)
+        let output_color_management_effect = (!is_hdr_output && !is_sdr_wide_gamut)
             .then_some(())
             .and(hdr_tone_map_effect.as_ref())
             .and_then(|_| {
@@ -491,7 +493,7 @@ impl Renderer {
                     sdr_destination_context,
                 )
             });
-        let white_level_effect = hdr_mode
+        let white_level_effect = is_hdr_output
             .then_some(())
             .and(color_management_effect.as_ref())
             .and_then(|_| {
@@ -530,19 +532,19 @@ impl Renderer {
 
     /// The backbuffer format the mode prefers before any swapchain refusal.
     fn preferred_swap_chain_format(
-        hdr_mode: bool,
-        pq_output: bool,
-        sdr_wide_gamut: bool,
+        is_hdr_output: bool,
+        is_pq_output: bool,
+        is_sdr_wide_gamut: bool,
         ten_bit_target: bool,
         bits_per_color: u32,
     ) -> DXGI_FORMAT {
-        if hdr_mode {
-            if pq_output {
+        if is_hdr_output {
+            if is_pq_output {
                 DXGI_FORMAT_R10G10B10A2_UNORM
             } else {
                 DXGI_FORMAT_R16G16B16A16_FLOAT
             }
-        } else if sdr_wide_gamut {
+        } else if is_sdr_wide_gamut {
             // Advanced color is on: hand wide-gamut scRGB to DWM's composition.
             DXGI_FORMAT_R16G16B16A16_FLOAT
         } else if ten_bit_target && bits_per_color >= 10 {
@@ -554,8 +556,8 @@ impl Renderer {
     }
 
     /// The format each mode is known to accept when a 10-bit swapchain is refused.
-    fn mode_fallback_format(hdr_mode: bool) -> DXGI_FORMAT {
-        if hdr_mode {
+    fn mode_fallback_format(is_hdr_output: bool) -> DXGI_FORMAT {
+        if is_hdr_output {
             DXGI_FORMAT_R16G16B16A16_FLOAT
         } else {
             DXGI_FORMAT_B8G8R8A8_UNORM
@@ -572,9 +574,9 @@ impl Renderer {
         device: &GraphicsDevice,
     ) -> Result<Self> {
         let output_mode = mode.clone();
-        let sdr_wide_gamut = mode.sdr_wide_gamut();
+        let is_sdr_wide_gamut = mode.is_sdr_wide_gamut();
         let OutputMode {
-            hdr: hdr_mode,
+            hdr: is_hdr_output,
             bits_per_color,
             ..
         } = mode;
@@ -619,13 +621,13 @@ impl Renderer {
             unsafe { d2d_context.CreateColorContext(D2D1_COLOR_SPACE_SRGB, None) }.ok();
         let (display_color_context, destination_gamut_label) = Self::display_context_and_label(
             &d2d_context,
-            hdr_mode,
-            sdr_wide_gamut,
+            is_hdr_output,
+            is_sdr_wide_gamut,
             display_profile.as_ref(),
         );
 
         // HDR encodes to PQ in the app so its 10-bit write is the only quantizer.
-        let pq_color_context = (hdr_mode && ten_bit_target)
+        let pq_color_context = (is_hdr_output && ten_bit_target)
             .then(|| Self::create_pq_color_context(&d2d_context))
             .flatten();
         let mut hdr_output_color_management_effect = Self::create_conversion_effect(
@@ -635,9 +637,9 @@ impl Renderer {
         );
 
         let mut swap_chain_format = Self::preferred_swap_chain_format(
-            hdr_mode,
+            is_hdr_output,
             hdr_output_color_management_effect.is_some(),
-            sdr_wide_gamut,
+            is_sdr_wide_gamut,
             ten_bit_target,
             bits_per_color,
         );
@@ -675,13 +677,13 @@ impl Renderer {
             // A 10-bit refusal falls back to the mode's proven format.
             Err(_) if swap_chain_format == DXGI_FORMAT_R10G10B10A2_UNORM => {
                 hdr_output_color_management_effect = None;
-                swap_chain_format = Self::mode_fallback_format(hdr_mode);
+                swap_chain_format = Self::mode_fallback_format(is_hdr_output);
                 create_swap_chain(swap_chain_format)?
             }
             Err(error) => return Err(error),
         };
         // Only HDR and ACM-on wide gamut declare; scRGB on plain SDR flashes DWM composition.
-        if hdr_mode {
+        if is_hdr_output {
             let swap_chain3 = swap_chain.cast::<IDXGISwapChain3>().ok();
             let pq_declared = hdr_output_color_management_effect.is_some()
                 && swap_chain3.as_ref().is_some_and(|swap_chain3| {
@@ -707,7 +709,7 @@ impl Renderer {
                         declare_color_space(swap_chain3, DXGI_COLOR_SPACE_RGB_FULL_G10_NONE_P709);
                 }
             }
-        } else if sdr_wide_gamut && let Ok(swap_chain3) = swap_chain.cast::<IDXGISwapChain3>() {
+        } else if is_sdr_wide_gamut && let Ok(swap_chain3) = swap_chain.cast::<IDXGISwapChain3>() {
             // The FP16 default is already scRGB; declare it so the intent is explicit.
             let _ = declare_color_space(&swap_chain3, DXGI_COLOR_SPACE_RGB_FULL_G10_NONE_P709);
         }
@@ -722,8 +724,8 @@ impl Renderer {
             .map(|swap_chain2| unsafe { swap_chain2.GetFrameLatencyWaitableObject() });
         let mode_effects = Self::create_mode_effects(
             &d2d_context,
-            hdr_mode,
-            sdr_wide_gamut,
+            is_hdr_output,
+            is_sdr_wide_gamut,
             tone_map_target_nits,
             scrgb_color_context.as_ref(),
             sdr_destination(display_color_context.as_ref(), srgb_color_context.as_ref()),
@@ -735,8 +737,8 @@ impl Renderer {
             upload_device_generation: UPLOAD_DEVICE_GENERATIONS
                 .fetch_add(1, std::sync::atomic::Ordering::Relaxed),
             upload_maximum_frame_bytes,
-            hdr_mode,
-            sdr_wide_gamut,
+            is_hdr_output,
+            is_sdr_wide_gamut,
             bits_per_color,
             swap_chain_format,
             tone_map_target_nits,
@@ -781,8 +783,8 @@ impl Renderer {
         Ok(renderer)
     }
 
-    pub fn hdr_mode(&self) -> bool {
-        self.hdr_mode
+    pub fn is_hdr_output(&self) -> bool {
+        self.is_hdr_output
     }
 
     /// The mode this renderer was built or reconfigured with.
@@ -793,21 +795,21 @@ impl Renderer {
     /// Tone-map luminances for the info overlay: display caps and the output target.
     pub fn tone_map_info(&self) -> ToneMapInfo {
         ToneMapInfo {
-            hdr_display: self.hdr_mode,
+            hdr_display: self.is_hdr_output,
             display_peak_nits: self.tone_map_target_nits,
             display_full_frame_nits: self.display_full_frame_nits,
             output_target_nits: self.tone_map_target_nits,
         }
     }
 
-    /// True when the backbuffer is HDR10 (PQ) rather than the scRGB FP16 fallback.
-    pub fn pq_output(&self) -> bool {
+    /// The backbuffer is HDR10 (PQ) rather than the scRGB FP16 fallback.
+    pub fn is_pq_output(&self) -> bool {
         self.hdr_output_color_management_effect.is_some()
     }
 
-    /// True when the SDR output is advanced-color FP16 scRGB (wide gamut handed to DWM).
-    pub fn sdr_wide_gamut(&self) -> bool {
-        self.sdr_wide_gamut
+    /// The SDR output is advanced-color FP16 scRGB, wide gamut handed to DWM.
+    pub fn is_sdr_wide_gamut(&self) -> bool {
+        self.is_sdr_wide_gamut
     }
 
     /// Active backbuffer, for the info overlay. ACM-off SDR names the gamut it maps into.
@@ -820,7 +822,7 @@ impl Renderer {
         self.output_label = if self.swap_chain_format == DXGI_FORMAT_R16G16B16A16_FLOAT {
             "FP16 scRGB".to_string()
         } else if self.swap_chain_format == DXGI_FORMAT_R10G10B10A2_UNORM {
-            if self.hdr_mode {
+            if self.is_hdr_output {
                 "10-bit HDR10 (PQ)".to_string()
             } else {
                 self.sdr_output_label("10-bit")
@@ -967,23 +969,23 @@ impl Renderer {
         tone_map_target_nits: f32,
         full_frame_nits: f32,
     ) -> Result<()> {
-        let sdr_wide_gamut = mode.sdr_wide_gamut();
+        let is_sdr_wide_gamut = mode.is_sdr_wide_gamut();
         let output_mode = mode.clone();
         let OutputMode {
-            hdr: hdr_mode,
+            hdr: is_hdr_output,
             bits_per_color,
             ..
         } = mode;
         let display_profile = mode.display_profile;
         // Adopt the target state first so a partial failure cannot retry every WM_MOVE.
         self.output_mode = output_mode;
-        self.hdr_mode = hdr_mode;
-        self.sdr_wide_gamut = sdr_wide_gamut;
+        self.is_hdr_output = is_hdr_output;
+        self.is_sdr_wide_gamut = is_sdr_wide_gamut;
         (self.display_color_context, self.destination_gamut_label) =
             Self::display_context_and_label(
                 &self.d2d_context,
-                hdr_mode,
-                sdr_wide_gamut,
+                is_hdr_output,
+                is_sdr_wide_gamut,
                 display_profile.as_ref(),
             );
         self.bits_per_color = bits_per_color;
@@ -1009,7 +1011,7 @@ impl Renderer {
         }
         let ten_bit_target = self.quantize_pass.is_some();
 
-        let pq_color_context = (hdr_mode && ten_bit_target)
+        let pq_color_context = (is_hdr_output && ten_bit_target)
             .then(|| Self::create_pq_color_context(&self.d2d_context))
             .flatten();
         let mut hdr_output_color_management_effect = Self::create_conversion_effect(
@@ -1018,9 +1020,9 @@ impl Renderer {
             pq_color_context.as_ref(),
         );
         let mut swap_chain_format = Self::preferred_swap_chain_format(
-            hdr_mode,
+            is_hdr_output,
             hdr_output_color_management_effect.is_some(),
-            sdr_wide_gamut,
+            is_sdr_wide_gamut,
             ten_bit_target,
             bits_per_color,
         );
@@ -1033,11 +1035,11 @@ impl Renderer {
             }
             // A 10-bit refusal falls back to the mode's proven format.
             hdr_output_color_management_effect = None;
-            swap_chain_format = Self::mode_fallback_format(hdr_mode);
+            swap_chain_format = Self::mode_fallback_format(is_hdr_output);
             resize_to(&self.swap_chain, swap_chain_format)?;
         }
         let swap_chain3 = self.swap_chain.cast::<IDXGISwapChain3>().ok();
-        if hdr_mode {
+        if is_hdr_output {
             let pq_declared = hdr_output_color_management_effect.is_some()
                 && swap_chain3.as_ref().is_some_and(|swap_chain3| {
                     declare_color_space(swap_chain3, DXGI_COLOR_SPACE_RGB_FULL_G2084_NONE_P2020)
@@ -1055,7 +1057,7 @@ impl Renderer {
                 }
             }
         } else if let Some(swap_chain3) = &swap_chain3 {
-            if sdr_wide_gamut {
+            if is_sdr_wide_gamut {
                 // Advanced-color SDR: extended-range scRGB for DWM's composition.
                 let _ = declare_color_space(swap_chain3, DXGI_COLOR_SPACE_RGB_FULL_G10_NONE_P709);
             } else {
@@ -1069,8 +1071,8 @@ impl Renderer {
 
         let mode_effects = Self::create_mode_effects(
             &self.d2d_context,
-            hdr_mode,
-            sdr_wide_gamut,
+            is_hdr_output,
+            is_sdr_wide_gamut,
             tone_map_target_nits,
             self.scrgb_color_context.as_ref(),
             self.sdr_destination_context(),
@@ -1250,7 +1252,7 @@ impl Renderer {
             .hdr_tone_map_effect
             .as_ref()
             .zip(peak_luminance_nits.filter(|_| hdr_content));
-        let scrgb_destination = self.hdr_mode || self.sdr_wide_gamut || tone_map.is_some();
+        let scrgb_destination = self.is_hdr_output || self.is_sdr_wide_gamut || tone_map.is_some();
         // A source already in the destination space skips CM; the conversion would change nothing.
         if storage == PixelStorage::Bgra8
             && !scrgb_destination
@@ -1306,7 +1308,7 @@ impl Renderer {
             }
         };
         // HDR content needs no linear stage before the backbuffer, so it converts once.
-        let direct_to_backbuffer = hdr_content && self.pq_output();
+        let direct_to_backbuffer = hdr_content && self.is_pq_output();
         let destination_context = if direct_to_backbuffer {
             self.pq_color_context.as_ref()
         } else if scrgb_destination {
@@ -1363,7 +1365,7 @@ impl Renderer {
                     .ok()?;
                     unsafe { normalize.SetInput(0, &tone_mapped, true) };
                     let normalized = unsafe { normalize.GetOutput() }.ok()?;
-                    if self.sdr_wide_gamut {
+                    if self.is_sdr_wide_gamut {
                         // FP16 scRGB backbuffer: keep the tone-mapped scRGB, no sRGB re-encode.
                         return Some(normalized);
                     }

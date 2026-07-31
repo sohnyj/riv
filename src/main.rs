@@ -344,8 +344,8 @@ impl Application {
             return;
         }
         let mut stale = false;
-        let hdr_mode = self.renderer.as_ref().is_some_and(Renderer::hdr_mode);
-        let boost = color::sdr_white_boost_for(window, hdr_mode);
+        let is_hdr_output = self.renderer.as_ref().is_some_and(Renderer::is_hdr_output);
+        let boost = color::sdr_white_boost_for(window, is_hdr_output);
         if (boost - self.sdr_white_boost).abs() > f32::EPSILON {
             self.sdr_white_boost = boost;
             if let Some(renderer) = &mut self.renderer {
@@ -353,7 +353,7 @@ impl Application {
             }
             stale = true;
         }
-        let (max_luminance, max_full_frame) = if hdr_mode {
+        let (max_luminance, max_full_frame) = if is_hdr_output {
             (
                 capabilities.max_luminance,
                 capabilities.max_full_frame_luminance,
@@ -361,8 +361,9 @@ impl Application {
         } else {
             (None, None)
         };
-        let target_nits = tone_map_target_luminance(hdr_mode, max_luminance);
-        let full_frame_nits = tone_map_full_frame_luminance(hdr_mode, max_full_frame, target_nits);
+        let target_nits = tone_map_target_luminance(is_hdr_output, max_luminance);
+        let full_frame_nits =
+            tone_map_full_frame_luminance(is_hdr_output, max_full_frame, target_nits);
         if self
             .renderer
             .as_mut()
@@ -409,8 +410,8 @@ impl Application {
         let Some(renderer) = &self.renderer else {
             return color::OutputColorTarget::Srgb;
         };
-        if !renderer.hdr_mode() {
-            if renderer.sdr_wide_gamut() {
+        if !renderer.is_hdr_output() {
+            if renderer.is_sdr_wide_gamut() {
                 // Advanced-color SDR: overlay and clear colors go out as linear scRGB too.
                 return color::OutputColorTarget::ScrgbLinear {
                     sdr_white_boost: self.sdr_white_boost,
@@ -418,7 +419,7 @@ impl Application {
             }
             return color::OutputColorTarget::Srgb;
         }
-        if renderer.pq_output() {
+        if renderer.is_pq_output() {
             color::OutputColorTarget::Pq {
                 sdr_white_boost: self.sdr_white_boost,
             }
@@ -1298,8 +1299,8 @@ const SDR_TONE_MAP_TARGET_NITS: f32 = 203.0;
 /// HDR tone-map target when the monitor reports no peak luminance.
 const HDR_PEAK_FALLBACK_NITS: f32 = 600.0;
 
-fn tone_map_target_luminance(hdr_mode: bool, max_luminance: Option<f32>) -> f32 {
-    if hdr_mode {
+fn tone_map_target_luminance(is_hdr_output: bool, max_luminance: Option<f32>) -> f32 {
+    if is_hdr_output {
         max_luminance.unwrap_or(HDR_PEAK_FALLBACK_NITS)
     } else {
         SDR_TONE_MAP_TARGET_NITS
@@ -1307,8 +1308,12 @@ fn tone_map_target_luminance(hdr_mode: bool, max_luminance: Option<f32>) -> f32 
 }
 
 /// Full-frame limit paired with the tone-map target, for the overlay diagnostics.
-fn tone_map_full_frame_luminance(hdr_mode: bool, max_full_frame: Option<f32>, target: f32) -> f32 {
-    if hdr_mode {
+fn tone_map_full_frame_luminance(
+    is_hdr_output: bool,
+    max_full_frame: Option<f32>,
+    target: f32,
+) -> f32 {
+    if is_hdr_output {
         max_full_frame.unwrap_or(target)
     } else {
         target
