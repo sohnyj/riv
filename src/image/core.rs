@@ -257,7 +257,7 @@ pub struct ListingEntry {
 }
 
 /// The weight outlives the cache entry: eviction drops pixels, not this knowledge.
-#[derive(Clone, Copy, PartialEq, Eq)]
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
 enum DecodedWeight {
     Unknown,
     Known(u64),
@@ -756,6 +756,27 @@ impl ImageCore {
         })
     }
 
+    /// Hands a rescanned listing the weights already probed; an edited file starts over.
+    fn carry_weights_into(&self, entries: &mut [ListingEntry]) {
+        if self.entries.is_empty() {
+            return;
+        }
+        let probed: HashMap<&ItemLocation, &ListingEntry> = self
+            .entries
+            .iter()
+            .filter(|entry| entry.weight != DecodedWeight::Unknown)
+            .map(|entry| (&entry.location, entry))
+            .collect();
+        for entry in entries {
+            if let Some(previous) = probed.get(&entry.location)
+                && previous.file_size == entry.file_size
+                && previous.modified == entry.modified
+            {
+                entry.weight = previous.weight;
+            }
+        }
+    }
+
     /// Installs an arrived scan; a stale one or a failed refresh is dropped.
     pub fn install_listing_scan(&mut self, scan: ScannedListing) -> ListingInstall {
         let Some(pending) = self
@@ -783,6 +804,7 @@ impl ImageCore {
         {
             sort_entries(&mut entries, &self.options);
         }
+        self.carry_weights_into(&mut entries);
         self.missing_anchor = self.missing_anchor_for(&entries);
         self.entries = entries;
         self.listing_scope = Some(scan.scope);
@@ -1291,7 +1313,9 @@ impl ImageCore {
     fn rescan_folder(&mut self, directory: &Path) {
         let scope = ListingScope::Directory(directory.to_path_buf());
         let scan = ScannedListing::of(scope, &self.options);
-        self.entries = scan.result.unwrap_or_default();
+        let mut entries = scan.result.unwrap_or_default();
+        self.carry_weights_into(&mut entries);
+        self.entries = entries;
         self.listing_scope = Some(scan.scope);
     }
 
@@ -2628,6 +2652,35 @@ mod listing_scan_tests {
         core.load_path(&second);
         assert!(core.has_pending_display()); // the decode has not landed yet
         assert_eq!(core.listing_position(), Some((2, 2)));
+        let _ = std::fs::remove_dir_all(&directory);
+    }
+
+    #[test]
+    fn a_refresh_keeps_the_weights_it_already_probed() {
+        let directory = std::env::temp_dir().join("riv-refresh-weights");
+        std::fs::create_dir_all(&directory).expect("fixture directory");
+        let kept = directory.join("a.png");
+        let edited = directory.join("b.png");
+        std::fs::write(&kept, b"listing only").expect("fixture file");
+        std::fs::write(&edited, b"listing only").expect("fixture file");
+        let mut core = core();
+        core.rescan_folder(&directory);
+        for entry in &mut core.entries {
+            entry.weight = DecodedWeight::Known(4096);
+        }
+        std::fs::write(&edited, b"listing only, now longer").expect("fixture file");
+        core.submit_refresh_scan();
+        let scope = ListingScope::Directory(directory.clone());
+        core.install_listing_scan(ScannedListing::of(scope, &core.options));
+        let weight_of = |name: &str| {
+            core.entries
+                .iter()
+                .find(|entry| entry.location.display_name().eq_ignore_ascii_case(name))
+                .map(|entry| entry.weight)
+        };
+        assert_eq!(weight_of("a.png"), Some(DecodedWeight::Known(4096)));
+        // The file changed under the listing, so its old weight no longer describes it.
+        assert_eq!(weight_of("b.png"), Some(DecodedWeight::Unknown));
         let _ = std::fs::remove_dir_all(&directory);
     }
 
