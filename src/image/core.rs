@@ -1353,25 +1353,14 @@ impl ImageCore {
                 .is_none_or(|current| current.location != *pending)
         });
         let (backward, forward, budget) = self.preload_plan();
-        let anchor_index = self
-            .navigation_anchor()
-            .and_then(|location| self.position_of(location));
-        // Candidates in priority order; a listing without the anchor (a URL) leaves only it.
-        let candidates: Vec<usize> = anchor_index
-            .map(|anchor_index| {
-                let length = self.entries.len();
-                preload_offsets(backward, forward)
-                    .filter_map(|offset| {
-                        index_at_offset(
-                            anchor_index,
-                            offset,
-                            length,
-                            self.options.loop_within_folder,
-                        )
-                    })
-                    .collect()
+        // Candidates in priority order; a missing anchor still names neighbors.
+        let length = self.entries.len();
+        let anchor = self.anchor_index();
+        let candidates: Vec<usize> = preload_offsets(backward, forward)
+            .filter_map(|offset| {
+                index_at_offset(anchor, offset, length, self.options.loop_within_folder)
             })
-            .unwrap_or_default();
+            .collect();
         let mut targets: HashSet<ItemLocation> = candidates
             .iter()
             .map(|&index| self.entries[index].location.clone())
@@ -1571,18 +1560,13 @@ impl ImageCore {
             return;
         }
         let anchor = self.navigation_anchor().cloned();
-        let anchor_index = anchor
-            .as_ref()
-            .and_then(|location| self.position_of(location));
-        let priorities = anchor_index.map_or_else(HashMap::new, |anchor| {
-            preload_priorities(
-                anchor,
-                backward,
-                forward,
-                self.entries.len(),
-                self.options.loop_within_folder,
-            )
-        });
+        let priorities = preload_priorities(
+            self.anchor_index(),
+            backward,
+            forward,
+            self.entries.len(),
+            self.options.loop_within_folder,
+        );
         let mut ranked: Vec<(ItemLocation, u64, usize)> = weighted
             .into_iter()
             .map(|(location, weight)| {
@@ -1621,8 +1605,18 @@ fn playlist_window_start(total: usize, anchor: Option<usize>, capacity: usize) -
         .min(total - capacity)
 }
 
+/// Where a step or an offset counts from; None for an anchor the listing never held.
+fn anchor_start(anchor: AnchorIndex, forward: bool) -> Option<isize> {
+    match anchor {
+        AnchorIndex::Listed(index) => Some(index as isize),
+        // A missing anchor sits between its neighbors, so both directions land next to it.
+        AnchorIndex::Missing(index) => Some(index as isize - isize::from(forward)),
+        AnchorIndex::Unlisted => None,
+    }
+}
+
 fn index_at_offset(
-    anchor: usize,
+    anchor: AnchorIndex,
     offset: isize,
     length: usize,
     loop_enabled: bool,
@@ -1630,10 +1624,10 @@ fn index_at_offset(
     if length == 0 {
         return None;
     }
-    let index = anchor as isize + offset;
+    let index = anchor_start(anchor, offset > 0)? + offset;
     if loop_enabled {
         let wrapped = index.rem_euclid(length as isize) as usize;
-        (wrapped != anchor).then_some(wrapped)
+        (anchor != AnchorIndex::Listed(wrapped)).then_some(wrapped)
     } else {
         (0..length as isize)
             .contains(&index)
@@ -1672,18 +1666,9 @@ fn step_index(anchor: AnchorIndex, direction: isize, length: usize, looped: bool
         return None;
     }
     let length = length as isize;
-    let start = match anchor {
-        AnchorIndex::Listed(index) => index as isize,
-        // A missing anchor sits between its neighbors, so both directions land next to it.
-        AnchorIndex::Missing(index) => index as isize - isize::from(direction > 0),
-        AnchorIndex::Unlisted => {
-            if direction > 0 {
-                -1
-            } else {
-                length
-            }
-        }
-    };
+    // An anchor the listing never held enters from the end the step comes from.
+    let start =
+        anchor_start(anchor, direction > 0).unwrap_or(if direction > 0 { -1 } else { length });
     let index = start + direction;
     if looped {
         Some(index.rem_euclid(length) as usize)
@@ -1694,13 +1679,16 @@ fn step_index(anchor: AnchorIndex, direction: isize, length: usize, looped: bool
 
 /// Entry index -> preload priority (anchor 0, then submission order); shared with eviction.
 fn preload_priorities(
-    anchor: usize,
+    anchor: AnchorIndex,
     backward: usize,
     forward: usize,
     length: usize,
     loop_enabled: bool,
 ) -> HashMap<usize, usize> {
-    let mut priorities = HashMap::from([(anchor, 0)]);
+    let mut priorities = match anchor {
+        AnchorIndex::Listed(index) => HashMap::from([(index, 0)]),
+        AnchorIndex::Missing(_) | AnchorIndex::Unlisted => HashMap::new(),
+    };
     for (rank, offset) in preload_offsets(backward, forward).enumerate() {
         if let Some(index) = index_at_offset(anchor, offset, length, loop_enabled) {
             priorities.entry(index).or_insert(rank + 1);
@@ -2213,9 +2201,32 @@ mod preload_geometry_tests {
     }
 
     #[test]
+    fn a_missing_anchor_preloads_the_neighbors_it_sat_between() {
+        let (backward, forward, _) = PRELOAD_SPECIFICATIONS[1];
+        let anchor = AnchorIndex::Missing(10);
+        let targets: Vec<usize> = preload_offsets(backward, forward)
+            .filter_map(|offset| index_at_offset(anchor, offset, 100, false))
+            .collect();
+        // Forward lands on the entry that took the place, backward on the one before it.
+        assert_eq!(targets, [10, 11, 12, 9]);
+    }
+
+    #[test]
+    fn an_unlisted_anchor_preloads_nothing() {
+        let (backward, forward, _) = PRELOAD_SPECIFICATIONS[1];
+        assert_eq!(
+            index_at_offset(AnchorIndex::Unlisted, 1, 100, false),
+            None,
+            "an anchor outside the listing has no neighbors to speculate on"
+        );
+        let priorities = preload_priorities(AnchorIndex::Unlisted, backward, forward, 100, false);
+        assert!(priorities.is_empty());
+    }
+
+    #[test]
     fn eviction_prefers_forward_over_backward_within_the_preload_targets() {
         let (backward, forward, _) = PRELOAD_SPECIFICATIONS[1];
-        let priorities = preload_priorities(10, backward, forward, 100, false);
+        let priorities = preload_priorities(AnchorIndex::Listed(10), backward, forward, 100, false);
         // The anchor survives longest, then +1..+3, then -1.
         assert_eq!(priorities[&10], 0);
         assert_eq!(priorities[&11], 1);
@@ -2228,7 +2239,7 @@ mod preload_geometry_tests {
     #[test]
     fn eviction_drops_outsiders_before_preload_targets() {
         let (backward, forward, _) = PRELOAD_SPECIFICATIONS[1];
-        let priorities = preload_priorities(10, backward, forward, 100, false);
+        let priorities = preload_priorities(AnchorIndex::Listed(10), backward, forward, 100, false);
         // Outside the map, so the eviction key is usize::MAX: they go first.
         assert!(!priorities.contains_key(&8));
         assert!(!priorities.contains_key(&14));
@@ -2238,12 +2249,12 @@ mod preload_geometry_tests {
     fn eviction_keeps_wrapped_preload_targets() {
         let (backward, forward, _) = PRELOAD_SPECIFICATIONS[1];
         // Five looping entries: +3 lands at ring offset -2 yet stays a target.
-        let priorities = preload_priorities(0, backward, forward, 5, true);
+        let priorities = preload_priorities(AnchorIndex::Listed(0), backward, forward, 5, true);
         assert_eq!(priorities[&3], 3);
         assert_eq!(priorities[&4], 4);
         assert_eq!(priorities.len(), 5);
         // Three looping entries: +2 claims the slot before -1 revisits it.
-        let priorities = preload_priorities(0, backward, forward, 3, true);
+        let priorities = preload_priorities(AnchorIndex::Listed(0), backward, forward, 3, true);
         assert_eq!(priorities[&2], 2);
         assert_eq!(priorities.len(), 3);
     }
