@@ -63,17 +63,17 @@ use windows::Win32::UI::WindowsAndMessaging::{
     CS_DBLCLKS, CS_HREDRAW, CS_VREDRAW, CW_USEDEFAULT, CreateWindowExW, DefWindowProcW,
     DispatchMessageW, GWL_STYLE, GWLP_USERDATA, GetClientRect, GetCursorPos, GetMessageW,
     GetWindowLongPtrW, GetWindowPlacement, GetWindowRect, HCURSOR, HTCAPTION, HTCLIENT,
-    HWND_NOTOPMOST, HWND_TOP, HWND_TOPMOST, IDC_ARROW, IDC_SIZEALL, IsZoomed, KillTimer,
+    HWND_NOTOPMOST, HWND_TOP, HWND_TOPMOST, IDC_ARROW, IDC_SIZEALL, IsIconic, IsZoomed, KillTimer,
     LoadCursorW, LoadIconW, MINMAXINFO, MSG, PostMessageW, PostQuitMessage, RegisterClassExW,
     SC_MONITORPOWER, SW_HIDE, SW_SHOW, SW_SHOWMAXIMIZED, SWP_FRAMECHANGED, SWP_NOACTIVATE,
     SWP_NOMOVE, SWP_NOSIZE, SWP_NOZORDER, SendMessageW, SetCursor, SetTimer, SetWindowLongPtrW,
-    SetWindowPlacement, SetWindowPos, SetWindowTextW, ShowWindow, TranslateMessage,
-    WINDOWPLACEMENT, WM_APP, WM_CLOSE, WM_CONTEXTMENU, WM_DESTROY, WM_DISPLAYCHANGE, WM_DPICHANGED,
-    WM_ENTERSIZEMOVE, WM_EXITSIZEMOVE, WM_GESTURE, WM_GETMINMAXINFO, WM_KEYDOWN, WM_LBUTTONDBLCLK,
-    WM_LBUTTONDOWN, WM_LBUTTONUP, WM_MBUTTONDOWN, WM_MOUSEHWHEEL, WM_MOUSEMOVE, WM_MOUSEWHEEL,
-    WM_MOVE, WM_NCDESTROY, WM_NCLBUTTONDOWN, WM_PAINT, WM_SETCURSOR, WM_SETTINGCHANGE, WM_SIZE,
-    WM_SYSCHAR, WM_SYSCOMMAND, WM_SYSKEYDOWN, WM_TIMER, WM_XBUTTONDOWN, WNDCLASSEXW,
-    WS_OVERLAPPEDWINDOW, WindowFromPoint,
+    SetWindowPlacement, SetWindowPos, SetWindowTextW, ShowWindow, TranslateMessage, WA_INACTIVE,
+    WINDOWPLACEMENT, WM_ACTIVATE, WM_APP, WM_CLOSE, WM_CONTEXTMENU, WM_DESTROY, WM_DISPLAYCHANGE,
+    WM_DPICHANGED, WM_ENTERSIZEMOVE, WM_EXITSIZEMOVE, WM_GESTURE, WM_GETMINMAXINFO, WM_KEYDOWN,
+    WM_LBUTTONDBLCLK, WM_LBUTTONDOWN, WM_LBUTTONUP, WM_MBUTTONDOWN, WM_MOUSEHWHEEL, WM_MOUSEMOVE,
+    WM_MOUSEWHEEL, WM_MOVE, WM_NCDESTROY, WM_NCLBUTTONDOWN, WM_PAINT, WM_SETCURSOR,
+    WM_SETTINGCHANGE, WM_SIZE, WM_SYSCHAR, WM_SYSCOMMAND, WM_SYSKEYDOWN, WM_TIMER, WM_XBUTTONDOWN,
+    WNDCLASSEXW, WS_OVERLAPPEDWINDOW, WindowFromPoint,
 };
 use windows::core::{PCWSTR, Result, w};
 
@@ -134,6 +134,8 @@ struct Application {
     current_monitor: HMONITOR,
     /// Inside a modal move loop, where the system invalidates but the content cannot change.
     window_moving: bool,
+    /// Activation as WM_ACTIVATE reports it; playback follows this, not a foreground query.
+    window_active: bool,
     /// Set when riv itself asked for new pixels, so a moving window still draws them.
     render_requested: bool,
     /// Last-applied dark title bar; a WM_SETTINGCHANGE reapplies only when it flips.
@@ -287,6 +289,7 @@ impl Application {
             window_title: "riv".to_string(),
             current_monitor: unsafe { MonitorFromWindow(window, MONITOR_DEFAULTTONEAREST) },
             window_moving: false,
+            window_active: true,
             render_requested: false,
             title_bar_dark: None,
             download_progress: None,
@@ -627,16 +630,7 @@ impl Application {
             .displayed_image
             .as_ref()
             .and_then(|image| Animation::new(image));
-        if let Some(animation) = &self.animation {
-            unsafe {
-                SetTimer(
-                    Some(window),
-                    ANIMATION_TIMER,
-                    animation.current_delay_milliseconds(),
-                    None,
-                )
-            };
-        }
+        self.schedule_animation_timer(window);
         if self
             .displayed_image
             .as_ref()
@@ -728,12 +722,8 @@ impl Application {
             return;
         };
         let frame_index = animation.next_frame();
-        let delay = animation.current_delay_milliseconds();
-        let paused = animation.paused;
         self.render_animation_frame(window, frame_index);
-        if !paused {
-            unsafe { SetTimer(Some(window), ANIMATION_TIMER, delay, None) };
-        }
+        self.schedule_animation_timer(window);
     }
 
     /// A manual step pauses playback; resume is left to the user.
@@ -794,10 +784,58 @@ impl Application {
         showing
     }
 
+    /// False while the window is minimized or another window holds the foreground.
+    fn playback_visible(&self, window: HWND) -> bool {
+        self.window_active && !unsafe { IsIconic(window) }.as_bool()
+    }
+
+    /// The one place the slideshow timer is set, so the playback gate holds for every caller.
+    fn schedule_slideshow_timer(&self, window: HWND, milliseconds: u32) {
+        if !self.playback_visible(window) {
+            return;
+        }
+        unsafe { SetTimer(Some(window), SLIDESHOW_TIMER, milliseconds, None) };
+    }
+
     /// Restarts the slideshow interval; navigation resets it so each item gets a full turn.
     fn restart_slideshow_timer(&self, window: HWND) {
         let interval = self.settings.options.slideshow_interval_seconds * 1000;
-        unsafe { SetTimer(Some(window), SLIDESHOW_TIMER, interval, None) };
+        self.schedule_slideshow_timer(window, interval);
+    }
+
+    /// Starts or stops the animation and slideshow timers to match the window state.
+    fn update_playback(&mut self, window: HWND) {
+        if self.playback_visible(window) {
+            self.schedule_animation_timer(window);
+            if self.slideshow_active {
+                self.restart_slideshow_timer(window);
+            }
+        } else {
+            let _ = unsafe { KillTimer(Some(window), ANIMATION_TIMER) };
+            let _ = unsafe { KillTimer(Some(window), SLIDESHOW_TIMER) };
+        }
+    }
+
+    /// Schedules the next animation frame, unless playback is paused or out of view.
+    fn schedule_animation_timer(&self, window: HWND) {
+        let Some(animation) = self
+            .animation
+            .as_ref()
+            .filter(|animation| !animation.paused)
+        else {
+            return;
+        };
+        if !self.playback_visible(window) {
+            return;
+        }
+        unsafe {
+            SetTimer(
+                Some(window),
+                ANIMATION_TIMER,
+                animation.current_delay_milliseconds(),
+                None,
+            )
+        };
     }
 
     fn toggle_slideshow(&mut self, window: HWND) {
@@ -1591,8 +1629,7 @@ fn dispatch_action(application: &mut Application, window: HWND, action: Action) 
                 if paused {
                     let _ = unsafe { KillTimer(Some(window), ANIMATION_TIMER) };
                 } else {
-                    let delay = animation.current_delay_milliseconds();
-                    unsafe { SetTimer(Some(window), ANIMATION_TIMER, delay, None) };
+                    application.schedule_animation_timer(window);
                 }
                 // Resuming drops the frame-step pill left by a manual step.
                 if !paused && application.dismiss_sticky_status_text() {
@@ -2073,6 +2110,14 @@ extern "system" fn window_procedure(
             }
             LRESULT(0)
         }
+        WM_ACTIVATE => {
+            if let Some(application) = application_from_window(window) {
+                // The message states the change; the foreground window has not moved yet.
+                application.window_active = (wparam.0 & 0xFFFF) as u32 != WA_INACTIVE;
+                application.update_playback(window);
+            }
+            LRESULT(0)
+        }
         WM_SIZE => {
             if let Some(application) = application_from_window(window) {
                 // A size change inside the modal loop still needs every frame drawn.
@@ -2230,7 +2275,7 @@ extern "system" fn window_procedure(
                         shown.elapsed().as_millis().min(u128::from(u32::MAX)) as u32
                     });
                 if hold > elapsed {
-                    unsafe { SetTimer(Some(window), SLIDESHOW_TIMER, hold - elapsed, None) };
+                    application.schedule_slideshow_timer(window, hold - elapsed);
                 } else {
                     let command = if application.settings.options.slideshow_reversed {
                         NavigationCommand::Previous
