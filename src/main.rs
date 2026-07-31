@@ -84,10 +84,9 @@ const WM_APP_SHOW_WINDOW: u32 = WM_APP + 2;
 
 const STATUS_TEXT_TIMER: usize = 1;
 const SLIDESHOW_TIMER: usize = 2;
-const OPEN_WITH_TIMER: usize = 3;
-const ANIMATION_TIMER: usize = 4;
-const CURSOR_HIDE_TIMER: usize = 5;
-const FULL_DECODE_TIMER: usize = 6;
+const ANIMATION_TIMER: usize = 3;
+const CURSOR_HIDE_TIMER: usize = 4;
+const FULL_DECODE_TIMER: usize = 5;
 
 const PAN_STEP: f32 = 64.0;
 
@@ -146,7 +145,9 @@ struct Application {
     slideshow_item_shown_at: Option<std::time::Instant>,
     animation: Option<Animation>,
     drop_target: Option<IDropTarget>,
-    open_with_list: Option<Box<OpenWithList>>,
+    open_with_list: Option<OpenWithList>,
+    /// Extension whose enumeration is running; at most one is in flight.
+    open_with_pending_extension: Option<String>,
 }
 
 /// A status pill: Timed auto-expires, Sticky holds until the image or playback changes.
@@ -294,6 +295,7 @@ impl Application {
             animation: None,
             drop_target: None,
             open_with_list: None,
+            open_with_pending_extension: None,
         };
         if let Some(renderer) = &mut application.renderer {
             renderer.set_sdr_white_boost(application.sdr_white_boost);
@@ -653,10 +655,7 @@ impl Application {
             if let Some(file) = location.containing_file() {
                 self.settings.add_recent_file(file);
             }
-            self.open_with_list = None;
-            if location.as_file().is_some() {
-                unsafe { SetTimer(Some(window), OPEN_WITH_TIMER, 250, None) };
-            }
+            self.start_open_with_enumeration(window);
         }
         self.preload_after_display = true;
         self.update_window_title(window);
@@ -1082,6 +1081,37 @@ impl Application {
         self.update_cursor_autohide(window);
         self.update_window_title(window);
         self.request_render(window);
+    }
+
+    /// Enumerates handlers when the extension on screen has no list yet and none is running.
+    fn start_open_with_enumeration(&mut self, window: HWND) {
+        let Some(extension) = self
+            .image_core
+            .current_file()
+            .and_then(open_with::lowercase_extension)
+        else {
+            return;
+        };
+        let enumerated = self
+            .open_with_list
+            .as_ref()
+            .is_some_and(|list| list.extension == extension);
+        if enumerated || self.open_with_pending_extension.is_some() {
+            return;
+        }
+        self.open_with_pending_extension = Some(extension.clone());
+        open_with::enumerate_in_background(window, extension);
+    }
+
+    /// The enumerated list, when it belongs to the extension on screen.
+    fn current_open_with_list(&self) -> Option<&OpenWithList> {
+        let extension = self
+            .image_core
+            .current_file()
+            .and_then(open_with::lowercase_extension)?;
+        self.open_with_list
+            .as_ref()
+            .filter(|list| list.extension == extension)
     }
 
     fn gate_satisfied(&self, gate: ActivationGate) -> bool {
@@ -2214,25 +2244,13 @@ extern "system" fn window_procedure(
             }
             LRESULT(0)
         }
-        WM_TIMER if wparam.0 == OPEN_WITH_TIMER => {
-            let _ = unsafe { KillTimer(Some(window), OPEN_WITH_TIMER) };
-            if let Some(application) = application_from_window(window)
-                && let Some(path) = application.image_core.current_file()
-            {
-                open_with::enumerate_in_background(window, path.to_path_buf());
-            }
-            LRESULT(0)
-        }
         WM_APP_OPEN_WITH_LIST => {
             let list = unsafe { Box::from_raw(lparam.0 as *mut OpenWithList) };
             if let Some(application) = application_from_window(window) {
-                let is_current = application.image_core.current_file().is_some_and(|path| {
-                    path.to_string_lossy()
-                        .eq_ignore_ascii_case(&list.path.to_string_lossy())
-                });
-                if is_current {
-                    application.open_with_list = Some(list);
-                }
+                application.open_with_pending_extension = None;
+                application.open_with_list = Some(*list);
+                // The file on screen may have moved to another extension meanwhile.
+                application.start_open_with_enumeration(window);
             }
             LRESULT(0)
         }
@@ -2427,7 +2445,7 @@ extern "system" fn window_procedure(
                         .into_iter()
                         .map(|(name, _)| name)
                         .collect(),
-                    open_with_items: application.open_with_list.as_ref().map_or_else(
+                    open_with_items: application.current_open_with_list().map_or_else(
                         Vec::new,
                         |list| {
                             list.items
@@ -2437,8 +2455,7 @@ extern "system" fn window_procedure(
                         },
                     ),
                     open_with_has_default: application
-                        .open_with_list
-                        .as_ref()
+                        .current_open_with_list()
                         .is_some_and(|list| list.has_default),
                     shortcuts: Action::all_bindable()
                         .filter_map(|action| {
@@ -2463,7 +2480,7 @@ extern "system" fn window_procedure(
                         MenuSelection::OpenWithEntry(index) => {
                             if let (Some(path), Some(list)) = (
                                 application.image_core.current_file(),
-                                application.open_with_list.as_ref(),
+                                application.current_open_with_list(),
                             ) && let Some(item) = list.items.get(index)
                             {
                                 let _ = open_with::invoke(path, &item.executable_path);

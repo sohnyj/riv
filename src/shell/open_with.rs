@@ -1,6 +1,6 @@
 //! Open With handler enumeration (SHAssocEnumHandlers) on a background thread.
 
-use std::path::{Path, PathBuf};
+use std::path::Path;
 
 use windows::Win32::Foundation::{HWND, LPARAM, WPARAM};
 use windows::Win32::System::Com::{
@@ -22,16 +22,21 @@ pub struct OpenWithItem {
 }
 
 pub struct OpenWithList {
-    pub path: PathBuf,
+    pub extension: String,
     pub has_default: bool,
     pub items: Vec<OpenWithItem>,
 }
 
-pub fn enumerate_in_background(window: HWND, path: PathBuf) {
+/// Extension without the dot, folded so lists match regardless of how a file spells it.
+pub fn lowercase_extension(path: &Path) -> Option<String> {
+    Some(path.extension()?.to_string_lossy().to_lowercase())
+}
+
+pub fn enumerate_in_background(window: HWND, extension: String) {
     let window_handle = window.0 as isize;
     std::thread::spawn(move || {
         let initialized = unsafe { CoInitializeEx(None, COINIT_MULTITHREADED) }.is_ok();
-        let list = Box::new(enumerate(&path));
+        let list = Box::new(enumerate(&extension));
         let pointer = Box::into_raw(list);
         let posted = unsafe {
             PostMessageW(
@@ -50,20 +55,19 @@ pub fn enumerate_in_background(window: HWND, path: PathBuf) {
     });
 }
 
-fn enumerate(path: &Path) -> OpenWithList {
+fn enumerate(extension: &str) -> OpenWithList {
     let mut items = Vec::new();
     let own_executable = std::env::current_exe()
         .map(|exe| exe.to_string_lossy().into_owned())
         .unwrap_or_default();
-    let default_executable = default_executable_for(path).unwrap_or_default();
+    let default_executable = default_executable_for(extension).unwrap_or_default();
 
-    for handler in handlers_for(path) {
+    // Packaged apps have no readable file path, so only riv itself is filtered out.
+    for handler in handlers_for(extension) {
         let Some(executable_path) = handler_executable_path(&handler) else {
             continue;
         };
-        if !Path::new(&executable_path).is_file()
-            || executable_path.eq_ignore_ascii_case(&own_executable)
-        {
+        if executable_path.eq_ignore_ascii_case(&own_executable) {
             continue;
         }
         let display_name = handler_ui_name(&handler).unwrap_or_else(|| executable_path.clone());
@@ -88,14 +92,17 @@ fn enumerate(path: &Path) -> OpenWithList {
         has_default = true;
     }
     OpenWithList {
-        path: path.to_path_buf(),
+        extension: extension.to_string(),
         has_default,
         items,
     }
 }
 
 pub fn invoke(path: &Path, executable_path: &str) -> Result<()> {
-    for handler in handlers_for(path) {
+    let Some(extension) = lowercase_extension(path) else {
+        return Ok(());
+    };
+    for handler in handlers_for(&extension) {
         if handler_executable_path(&handler)
             .is_some_and(|name| name.eq_ignore_ascii_case(executable_path))
         {
@@ -120,11 +127,8 @@ pub fn show_open_with_dialog(window: HWND, path: &Path) {
     let _ = unsafe { SHOpenWithDialog(Some(window), &raw const information) };
 }
 
-fn handlers_for(path: &Path) -> Vec<IAssocHandler> {
-    let Some(extension) = path.extension() else {
-        return Vec::new();
-    };
-    let extension = HSTRING::from(format!(".{}", extension.to_string_lossy()));
+fn handlers_for(extension: &str) -> Vec<IAssocHandler> {
+    let extension = HSTRING::from(format!(".{extension}"));
     let Ok(enumerator) = (unsafe { SHAssocEnumHandlers(&extension, ASSOC_FILTER_RECOMMENDED) })
     else {
         return Vec::new();
@@ -159,8 +163,8 @@ fn take_shell_string(text: windows::core::PWSTR) -> Option<String> {
     Some(result)
 }
 
-fn default_executable_for(path: &Path) -> Option<String> {
-    let extension = HSTRING::from(format!(".{}", path.extension()?.to_string_lossy()));
+fn default_executable_for(extension: &str) -> Option<String> {
+    let extension = HSTRING::from(format!(".{extension}"));
     let mut buffer = [0u16; 1024];
     let mut length = buffer.len() as u32;
     let status = unsafe {
