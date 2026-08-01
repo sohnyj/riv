@@ -217,47 +217,59 @@ pub fn display_color_info(watcher: Option<&DisplayWatcher>, window: HWND) -> Dis
 
 /// The ICC profile Windows associates with the window's monitor.
 fn monitor_device_profile(window: HWND) -> Option<Vec<u8>> {
-    let monitor = unsafe { MonitorFromWindow(window, MONITOR_DEFAULTTONEAREST) };
-    let mut monitor_information = MONITORINFOEXW::default();
-    monitor_information.monitorInfo.cbSize = size_of::<MONITORINFOEXW>() as u32;
-    unsafe { GetMonitorInfoW(monitor, &raw mut monitor_information.monitorInfo) }
-        .as_bool()
-        .then_some(())?;
-    device_profile(&monitor_information.szDevice)
+    for_window_display_path(window, display_path_profile)
 }
 
-/// The ICC profile Windows associates with this output.
-fn device_profile(device_name: &[u16; 32]) -> Option<Vec<u8>> {
-    use windows::Win32::Graphics::Gdi::{CreateDCW, DeleteDC};
-    use windows::Win32::UI::ColorSystem::GetICMProfileW;
+/// The display path's default ICC profile, in the scope the display currently uses.
+fn display_path_profile(path: &DISPLAYCONFIG_PATH_INFO) -> Option<Vec<u8>> {
+    use windows::Win32::Foundation::{HLOCAL, LocalFree};
+    use windows::Win32::UI::ColorSystem::{
+        CPST_NONE, CPT_ICC, ColorProfileGetDisplayDefault, ColorProfileGetDisplayUserScope,
+        WCS_PROFILE_MANAGEMENT_SCOPE_SYSTEM_WIDE,
+    };
+
+    let adapter = path.targetInfo.adapterId;
+    let source = path.sourceInfo.id;
+    let scope = unsafe { ColorProfileGetDisplayUserScope(adapter, source) }
+        .unwrap_or(WCS_PROFILE_MANAGEMENT_SCOPE_SYSTEM_WIDE);
+    let name = unsafe { ColorProfileGetDisplayDefault(scope, adapter, source, CPT_ICC, CPST_NONE) }
+        .ok()?;
+    let profile = unsafe { name.to_string() }.ok();
+    let _ = unsafe { LocalFree(Some(HLOCAL(name.0.cast()))) };
+    let profile = profile.filter(|name| !name.is_empty())?;
+    // A bare file name lives in the system color directory; a full path stands alone.
+    let profile = std::path::Path::new(&profile);
+    if profile.is_absolute() {
+        std::fs::read(profile).ok()
+    } else {
+        std::fs::read(color_directory()?.join(profile)).ok()
+    }
+}
+
+/// The system color directory, where installed ICC profiles live.
+fn color_directory() -> Option<std::path::PathBuf> {
+    use windows::Win32::UI::ColorSystem::GetColorDirectoryW;
     use windows::core::{PCWSTR, PWSTR};
 
-    let device = PCWSTR(device_name.as_ptr());
-    let device_context = unsafe { CreateDCW(device, device, PCWSTR::null(), None) };
-    if device_context.is_invalid() {
-        return None;
-    }
-    // First call sizes the path buffer, second fills it.
     let mut length = 0u32;
-    let _ = unsafe { GetICMProfileW(device_context, &raw mut length, None) };
-    let mut path = vec![0u16; length as usize];
-    let filled = unsafe {
-        GetICMProfileW(
-            device_context,
+    let _ = unsafe { GetColorDirectoryW(PCWSTR::null(), None, &raw mut length) };
+    let mut buffer = vec![0u16; (length as usize).div_ceil(2)];
+    unsafe {
+        GetColorDirectoryW(
+            PCWSTR::null(),
+            Some(PWSTR(buffer.as_mut_ptr())),
             &raw mut length,
-            Some(PWSTR(path.as_mut_ptr())),
         )
     }
-    .as_bool();
-    let _ = unsafe { DeleteDC(device_context) };
-    if !filled {
-        return None;
-    }
-    let end = path
+    .as_bool()
+    .then_some(())?;
+    let end = buffer
         .iter()
         .position(|unit| *unit == 0)
-        .unwrap_or(path.len());
-    std::fs::read(String::from_utf16_lossy(&path[..end])).ok()
+        .unwrap_or(buffer.len());
+    Some(std::path::PathBuf::from(String::from_utf16_lossy(
+        &buffer[..end],
+    )))
 }
 
 fn capabilities_from(information: Option<&AdvancedColorInfo>, window: HWND) -> DisplayCapabilities {
