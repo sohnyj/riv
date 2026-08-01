@@ -380,6 +380,14 @@ static REGISTRY: &[FormatDescriptor] = &[
         store_extensions: &["JPEG XL Image Extension"],
     },
     FormatDescriptor {
+        name: "JPEG XR",
+        extensions: &["jxr", "wdp", "hdp"],
+        magic: &[&[(0, b"II\xBC\x01")], &[(0, b"II\xBC\x00")]],
+        semantics: FrameSemantics::Single,
+        adapter: Adapter::Wic,
+        store_extensions: &[],
+    },
+    FormatDescriptor {
         name: "RAW",
         extensions: &[
             "arw", "cr2", "cr3", "crw", "dng", "erf", "kdc", "mrw", "nef", "nrw", "orf", "pef",

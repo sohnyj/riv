@@ -67,6 +67,7 @@ Decoded by Windows Imaging Component codecs:
 | Format | Notes |
 |---|---|
 | PNG, JPEG, GIF, BMP, ICO, TIFF | |
+| JPEG XR | HDR |
 | DDS | BC1-BC3 |
 
 Archives browsable as image folders:
