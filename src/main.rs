@@ -40,6 +40,7 @@ use view::transform::{FitMode, Size, ViewTransform};
 use window::context_menu::{self, MenuSelection, MenuState};
 use window::dwm;
 use window::overlay::{self, Overlay, OverlayContent};
+use windows::System::DispatcherQueueController;
 use windows::Win32::Foundation::{
     HANDLE, HWND, LPARAM, LRESULT, POINT, RECT, WAIT_EVENT, WAIT_OBJECT_0, WPARAM,
 };
@@ -59,6 +60,9 @@ use windows::Win32::System::Power::{
     ES_CONTINUOUS, ES_DISPLAY_REQUIRED, ES_SYSTEM_REQUIRED, SetThreadExecutionState,
 };
 use windows::Win32::System::Threading::WaitForSingleObjectEx;
+use windows::Win32::System::WinRT::{
+    CreateDispatcherQueueController, DQTAT_COM_NONE, DQTYPE_THREAD_CURRENT, DispatcherQueueOptions,
+};
 use windows::Win32::UI::HiDpi::GetDpiForWindow;
 use windows::Win32::UI::Input::KeyboardAndMouse::{
     ReleaseCapture, SetCapture, VK_CONTROL, VK_ESCAPE, VK_LWIN, VK_MENU, VK_RWIN, VK_SHIFT,
@@ -87,6 +91,8 @@ use windows::core::{PCWSTR, Result, w};
 const APPLICATION_ICON_ID: PCWSTR = PCWSTR(std::ptr::without_provenance(1));
 
 const WM_APP_SHOW_WINDOW: u32 = WM_APP + 2;
+/// Posted by the display watcher when the advanced-color state or luminance changes.
+const WM_APP_ADVANCED_COLOR_CHANGED: u32 = WM_APP + 10;
 
 const STATUS_TEXT_TIMER: usize = 1;
 const SLIDESHOW_TIMER: usize = 2;
@@ -102,6 +108,10 @@ const MINIMUM_CLIENT_SIZE: (i32, i32) = (320, 240);
 struct Application {
     /// None between a device loss and the next successful rebuild.
     renderer: Option<Renderer>,
+    /// Advanced-color snapshots and change events for the window's display.
+    display_watcher: Option<color::DisplayWatcher>,
+    /// Keeps the thread's dispatcher queue alive; the watcher's events need one.
+    _dispatcher_queue_controller: Option<DispatcherQueueController>,
     /// A failed output mode switch retries on the next paint.
     output_reconfigure_pending: bool,
     view_transform: ViewTransform,
@@ -246,11 +256,21 @@ impl Application {
         initial_path: Option<&Path>,
         pending_device: PendingDevice,
     ) -> Result<Self> {
+        // The watcher's change events arrive only while this thread runs a dispatcher queue.
+        let dispatcher_queue_controller = unsafe {
+            CreateDispatcherQueueController(DispatcherQueueOptions {
+                dwSize: size_of::<DispatcherQueueOptions>() as u32,
+                threadType: DQTYPE_THREAD_CURRENT,
+                apartmentType: DQTAT_COM_NONE,
+            })
+        }
+        .ok();
+        let display_watcher = color::DisplayWatcher::new(window, WM_APP_ADVANCED_COLOR_CHANGED);
         let color::DisplayColorInfo {
             capabilities,
             gamut,
             display_profile,
-        } = color::display_color_info(window);
+        } = color::display_color_info(display_watcher.as_ref(), window);
         let renderer = create_renderer(
             window,
             &capabilities,
@@ -265,6 +285,8 @@ impl Application {
         view_transform.fit_mode = FitMode::from_setting(settings.options.fit_mode);
         let mut application = Self {
             renderer: Some(renderer),
+            display_watcher,
+            _dispatcher_queue_controller: dispatcher_queue_controller,
             output_reconfigure_pending: false,
             view_transform,
             image_core: ImageCore::new(window, core_options(&settings.options)),
@@ -276,7 +298,11 @@ impl Application {
             preserve_zoom: false,
             always_on_top: false,
             fullscreen_restore: None,
-            sdr_white_boost: color::sdr_white_boost_for(window, capabilities.hdr),
+            sdr_white_boost: if capabilities.hdr {
+                capabilities.sdr_white_boost
+            } else {
+                1.0
+            },
             pan_drag_position: None,
             pan_cursor: unsafe { LoadCursorW(None, IDC_SIZEALL)? },
             arrow_cursor: unsafe { LoadCursorW(None, IDC_ARROW)? },
@@ -343,15 +369,19 @@ impl Application {
             capabilities,
             gamut,
             display_profile,
-        } = color::display_color_info(window);
+        } = color::display_color_info(self.display_watcher.as_ref(), window);
         self.display_labels = display_labels(&capabilities, gamut);
-        if self.reconfigure_display_output(window, &capabilities, display_profile, false) {
+        if self.reconfigure_display_output(&capabilities, display_profile, false) {
             self.request_render(window);
             return;
         }
         let mut stale = false;
         let is_hdr_output = self.renderer.as_ref().is_some_and(Renderer::is_hdr_output);
-        let boost = color::sdr_white_boost_for(window, is_hdr_output);
+        let boost = if is_hdr_output {
+            capabilities.sdr_white_boost
+        } else {
+            1.0
+        };
         if (boost - self.sdr_white_boost).abs() > f32::EPSILON {
             self.sdr_white_boost = boost;
             if let Some(renderer) = &mut self.renderer {
@@ -382,27 +412,9 @@ impl Application {
         }
     }
 
-    /// Re-reads the display luminance when the info panel opens; a query that raced a
-    /// mode transition can capture transitional values no later message corrects.
-    fn refresh_display_luminance(&mut self, window: HWND) {
-        if !self.renderer.as_ref().is_some_and(Renderer::is_hdr_output) {
-            return;
-        }
-        let capabilities = color::display_capabilities(window);
-        // A mode mismatch belongs to WM_DISPLAYCHANGE; only settled same-mode values apply.
-        if !capabilities.hdr {
-            return;
-        }
-        let (target_nits, full_frame_nits) = tone_map_targets(&capabilities);
-        if let Some(renderer) = &mut self.renderer {
-            renderer.set_tone_map_target(target_nits, full_frame_nits);
-        }
-    }
-
     /// True when a reconfigure was attempted (repaint due); a failure marks the retry pending.
     fn reconfigure_display_output(
         &mut self,
-        window: HWND,
         capabilities: &color::DisplayCapabilities,
         display_profile: Option<Arc<Vec<u8>>>,
         force: bool,
@@ -415,7 +427,11 @@ impl Application {
         if !mismatch && !force {
             return false;
         }
-        self.sdr_white_boost = color::sdr_white_boost_for(window, capabilities.hdr);
+        self.sdr_white_boost = if capabilities.hdr {
+            capabilities.sdr_white_boost
+        } else {
+            1.0
+        };
         let (target_nits, full_frame_nits) = tone_map_targets(capabilities);
         let reconfigured = self.renderer.as_mut().is_some_and(|renderer| {
             renderer
@@ -897,7 +913,7 @@ impl Application {
             capabilities,
             display_profile,
             ..
-        } = color::display_color_info(window);
+        } = color::display_color_info(self.display_watcher.as_ref(), window);
         self.renderer = Some(create_renderer(
             window,
             &capabilities,
@@ -1076,8 +1092,8 @@ impl Application {
                 capabilities,
                 display_profile,
                 ..
-            } = color::display_color_info(window);
-            let _ = self.reconfigure_display_output(window, &capabilities, display_profile, true);
+            } = color::display_color_info(self.display_watcher.as_ref(), window);
+            let _ = self.reconfigure_display_output(&capabilities, display_profile, true);
         }
         let viewport = self.viewport(window);
         let image = self.image_size();
@@ -1527,9 +1543,6 @@ fn dispatch_action(application: &mut Application, window: HWND, action: Action) 
                 application.show_file_info = true;
             } else {
                 application.show_file_info = !application.show_file_info;
-            }
-            if application.show_file_info {
-                application.refresh_display_luminance(window);
             }
             application.request_render(window);
         }
@@ -2326,6 +2339,14 @@ extern "system" fn window_procedure(
             }
             LRESULT(0)
         }
+        WM_APP_ADVANCED_COLOR_CHANGED => {
+            // The advanced-color state settled into new values; re-evaluate once per posting.
+            if let Some(application) = application_from_window(window) {
+                let _ = application.update_current_monitor(window);
+                application.refresh_display_state(window);
+            }
+            LRESULT(0)
+        }
         WM_TIMER if wparam.0 == ANIMATION_TIMER => {
             if let Some(application) = application_from_window(window) {
                 application.play_animation_frame(window);
@@ -2714,6 +2735,11 @@ extern "system" fn window_procedure(
             }
         }
         WM_DESTROY => {
+            if let Some(application) = application_from_window(window)
+                && let Some(watcher) = application.display_watcher.take()
+            {
+                watcher.close();
+            }
             unsafe { PostQuitMessage(0) };
             LRESULT(0)
         }

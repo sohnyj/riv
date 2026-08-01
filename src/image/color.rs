@@ -2,20 +2,50 @@
 
 use std::sync::Arc;
 
+use windows::Foundation::TypedEventHandler;
+use windows::Graphics::Display::{AdvancedColorInfo, AdvancedColorKind, DisplayInformation};
 use windows::Win32::Devices::Display::{
-    DISPLAYCONFIG_DEVICE_INFO_GET_ADVANCED_COLOR_INFO,
-    DISPLAYCONFIG_DEVICE_INFO_GET_SDR_WHITE_LEVEL, DISPLAYCONFIG_DEVICE_INFO_GET_SOURCE_NAME,
+    DISPLAYCONFIG_DEVICE_INFO_GET_ADVANCED_COLOR_INFO, DISPLAYCONFIG_DEVICE_INFO_GET_SOURCE_NAME,
     DISPLAYCONFIG_DEVICE_INFO_HEADER, DISPLAYCONFIG_GET_ADVANCED_COLOR_INFO,
-    DISPLAYCONFIG_MODE_INFO, DISPLAYCONFIG_PATH_INFO, DISPLAYCONFIG_SDR_WHITE_LEVEL,
-    DISPLAYCONFIG_SOURCE_DEVICE_NAME, DisplayConfigGetDeviceInfo, GetDisplayConfigBufferSizes,
-    QDC_ONLY_ACTIVE_PATHS, QueryDisplayConfig,
+    DISPLAYCONFIG_MODE_INFO, DISPLAYCONFIG_PATH_INFO, DISPLAYCONFIG_SOURCE_DEVICE_NAME,
+    DisplayConfigGetDeviceInfo, GetDisplayConfigBufferSizes, QDC_ONLY_ACTIVE_PATHS,
+    QueryDisplayConfig,
 };
-use windows::Win32::Foundation::{ERROR_SUCCESS, HWND};
+use windows::Win32::Foundation::{ERROR_SUCCESS, HWND, LPARAM, WPARAM};
 use windows::Win32::Graphics::Direct2D::Common::D2D1_COLOR_F;
-use windows::Win32::Graphics::Dxgi::DXGI_OUTPUT_DESC1;
 use windows::Win32::Graphics::Gdi::{
     GetMonitorInfoW, MONITOR_DEFAULTTONEAREST, MONITORINFOEXW, MonitorFromWindow,
 };
+use windows::Win32::UI::WindowsAndMessaging::PostMessageW;
+use windows::core::{IInspectable, Interface};
+
+/// The DisplayInformation activation factory's desktop interop, absent from the crate's
+/// bindings; the first three slots are IInspectable's, keeping the vtable layout.
+#[allow(non_snake_case)]
+mod interop {
+    use windows::Win32::Foundation::HWND;
+    use windows::core::{GUID, HRESULT};
+
+    #[windows::core::interface("7449121C-382B-4705-8DA7-A795BA482013")]
+    pub unsafe trait IDisplayInformationStaticsInterop: windows::core::IUnknown {
+        pub unsafe fn GetIids(&self, count: *mut u32, iids: *mut *mut GUID) -> HRESULT;
+        pub unsafe fn GetRuntimeClassName(&self, name: *mut *mut core::ffi::c_void) -> HRESULT;
+        pub unsafe fn GetTrustLevel(&self, level: *mut i32) -> HRESULT;
+        pub unsafe fn GetForWindow(
+            &self,
+            window: HWND,
+            riid: *const GUID,
+            information: *mut *mut core::ffi::c_void,
+        ) -> HRESULT;
+        pub unsafe fn GetForMonitor(
+            &self,
+            monitor: *mut core::ffi::c_void,
+            riid: *const GUID,
+            information: *mut *mut core::ffi::c_void,
+        ) -> HRESULT;
+    }
+}
+use interop::IDisplayInformationStaticsInterop;
 
 /// Encoding of app-drawn colors (overlay, clear) for the current backbuffer.
 #[derive(Clone, Copy)]
@@ -105,7 +135,7 @@ fn scrgb_color_to_pq(color: D2D1_COLOR_F) -> D2D1_COLOR_F {
     }
 }
 
-/// Output capabilities from a single enumeration; unknown output falls back to SDR 8-bit.
+/// Output capabilities from one advanced-color snapshot; unknown state falls back to SDR 8-bit.
 #[derive(Clone, Copy)]
 pub struct DisplayCapabilities {
     pub hdr: bool,
@@ -114,9 +144,11 @@ pub struct DisplayCapabilities {
     pub max_full_frame_luminance: Option<f32>,
     /// Advanced color (HDR or SDR auto color management) is on for this output.
     pub advanced_color: bool,
+    /// SDR white over the 80-nit reference; the renderer applies it on HDR outputs only.
+    pub sdr_white_boost: f32,
 }
 
-/// A display's color capabilities, EDID gamut, and installed profile, from one enumeration.
+/// A display's color capabilities, native gamut, and installed profile, from one snapshot.
 pub struct DisplayColorInfo {
     pub capabilities: DisplayCapabilities,
     pub gamut: Option<DisplayGamut>,
@@ -124,29 +156,75 @@ pub struct DisplayColorInfo {
     pub display_profile: Option<Arc<Vec<u8>>>,
 }
 
-/// Queries the display's color capabilities, gamut, and profile with a single enumeration.
-pub fn display_color_info(window: HWND) -> DisplayColorInfo {
-    let description = window_output_description(window);
-    let capabilities = capabilities_from(description.as_ref(), window);
+/// The window's display information hook: advanced-color snapshots plus a change message.
+pub struct DisplayWatcher {
+    display_information: DisplayInformation,
+    change_token: i64,
+}
+
+impl DisplayWatcher {
+    /// Hooks `window`'s display information; advanced-color changes post `message` to it.
+    pub fn new(window: HWND, message: u32) -> Option<Self> {
+        let interop =
+            windows::core::factory::<DisplayInformation, IDisplayInformationStaticsInterop>()
+                .ok()?;
+        let mut pointer: *mut core::ffi::c_void = core::ptr::null_mut();
+        unsafe { interop.GetForWindow(window, &DisplayInformation::IID, &raw mut pointer) }
+            .ok()
+            .ok()?;
+        let display_information = unsafe { DisplayInformation::from_raw(pointer) };
+        let window_value = window.0 as isize;
+        let handler = TypedEventHandler::<DisplayInformation, IInspectable>::new(move |_, _| {
+            let window = HWND(window_value as *mut core::ffi::c_void);
+            let _ = unsafe { PostMessageW(Some(window), message, WPARAM(0), LPARAM(0)) };
+            Ok(())
+        });
+        let change_token = display_information
+            .AdvancedColorInfoChanged(&handler)
+            .ok()?;
+        Some(Self {
+            display_information,
+            change_token,
+        })
+    }
+
+    fn advanced_color_info(&self) -> Option<AdvancedColorInfo> {
+        self.display_information.GetAdvancedColorInfo().ok()
+    }
+
+    /// Unhooks the change handler; the information object dies with the watcher.
+    pub fn close(&self) {
+        let _ = self
+            .display_information
+            .RemoveAdvancedColorInfoChanged(self.change_token);
+    }
+}
+
+/// Queries the display's color capabilities, gamut, and profile from the watcher's snapshot.
+pub fn display_color_info(watcher: Option<&DisplayWatcher>, window: HWND) -> DisplayColorInfo {
+    let information = watcher.and_then(DisplayWatcher::advanced_color_info);
+    let capabilities = capabilities_from(information.as_ref(), window);
     // Only ACM-off SDR consumes the profile; skip the disk read in the delegated modes.
     let display_profile = (!capabilities.hdr && !capabilities.advanced_color)
-        .then(|| {
-            description
-                .as_ref()
-                .and_then(|d| device_profile(&d.DeviceName))
-        })
+        .then(|| monitor_device_profile(window))
         .flatten()
         .map(Arc::new);
     DisplayColorInfo {
         capabilities,
-        gamut: description.as_ref().and_then(gamut_from),
+        gamut: information.as_ref().and_then(gamut_from),
         display_profile,
     }
 }
 
-/// The display's capabilities alone, skipping the profile read; for read-time refreshes.
-pub fn display_capabilities(window: HWND) -> DisplayCapabilities {
-    capabilities_from(window_output_description(window).as_ref(), window)
+/// The ICC profile Windows associates with the window's monitor.
+fn monitor_device_profile(window: HWND) -> Option<Vec<u8>> {
+    let monitor = unsafe { MonitorFromWindow(window, MONITOR_DEFAULTTONEAREST) };
+    let mut monitor_information = MONITORINFOEXW::default();
+    monitor_information.monitorInfo.cbSize = size_of::<MONITORINFOEXW>() as u32;
+    unsafe { GetMonitorInfoW(monitor, &raw mut monitor_information.monitorInfo) }
+        .as_bool()
+        .then_some(())?;
+    device_profile(&monitor_information.szDevice)
 }
 
 /// The ICC profile Windows associates with this output.
@@ -183,24 +261,25 @@ fn device_profile(device_name: &[u16; 32]) -> Option<Vec<u8>> {
     std::fs::read(String::from_utf16_lossy(&path[..end])).ok()
 }
 
-fn capabilities_from(description: Option<&DXGI_OUTPUT_DESC1>, window: HWND) -> DisplayCapabilities {
-    use windows::Win32::Graphics::Dxgi::Common::DXGI_COLOR_SPACE_RGB_FULL_G2084_NONE_P2020;
-    let Some(description) = description else {
-        return DisplayCapabilities {
-            hdr: false,
-            bits_per_color: 8,
-            max_luminance: None,
-            max_full_frame_luminance: None,
-            advanced_color: false,
-        };
-    };
+fn capabilities_from(information: Option<&AdvancedColorInfo>, window: HWND) -> DisplayCapabilities {
+    let kind = information.and_then(|information| information.CurrentAdvancedColorKind().ok());
+    let hdr = kind == Some(AdvancedColorKind::HighDynamicRange);
+    let nits = |value: Option<f32>| value.filter(|nits| *nits > 0.0);
     DisplayCapabilities {
-        hdr: description.ColorSpace == DXGI_COLOR_SPACE_RGB_FULL_G2084_NONE_P2020,
-        bits_per_color: description.BitsPerColor,
-        max_luminance: (description.MaxLuminance > 0.0).then_some(description.MaxLuminance),
-        max_full_frame_luminance: (description.MaxFullFrameLuminance > 0.0)
-            .then_some(description.MaxFullFrameLuminance),
-        advanced_color: advanced_color_enabled(window),
+        hdr,
+        bits_per_color: bits_per_color(window).unwrap_or(8),
+        max_luminance: nits(
+            information.and_then(|information| information.MaxLuminanceInNits().ok()),
+        ),
+        max_full_frame_luminance: nits(
+            information
+                .and_then(|information| information.MaxAverageFullFrameLuminanceInNits().ok()),
+        ),
+        advanced_color: hdr || kind == Some(AdvancedColorKind::WideColorGamut),
+        sdr_white_boost: nits(
+            information.and_then(|information| information.SdrWhiteLevelInNits().ok()),
+        )
+        .map_or(1.0, |white| white / SDR_REFERENCE_WHITE_NITS),
     }
 }
 
@@ -263,49 +342,15 @@ pub(crate) fn nearest_gamut_label(measured: [[f32; 2]; 3]) -> &'static str {
     best.0
 }
 
-/// The window output's EDID primaries, when the driver reports them.
-fn gamut_from(description: &DXGI_OUTPUT_DESC1) -> Option<DisplayGamut> {
+/// The display's native primaries, when the snapshot carries real chromaticities.
+fn gamut_from(information: &AdvancedColorInfo) -> Option<DisplayGamut> {
+    let point = |point: windows::Foundation::Point| [point.X, point.Y];
     let gamut = DisplayGamut {
-        red: description.RedPrimary,
-        green: description.GreenPrimary,
-        blue: description.BluePrimary,
+        red: point(information.RedPrimary().ok()?),
+        green: point(information.GreenPrimary().ok()?),
+        blue: point(information.BluePrimary().ok()?),
     };
     gamut.is_known().then_some(gamut)
-}
-
-/// SDR white boost given the known HDR state; 1.0 outside HDR (ACM output is display-referred).
-pub fn sdr_white_boost_for(window: HWND, hdr: bool) -> f32 {
-    if !hdr {
-        return 1.0;
-    }
-    query_sdr_white_boost(window).unwrap_or(1.0)
-}
-
-fn window_output_description(window: HWND) -> Option<DXGI_OUTPUT_DESC1> {
-    use windows::Win32::Graphics::Dxgi::{CreateDXGIFactory1, IDXGIFactory1, IDXGIOutput6};
-    use windows::core::Interface;
-
-    let monitor = unsafe { MonitorFromWindow(window, MONITOR_DEFAULTTONEAREST) };
-    let factory = unsafe { CreateDXGIFactory1::<IDXGIFactory1>() }.ok()?;
-    let mut adapter_index = 0;
-    while let Ok(adapter) = unsafe { factory.EnumAdapters1(adapter_index) } {
-        adapter_index += 1;
-        let mut output_index = 0;
-        while let Ok(output) = unsafe { adapter.EnumOutputs(output_index) } {
-            output_index += 1;
-            let Ok(description) = (unsafe { output.GetDesc() }) else {
-                continue;
-            };
-            if description.Monitor != monitor {
-                continue;
-            }
-            return output
-                .cast::<IDXGIOutput6>()
-                .ok()
-                .and_then(|output6| unsafe { output6.GetDesc1() }.ok());
-        }
-    }
-    None
 }
 
 /// Applies `read` to the active display path driving `window`'s monitor.
@@ -369,51 +414,21 @@ fn for_window_display_path<T>(
     None
 }
 
-/// The advanced-color flags for `path`'s target (bit 0x2 = advancedColorEnabled).
-fn advanced_color_flags(path: &DISPLAYCONFIG_PATH_INFO) -> Option<u32> {
-    let mut advanced_color = DISPLAYCONFIG_GET_ADVANCED_COLOR_INFO {
-        header: DISPLAYCONFIG_DEVICE_INFO_HEADER {
-            r#type: DISPLAYCONFIG_DEVICE_INFO_GET_ADVANCED_COLOR_INFO,
-            size: size_of::<DISPLAYCONFIG_GET_ADVANCED_COLOR_INFO>() as u32,
-            adapterId: path.targetInfo.adapterId,
-            id: path.targetInfo.id,
-        },
-        ..Default::default()
-    };
-    (unsafe { DisplayConfigGetDeviceInfo(&raw mut advanced_color.header) } == 0)
-        .then_some(unsafe { advanced_color.Anonymous.value })
-}
-
-/// DISPLAYCONFIG_GET_ADVANCED_COLOR_INFO advancedColorEnabled bit.
-const ADVANCED_COLOR_ENABLED: u32 = 0x2;
-
-/// True when advanced color (HDR, or SDR auto color management) is on for the window's display.
-pub fn advanced_color_enabled(window: HWND) -> bool {
-    for_window_display_path(window, advanced_color_flags)
-        .is_some_and(|flags| flags & ADVANCED_COLOR_ENABLED != 0)
-}
-
-fn query_sdr_white_boost(window: HWND) -> Option<f32> {
+/// Color depth of the window's active display path; the advanced-color query carries it.
+fn bits_per_color(window: HWND) -> Option<u32> {
     for_window_display_path(window, |path| {
-        // The SDR white level is meaningful only when advanced color is on.
-        if advanced_color_flags(path)? & ADVANCED_COLOR_ENABLED == 0 {
-            return None;
-        }
-        let mut white_level = DISPLAYCONFIG_SDR_WHITE_LEVEL {
+        let mut advanced_color = DISPLAYCONFIG_GET_ADVANCED_COLOR_INFO {
             header: DISPLAYCONFIG_DEVICE_INFO_HEADER {
-                r#type: DISPLAYCONFIG_DEVICE_INFO_GET_SDR_WHITE_LEVEL,
-                size: size_of::<DISPLAYCONFIG_SDR_WHITE_LEVEL>() as u32,
+                r#type: DISPLAYCONFIG_DEVICE_INFO_GET_ADVANCED_COLOR_INFO,
+                size: size_of::<DISPLAYCONFIG_GET_ADVANCED_COLOR_INFO>() as u32,
                 adapterId: path.targetInfo.adapterId,
                 id: path.targetInfo.id,
             },
-            SDRWhiteLevel: 0,
+            ..Default::default()
         };
-        if unsafe { DisplayConfigGetDeviceInfo(&raw mut white_level.header) } != 0
-            || white_level.SDRWhiteLevel == 0
-        {
-            return None;
-        }
-        Some(white_level.SDRWhiteLevel as f32 / 1000.0)
+        (unsafe { DisplayConfigGetDeviceInfo(&raw mut advanced_color.header) } == 0)
+            .then_some(advanced_color.bitsPerColorChannel)
+            .filter(|bits| *bits > 0)
     })
 }
 
