@@ -309,11 +309,7 @@ impl Application {
             preserve_zoom: false,
             always_on_top: false,
             fullscreen_restore: None,
-            sdr_white_boost: if capabilities.hdr {
-                capabilities.sdr_white_boost
-            } else {
-                1.0
-            },
+            sdr_white_boost: capabilities.sdr_white_boost_for(capabilities.hdr),
             pan_drag_position: None,
             pan_cursor: unsafe { LoadCursorW(None, IDC_SIZEALL)? },
             arrow_cursor: unsafe { LoadCursorW(None, IDC_ARROW)? },
@@ -392,11 +388,7 @@ impl Application {
         }
         let mut stale = false;
         let is_hdr_output = self.renderer.as_ref().is_some_and(Renderer::is_hdr_output);
-        let boost = if is_hdr_output {
-            capabilities.sdr_white_boost
-        } else {
-            1.0
-        };
+        let boost = capabilities.sdr_white_boost_for(is_hdr_output);
         if (boost - self.sdr_white_boost).abs() > f32::EPSILON {
             self.sdr_white_boost = boost;
             if let Some(renderer) = &mut self.renderer {
@@ -442,11 +434,7 @@ impl Application {
         if !mismatch && !force {
             return false;
         }
-        self.sdr_white_boost = if capabilities.hdr {
-            capabilities.sdr_white_boost
-        } else {
-            1.0
-        };
+        self.sdr_white_boost = capabilities.sdr_white_boost_for(capabilities.hdr);
         let (target_nits, full_frame_nits) = tone_map_targets(capabilities);
         let reconfigured = self.renderer.as_mut().is_some_and(|renderer| {
             renderer
@@ -2619,7 +2607,6 @@ extern "system" fn window_procedure(
                     playlist_names: playlist.names,
                     playlist_first_index: playlist.first_index,
                     playlist_current_slot: playlist.current_slot,
-                    playlist_hidden_before: playlist.hidden_before,
                     playlist_hidden_after: playlist.hidden_after,
                     has_animation: application
                         .image_core
@@ -2766,14 +2753,6 @@ extern "system" fn window_procedure(
             }
         }
         WM_DESTROY => {
-            if let Some(application) = application_from_window(window) {
-                if let Some(watcher) = application.display_watcher.take() {
-                    watcher.close();
-                }
-                if let Some(watcher) = application.theme_watcher.take() {
-                    watcher.close();
-                }
-            }
             unsafe { PostQuitMessage(0) };
             LRESULT(0)
         }

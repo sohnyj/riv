@@ -59,9 +59,10 @@ impl ThemeWatcher {
                 5 * u32::from(color.G) + 2 * u32::from(color.R) + u32::from(color.B) > 8 * 128
             })
     }
+}
 
-    /// Unhooks the change handler; the settings object dies with the watcher.
-    pub fn close(&self) {
+impl Drop for ThemeWatcher {
+    fn drop(&mut self) {
         let _ = self.settings.RemoveColorValuesChanged(self.change_token);
     }
 }

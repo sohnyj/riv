@@ -143,8 +143,19 @@ pub struct DisplayCapabilities {
     pub max_full_frame_luminance: Option<f32>,
     /// Advanced color (HDR or SDR auto color management) is on for this output.
     pub advanced_color: bool,
-    /// SDR white over the 80-nit reference; the renderer applies it on HDR outputs only.
+    /// SDR white over the 80-nit reference; meaningful on HDR outputs only.
     pub sdr_white_boost: f32,
+}
+
+impl DisplayCapabilities {
+    /// SDR white boost for the given output; 1.0 outside HDR (ACM output is display-referred).
+    pub fn sdr_white_boost_for(&self, hdr_output: bool) -> f32 {
+        if hdr_output {
+            self.sdr_white_boost
+        } else {
+            1.0
+        }
+    }
 }
 
 /// A display's color capabilities, native gamut, and installed profile, from one snapshot.
@@ -190,9 +201,10 @@ impl DisplayWatcher {
     fn advanced_color_info(&self) -> Option<AdvancedColorInfo> {
         self.display_information.GetAdvancedColorInfo().ok()
     }
+}
 
-    /// Unhooks the change handler; the information object dies with the watcher.
-    pub fn close(&self) {
+impl Drop for DisplayWatcher {
+    fn drop(&mut self) {
         let _ = self
             .display_information
             .RemoveAdvancedColorInfoChanged(self.change_token);
@@ -428,7 +440,7 @@ fn for_window_display_path<T>(
 /// Color depth of the window's active display path; the advanced-color query carries it.
 /// wingdi.h DISPLAYCONFIG_DEVICE_INFO_GET_ADVANCED_COLOR_INFO_2 (24H2), absent from the
 /// crate's bindings.
-const DEVICE_INFO_GET_ADVANCED_COLOR_INFO_2: DISPLAYCONFIG_DEVICE_INFO_TYPE =
+const DISPLAYCONFIG_DEVICE_INFO_GET_ADVANCED_COLOR_INFO_2: DISPLAYCONFIG_DEVICE_INFO_TYPE =
     DISPLAYCONFIG_DEVICE_INFO_TYPE(15);
 
 /// wingdi.h DISPLAYCONFIG_GET_ADVANCED_COLOR_INFO_2 (24H2), absent from the crate's
@@ -448,7 +460,7 @@ fn bits_per_color(window: HWND) -> Option<u32> {
     for_window_display_path(window, |path| {
         let mut advanced_color = DISPLAYCONFIG_GET_ADVANCED_COLOR_INFO_2 {
             header: DISPLAYCONFIG_DEVICE_INFO_HEADER {
-                r#type: DEVICE_INFO_GET_ADVANCED_COLOR_INFO_2,
+                r#type: DISPLAYCONFIG_DEVICE_INFO_GET_ADVANCED_COLOR_INFO_2,
                 size: size_of::<DISPLAYCONFIG_GET_ADVANCED_COLOR_INFO_2>() as u32,
                 adapterId: path.targetInfo.adapterId,
                 id: path.targetInfo.id,

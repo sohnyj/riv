@@ -32,9 +32,9 @@ pub struct MenuState {
     pub loop_enabled: bool,
     pub open_url_available: bool,
     pub playlist_names: Vec<String>,
+    /// Absolute index of the first shown name; doubles as the count hidden before it.
     pub playlist_first_index: usize,
     pub playlist_current_slot: Option<usize>,
-    pub playlist_hidden_before: usize,
     pub playlist_hidden_after: usize,
     pub animation_paused: bool,
     pub fit_height: bool,
@@ -218,7 +218,7 @@ impl MenuBuilder {
         self.append_separator(menu)?;
 
         let playlist = unsafe { CreatePopupMenu()? };
-        Self::append_playlist_overflow(playlist, self.state_snapshot.playlist_hidden_before)?;
+        Self::append_playlist_overflow(playlist, self.state_snapshot.playlist_first_index)?;
         let playlist_names = self.state_snapshot.playlist_names.clone();
         for (slot, name) in playlist_names.iter().enumerate() {
             self.append_playlist_entry(playlist, slot, name)?;
@@ -355,7 +355,6 @@ mod menu_structure_tests {
             playlist_names: Vec::new(),
             playlist_first_index: 0,
             playlist_current_slot: None,
-            playlist_hidden_before: 0,
             playlist_hidden_after: 0,
             animation_paused: false,
             fit_height: false,
@@ -502,7 +501,6 @@ mod menu_structure_tests {
         with_folder.playlist_names = (0..20).map(|index| format!("{index:03}.png")).collect();
         with_folder.playlist_first_index = 38;
         with_folder.playlist_current_slot = Some(12);
-        with_folder.playlist_hidden_before = 38;
         with_folder.playlist_hidden_after = 42;
         let mut builder = MenuBuilder {
             entries: Vec::new(),
