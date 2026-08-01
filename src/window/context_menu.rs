@@ -11,7 +11,7 @@ use windows::core::{HSTRING, Result};
 
 use crate::actions::{Action, ActivationGate};
 
-/// Playlist submenu size; names beyond the window collapse into a "... nnn more" line.
+/// Playlist submenu size; names beyond the window collapse into "..." lines at either end.
 pub const PLAYLIST_CAPACITY: usize = 25;
 
 #[derive(Clone, Copy)]
@@ -34,7 +34,8 @@ pub struct MenuState {
     pub playlist_names: Vec<String>,
     pub playlist_first_index: usize,
     pub playlist_current_slot: Option<usize>,
-    pub playlist_hidden_count: usize,
+    pub playlist_hidden_before: usize,
+    pub playlist_hidden_after: usize,
     pub animation_paused: bool,
     pub fit_height: bool,
     pub preserve_zoom: bool,
@@ -121,6 +122,23 @@ impl MenuBuilder {
         }
     }
 
+    /// A disabled "..." line whose hidden-name count rides the shortcut column; zero appends
+    /// nothing.
+    fn append_playlist_overflow(menu: HMENU, hidden: usize) -> Result<()> {
+        if hidden == 0 {
+            return Ok(());
+        }
+        let label = format!("...\t{hidden} more");
+        unsafe {
+            AppendMenuW(
+                menu,
+                MF_STRING | MF_GRAYED | MF_DISABLED,
+                0,
+                &HSTRING::from(label.as_str()),
+            )
+        }
+    }
+
     fn append_playlist_entry(&mut self, menu: HMENU, slot: usize, label: &str) -> Result<()> {
         self.entries.push(MenuSelection::PlaylistEntry(
             self.state_snapshot.playlist_first_index + slot,
@@ -200,21 +218,12 @@ impl MenuBuilder {
         self.append_separator(menu)?;
 
         let playlist = unsafe { CreatePopupMenu()? };
+        Self::append_playlist_overflow(playlist, self.state_snapshot.playlist_hidden_before)?;
         let playlist_names = self.state_snapshot.playlist_names.clone();
         for (slot, name) in playlist_names.iter().enumerate() {
             self.append_playlist_entry(playlist, slot, name)?;
         }
-        if self.state_snapshot.playlist_hidden_count > 0 {
-            let more = format!("... {} more", self.state_snapshot.playlist_hidden_count);
-            unsafe {
-                AppendMenuW(
-                    playlist,
-                    MF_STRING | MF_GRAYED | MF_DISABLED,
-                    0,
-                    &HSTRING::from(more.as_str()),
-                )?;
-            }
-        }
+        Self::append_playlist_overflow(playlist, self.state_snapshot.playlist_hidden_after)?;
         // No folder listing means nothing to jump to.
         self.append_submenu(
             menu,
@@ -346,7 +355,8 @@ mod menu_structure_tests {
             playlist_names: Vec::new(),
             playlist_first_index: 0,
             playlist_current_slot: None,
-            playlist_hidden_count: 0,
+            playlist_hidden_before: 0,
+            playlist_hidden_after: 0,
             animation_paused: false,
             fit_height: false,
             preserve_zoom: false,
@@ -489,10 +499,11 @@ mod menu_structure_tests {
     fn playlist_lists_the_window_and_collapses_the_rest() {
         let mut with_folder = state();
         with_folder.has_navigation_targets = true;
-        with_folder.playlist_names = (0..25).map(|index| format!("{index:03}.png")).collect();
+        with_folder.playlist_names = (0..20).map(|index| format!("{index:03}.png")).collect();
         with_folder.playlist_first_index = 38;
         with_folder.playlist_current_slot = Some(12);
-        with_folder.playlist_hidden_count = 75;
+        with_folder.playlist_hidden_before = 38;
+        with_folder.playlist_hidden_after = 42;
         let mut builder = MenuBuilder {
             entries: Vec::new(),
             state_snapshot: with_folder,
@@ -510,18 +521,20 @@ mod menu_structure_tests {
             }
         }
         let submenu = submenu.expect("Playlist submenu present");
-        assert_eq!(unsafe { GetMenuItemCount(Some(submenu)) }, 26);
-        // The overflow line shows the count and takes no selection.
-        let mut text = [0u16; 64];
-        let length = unsafe { GetMenuStringW(submenu, 25, Some(&mut text), MF_BYPOSITION) };
-        assert_eq!(
-            String::from_utf16_lossy(&text[..length as usize]),
-            "... 75 more"
-        );
-        let more_flags = unsafe { GetMenuState(submenu, 25, MF_BYPOSITION) };
-        assert!(MENU_ITEM_FLAGS(more_flags) & MF_GRAYED == MF_GRAYED);
-        // The current file carries the check marker.
-        let current_flags = unsafe { GetMenuState(submenu, 12, MF_BYPOSITION) };
+        assert_eq!(unsafe { GetMenuItemCount(Some(submenu)) }, 22);
+        // Overflow lines at both ends show each side's count and take no selection.
+        let overflow_line = |position: u32| {
+            let mut text = [0u16; 64];
+            let length =
+                unsafe { GetMenuStringW(submenu, position, Some(&mut text), MF_BYPOSITION) };
+            let flags = unsafe { GetMenuState(submenu, position, MF_BYPOSITION) };
+            assert!(MENU_ITEM_FLAGS(flags) & MF_GRAYED == MF_GRAYED);
+            String::from_utf16_lossy(&text[..length as usize])
+        };
+        assert_eq!(overflow_line(0), "...\t38 more");
+        assert_eq!(overflow_line(21), "...\t42 more");
+        // The current file carries the check marker, shifted past the leading overflow line.
+        let current_flags = unsafe { GetMenuState(submenu, 13, MF_BYPOSITION) };
         assert!(MENU_ITEM_FLAGS(current_flags) & MF_CHECKED == MF_CHECKED);
         // Selections map back to absolute listing indices.
         assert!(

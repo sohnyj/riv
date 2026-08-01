@@ -368,7 +368,8 @@ pub struct PlaylistWindow {
     pub names: Vec<String>,
     pub first_index: usize,
     pub current_slot: Option<usize>,
-    pub hidden_count: usize,
+    pub hidden_before: usize,
+    pub hidden_after: usize,
 }
 
 pub struct ImageCore {
@@ -599,7 +600,8 @@ impl ImageCore {
                 }
                 _ => None,
             },
-            hidden_count: total - (end - first_index),
+            hidden_before: first_index,
+            hidden_after: total - end,
         }
     }
 
@@ -2940,7 +2942,8 @@ mod playlist_window_tests {
         assert_eq!(window.names.len(), 5);
         assert_eq!(window.first_index, 0);
         assert_eq!(window.current_slot, Some(2));
-        assert_eq!(window.hidden_count, 0);
+        assert_eq!(window.hidden_before, 0);
+        assert_eq!(window.hidden_after, 0);
         assert_eq!(window.names[0], "000.png");
     }
 
@@ -2950,7 +2953,8 @@ mod playlist_window_tests {
         assert_eq!(window.first_index, 38);
         assert_eq!(window.current_slot, Some(12));
         assert_eq!(window.names.len(), 25);
-        assert_eq!(window.hidden_count, 75);
+        assert_eq!(window.hidden_before, 38);
+        assert_eq!(window.hidden_after, 37);
     }
 
     #[test]
@@ -2958,9 +2962,13 @@ mod playlist_window_tests {
         let near_start = core_with_files(100, Some(3)).playlist_window(25);
         assert_eq!(near_start.first_index, 0);
         assert_eq!(near_start.current_slot, Some(3));
+        assert_eq!(near_start.hidden_before, 0);
+        assert_eq!(near_start.hidden_after, 75);
         let near_end = core_with_files(100, Some(97)).playlist_window(25);
         assert_eq!(near_end.first_index, 75);
         assert_eq!(near_end.current_slot, Some(22));
+        assert_eq!(near_end.hidden_before, 75);
+        assert_eq!(near_end.hidden_after, 0);
     }
 
     #[test]
@@ -2968,6 +2976,7 @@ mod playlist_window_tests {
         let window = core_with_files(100, None).playlist_window(25);
         assert_eq!(window.first_index, 0);
         assert_eq!(window.current_slot, None);
-        assert_eq!(window.hidden_count, 75);
+        assert_eq!(window.hidden_before, 0);
+        assert_eq!(window.hidden_after, 75);
     }
 }

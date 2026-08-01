@@ -2619,7 +2619,8 @@ extern "system" fn window_procedure(
                     playlist_names: playlist.names,
                     playlist_first_index: playlist.first_index,
                     playlist_current_slot: playlist.current_slot,
-                    playlist_hidden_count: playlist.hidden_count,
+                    playlist_hidden_before: playlist.hidden_before,
+                    playlist_hidden_after: playlist.hidden_after,
                     has_animation: application
                         .image_core
                         .current
