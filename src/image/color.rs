@@ -5,11 +5,10 @@ use std::sync::Arc;
 use windows::Foundation::TypedEventHandler;
 use windows::Graphics::Display::{AdvancedColorInfo, AdvancedColorKind, DisplayInformation};
 use windows::Win32::Devices::Display::{
-    DISPLAYCONFIG_DEVICE_INFO_GET_ADVANCED_COLOR_INFO, DISPLAYCONFIG_DEVICE_INFO_GET_SOURCE_NAME,
-    DISPLAYCONFIG_DEVICE_INFO_HEADER, DISPLAYCONFIG_GET_ADVANCED_COLOR_INFO,
-    DISPLAYCONFIG_MODE_INFO, DISPLAYCONFIG_PATH_INFO, DISPLAYCONFIG_SOURCE_DEVICE_NAME,
-    DisplayConfigGetDeviceInfo, GetDisplayConfigBufferSizes, QDC_ONLY_ACTIVE_PATHS,
-    QueryDisplayConfig,
+    DISPLAYCONFIG_DEVICE_INFO_GET_SOURCE_NAME, DISPLAYCONFIG_DEVICE_INFO_HEADER,
+    DISPLAYCONFIG_DEVICE_INFO_TYPE, DISPLAYCONFIG_MODE_INFO, DISPLAYCONFIG_PATH_INFO,
+    DISPLAYCONFIG_SOURCE_DEVICE_NAME, DisplayConfigGetDeviceInfo, GetDisplayConfigBufferSizes,
+    QDC_ONLY_ACTIVE_PATHS, QueryDisplayConfig,
 };
 use windows::Win32::Foundation::{ERROR_SUCCESS, HWND, LPARAM, WPARAM};
 use windows::Win32::Graphics::Direct2D::Common::D2D1_COLOR_F;
@@ -415,12 +414,30 @@ fn for_window_display_path<T>(
 }
 
 /// Color depth of the window's active display path; the advanced-color query carries it.
+/// wingdi.h DISPLAYCONFIG_DEVICE_INFO_GET_ADVANCED_COLOR_INFO_2 (24H2), absent from the
+/// crate's bindings.
+const DEVICE_INFO_GET_ADVANCED_COLOR_INFO_2: DISPLAYCONFIG_DEVICE_INFO_TYPE =
+    DISPLAYCONFIG_DEVICE_INFO_TYPE(15);
+
+/// wingdi.h DISPLAYCONFIG_GET_ADVANCED_COLOR_INFO_2 (24H2), absent from the crate's
+/// bindings; the field names mirror the header.
+#[repr(C)]
+#[allow(non_snake_case, non_camel_case_types)]
+#[derive(Default)]
+struct DISPLAYCONFIG_GET_ADVANCED_COLOR_INFO_2 {
+    header: DISPLAYCONFIG_DEVICE_INFO_HEADER,
+    value: u32,
+    colorEncoding: i32,
+    bitsPerColorChannel: u32,
+    activeColorMode: i32,
+}
+
 fn bits_per_color(window: HWND) -> Option<u32> {
     for_window_display_path(window, |path| {
-        let mut advanced_color = DISPLAYCONFIG_GET_ADVANCED_COLOR_INFO {
+        let mut advanced_color = DISPLAYCONFIG_GET_ADVANCED_COLOR_INFO_2 {
             header: DISPLAYCONFIG_DEVICE_INFO_HEADER {
-                r#type: DISPLAYCONFIG_DEVICE_INFO_GET_ADVANCED_COLOR_INFO,
-                size: size_of::<DISPLAYCONFIG_GET_ADVANCED_COLOR_INFO>() as u32,
+                r#type: DEVICE_INFO_GET_ADVANCED_COLOR_INFO_2,
+                size: size_of::<DISPLAYCONFIG_GET_ADVANCED_COLOR_INFO_2>() as u32,
                 adapterId: path.targetInfo.adapterId,
                 id: path.targetInfo.id,
             },

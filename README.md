@@ -75,7 +75,7 @@ zip, 7z, rar, tar, and cbz / cbr / cb7 / cbt.
 
 ## Requirements
 
-- Windows 11 23H2 or later, x86-64
+- Windows 11 24H2 or later, x86-64
 - Direct3D 12 capable GPU
 
 ## Building
