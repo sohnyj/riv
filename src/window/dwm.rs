@@ -1,7 +1,11 @@
-//! DWM window attributes; failures (e.g. wine) are ignored.
+//! DWM window attributes and the system theme hook; failures (e.g. wine) are ignored.
 
-use windows::Win32::Foundation::HWND;
+use windows::Foundation::TypedEventHandler;
+use windows::UI::ViewManagement::{UIColorType, UISettings};
+use windows::Win32::Foundation::{HWND, LPARAM, WPARAM};
 use windows::Win32::Graphics::Dwm::{DWMWA_USE_IMMERSIVE_DARK_MODE, DwmSetWindowAttribute};
+use windows::Win32::UI::WindowsAndMessaging::PostMessageW;
+use windows::core::IInspectable;
 
 fn set_attribute<T>(
     window: HWND,
@@ -24,23 +28,40 @@ pub fn apply_title_bar_theme(window: HWND, dark: bool) {
     set_attribute(window, DWMWA_USE_IMMERSIVE_DARK_MODE, &dark);
 }
 
-/// True when the system app theme is dark (AppsUseLightTheme is 0).
-pub fn system_apps_use_dark_theme() -> bool {
-    use windows::Win32::System::Registry::{HKEY_CURRENT_USER, RRF_RT_REG_DWORD, RegGetValueW};
-    use windows::core::w;
+/// The system color hook: dark-mode reads plus a posted change message.
+pub struct ThemeWatcher {
+    settings: UISettings,
+    change_token: i64,
+}
 
-    let mut value = 1u32;
-    let mut size = size_of::<u32>() as u32;
-    let result = unsafe {
-        RegGetValueW(
-            HKEY_CURRENT_USER,
-            w!("Software\\Microsoft\\Windows\\CurrentVersion\\Themes\\Personalize"),
-            w!("AppsUseLightTheme"),
-            RRF_RT_REG_DWORD,
-            None,
-            Some((&raw mut value).cast()),
-            Some(&raw mut size),
-        )
-    };
-    result == windows::Win32::Foundation::ERROR_SUCCESS && value == 0
+impl ThemeWatcher {
+    /// Hooks the system color settings; color changes post `message` to `window`.
+    pub fn new(window: HWND, message: u32) -> Option<Self> {
+        let settings = UISettings::new().ok()?;
+        let window_value = window.0 as isize;
+        let handler = TypedEventHandler::<UISettings, IInspectable>::new(move |_, _| {
+            let window = HWND(window_value as *mut core::ffi::c_void);
+            let _ = unsafe { PostMessageW(Some(window), message, WPARAM(0), LPARAM(0)) };
+            Ok(())
+        });
+        let change_token = settings.ColorValuesChanged(&handler).ok()?;
+        Some(Self {
+            settings,
+            change_token,
+        })
+    }
+
+    /// Dark mode shows a light foreground; brightness per the perceived-luminance weights.
+    pub fn apps_use_dark_theme(&self) -> bool {
+        self.settings
+            .GetColorValue(UIColorType::Foreground)
+            .is_ok_and(|color| {
+                5 * u32::from(color.G) + 2 * u32::from(color.R) + u32::from(color.B) > 8 * 128
+            })
+    }
+
+    /// Unhooks the change handler; the settings object dies with the watcher.
+    pub fn close(&self) {
+        let _ = self.settings.RemoveColorValuesChanged(self.change_token);
+    }
 }

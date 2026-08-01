@@ -81,9 +81,8 @@ use windows::Win32::UI::WindowsAndMessaging::{
     WM_CONTEXTMENU, WM_DESTROY, WM_DISPLAYCHANGE, WM_DPICHANGED, WM_ENTERSIZEMOVE, WM_EXITSIZEMOVE,
     WM_GESTURE, WM_GETMINMAXINFO, WM_KEYDOWN, WM_LBUTTONDBLCLK, WM_LBUTTONDOWN, WM_LBUTTONUP,
     WM_MBUTTONDOWN, WM_MOUSEHWHEEL, WM_MOUSEMOVE, WM_MOUSEWHEEL, WM_MOVE, WM_NCDESTROY,
-    WM_NCLBUTTONDOWN, WM_PAINT, WM_QUIT, WM_SETCURSOR, WM_SETTINGCHANGE, WM_SIZE, WM_SYSCHAR,
-    WM_SYSCOMMAND, WM_SYSKEYDOWN, WM_TIMER, WM_XBUTTONDOWN, WNDCLASSEXW, WS_OVERLAPPEDWINDOW,
-    WindowFromPoint,
+    WM_NCLBUTTONDOWN, WM_PAINT, WM_QUIT, WM_SETCURSOR, WM_SIZE, WM_SYSCHAR, WM_SYSCOMMAND,
+    WM_SYSKEYDOWN, WM_TIMER, WM_XBUTTONDOWN, WNDCLASSEXW, WS_OVERLAPPEDWINDOW, WindowFromPoint,
 };
 use windows::core::{PCWSTR, Result, w};
 
@@ -93,6 +92,8 @@ const APPLICATION_ICON_ID: PCWSTR = PCWSTR(std::ptr::without_provenance(1));
 const WM_APP_SHOW_WINDOW: u32 = WM_APP + 2;
 /// Posted by the display watcher when the advanced-color state or luminance changes.
 const WM_APP_ADVANCED_COLOR_CHANGED: u32 = WM_APP + 10;
+/// Posted by the theme watcher when the system colors change.
+const WM_APP_SYSTEM_COLORS_CHANGED: u32 = WM_APP + 11;
 
 const STATUS_TEXT_TIMER: usize = 1;
 const SLIDESHOW_TIMER: usize = 2;
@@ -110,6 +111,8 @@ struct Application {
     renderer: Option<Renderer>,
     /// Advanced-color snapshots and change events for the window's display.
     display_watcher: Option<color::DisplayWatcher>,
+    /// Dark-mode reads and change events for the system colors.
+    theme_watcher: Option<dwm::ThemeWatcher>,
     /// Keeps the thread's dispatcher queue alive; the watcher's events need one.
     _dispatcher_queue_controller: Option<DispatcherQueueController>,
     /// A failed output mode switch retries on the next paint.
@@ -154,7 +157,7 @@ struct Application {
     window_active: bool,
     /// Set when riv itself asked for new pixels, so a moving window still draws them.
     render_requested: bool,
-    /// Last-applied dark title bar; a WM_SETTINGCHANGE reapplies only when it flips.
+    /// Last-applied dark title bar; a system color change reapplies only when it flips.
     title_bar_dark: Option<bool>,
     /// Received bytes of the pending URL download the view reports on.
     download_progress: Option<(ItemLocation, u64)>,
@@ -266,6 +269,7 @@ impl Application {
         }
         .ok();
         let display_watcher = color::DisplayWatcher::new(window, WM_APP_ADVANCED_COLOR_CHANGED);
+        let theme_watcher = dwm::ThemeWatcher::new(window, WM_APP_SYSTEM_COLORS_CHANGED);
         let color::DisplayColorInfo {
             capabilities,
             gamut,
@@ -286,6 +290,7 @@ impl Application {
         let mut application = Self {
             renderer: Some(renderer),
             display_watcher,
+            theme_watcher,
             _dispatcher_queue_controller: dispatcher_queue_controller,
             output_reconfigure_pending: false,
             view_transform,
@@ -356,7 +361,10 @@ impl Application {
 
     /// Reapplies the dark title bar only when the system app theme actually flips.
     fn refresh_title_bar_theme(&mut self, window: HWND) {
-        let dark = dwm::system_apps_use_dark_theme();
+        let dark = self
+            .theme_watcher
+            .as_ref()
+            .is_some_and(dwm::ThemeWatcher::apps_use_dark_theme);
         if self.title_bar_dark != Some(dark) {
             self.title_bar_dark = Some(dark);
             dwm::apply_title_bar_theme(window, dark);
@@ -2347,6 +2355,12 @@ extern "system" fn window_procedure(
             }
             LRESULT(0)
         }
+        WM_APP_SYSTEM_COLORS_CHANGED => {
+            if let Some(application) = application_from_window(window) {
+                application.refresh_title_bar_theme(window);
+            }
+            LRESULT(0)
+        }
         WM_TIMER if wparam.0 == ANIMATION_TIMER => {
             if let Some(application) = application_from_window(window) {
                 application.play_animation_frame(window);
@@ -2706,13 +2720,6 @@ extern "system" fn window_procedure(
             }
             unsafe { DefWindowProcW(window, message, wparam, lparam) }
         }
-        WM_SETTINGCHANGE => {
-            // WM_SETTINGCHANGE fires for many unrelated settings; gate on an actual theme flip.
-            if let Some(application) = application_from_window(window) {
-                application.refresh_title_bar_theme(window);
-            }
-            unsafe { DefWindowProcW(window, message, wparam, lparam) }
-        }
         WM_NCDESTROY => {
             let _ = unsafe { RevokeDragDrop(window) };
             let pointer =
@@ -2735,10 +2742,13 @@ extern "system" fn window_procedure(
             }
         }
         WM_DESTROY => {
-            if let Some(application) = application_from_window(window)
-                && let Some(watcher) = application.display_watcher.take()
-            {
-                watcher.close();
+            if let Some(application) = application_from_window(window) {
+                if let Some(watcher) = application.display_watcher.take() {
+                    watcher.close();
+                }
+                if let Some(watcher) = application.theme_watcher.take() {
+                    watcher.close();
+                }
             }
             unsafe { PostQuitMessage(0) };
             LRESULT(0)
