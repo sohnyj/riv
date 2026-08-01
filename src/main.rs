@@ -57,9 +57,13 @@ use windows::Win32::Graphics::Gdi::{
 use windows::Win32::System::LibraryLoader::GetModuleHandleW;
 use windows::Win32::System::Ole::{IDropTarget, OleInitialize, RevokeDragDrop};
 use windows::Win32::System::Power::{
-    ES_CONTINUOUS, ES_DISPLAY_REQUIRED, ES_SYSTEM_REQUIRED, SetThreadExecutionState,
+    PowerClearRequest, PowerCreateRequest, PowerRequestDisplayRequired, PowerRequestSystemRequired,
+    PowerSetRequest,
 };
-use windows::Win32::System::Threading::WaitForSingleObjectEx;
+use windows::Win32::System::SystemServices::POWER_REQUEST_CONTEXT_VERSION;
+use windows::Win32::System::Threading::{
+    POWER_REQUEST_CONTEXT_SIMPLE_STRING, REASON_CONTEXT, REASON_CONTEXT_0, WaitForSingleObjectEx,
+};
 use windows::Win32::System::WinRT::{
     CreateDispatcherQueueController, DQTAT_COM_NONE, DQTYPE_THREAD_CURRENT, DispatcherQueueOptions,
 };
@@ -162,6 +166,8 @@ struct Application {
     /// Received bytes of the pending URL download the view reports on.
     download_progress: Option<(ItemLocation, u64)>,
     slideshow_active: bool,
+    /// The named power request keeping the system awake while the slideshow runs.
+    power_request: Option<HANDLE>,
     /// When the current slideshow item began showing, for the animation-aware interval.
     slideshow_item_shown_at: Option<std::time::Instant>,
     animation: Option<Animation>,
@@ -331,6 +337,7 @@ impl Application {
             title_bar_dark: None,
             download_progress: None,
             slideshow_active: false,
+            power_request: None,
             slideshow_item_shown_at: None,
             animation: None,
             drop_target: None,
@@ -896,9 +903,35 @@ impl Application {
                 .set_navigation_direction(self.settings.options.slideshow_reversed);
             self.slideshow_active = true;
             self.slideshow_item_shown_at = Some(std::time::Instant::now());
-            keep_system_awake(true);
+            self.keep_system_awake(true);
             self.show_status_text(window, "Slideshow: Start".to_string());
             self.request_render(window);
+        }
+    }
+
+    /// Blocks system sleep and display power-off under a name powercfg /requests can show;
+    /// the screen saver is blocked in WM_SYSCOMMAND.
+    fn keep_system_awake(&mut self, active: bool) {
+        if active && self.power_request.is_none() {
+            let mut reason: Vec<u16> = "Slideshow\0".encode_utf16().collect();
+            let context = REASON_CONTEXT {
+                Version: POWER_REQUEST_CONTEXT_VERSION,
+                Flags: POWER_REQUEST_CONTEXT_SIMPLE_STRING,
+                Reason: REASON_CONTEXT_0 {
+                    SimpleReasonString: windows::core::PWSTR(reason.as_mut_ptr()),
+                },
+            };
+            self.power_request = unsafe { PowerCreateRequest(&raw const context) }.ok();
+        }
+        let Some(request) = self.power_request else {
+            return;
+        };
+        for request_type in [PowerRequestSystemRequired, PowerRequestDisplayRequired] {
+            let _ = if active {
+                unsafe { PowerSetRequest(request, request_type) }
+            } else {
+                unsafe { PowerClearRequest(request, request_type) }
+            };
         }
     }
 
@@ -906,7 +939,7 @@ impl Application {
         if self.slideshow_active {
             let _ = unsafe { KillTimer(Some(window), SLIDESHOW_TIMER) };
             self.slideshow_active = false;
-            keep_system_awake(false);
+            self.keep_system_awake(false);
             self.show_status_text(window, "Slideshow: Stop".to_string());
             self.request_render(window);
         }
@@ -1790,16 +1823,6 @@ fn rename_current_file(application: &mut Application, window: HWND) {
         }
         Err(error) => file_ops::show_rename_error(window, &error),
     }
-}
-
-/// Blocks system sleep and display power-off; the screen saver is blocked in WM_SYSCOMMAND.
-fn keep_system_awake(active: bool) {
-    let flags = if active {
-        ES_CONTINUOUS | ES_SYSTEM_REQUIRED | ES_DISPLAY_REQUIRED
-    } else {
-        ES_CONTINUOUS
-    };
-    unsafe { SetThreadExecutionState(flags) };
 }
 
 fn toggle_fullscreen(application: &mut Application, window: HWND) {
@@ -2730,7 +2753,7 @@ extern "system" fn window_procedure(
             unsafe { DefWindowProcW(window, message, wparam, lparam) }
         }
         WM_SYSCOMMAND => {
-            // SetThreadExecutionState does not cover the screen saver; block it here.
+            // The power request does not cover the screen saver; block it here.
             let command = wparam.0 as u32 & 0xFFF0;
             let blocked = (command == SC_SCREENSAVE || command == SC_MONITORPOWER)
                 && application_from_window(window)
