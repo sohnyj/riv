@@ -144,6 +144,11 @@ pub fn display_color_info(window: HWND) -> DisplayColorInfo {
     }
 }
 
+/// The display's capabilities alone, skipping the profile read; for read-time refreshes.
+pub fn display_capabilities(window: HWND) -> DisplayCapabilities {
+    capabilities_from(window_output_description(window).as_ref(), window)
+}
+
 /// The ICC profile Windows associates with this output.
 fn device_profile(device_name: &[u16; 32]) -> Option<Vec<u8>> {
     use windows::Win32::Graphics::Gdi::{CreateDCW, DeleteDC};

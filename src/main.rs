@@ -382,6 +382,23 @@ impl Application {
         }
     }
 
+    /// Re-reads the display luminance when the info panel opens; a query that raced a
+    /// mode transition can capture transitional values no later message corrects.
+    fn refresh_display_luminance(&mut self, window: HWND) {
+        if !self.renderer.as_ref().is_some_and(Renderer::is_hdr_output) {
+            return;
+        }
+        let capabilities = color::display_capabilities(window);
+        // A mode mismatch belongs to WM_DISPLAYCHANGE; only settled same-mode values apply.
+        if !capabilities.hdr {
+            return;
+        }
+        let (target_nits, full_frame_nits) = tone_map_targets(&capabilities);
+        if let Some(renderer) = &mut self.renderer {
+            renderer.set_tone_map_target(target_nits, full_frame_nits);
+        }
+    }
+
     /// True when a reconfigure was attempted (repaint due); a failure marks the retry pending.
     fn reconfigure_display_output(
         &mut self,
@@ -1510,6 +1527,9 @@ fn dispatch_action(application: &mut Application, window: HWND, action: Action) 
                 application.show_file_info = true;
             } else {
                 application.show_file_info = !application.show_file_info;
+            }
+            if application.show_file_info {
+                application.refresh_display_luminance(window);
             }
             application.request_render(window);
         }
