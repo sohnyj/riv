@@ -526,7 +526,7 @@ pub fn build_error_text(
     file_name: &str,
     message: &str,
     code: i32,
-    store_extensions: &[&str],
+    store_codec_names: &[&str],
 ) -> String {
     let reason = if message.is_empty() {
         "Decode failed".to_string()
@@ -544,14 +544,14 @@ pub fn build_error_text(
     } else {
         format!("Error occurred opening\n{file_name}\n{reason}")
     };
-    if !store_extensions.is_empty() {
-        let extension_names = store_extensions
+    if !store_codec_names.is_empty() {
+        let codec_names = store_codec_names
             .iter()
             .map(|name| format!("\"{name}\""))
             .collect::<Vec<_>>()
             .join(" and ");
         text.push_str(&format!(
-            "\nInstall {extension_names} (Microsoft Corporation)\nfrom the Microsoft Store to view this file."
+            "\nInstall {codec_names} (Microsoft Corporation)\nfrom the Microsoft Store to view this file."
         ));
     }
     text
@@ -1098,7 +1098,7 @@ mod error_text_tests {
     }
 
     #[test]
-    fn store_extensions_are_named_together() {
+    fn store_codecs_are_named_together() {
         let single = build_error_text("a.jxl", "decode failed", 0, &["JPEG XL Image Extension"]);
         assert!(single.ends_with(
             "\nInstall \"JPEG XL Image Extension\" (Microsoft Corporation)\nfrom the Microsoft Store to view this file."
