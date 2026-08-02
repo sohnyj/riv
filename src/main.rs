@@ -718,7 +718,7 @@ impl Application {
         self.update_window_title(window);
     }
 
-    /// A shown RAW preview gets its full decode once navigation stops briefly.
+    /// A shown preview stand-in gets its full decode once navigation stops briefly.
     fn schedule_full_decode(&self, window: HWND) {
         if self.image_core.full_decode_pending() {
             unsafe { SetTimer(Some(window), FULL_DECODE_TIMER, 250, None) };

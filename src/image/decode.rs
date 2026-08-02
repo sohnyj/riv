@@ -20,12 +20,12 @@ use windows::Win32::Graphics::Dxgi::Common::{
 use windows::Win32::Graphics::Imaging::{
     CLSID_WICImagingFactory, GUID_WICPixelFormat32bppPBGRA, GUID_WICPixelFormat64bppPRGBAHalf,
     GUID_WICPixelFormat64bppRGBA, IWICBitmapDecoder, IWICBitmapFrameDecode, IWICBitmapSource,
-    IWICColorContext, IWICImagingFactory, IWICMetadataQueryReader, IWICPixelFormatInfo2,
-    WICBitmapDitherTypeNone, WICBitmapInterpolationModeFant, WICBitmapPaletteTypeCustom,
-    WICBitmapTransformFlipHorizontal, WICBitmapTransformFlipVertical, WICBitmapTransformOptions,
-    WICBitmapTransformRotate90, WICBitmapTransformRotate180, WICBitmapTransformRotate270,
-    WICColorContextProfile, WICDecodeMetadataCacheOnDemand,
-    WICPixelFormatNumericRepresentationFloat, WICRect,
+    IWICBitmapSourceTransform, IWICColorContext, IWICImagingFactory, IWICMetadataQueryReader,
+    IWICPixelFormatInfo2, WICBitmapDitherTypeNone, WICBitmapInterpolationModeFant,
+    WICBitmapPaletteTypeCustom, WICBitmapTransformFlipHorizontal, WICBitmapTransformFlipVertical,
+    WICBitmapTransformOptions, WICBitmapTransformRotate0, WICBitmapTransformRotate90,
+    WICBitmapTransformRotate180, WICBitmapTransformRotate270, WICColorContextProfile,
+    WICDecodeMetadataCacheOnDemand, WICPixelFormatNumericRepresentationFloat, WICRect,
 };
 use windows::Win32::Media::MediaFoundation::MF_E_TOPO_CODEC_NOT_FOUND;
 use windows::Win32::System::Com::StructuredStorage::{
@@ -239,6 +239,7 @@ type MagicSignature = &'static [(usize, &'static [u8])];
 enum Adapter {
     Wic,
     WicRawTwoStage,
+    WicSubresolutionTwoStage,
     Apng,
     Svg,
     WebPAnimation,
@@ -384,7 +385,7 @@ static REGISTRY: &[FormatDescriptor] = &[
         extensions: &["jxr", "wdp", "hdp"],
         magic: &[&[(0, b"II\xBC\x01")], &[(0, b"II\xBC\x00")]],
         semantics: FrameSemantics::Single,
-        adapter: Adapter::Wic,
+        adapter: Adapter::WicSubresolutionTwoStage,
         store_extensions: &[],
     },
     FormatDescriptor {
@@ -614,7 +615,7 @@ fn decode_input(
     let semantics = descriptor.map_or(&FrameSemantics::Single, |descriptor| &descriptor.semantics);
     let adapter = descriptor.map_or(&Adapter::Wic, |descriptor| &descriptor.adapter);
     match adapter {
-        Adapter::Wic | Adapter::WicRawTwoStage => {
+        Adapter::Wic | Adapter::WicRawTwoStage | Adapter::WicSubresolutionTwoStage => {
             decode_with_wic(input, format_name, semantics, cancellation).map_err(|mut error| {
                 if is_missing_codec_error(error.code)
                     && let Some(descriptor) = descriptor
@@ -740,7 +741,9 @@ pub fn probe_bytes_weight(data: &[u8], extension: Option<&str>) -> Option<u64> {
 fn probe_weight(input: &DecodeInput<'_>) -> Option<u64> {
     let descriptor = input.descriptor()?;
     match descriptor.adapter {
-        Adapter::Wic | Adapter::WicRawTwoStage => probe_wic_weight(input, &descriptor.semantics),
+        Adapter::Wic | Adapter::WicRawTwoStage | Adapter::WicSubresolutionTwoStage => {
+            probe_wic_weight(input, &descriptor.semantics)
+        }
         Adapter::Apng => match input {
             DecodeInput::File(path) => probe_apng_weight(BufReader::new(File::open(path).ok()?)),
             DecodeInput::Memory { data, .. } => probe_apng_weight(Cursor::new(*data)),
@@ -827,15 +830,32 @@ fn probe_webp_weight(input: &DecodeInput<'_>) -> Option<u64> {
     Some(decoded_weight(dimension(24)?, dimension(27)?, 4, 1))
 }
 
-/// Extension-only: magic probing never yields RAW, and this runs on the UI thread.
-pub fn is_raw_two_stage(path: &Path) -> bool {
-    path.extension()
-        .map(|extension| extension.to_string_lossy().to_lowercase())
-        .and_then(|extension| descriptor_for_extension(&extension))
-        .is_some_and(|descriptor| matches!(descriptor.adapter, Adapter::WicRawTwoStage))
+/// Extension-only descriptor lookup, so the UI-thread gates do no I/O.
+fn descriptor_for_path_extension(path: &Path) -> Option<&'static FormatDescriptor> {
+    let extension = path.extension()?.to_string_lossy().to_lowercase();
+    descriptor_for_extension(&extension)
 }
 
-pub fn decode_raw_preview(path: &Path, cancellation: &AtomicBool) -> Option<DecodedImage> {
+/// A file whose decode runs preview first; magic probing never yields these formats.
+pub fn is_two_stage_preview(path: &Path) -> bool {
+    descriptor_for_path_extension(path).is_some_and(|descriptor| {
+        matches!(
+            descriptor.adapter,
+            Adapter::WicRawTwoStage | Adapter::WicSubresolutionTwoStage
+        )
+    })
+}
+
+/// The preview stage of a two-stage file: a RAW embedded preview or a sub-resolution pass.
+pub fn decode_two_stage_preview(path: &Path, cancellation: &AtomicBool) -> Option<DecodedImage> {
+    match descriptor_for_path_extension(path)?.adapter {
+        Adapter::WicRawTwoStage => decode_raw_preview(path, cancellation),
+        Adapter::WicSubresolutionTwoStage => decode_subresolution_preview(path, cancellation),
+        _ => None,
+    }
+}
+
+fn decode_raw_preview(path: &Path, cancellation: &AtomicBool) -> Option<DecodedImage> {
     let decoded = with_wic_factory(|factory| {
         let decoder = unsafe {
             factory.CreateDecoderFromFilename(
@@ -879,6 +899,88 @@ pub fn decode_raw_preview(path: &Path, cancellation: &AtomicBool) -> Option<Deco
     })
     .ok()?;
     Some(decoded.into_image("RAW"))
+}
+
+/// Preview request: a quarter for float sources, half for the rest, capped near the monitor.
+fn subresolution_target_size(width: u32, height: u32, float_native: bool) -> (u32, u32) {
+    let target = largest_monitor_long_side().min(MAXIMUM_TEXTURE_DIMENSION);
+    let longest = width.max(height).max(1);
+    let class_divisor: u32 = if float_native { 4 } else { 2 };
+    let divisor = class_divisor.max(longest.div_ceil(target));
+    ((width / divisor).max(1), (height / divisor).max(1))
+}
+
+/// Component information for a pixel format GUID, the one WIC route to its traits.
+fn pixel_format_information(
+    factory: &IWICImagingFactory,
+    format: &windows::core::GUID,
+) -> WindowsResult<IWICPixelFormatInfo2> {
+    unsafe { factory.CreateComponentInfo(format) }?.cast()
+}
+
+/// Bits per pixel of a WIC pixel format, for sizing a native-format buffer.
+fn pixel_format_bits_per_pixel(
+    factory: &IWICImagingFactory,
+    format: &windows::core::GUID,
+) -> WindowsResult<u32> {
+    unsafe { pixel_format_information(factory, format)?.GetBitsPerPixel() }
+}
+
+/// Decodes a display-sized stand-in through the decoder's native scaler; None keeps one stage.
+fn decode_subresolution_preview(path: &Path, cancellation: &AtomicBool) -> Option<DecodedImage> {
+    let format_name = descriptor_for_path_extension(path)?.name;
+    let decoded = with_wic_factory(|factory| {
+        let decoder = create_wic_decoder(factory, &DecodeInput::File(path))?;
+        let frame = unsafe { decoder.GetFrame(0)? };
+        let Some(scaled) = subresolution_source(factory, &frame, cancellation)? else {
+            return Ok(None);
+        };
+        decode_frame_source(factory, &frame, scaled, cancellation).map(Some)
+    })
+    .ok()
+    .flatten()?;
+    Some(decoded.into_image(format_name))
+}
+
+/// Sub-resolution copy through the decoder's native scaler; None when it cannot help.
+fn subresolution_source(
+    factory: &IWICImagingFactory,
+    frame: &IWICBitmapFrameDecode,
+    cancellation: &AtomicBool,
+) -> WindowsResult<Option<IWICBitmapSource>> {
+    let Ok(transform) = frame.cast::<IWICBitmapSourceTransform>() else {
+        return Ok(None);
+    };
+    let (full_width, full_height) = source_size(&frame.cast()?)?;
+    let (_, float_native) = frame_pixel_format_info(factory, frame);
+    let (mut width, mut height) = subresolution_target_size(full_width, full_height, float_native);
+    unsafe { transform.GetClosestSize(&mut width, &mut height)? };
+    // A decoder that cannot scale answers with the full size; stay single-stage then.
+    if width == 0 || height == 0 || (width, height) == (full_width, full_height) {
+        return Ok(None);
+    }
+    let mut format = unsafe { frame.GetPixelFormat()? };
+    unsafe { transform.GetClosestPixelFormat(&mut format)? };
+    let bits_per_pixel = pixel_format_bits_per_pixel(factory, &format)?;
+    let stride = (width * bits_per_pixel).div_ceil(8);
+    if cancellation.load(Ordering::Relaxed) {
+        return Err(E_ABORT.into());
+    }
+    let mut pixels = vec![0u8; stride as usize * height as usize];
+    unsafe {
+        transform.CopyPixels(
+            std::ptr::null(),
+            width,
+            height,
+            &format,
+            WICBitmapTransformRotate0,
+            stride,
+            &mut pixels,
+        )?
+    };
+    let bitmap =
+        unsafe { factory.CreateBitmapFromMemory(width, height, &format, stride, &pixels)? };
+    Ok(Some(bitmap.cast()?))
 }
 
 thread_local! {
@@ -1053,10 +1155,21 @@ fn decode_single_frame(
     cancellation: &AtomicBool,
 ) -> WindowsResult<DecodedFrames> {
     let frame = unsafe { decoder.GetFrame(index)? };
-    let orientation = exif_orientation(&frame);
-    let icc_profile = icc_profile_bytes(factory, &frame);
-    let exif = read_exif(&frame);
-    let (native_bits_per_channel, float_native) = frame_pixel_format_info(factory, &frame);
+    let pixel_source = frame.cast()?;
+    decode_frame_source(factory, &frame, pixel_source, cancellation)
+}
+
+/// The single-frame pipeline over the frame itself or a sub-resolution copy of it.
+fn decode_frame_source(
+    factory: &IWICImagingFactory,
+    frame: &IWICBitmapFrameDecode,
+    pixel_source: IWICBitmapSource,
+    cancellation: &AtomicBool,
+) -> WindowsResult<DecodedFrames> {
+    let orientation = exif_orientation(frame);
+    let icc_profile = icc_profile_bytes(factory, frame);
+    let exif = read_exif(frame);
+    let (native_bits_per_channel, float_native) = frame_pixel_format_info(factory, frame);
     let high_depth = native_bits_per_channel > 8;
     // PQ/HLG integers bypass WIC's sRGB-assuming float conversion.
     let hdr_encoding = if float_native {
@@ -1064,7 +1177,7 @@ fn decode_single_frame(
     } else {
         icc_profile.as_deref().and_then(icc_hdr_encoding)
     };
-    let (frame_width, frame_height) = source_size(&frame.cast()?)?;
+    let (frame_width, frame_height) = source_size(&pixel_source)?;
     let oversized = frame_width.max(frame_height) > MAXIMUM_TEXTURE_DIMENSION;
     // The Fant scaler rejects half floats; oversized integers scale first, convert after.
     let deferred_half = high_depth && !float_native && hdr_encoding.is_none() && oversized;
@@ -1075,10 +1188,10 @@ fn decode_single_frame(
         } else {
             &GUID_WICPixelFormat64bppPRGBAHalf
         };
-        convert_half_or_pbgra(factory, &frame.cast()?, target)?
+        convert_half_or_pbgra(factory, &pixel_source, target)?
     } else {
         (
-            convert_to_pbgra(factory, &frame.cast()?)?,
+            convert_to_pbgra(factory, &pixel_source)?,
             PixelStorage::Bgra8,
         )
     };
@@ -1161,8 +1274,7 @@ fn frame_pixel_format_info(
 ) -> (u32, bool) {
     (|| -> WindowsResult<(u32, bool)> {
         let format = unsafe { frame.GetPixelFormat()? };
-        let information: IWICPixelFormatInfo2 =
-            unsafe { factory.CreateComponentInfo(&raw const format)? }.cast()?;
+        let information = pixel_format_information(factory, &format)?;
         let bits_per_pixel = unsafe { information.GetBitsPerPixel()? };
         let channel_count = unsafe { information.GetChannelCount()? };
         let float_native = unsafe { information.GetNumericRepresentation()? }
@@ -2784,11 +2896,12 @@ mod descriptor_probe_tests {
     use super::*;
 
     #[test]
-    fn raw_two_stage_detection_is_extension_only() {
-        assert!(is_raw_two_stage(Path::new("photo.dng")));
-        assert!(is_raw_two_stage(Path::new("PHOTO.DNG")));
-        assert!(!is_raw_two_stage(Path::new("photo.png")));
-        assert!(!is_raw_two_stage(Path::new("photo")));
+    fn two_stage_detection_is_extension_only() {
+        assert!(is_two_stage_preview(Path::new("photo.dng")));
+        assert!(is_two_stage_preview(Path::new("PHOTO.DNG")));
+        assert!(is_two_stage_preview(Path::new("capture.jxr")));
+        assert!(!is_two_stage_preview(Path::new("photo.png")));
+        assert!(!is_two_stage_preview(Path::new("photo")));
     }
 
     #[test]

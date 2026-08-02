@@ -309,7 +309,7 @@ pub struct CurrentImage {
 struct CacheEntry {
     file_size: u64,
     modified: Option<SystemTime>,
-    /// RAW preview or animation first frame standing in until someone pays for the full decode.
+    /// Preview stand-in (RAW, sub-resolution, animation first frame) until the full decode is paid for.
     preview: bool,
     image: Arc<DecodedImage>,
     texture: Option<UploadedTexture>,
@@ -941,7 +941,7 @@ impl ImageCore {
         } else {
             self.submit_pending_decode(location.clone(), file_size, modified, preview_shown);
         }
-        // The deferral timer submits a RAW full decode; this call is for the sweeps.
+        // The deferral timer owns the pending full decode; this call is for the sweeps.
         self.refresh_preload();
         preview_shown
     }
@@ -976,7 +976,7 @@ impl ImageCore {
         self.submit_pending_decode(location, file_size, modified, preview_cached);
     }
 
-    /// Submits what a pending item still needs; a cached RAW preview waits on the timer.
+    /// Submits what a pending item still needs; a cached two-stage preview waits on the timer.
     fn submit_pending_decode(
         &mut self,
         location: ItemLocation,
@@ -986,12 +986,12 @@ impl ImageCore {
     ) {
         if !preview_cached {
             self.submit_decode(location, file_size, modified, JobKind::Preview, true);
-        } else if !is_raw_two_stage(&location) {
+        } else if !is_deferred_two_stage(&location) {
             self.submit_decode(location, file_size, modified, JobKind::Full, true);
         }
     }
 
-    /// A pending RAW item is showing its preview and waits for the deferred full decode.
+    /// A pending two-stage item is showing its preview and waits for the deferred full decode.
     pub fn full_decode_pending(&self) -> bool {
         self.pending_display.as_ref().is_some_and(|pending| {
             !self.in_flight.contains_key(pending)
@@ -1423,8 +1423,8 @@ impl ImageCore {
                 continue;
             }
             let entry = &self.entries[index];
-            // Cheap speculation: RAW targets get the preview; animations stop at frame one.
-            let kind = if is_raw_two_stage(&entry.location) {
+            // Cheap speculation: two-stage targets get the preview; animations stop at frame one.
+            let kind = if is_deferred_two_stage(&entry.location) {
                 JobKind::Preview
             } else {
                 JobKind::Full
@@ -1656,9 +1656,9 @@ fn fits_in_budget(occupied: u64, budget: u64, weights: &[u64]) -> Vec<bool> {
         .collect()
 }
 
-/// A local RAW file on the embedded-preview two-stage path.
-fn is_raw_two_stage(location: &ItemLocation) -> bool {
-    matches!(location, ItemLocation::File(path) if decode::is_raw_two_stage(path))
+/// A preview-first local file whose full decode waits for the navigation lull.
+fn is_deferred_two_stage(location: &ItemLocation) -> bool {
+    matches!(location, ItemLocation::File(path) if decode::is_two_stage_preview(path))
 }
 
 /// One step from the anchor index; None past a non-looping end.
@@ -1825,7 +1825,7 @@ fn format_name_of(location: &ItemLocation) -> &'static str {
 #[derive(Clone, Copy, PartialEq, Eq)]
 enum JobKind {
     Full,
-    /// Stops at a RAW's embedded preview when one exists; decodes fully otherwise.
+    /// Stops at a RAW embedded or sub-resolution preview when one exists; decodes fully otherwise.
     Preview,
     /// Reads only the header and posts the decode weight; no pixels.
     Probe,
@@ -1999,8 +1999,7 @@ fn worker_loop(shared: &PoolShared, window: isize) {
                     );
                 };
                 if job.kind != JobKind::Full
-                    && decode::is_raw_two_stage(path)
-                    && let Some(preview) = decode::decode_raw_preview(path, &job.cancellation)
+                    && let Some(preview) = decode::decode_two_stage_preview(path, &job.cancellation)
                 {
                     post_preview(preview, true);
                     continue; // the full decode waits until someone asks for it
