@@ -203,11 +203,12 @@ struct InfoTextCache {
     text: String,
 }
 
-/// Advanced-color mode and EDID gamut label of the window's display, for the info overlay.
+/// Advanced-color mode, EDID gamut label, and wire depth of the display, for the info overlay.
 #[derive(Clone, Copy, PartialEq)]
 struct DisplayLabels {
     color_mode: &'static str,
     gamut: &'static str,
+    bits_per_color: u32,
 }
 
 /// The output mode the renderer drives, from the display's current capabilities.
@@ -235,7 +236,11 @@ fn display_labels(
         "SDR"
     };
     let gamut = gamut.map_or("unknown", |gamut| gamut.label());
-    DisplayLabels { color_mode, gamut }
+    DisplayLabels {
+        color_mode,
+        gamut,
+        bits_per_color: capabilities.bits_per_color,
+    }
 }
 
 /// Builds a window-sized renderer for the queried display state.
@@ -380,12 +385,15 @@ impl Application {
             gamut,
             display_profile,
         } = color::display_color_info(self.display_watcher.as_ref(), window);
-        self.display_labels = display_labels(&capabilities, gamut);
+        let labels = display_labels(&capabilities, gamut);
+        // A label-only change (wire depth, gamut) still owes the panel a repaint.
+        let labels_changed = labels != self.display_labels;
+        self.display_labels = labels;
         if self.reconfigure_display_output(&capabilities, display_profile, false) {
             self.request_render(window);
             return;
         }
-        let mut stale = false;
+        let mut stale = labels_changed;
         let is_hdr_output = self.renderer.as_ref().is_some_and(Renderer::is_hdr_output);
         let boost = capabilities.sdr_white_boost_for(is_hdr_output);
         if (boost - self.sdr_white_boost).abs() > f32::EPSILON {
@@ -1041,6 +1049,11 @@ impl Application {
             .renderer
             .as_ref()
             .map_or("", |renderer| renderer.output_label());
+        // The display line mirrors the output line's "[bits] [gamut]" form.
+        let display_description = format!(
+            "{}-bit {}",
+            self.display_labels.bits_per_color, self.display_labels.gamut
+        );
         let scaling_description = self.scaling_description(frame);
         let dither_description = frame.map_or("None", FrameDecision::dither_description);
         let tone_map = self.renderer.as_ref().map(Renderer::tone_map_info);
@@ -1069,7 +1082,7 @@ impl Application {
                 dither_description,
                 tone_map,
                 self.display_labels.color_mode,
-                self.display_labels.gamut,
+                &display_description,
             );
             let location = current.location.clone();
             self.info_text_cache = Some(InfoTextCache {

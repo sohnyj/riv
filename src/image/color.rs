@@ -12,6 +12,7 @@ use windows::Win32::Devices::Display::{
 };
 use windows::Win32::Foundation::{ERROR_SUCCESS, HWND, LPARAM, WPARAM};
 use windows::Win32::Graphics::Direct2D::Common::D2D1_COLOR_F;
+use windows::Win32::Graphics::Dxgi::{CreateDXGIFactory1, IDXGIFactory1, IDXGIOutput6};
 use windows::Win32::Graphics::Gdi::{
     GetMonitorInfoW, MONITOR_DEFAULTTONEAREST, MONITORINFOEXW, MonitorFromWindow,
 };
@@ -111,6 +112,8 @@ pub fn perceptual_quantizer_nits(code: f32) -> f32 {
 #[derive(Clone, Copy)]
 pub struct DisplayCapabilities {
     pub hdr: bool,
+    /// Wire depth of the display path, shown in the info panel; never picks formats.
+    pub bits_per_color: u32,
     pub max_luminance: Option<f32>,
     pub max_full_frame_luminance: Option<f32>,
     /// Advanced color (HDR or SDR auto color management) is on for this output.
@@ -186,7 +189,7 @@ impl Drop for DisplayWatcher {
 /// Queries the display's color capabilities, gamut, and profile from the watcher's snapshot.
 pub fn display_color_info(watcher: Option<&DisplayWatcher>, window: HWND) -> DisplayColorInfo {
     let information = watcher.and_then(DisplayWatcher::advanced_color_info);
-    let capabilities = capabilities_from(information.as_ref());
+    let capabilities = capabilities_from(information.as_ref(), window);
     // Only ACM-off SDR consumes the profile; skip the disk read in the delegated modes.
     let display_profile = (!capabilities.hdr && !capabilities.advanced_color)
         .then(|| monitor_device_profile(window))
@@ -256,12 +259,13 @@ fn color_directory() -> Option<std::path::PathBuf> {
     )))
 }
 
-fn capabilities_from(information: Option<&AdvancedColorInfo>) -> DisplayCapabilities {
+fn capabilities_from(information: Option<&AdvancedColorInfo>, window: HWND) -> DisplayCapabilities {
     let kind = information.and_then(|information| information.CurrentAdvancedColorKind().ok());
     let hdr = kind == Some(AdvancedColorKind::HighDynamicRange);
     let nits = |value: Option<f32>| value.filter(|nits| *nits > 0.0);
     DisplayCapabilities {
         hdr,
+        bits_per_color: bits_per_color(window).unwrap_or(8),
         max_luminance: nits(
             information.and_then(|information| information.MaxLuminanceInNits().ok()),
         ),
@@ -404,6 +408,29 @@ fn for_window_display_path<T>(
             continue;
         }
         return read(path);
+    }
+    None
+}
+
+/// Wire depth of the window's display, from the active DXGI output description.
+fn bits_per_color(window: HWND) -> Option<u32> {
+    let monitor = unsafe { MonitorFromWindow(window, MONITOR_DEFAULTTONEAREST) };
+    // A fresh factory each query: enumeration snapshots go stale across display changes.
+    let factory: IDXGIFactory1 = unsafe { CreateDXGIFactory1() }.ok()?;
+    let mut adapter_index = 0;
+    while let Ok(adapter) = unsafe { factory.EnumAdapters1(adapter_index) } {
+        let mut output_index = 0;
+        while let Ok(output) = unsafe { adapter.EnumOutputs(output_index) } {
+            if let Ok(description) = output
+                .cast::<IDXGIOutput6>()
+                .and_then(|output6| unsafe { output6.GetDesc1() })
+                && description.Monitor == monitor
+            {
+                return Some(description.BitsPerColor).filter(|bits| *bits > 0);
+            }
+            output_index += 1;
+        }
+        adapter_index += 1;
     }
     None
 }

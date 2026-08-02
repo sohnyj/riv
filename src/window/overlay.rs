@@ -345,7 +345,7 @@ pub fn build_info_text(
     dither_description: &str,
     tone_map: Option<ToneMapInfo>,
     color_mode: &str,
-    gamut: &str,
+    display_description: &str,
 ) -> String {
     let megapixels = f64::from(image.width) * f64::from(image.height) / 1_000_000.0;
     let color_profile = match &image.icc_profile {
@@ -382,7 +382,7 @@ pub fn build_info_text(
     // Display: the output state.
     let display = vec![
         format!("Advanced color: {color_mode}"),
-        format!("Display: {gamut}"),
+        format!("Display: {display_description}"),
         format!("Output: {output_label}"),
     ];
 
