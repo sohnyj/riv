@@ -75,7 +75,7 @@ use windows::Win32::UI::WindowsAndMessaging::{
     CS_DBLCLKS, CS_HREDRAW, CS_VREDRAW, CW_USEDEFAULT, CreateWindowExW, DefWindowProcW,
     DispatchMessageW, GWL_STYLE, GWLP_USERDATA, GetClientRect, GetCursorPos, GetMessageW,
     GetWindowLongPtrW, GetWindowPlacement, GetWindowRect, HCURSOR, HTCAPTION, HTCLIENT,
-    HWND_NOTOPMOST, HWND_TOP, HWND_TOPMOST, IDC_ARROW, IDC_SIZEALL, IsIconic, IsZoomed, KillTimer,
+    HWND_NOTOPMOST, HWND_TOP, HWND_TOPMOST, IDC_ARROW, IDC_SIZEALL, IsZoomed, KillTimer,
     LoadCursorW, LoadIconW, MINMAXINFO, MSG, MWMO_INPUTAVAILABLE, MsgWaitForMultipleObjectsEx,
     PM_REMOVE, PeekMessageW, PostMessageW, PostQuitMessage, QS_ALLINPUT, QS_PAINT,
     QUEUE_STATUS_FLAGS, RegisterClassExW, SC_MONITORPOWER, SW_HIDE, SW_SHOW, SW_SHOWMAXIMIZED,
@@ -157,7 +157,7 @@ struct Application {
     current_monitor: HMONITOR,
     /// Inside a modal move loop, where the system invalidates but the content cannot change.
     window_moving: bool,
-    /// Activation as WM_ACTIVATE reports it; playback follows this, not a foreground query.
+    /// Activation as WM_ACTIVATE reports it; the slideshow follows this, not a foreground query.
     window_active: bool,
     /// Set when riv itself asked for new pixels, so a moving window still draws them.
     render_requested: bool,
@@ -820,14 +820,9 @@ impl Application {
         showing
     }
 
-    /// False while the window is minimized or another window holds the foreground.
-    fn playback_visible(&self, window: HWND) -> bool {
-        self.window_active && !unsafe { IsIconic(window) }.as_bool()
-    }
-
-    /// The one place the slideshow timer is set, so the playback gate holds for every caller.
+    /// The one place the slideshow timer is set, so the focus gate holds for every caller.
     fn schedule_slideshow_timer(&self, window: HWND, milliseconds: u32) {
-        if !self.playback_visible(window) {
+        if !self.window_active {
             return;
         }
         unsafe { SetTimer(Some(window), SLIDESHOW_TIMER, milliseconds, None) };
@@ -839,20 +834,19 @@ impl Application {
         self.schedule_slideshow_timer(window, interval);
     }
 
-    /// Starts or stops the animation and slideshow timers to match the window state.
-    fn update_playback(&mut self, window: HWND) {
-        if self.playback_visible(window) {
-            self.schedule_animation_timer(window);
-            if self.slideshow_active {
-                self.restart_slideshow_timer(window);
-            }
+    /// The slideshow pauses while unfocused and resumes on return; animations keep playing.
+    fn update_slideshow_focus(&mut self, window: HWND) {
+        if !self.slideshow_active {
+            return;
+        }
+        if self.window_active {
+            self.restart_slideshow_timer(window);
         } else {
-            let _ = unsafe { KillTimer(Some(window), ANIMATION_TIMER) };
             let _ = unsafe { KillTimer(Some(window), SLIDESHOW_TIMER) };
         }
     }
 
-    /// Schedules the next animation frame, unless playback is paused or out of view.
+    /// Schedules the next animation frame, unless playback is paused.
     fn schedule_animation_timer(&self, window: HWND) {
         let Some(animation) = self
             .animation
@@ -861,9 +855,6 @@ impl Application {
         else {
             return;
         };
-        if !self.playback_visible(window) {
-            return;
-        }
         unsafe {
             SetTimer(
                 Some(window),
@@ -2233,7 +2224,7 @@ extern "system" fn window_procedure(
             if let Some(application) = application_from_window(window) {
                 // The message states the change; the foreground window has not moved yet.
                 application.window_active = (wparam.0 & 0xFFFF) as u32 != WA_INACTIVE;
-                application.update_playback(window);
+                application.update_slideshow_focus(window);
             }
             LRESULT(0)
         }
