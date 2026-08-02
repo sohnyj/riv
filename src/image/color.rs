@@ -6,9 +6,9 @@ use windows::Foundation::TypedEventHandler;
 use windows::Graphics::Display::{AdvancedColorInfo, AdvancedColorKind, DisplayInformation};
 use windows::Win32::Devices::Display::{
     DISPLAYCONFIG_DEVICE_INFO_GET_SOURCE_NAME, DISPLAYCONFIG_DEVICE_INFO_HEADER,
-    DISPLAYCONFIG_DEVICE_INFO_TYPE, DISPLAYCONFIG_MODE_INFO, DISPLAYCONFIG_PATH_INFO,
-    DISPLAYCONFIG_SOURCE_DEVICE_NAME, DisplayConfigGetDeviceInfo, GetDisplayConfigBufferSizes,
-    QDC_ONLY_ACTIVE_PATHS, QueryDisplayConfig,
+    DISPLAYCONFIG_MODE_INFO, DISPLAYCONFIG_PATH_INFO, DISPLAYCONFIG_SOURCE_DEVICE_NAME,
+    DisplayConfigGetDeviceInfo, GetDisplayConfigBufferSizes, QDC_ONLY_ACTIVE_PATHS,
+    QueryDisplayConfig,
 };
 use windows::Win32::Foundation::{ERROR_SUCCESS, HWND, LPARAM, WPARAM};
 use windows::Win32::Graphics::Direct2D::Common::D2D1_COLOR_F;
@@ -51,7 +51,6 @@ use interop::IDisplayInformationStaticsInterop;
 pub enum OutputColorTarget {
     Srgb,
     ScrgbLinear { sdr_white_boost: f32 },
-    Pq { sdr_white_boost: f32 },
 }
 
 pub fn output_color(color: D2D1_COLOR_F, target: OutputColorTarget) -> D2D1_COLOR_F {
@@ -59,9 +58,6 @@ pub fn output_color(color: D2D1_COLOR_F, target: OutputColorTarget) -> D2D1_COLO
         OutputColorTarget::Srgb => color,
         OutputColorTarget::ScrgbLinear { sdr_white_boost } => {
             srgb_color_to_scrgb(color, sdr_white_boost)
-        }
-        OutputColorTarget::Pq { sdr_white_boost } => {
-            scrgb_color_to_pq(srgb_color_to_scrgb(color, sdr_white_boost))
         }
     }
 }
@@ -111,34 +107,10 @@ pub fn perceptual_quantizer_nits(code: f32) -> f32 {
     PQ_PEAK_NITS * (numerator / denominator).powf(1.0 / PQ_M1)
 }
 
-/// BT.709 -> BT.2020 primaries (rows sum to 1).
-const BT709_TO_BT2020: [[f32; 3]; 3] = [
-    [0.627_404, 0.329_283, 0.043_313],
-    [0.069_097, 0.919_540, 0.011_362],
-    [0.016_391, 0.088_013, 0.895_595],
-];
-
-/// Linear scRGB (BT.709, 1.0 = 80 nits) to PQ-encoded BT.2020 (HDR10 backbuffer).
-fn scrgb_color_to_pq(color: D2D1_COLOR_F) -> D2D1_COLOR_F {
-    let source = [color.r, color.g, color.b];
-    let mut encoded = [0.0f32; 3];
-    for (row, channel) in BT709_TO_BT2020.iter().zip(&mut encoded) {
-        let linear = row[0] * source[0] + row[1] * source[1] + row[2] * source[2];
-        *channel = perceptual_quantizer_code((linear * SDR_REFERENCE_WHITE_NITS).min(PQ_PEAK_NITS));
-    }
-    D2D1_COLOR_F {
-        r: encoded[0],
-        g: encoded[1],
-        b: encoded[2],
-        a: color.a,
-    }
-}
-
-/// Output capabilities from one advanced-color snapshot; unknown state falls back to SDR 8-bit.
+/// Output capabilities from one advanced-color snapshot; unknown state falls back to SDR.
 #[derive(Clone, Copy)]
 pub struct DisplayCapabilities {
     pub hdr: bool,
-    pub bits_per_color: u32,
     pub max_luminance: Option<f32>,
     pub max_full_frame_luminance: Option<f32>,
     /// Advanced color (HDR or SDR auto color management) is on for this output.
@@ -214,7 +186,7 @@ impl Drop for DisplayWatcher {
 /// Queries the display's color capabilities, gamut, and profile from the watcher's snapshot.
 pub fn display_color_info(watcher: Option<&DisplayWatcher>, window: HWND) -> DisplayColorInfo {
     let information = watcher.and_then(DisplayWatcher::advanced_color_info);
-    let capabilities = capabilities_from(information.as_ref(), window);
+    let capabilities = capabilities_from(information.as_ref());
     // Only ACM-off SDR consumes the profile; skip the disk read in the delegated modes.
     let display_profile = (!capabilities.hdr && !capabilities.advanced_color)
         .then(|| monitor_device_profile(window))
@@ -284,13 +256,12 @@ fn color_directory() -> Option<std::path::PathBuf> {
     )))
 }
 
-fn capabilities_from(information: Option<&AdvancedColorInfo>, window: HWND) -> DisplayCapabilities {
+fn capabilities_from(information: Option<&AdvancedColorInfo>) -> DisplayCapabilities {
     let kind = information.and_then(|information| information.CurrentAdvancedColorKind().ok());
     let hdr = kind == Some(AdvancedColorKind::HighDynamicRange);
     let nits = |value: Option<f32>| value.filter(|nits| *nits > 0.0);
     DisplayCapabilities {
         hdr,
-        bits_per_color: bits_per_color(window).unwrap_or(8),
         max_luminance: nits(
             information.and_then(|information| information.MaxLuminanceInNits().ok()),
         ),
@@ -437,42 +408,6 @@ fn for_window_display_path<T>(
     None
 }
 
-/// Color depth of the window's active display path; the advanced-color query carries it.
-/// wingdi.h DISPLAYCONFIG_DEVICE_INFO_GET_ADVANCED_COLOR_INFO_2 (24H2), absent from the
-/// crate's bindings.
-const DISPLAYCONFIG_DEVICE_INFO_GET_ADVANCED_COLOR_INFO_2: DISPLAYCONFIG_DEVICE_INFO_TYPE =
-    DISPLAYCONFIG_DEVICE_INFO_TYPE(15);
-
-/// wingdi.h DISPLAYCONFIG_GET_ADVANCED_COLOR_INFO_2 (24H2), absent from the crate's
-/// bindings; the field names mirror the header.
-#[repr(C)]
-#[allow(non_snake_case, non_camel_case_types)]
-#[derive(Default)]
-struct DISPLAYCONFIG_GET_ADVANCED_COLOR_INFO_2 {
-    header: DISPLAYCONFIG_DEVICE_INFO_HEADER,
-    value: u32,
-    colorEncoding: i32,
-    bitsPerColorChannel: u32,
-    activeColorMode: i32,
-}
-
-fn bits_per_color(window: HWND) -> Option<u32> {
-    for_window_display_path(window, |path| {
-        let mut advanced_color = DISPLAYCONFIG_GET_ADVANCED_COLOR_INFO_2 {
-            header: DISPLAYCONFIG_DEVICE_INFO_HEADER {
-                r#type: DISPLAYCONFIG_DEVICE_INFO_GET_ADVANCED_COLOR_INFO_2,
-                size: size_of::<DISPLAYCONFIG_GET_ADVANCED_COLOR_INFO_2>() as u32,
-                adapterId: path.targetInfo.adapterId,
-                id: path.targetInfo.id,
-            },
-            ..Default::default()
-        };
-        (unsafe { DisplayConfigGetDeviceInfo(&raw mut advanced_color.header) } == 0)
-            .then_some(advanced_color.bitsPerColorChannel)
-            .filter(|bits| *bits > 0)
-    })
-}
-
 #[cfg(test)]
 mod output_color_tests {
     use super::*;
@@ -499,13 +434,6 @@ mod output_color_tests {
     }
 
     #[test]
-    fn bt2020_matrix_preserves_white() {
-        for row in BT709_TO_BT2020 {
-            assert!((row.iter().sum::<f32>() - 1.0).abs() < TOLERANCE);
-        }
-    }
-
-    #[test]
     fn output_color_encodes_srgb_white_per_target() {
         let white = gray(1.0);
         let srgb = output_color(white, OutputColorTarget::Srgb);
@@ -517,14 +445,5 @@ mod output_color_tests {
             },
         );
         assert!((scrgb.g - 2.5).abs() < TOLERANCE);
-        // 80 nits in PQ; equal channels stay equal through the matrix.
-        let pq = output_color(
-            white,
-            OutputColorTarget::Pq {
-                sdr_white_boost: 1.0,
-            },
-        );
-        assert!((pq.r - 0.4859).abs() < TOLERANCE);
-        assert!((pq.r - pq.b).abs() < TOLERANCE);
     }
 }

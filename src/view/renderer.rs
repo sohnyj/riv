@@ -38,10 +38,9 @@ use windows::Win32::Graphics::Direct3D11::{
 };
 use windows::Win32::Graphics::Dxgi::Common::{
     DXGI_ALPHA_MODE_IGNORE, DXGI_COLOR_SPACE_RGB_FULL_G10_NONE_P709,
-    DXGI_COLOR_SPACE_RGB_FULL_G22_NONE_P709, DXGI_COLOR_SPACE_RGB_FULL_G2084_NONE_P2020,
-    DXGI_COLOR_SPACE_TYPE, DXGI_FORMAT, DXGI_FORMAT_B8G8R8A8_UNORM, DXGI_FORMAT_R10G10B10A2_UNORM,
-    DXGI_FORMAT_R16G16B16A16_FLOAT, DXGI_FORMAT_R16G16B16A16_UNORM, DXGI_FORMAT_UNKNOWN,
-    DXGI_SAMPLE_DESC,
+    DXGI_COLOR_SPACE_RGB_FULL_G22_NONE_P709, DXGI_COLOR_SPACE_TYPE, DXGI_FORMAT,
+    DXGI_FORMAT_B8G8R8A8_UNORM, DXGI_FORMAT_R16G16B16A16_FLOAT, DXGI_FORMAT_R16G16B16A16_UNORM,
+    DXGI_FORMAT_UNKNOWN, DXGI_SAMPLE_DESC,
 };
 use windows::Win32::Graphics::Dxgi::{
     DXGI_PRESENT, DXGI_SCALING_STRETCH, DXGI_SWAP_CHAIN_COLOR_SPACE_SUPPORT_FLAG_PRESENT,
@@ -101,11 +100,10 @@ struct ToneMapTarget {
     full_frame_nits: f32,
 }
 
-/// The output-affecting display state: HDR, wire depth, and advanced-color.
+/// The output-affecting display state: HDR and advanced-color.
 #[derive(Clone, PartialEq)]
 pub struct OutputMode {
     pub hdr: bool,
-    pub bits_per_color: u32,
     pub advanced_color: bool,
     /// The display's ICC profile, the ACM-off SDR destination; None when unavailable.
     pub display_profile: Option<Arc<Vec<u8>>>,
@@ -133,7 +131,6 @@ pub struct Renderer {
     is_hdr_output: bool,
     /// Advanced-color SDR: FP16 scRGB output so DWM color-manages the wide gamut.
     is_sdr_wide_gamut: bool,
-    bits_per_color: u32,
     backbuffer_format: DXGI_FORMAT,
     tone_map_target_nits: f32,
     /// Display's sustained full-frame luminance, shown in the overlay diagnostics.
@@ -146,7 +143,7 @@ pub struct Renderer {
     upload_maximum_frame_bytes: u64,
     d3d_context: ID3D11DeviceContext,
     d2d_context: ID2D1DeviceContext,
-    /// Fullscreen quantizing copy for the 10-bit backbuffers D2D cannot target.
+    /// Fullscreen quantizing copy from the UNORM16 scene to the 8-bit backbuffer.
     quantize_pass: Option<QuantizePass>,
     scene_shader_resource_view: Option<ID3D11ShaderResourceView>,
     backbuffer_render_target_view: Option<ID3D11RenderTargetView>,
@@ -159,9 +156,6 @@ pub struct Renderer {
     hdr_tone_map_effect: Option<ID2D1Effect>,
     tone_map_normalize_effect: Option<ID2D1Effect>,
     output_color_management_effect: Option<ID2D1Effect>,
-    /// scRGB -> PQ BT.2020 for the HDR10 backbuffer; None on the FP16 fallback.
-    hdr_output_color_management_effect: Option<ID2D1Effect>,
-    pq_color_context: Option<ID2D1ColorContext>,
     dither_setting: DitherMode,
     image_storage: PixelStorage,
     image_source_bits_per_channel: u32,
@@ -239,7 +233,6 @@ impl Drop for Renderer {
         self.hdr_tone_map_effect = None;
         self.tone_map_normalize_effect = None;
         self.output_color_management_effect = None;
-        self.hdr_output_color_management_effect = None;
     }
 }
 
@@ -405,7 +398,7 @@ impl Renderer {
             peak_nits: tone_map_target_nits,
             full_frame_nits,
         };
-        // A deep-color failure downgrades to the proven formats, never blocks launch.
+        // A failed first build retries without the quantize pass, never blocking launch.
         Self::build(window, width, height, mode.clone(), target, true, &device).or_else(|_| {
             // A fresh device for the retry: DXGI allows one flip swapchain per window.
             Self::build(
@@ -448,18 +441,6 @@ impl Renderer {
             .ok()?;
         }
         Some(effect)
-    }
-
-    /// The HDR10 backbuffer's own color space, as a context sources can convert into.
-    fn create_pq_color_context(d2d_context: &ID2D1DeviceContext) -> Option<ID2D1ColorContext> {
-        unsafe {
-            d2d_context
-                .cast::<ID2D1DeviceContext5>()
-                .ok()?
-                .CreateColorContextFromDxgiColorSpace(DXGI_COLOR_SPACE_RGB_FULL_G2084_NONE_P2020)
-        }
-        .ok()
-        .map(Into::into)
     }
 
     /// Display-profile color context and its gamut label for ACM-off SDR; both None otherwise.
@@ -573,53 +554,13 @@ impl Renderer {
         }
     }
 
-    /// Dither only the UNORM backbuffers the app quantizes; FP16 leaves quantization to DWM.
+    /// Dither only the 8-bit backbuffer the app quantizes; FP16 leaves quantization to DWM.
     fn backbuffer_bits_for(format: DXGI_FORMAT) -> Option<u32> {
-        if format == DXGI_FORMAT_B8G8R8A8_UNORM {
-            Some(8)
-        } else if format == DXGI_FORMAT_R10G10B10A2_UNORM {
-            Some(10)
-        } else {
-            None
-        }
+        (format == DXGI_FORMAT_B8G8R8A8_UNORM).then_some(8)
     }
 
-    /// The backbuffer format the mode prefers before any swapchain refusal.
-    fn preferred_backbuffer_format(
-        is_hdr_output: bool,
-        is_pq_output: bool,
-        is_sdr_wide_gamut: bool,
-        ten_bit_target: bool,
-        bits_per_color: u32,
-    ) -> DXGI_FORMAT {
-        if is_hdr_output {
-            if is_pq_output {
-                DXGI_FORMAT_R10G10B10A2_UNORM
-            } else {
-                DXGI_FORMAT_R16G16B16A16_FLOAT
-            }
-        } else if is_sdr_wide_gamut {
-            // Advanced color is on: hand wide-gamut scRGB to DWM's composition.
-            DXGI_FORMAT_R16G16B16A16_FLOAT
-        } else if ten_bit_target && bits_per_color >= 10 {
-            // Only the format widens; no declaration, so DWM keeps the sRGB reading.
-            DXGI_FORMAT_R10G10B10A2_UNORM
-        } else {
-            DXGI_FORMAT_B8G8R8A8_UNORM
-        }
-    }
-
-    /// The format each mode is known to accept when a 10-bit swapchain is refused.
-    fn mode_fallback_format(is_hdr_output: bool) -> DXGI_FORMAT {
-        if is_hdr_output {
-            DXGI_FORMAT_R16G16B16A16_FLOAT
-        } else {
-            DXGI_FORMAT_B8G8R8A8_UNORM
-        }
-    }
-
-    /// Composition buffers are FP16 scRGB for HDR and ACM-on wide gamut, 8-bit sRGB otherwise.
-    fn composition_format_and_color_space(
+    /// FP16 scRGB for HDR and ACM-on wide gamut, 8-bit sRGB otherwise; both paths share it.
+    fn mode_format_and_color_space(
         is_hdr_output: bool,
         is_sdr_wide_gamut: bool,
     ) -> (DXGI_FORMAT, DXGI_COLOR_SPACE_TYPE) {
@@ -642,15 +583,13 @@ impl Renderer {
         height: u32,
         mode: OutputMode,
         target: ToneMapTarget,
-        deep_color: bool,
+        with_quantize_pass: bool,
         device: &GraphicsDevice,
     ) -> Result<Self> {
         let output_mode = mode.clone();
         let is_sdr_wide_gamut = mode.is_sdr_wide_gamut();
         let OutputMode {
-            hdr: is_hdr_output,
-            bits_per_color,
-            ..
+            hdr: is_hdr_output, ..
         } = mode;
         let display_profile = mode.display_profile;
         let tone_map_target_nits = target.peak_nits;
@@ -666,7 +605,7 @@ impl Renderer {
                 .map_or(0, |description| description.DedicatedVideoMemory as u64),
         );
 
-        // D2D precedes the swapchain: the PQ pipeline decides the backbuffer format.
+        // D2D precedes the present target: the pass decides the scene format.
         let d2d_factory: ID2D1Factory1 =
             unsafe { D2D1CreateFactory(D2D1_FACTORY_TYPE_SINGLE_THREADED, None)? };
         let d2d_context = unsafe {
@@ -680,12 +619,11 @@ impl Renderer {
             d2d_context.SetRenderingControls(&raw const rendering_controls);
         }
         // D2D draws the UNORM16 scene; the pass dithers and its UNORM write quantizes.
-        let mut quantize_pass = (deep_color
+        let mut quantize_pass = (with_quantize_pass
             && unsafe { d2d_context.IsDxgiFormatSupported(DXGI_FORMAT_R16G16B16A16_UNORM) }
                 .as_bool())
         .then(|| QuantizePass::new(&d3d_device).ok())
         .flatten();
-        let ten_bit_target = quantize_pass.is_some();
 
         let scrgb_color_context =
             unsafe { d2d_context.CreateColorContext(D2D1_COLOR_SPACE_SCRGB, None) }.ok();
@@ -702,7 +640,7 @@ impl Renderer {
         let composition =
             CompositionPresenter::new(&d3d_device, window).and_then(|mut presenter| {
                 let (format, color_space) =
-                    Self::composition_format_and_color_space(is_hdr_output, is_sdr_wide_gamut);
+                    Self::mode_format_and_color_space(is_hdr_output, is_sdr_wide_gamut);
                 presenter.set_color_space(color_space).ok()?;
                 presenter
                     .ensure_buffers(
@@ -714,109 +652,43 @@ impl Renderer {
                     .ok()?;
                 Some((presenter, format))
             });
-        let (
-            present_target,
-            backbuffer_format,
-            pq_color_context,
-            hdr_output_color_management_effect,
-        ) = match composition {
-            Some((presenter, format)) => {
-                (PresentTarget::Composition(presenter), format, None, None)
-            }
+        let (present_target, backbuffer_format) = match composition {
+            Some((presenter, format)) => (PresentTarget::Composition(presenter), format),
             None => {
-                // HDR encodes to PQ in the app so its 10-bit write is the only quantizer.
-                let pq_color_context = (is_hdr_output && ten_bit_target)
-                    .then(|| Self::create_pq_color_context(&d2d_context))
-                    .flatten();
-                let mut hdr_output_color_management_effect = Self::create_conversion_effect(
-                    &d2d_context,
-                    scrgb_color_context.as_ref(),
-                    pq_color_context.as_ref(),
-                );
-                let mut backbuffer_format = Self::preferred_backbuffer_format(
-                    is_hdr_output,
-                    hdr_output_color_management_effect.is_some(),
-                    is_sdr_wide_gamut,
-                    ten_bit_target,
-                    bits_per_color,
-                );
-                let create_swap_chain = |format: DXGI_FORMAT| -> Result<IDXGISwapChain1> {
-                    unsafe {
-                        let adapter = dxgi_device.GetAdapter()?;
-                        let factory: IDXGIFactory2 = adapter.GetParent()?;
-                        let description = DXGI_SWAP_CHAIN_DESC1 {
-                            Width: width,
-                            Height: height,
-                            Format: format,
-                            SampleDesc: DXGI_SAMPLE_DESC {
-                                Count: 1,
-                                Quality: 0,
-                            },
-                            BufferUsage: DXGI_USAGE_RENDER_TARGET_OUTPUT,
-                            BufferCount: 2,
-                            Scaling: DXGI_SCALING_STRETCH,
-                            SwapEffect: DXGI_SWAP_EFFECT_FLIP_DISCARD,
-                            AlphaMode: DXGI_ALPHA_MODE_IGNORE,
-                            Flags: SWAP_CHAIN_FLAGS.0 as u32,
-                            ..Default::default()
-                        };
-                        factory.CreateSwapChainForHwnd(
-                            &d3d_device,
-                            window,
-                            &raw const description,
-                            None,
-                            None,
-                        )
-                    }
+                let (format, color_space) =
+                    Self::mode_format_and_color_space(is_hdr_output, is_sdr_wide_gamut);
+                let swap_chain = unsafe {
+                    let adapter = dxgi_device.GetAdapter()?;
+                    let factory: IDXGIFactory2 = adapter.GetParent()?;
+                    let description = DXGI_SWAP_CHAIN_DESC1 {
+                        Width: width,
+                        Height: height,
+                        Format: format,
+                        SampleDesc: DXGI_SAMPLE_DESC {
+                            Count: 1,
+                            Quality: 0,
+                        },
+                        BufferUsage: DXGI_USAGE_RENDER_TARGET_OUTPUT,
+                        BufferCount: 2,
+                        Scaling: DXGI_SCALING_STRETCH,
+                        SwapEffect: DXGI_SWAP_EFFECT_FLIP_DISCARD,
+                        AlphaMode: DXGI_ALPHA_MODE_IGNORE,
+                        Flags: SWAP_CHAIN_FLAGS.0 as u32,
+                        ..Default::default()
+                    };
+                    factory.CreateSwapChainForHwnd(
+                        &d3d_device,
+                        window,
+                        &raw const description,
+                        None,
+                        None,
+                    )?
                 };
-                let swap_chain = match create_swap_chain(backbuffer_format) {
-                    Ok(swap_chain) => swap_chain,
-                    // A 10-bit refusal falls back to the mode's proven format.
-                    Err(_) if backbuffer_format == DXGI_FORMAT_R10G10B10A2_UNORM => {
-                        hdr_output_color_management_effect = None;
-                        backbuffer_format = Self::mode_fallback_format(is_hdr_output);
-                        create_swap_chain(backbuffer_format)?
-                    }
-                    Err(error) => return Err(error),
-                };
-                // Only HDR and ACM-on wide gamut declare; scRGB on plain SDR flashes DWM composition.
-                if is_hdr_output {
-                    let swap_chain3 = swap_chain.cast::<IDXGISwapChain3>().ok();
-                    let pq_declared = hdr_output_color_management_effect.is_some()
-                        && swap_chain3.as_ref().is_some_and(|swap_chain3| {
-                            declare_color_space(
-                                swap_chain3,
-                                DXGI_COLOR_SPACE_RGB_FULL_G2084_NONE_P2020,
-                            )
-                            .is_ok()
-                        });
-                    if !pq_declared {
-                        hdr_output_color_management_effect = None;
-                        if backbuffer_format == DXGI_FORMAT_R10G10B10A2_UNORM {
-                            backbuffer_format = DXGI_FORMAT_R16G16B16A16_FLOAT;
-                            unsafe {
-                                swap_chain.ResizeBuffers(
-                                    0,
-                                    width,
-                                    height,
-                                    backbuffer_format,
-                                    SWAP_CHAIN_FLAGS,
-                                )?;
-                            }
-                        }
-                        if let Some(swap_chain3) = &swap_chain3 {
-                            let _ = declare_color_space(
-                                swap_chain3,
-                                DXGI_COLOR_SPACE_RGB_FULL_G10_NONE_P709,
-                            );
-                        }
-                    }
-                } else if is_sdr_wide_gamut
+                // Only FP16 declares; scRGB on plain SDR flashes DWM composition.
+                if (is_hdr_output || is_sdr_wide_gamut)
                     && let Ok(swap_chain3) = swap_chain.cast::<IDXGISwapChain3>()
                 {
-                    // The FP16 default is already scRGB; declare it so the intent is explicit.
-                    let _ =
-                        declare_color_space(&swap_chain3, DXGI_COLOR_SPACE_RGB_FULL_G10_NONE_P709);
+                    let _ = declare_color_space(&swap_chain3, color_space);
                 }
                 // Waitable swapchains default to a present-queue depth of 1.
                 let frame_latency_waitable = swap_chain
@@ -828,9 +700,7 @@ impl Renderer {
                         swap_chain,
                         frame_latency_waitable,
                     },
-                    backbuffer_format,
-                    pq_color_context,
-                    hdr_output_color_management_effect,
+                    format,
                 )
             }
         };
@@ -855,7 +725,6 @@ impl Renderer {
             upload_maximum_frame_bytes,
             is_hdr_output,
             is_sdr_wide_gamut,
-            bits_per_color,
             backbuffer_format,
             tone_map_target_nits,
             display_full_frame_nits: full_frame_nits,
@@ -875,8 +744,6 @@ impl Renderer {
             hdr_tone_map_effect: mode_effects.hdr_tone_map_effect,
             tone_map_normalize_effect: mode_effects.tone_map_normalize_effect,
             output_color_management_effect: mode_effects.output_color_management_effect,
-            hdr_output_color_management_effect,
-            pq_color_context,
             dither_setting: DitherMode::None,
             image_storage: PixelStorage::Bgra8,
             image_source_bits_per_channel: 8,
@@ -918,11 +785,6 @@ impl Renderer {
         }
     }
 
-    /// The backbuffer is HDR10 (PQ) rather than the scRGB FP16 fallback.
-    pub fn is_pq_output(&self) -> bool {
-        self.hdr_output_color_management_effect.is_some()
-    }
-
     /// The SDR output is advanced-color FP16 scRGB, wide gamut handed to DWM.
     pub fn is_sdr_wide_gamut(&self) -> bool {
         self.is_sdr_wide_gamut
@@ -937,12 +799,6 @@ impl Renderer {
     fn refresh_output_label(&mut self) {
         self.output_label = if self.backbuffer_format == DXGI_FORMAT_R16G16B16A16_FLOAT {
             "FP16 scRGB".to_string()
-        } else if self.backbuffer_format == DXGI_FORMAT_R10G10B10A2_UNORM {
-            if self.is_hdr_output {
-                "10-bit HDR10 (PQ)".to_string()
-            } else {
-                self.sdr_output_label("10-bit")
-            }
         } else {
             self.sdr_output_label("8-bit")
         };
@@ -1189,9 +1045,7 @@ impl Renderer {
         let is_sdr_wide_gamut = mode.is_sdr_wide_gamut();
         let output_mode = mode.clone();
         let OutputMode {
-            hdr: is_hdr_output,
-            bits_per_color,
-            ..
+            hdr: is_hdr_output, ..
         } = mode;
         let display_profile = mode.display_profile;
         // Adopt the target state first so a partial failure cannot retry every WM_MOVE.
@@ -1205,7 +1059,6 @@ impl Renderer {
                 is_sdr_wide_gamut,
                 display_profile.as_ref(),
             );
-        self.bits_per_color = bits_per_color;
         self.tone_map_target_nits = tone_map_target_nits;
         self.display_full_frame_nits = full_frame_nits;
 
@@ -1226,89 +1079,29 @@ impl Renderer {
         {
             self.quantize_pass = QuantizePass::new(&self.d3d_device).ok();
         }
-        let ten_bit_target = self.quantize_pass.is_some();
-
-        let (pq_color_context, hdr_output_color_management_effect, backbuffer_format) =
-            match &mut self.present_target {
-                PresentTarget::Composition(presenter) => {
-                    let (format, color_space) =
-                        Self::composition_format_and_color_space(is_hdr_output, is_sdr_wide_gamut);
-                    presenter.set_color_space(color_space)?;
-                    (None, None, format)
-                }
-                PresentTarget::SwapChain { swap_chain, .. } => {
-                    let pq_color_context = (is_hdr_output && ten_bit_target)
-                        .then(|| Self::create_pq_color_context(&self.d2d_context))
-                        .flatten();
-                    let mut hdr_output_color_management_effect = Self::create_conversion_effect(
-                        &self.d2d_context,
-                        self.scrgb_color_context.as_ref(),
-                        pq_color_context.as_ref(),
-                    );
-                    let mut backbuffer_format = Self::preferred_backbuffer_format(
-                        is_hdr_output,
-                        hdr_output_color_management_effect.is_some(),
-                        is_sdr_wide_gamut,
-                        ten_bit_target,
-                        bits_per_color,
-                    );
-                    let resize_to = |swap_chain: &IDXGISwapChain1, format| unsafe {
-                        swap_chain.ResizeBuffers(0, 0, 0, format, SWAP_CHAIN_FLAGS)
-                    };
-                    if let Err(error) = resize_to(swap_chain, backbuffer_format) {
-                        if backbuffer_format != DXGI_FORMAT_R10G10B10A2_UNORM {
-                            return Err(error);
-                        }
-                        // A 10-bit refusal falls back to the mode's proven format.
-                        hdr_output_color_management_effect = None;
-                        backbuffer_format = Self::mode_fallback_format(is_hdr_output);
-                        resize_to(swap_chain, backbuffer_format)?;
+        let (format, color_space) =
+            Self::mode_format_and_color_space(is_hdr_output, is_sdr_wide_gamut);
+        let backbuffer_format = match &mut self.present_target {
+            PresentTarget::Composition(presenter) => {
+                presenter.set_color_space(color_space)?;
+                format
+            }
+            PresentTarget::SwapChain { swap_chain, .. } => {
+                unsafe { swap_chain.ResizeBuffers(0, 0, 0, format, SWAP_CHAIN_FLAGS) }?;
+                if let Ok(swap_chain3) = swap_chain.cast::<IDXGISwapChain3>() {
+                    if is_hdr_output || is_sdr_wide_gamut {
+                        let _ = declare_color_space(&swap_chain3, color_space);
+                    } else {
+                        // Undo any FP16 declaration; SDR composition reads sRGB.
+                        let _ = declare_color_space(
+                            &swap_chain3,
+                            DXGI_COLOR_SPACE_RGB_FULL_G22_NONE_P709,
+                        );
                     }
-                    let swap_chain3 = swap_chain.cast::<IDXGISwapChain3>().ok();
-                    if is_hdr_output {
-                        let pq_declared = hdr_output_color_management_effect.is_some()
-                            && swap_chain3.as_ref().is_some_and(|swap_chain3| {
-                                declare_color_space(
-                                    swap_chain3,
-                                    DXGI_COLOR_SPACE_RGB_FULL_G2084_NONE_P2020,
-                                )
-                                .is_ok()
-                            });
-                        if !pq_declared {
-                            hdr_output_color_management_effect = None;
-                            if backbuffer_format == DXGI_FORMAT_R10G10B10A2_UNORM {
-                                backbuffer_format = DXGI_FORMAT_R16G16B16A16_FLOAT;
-                                resize_to(swap_chain, backbuffer_format)?;
-                            }
-                            if let Some(swap_chain3) = &swap_chain3 {
-                                let _ = declare_color_space(
-                                    swap_chain3,
-                                    DXGI_COLOR_SPACE_RGB_FULL_G10_NONE_P709,
-                                );
-                            }
-                        }
-                    } else if let Some(swap_chain3) = &swap_chain3 {
-                        if is_sdr_wide_gamut {
-                            // Advanced-color SDR: extended-range scRGB for DWM's composition.
-                            let _ = declare_color_space(
-                                swap_chain3,
-                                DXGI_COLOR_SPACE_RGB_FULL_G10_NONE_P709,
-                            );
-                        } else {
-                            // Undo any HDR declaration; SDR composition reads sRGB.
-                            let _ = declare_color_space(
-                                swap_chain3,
-                                DXGI_COLOR_SPACE_RGB_FULL_G22_NONE_P709,
-                            );
-                        }
-                    }
-                    (
-                        pq_color_context,
-                        hdr_output_color_management_effect,
-                        backbuffer_format,
-                    )
                 }
-            };
+                format
+            }
+        };
         if backbuffer_format == DXGI_FORMAT_R16G16B16A16_FLOAT {
             self.quantize_pass = None;
         }
@@ -1326,8 +1119,6 @@ impl Renderer {
         self.hdr_tone_map_effect = mode_effects.hdr_tone_map_effect;
         self.tone_map_normalize_effect = mode_effects.tone_map_normalize_effect;
         self.output_color_management_effect = mode_effects.output_color_management_effect;
-        self.hdr_output_color_management_effect = hdr_output_color_management_effect;
-        self.pq_color_context = pq_color_context;
         self.backbuffer_format = backbuffer_format;
         self.refresh_output_label();
         self.create_target()
@@ -1551,11 +1342,7 @@ impl Renderer {
                 source_context
             }
         };
-        // HDR content needs no linear stage before the backbuffer, so it converts once.
-        let direct_to_backbuffer = hdr_content && self.is_pq_output();
-        let destination_context = if direct_to_backbuffer {
-            self.pq_color_context.as_ref()
-        } else if scrgb_destination {
+        let destination_context = if scrgb_destination {
             self.scrgb_color_context.as_ref()
         } else {
             self.sdr_destination_context()
@@ -1629,19 +1416,7 @@ impl Renderer {
                 }
             }
         };
-        // The HDR10 backbuffer quantizes PQ; encode after every linear stage.
-        let output_encoding = self
-            .hdr_output_color_management_effect
-            .as_ref()
-            .filter(|_| !direct_to_backbuffer);
-        self.effect_output = match (output_encoding, scene) {
-            (Some(output_encoding), Some(scene)) => {
-                unsafe { output_encoding.SetInput(0, &scene, true) };
-                unsafe { output_encoding.GetOutput() }.ok()
-            }
-            (None, scene) => scene,
-            (Some(_), None) => None,
-        };
+        self.effect_output = scene;
     }
 
     pub fn clear_image(&mut self) {

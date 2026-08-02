@@ -217,7 +217,6 @@ fn output_mode(
 ) -> OutputMode {
     OutputMode {
         hdr: capabilities.hdr,
-        bits_per_color: capabilities.bits_per_color,
         advanced_color: capabilities.advanced_color,
         display_profile,
     }
@@ -461,14 +460,8 @@ impl Application {
             }
             return color::OutputColorTarget::Srgb;
         }
-        if renderer.is_pq_output() {
-            color::OutputColorTarget::Pq {
-                sdr_white_boost: self.sdr_white_boost,
-            }
-        } else {
-            color::OutputColorTarget::ScrgbLinear {
-                sdr_white_boost: self.sdr_white_boost,
-            }
+        color::OutputColorTarget::ScrgbLinear {
+            sdr_white_boost: self.sdr_white_boost,
         }
     }
 
