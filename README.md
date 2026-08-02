@@ -58,9 +58,6 @@ Decoded by built-in codecs:
 | APNG | png |
 | Animated WebP | libwebp |
 
-The built-in decoder matches Store extensions except for 10-bit SDR files,
-which it reads at 8 bits.
-
 Decoded by Windows Imaging Component codecs:
 
 | Format | Notes |
