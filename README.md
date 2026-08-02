@@ -13,7 +13,6 @@ A fast, precise, minimal image viewer for Windows.
 - Rendering
   - FP16 linear render pipeline, FP16 scRGB output
   - HDR passthrough on HDR displays, HDR tone-mapped on SDR displays
-  - Native 10-bit output on deep-color displays
   - Output dither: Ordered or Fruit shader
   - Color management: Windows Advanced Color with WCG/HDR, PQ/HLG, embedded/display ICC profiles
 - Browsing
@@ -75,7 +74,7 @@ zip, 7z, rar, tar, and cbz / cbr / cb7 / cbt.
 
 ## Requirements
 
-- Windows 11 24H2 or later, x86-64
+- Windows 11 23H2 or later, x86-64
 - Direct3D 12 capable GPU
 
 ## Building
