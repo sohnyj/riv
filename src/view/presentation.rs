@@ -6,8 +6,8 @@ use windows::Win32::Graphics::CompositionSwapchain::{
 };
 use windows::Win32::Graphics::Direct2D::ID2D1Bitmap1;
 use windows::Win32::Graphics::Direct3D11::{
-    D3D11_BIND_RENDER_TARGET, D3D11_BIND_SHADER_RESOURCE, D3D11_RESOURCE_MISC_SHARED,
-    D3D11_RESOURCE_MISC_SHARED_NTHANDLE, D3D11_TEXTURE2D_DESC, D3D11_USAGE_DEFAULT, ID3D11Device,
+    D3D11_CREATE_DEVICE_FLAG, D3D11_CREATE_DEVICE_PREVENT_INTERNAL_THREADING_OPTIMIZATIONS,
+    D3D11_RESOURCE_MISC_SHARED, D3D11_RESOURCE_MISC_SHARED_NTHANDLE, ID3D11Device,
     ID3D11DeviceContext, ID3D11RenderTargetView, ID3D11Texture2D,
 };
 use windows::Win32::Graphics::DirectComposition::{
@@ -15,12 +15,16 @@ use windows::Win32::Graphics::DirectComposition::{
     DCompositionCreateSurfaceHandle, IDCompositionDevice, IDCompositionTarget, IDCompositionVisual,
 };
 use windows::Win32::Graphics::Dxgi::Common::{
-    DXGI_ALPHA_MODE_IGNORE, DXGI_COLOR_SPACE_TYPE, DXGI_FORMAT, DXGI_SAMPLE_DESC,
+    DXGI_ALPHA_MODE_IGNORE, DXGI_COLOR_SPACE_TYPE, DXGI_FORMAT,
 };
 use windows::Win32::Graphics::Dxgi::IDXGIDevice;
 use windows::Win32::System::LibraryLoader::{GetProcAddress, LoadLibraryW};
 use windows::Win32::System::Threading::WaitForSingleObjectEx;
 use windows::core::{GUID, HRESULT, IUnknown, Interface, Result, s, w};
+
+/// The presentation factory refuses devices created without this flag.
+pub const REQUIRED_DEVICE_FLAG: D3D11_CREATE_DEVICE_FLAG =
+    D3D11_CREATE_DEVICE_PREVENT_INTERNAL_THREADING_OPTIMIZATIONS;
 
 /// One presentation buffer with its render bindings; the event signals availability.
 pub struct BufferSlot {
@@ -46,8 +50,8 @@ pub struct CompositionPresenter {
     surface_handle: HANDLE,
     buffers: Vec<BufferSlot>,
     next_buffer_index: usize,
-    /// Format and size of the current ring, so an unchanged target skips reallocation.
-    allocated: Option<(DXGI_FORMAT, (u32, u32))>,
+    /// Format, size, and count of the current ring, so an unchanged target skips reallocation.
+    allocated: Option<(DXGI_FORMAT, (u32, u32), usize)>,
     _composition_device: IDCompositionDevice,
     _composition_target: IDCompositionTarget,
     _composition_visual: IDCompositionVisual,
@@ -167,12 +171,12 @@ impl CompositionPresenter {
         size: (u32, u32),
         count: usize,
     ) -> Result<()> {
-        if self.allocated == Some((format, size)) && self.buffers.len() == count {
+        if self.allocated == Some((format, size, count)) {
             return Ok(());
         }
         self.allocated = None;
         self.allocate_buffers(d3d_device, format, size, count)?;
-        self.allocated = Some((format, size));
+        self.allocated = Some((format, size, count));
         Ok(())
     }
 
@@ -186,29 +190,14 @@ impl CompositionPresenter {
     ) -> Result<()> {
         self.buffers.clear();
         self.next_buffer_index = 0;
-        let description = D3D11_TEXTURE2D_DESC {
-            Width: size.0,
-            Height: size.1,
-            MipLevels: 1,
-            ArraySize: 1,
-            Format: format,
-            SampleDesc: DXGI_SAMPLE_DESC {
-                Count: 1,
-                Quality: 0,
-            },
-            Usage: D3D11_USAGE_DEFAULT,
-            BindFlags: (D3D11_BIND_RENDER_TARGET.0 | D3D11_BIND_SHADER_RESOURCE.0) as u32,
-            // Shareable but not displayable: composition only, never independent flip.
-            MiscFlags: (D3D11_RESOURCE_MISC_SHARED.0 | D3D11_RESOURCE_MISC_SHARED_NTHANDLE.0)
-                as u32,
-            ..Default::default()
-        };
         for _ in 0..count {
-            let mut texture = None;
-            unsafe {
-                d3d_device.CreateTexture2D(&raw const description, None, Some(&raw mut texture))?
-            };
-            let texture = texture.ok_or_else(windows::core::Error::empty)?;
+            // Shareable but not displayable: composition only, never independent flip.
+            let texture = crate::view::create_render_texture(
+                d3d_device,
+                size,
+                format,
+                D3D11_RESOURCE_MISC_SHARED | D3D11_RESOURCE_MISC_SHARED_NTHANDLE,
+            )?;
             let buffer = unsafe {
                 self.manager
                     .AddBufferFromResource(&texture.cast::<IUnknown>()?)
@@ -253,10 +242,7 @@ impl CompositionPresenter {
 
     /// Shows the drawn slot and advances the ring.
     pub fn present_next(&mut self, d3d_context: &ID3D11DeviceContext) -> Result<()> {
-        let slot = self
-            .buffers
-            .get(self.next_buffer_index)
-            .ok_or_else(windows::core::Error::empty)?;
+        let slot = self.next_slot().ok_or_else(windows::core::Error::empty)?;
         unsafe {
             self.surface.SetBuffer(&slot.buffer)?;
             // The manager tracks submitted work; make sure the frame is submitted.

@@ -31,10 +31,9 @@ use windows::Win32::Graphics::Direct3D::{
 };
 use windows::Win32::Graphics::Direct3D11::{
     D3D11_CPU_ACCESS_READ, D3D11_CREATE_DEVICE_BGRA_SUPPORT, D3D11_CREATE_DEVICE_FLAG,
-    D3D11_CREATE_DEVICE_PREVENT_INTERNAL_THREADING_OPTIMIZATIONS, D3D11_MAP_READ,
-    D3D11_MAPPED_SUBRESOURCE, D3D11_SDK_VERSION, D3D11_TEXTURE2D_DESC, D3D11_USAGE_STAGING,
-    D3D11CreateDevice, ID3D11Device, ID3D11DeviceContext, ID3D11RenderTargetView,
-    ID3D11ShaderResourceView, ID3D11Texture2D,
+    D3D11_MAP_READ, D3D11_MAPPED_SUBRESOURCE, D3D11_RESOURCE_MISC_FLAG, D3D11_SDK_VERSION,
+    D3D11_TEXTURE2D_DESC, D3D11_USAGE_STAGING, D3D11CreateDevice, ID3D11Device,
+    ID3D11DeviceContext, ID3D11RenderTargetView, ID3D11ShaderResourceView, ID3D11Texture2D,
 };
 use windows::Win32::Graphics::Dxgi::Common::{
     DXGI_ALPHA_MODE_IGNORE, DXGI_COLOR_SPACE_RGB_FULL_G10_NONE_P709,
@@ -62,7 +61,7 @@ use crate::image::decode::{
     icc_same_space, maximum_resource_bytes,
 };
 use crate::view::dither::DitherMode;
-use crate::view::presentation::CompositionPresenter;
+use crate::view::presentation::{self, CompositionPresenter};
 use crate::view::quantize::QuantizePass;
 
 /// Creation and every ResizeBuffers must pass the same swap-chain flags.
@@ -245,9 +244,7 @@ pub struct GraphicsDevice {
 
 /// Hardware when available, WARP otherwise.
 pub fn create_device() -> Result<GraphicsDevice> {
-    // The presentation factory rejects devices with internal threading optimizations.
-    let presentation_flags = D3D11_CREATE_DEVICE_BGRA_SUPPORT
-        | D3D11_CREATE_DEVICE_PREVENT_INTERNAL_THREADING_OPTIMIZATIONS;
+    let presentation_flags = D3D11_CREATE_DEVICE_BGRA_SUPPORT | presentation::REQUIRED_DEVICE_FLAG;
     // D3D11 WARP is documented only through 11_1; shader model 5.0 needs no more.
     create_d3d_device(
         D3D_DRIVER_TYPE_HARDWARE,
@@ -636,34 +633,32 @@ impl Renderer {
             display_profile.as_ref(),
         );
 
+        let (backbuffer_format, color_space) =
+            Self::mode_format_and_color_space(is_hdr_output, is_sdr_wide_gamut);
         // Any composition setup failure keeps the proven hwnd swapchain path.
         let composition =
             CompositionPresenter::new(&d3d_device, window).and_then(|mut presenter| {
-                let (format, color_space) =
-                    Self::mode_format_and_color_space(is_hdr_output, is_sdr_wide_gamut);
                 presenter.set_color_space(color_space).ok()?;
                 presenter
                     .ensure_buffers(
                         &d3d_device,
-                        format,
+                        backbuffer_format,
                         (width, height),
                         PRESENTATION_BUFFER_COUNT,
                     )
                     .ok()?;
-                Some((presenter, format))
+                Some(presenter)
             });
-        let (present_target, backbuffer_format) = match composition {
-            Some((presenter, format)) => (PresentTarget::Composition(presenter), format),
+        let present_target = match composition {
+            Some(presenter) => PresentTarget::Composition(presenter),
             None => {
-                let (format, color_space) =
-                    Self::mode_format_and_color_space(is_hdr_output, is_sdr_wide_gamut);
                 let swap_chain = unsafe {
                     let adapter = dxgi_device.GetAdapter()?;
                     let factory: IDXGIFactory2 = adapter.GetParent()?;
                     let description = DXGI_SWAP_CHAIN_DESC1 {
                         Width: width,
                         Height: height,
-                        Format: format,
+                        Format: backbuffer_format,
                         SampleDesc: DXGI_SAMPLE_DESC {
                             Count: 1,
                             Quality: 0,
@@ -695,13 +690,10 @@ impl Renderer {
                     .cast::<IDXGISwapChain2>()
                     .ok()
                     .map(|swap_chain2| unsafe { swap_chain2.GetFrameLatencyWaitableObject() });
-                (
-                    PresentTarget::SwapChain {
-                        swap_chain,
-                        frame_latency_waitable,
-                    },
-                    format,
-                )
+                PresentTarget::SwapChain {
+                    swap_chain,
+                    frame_latency_waitable,
+                }
             }
         };
         // FP16 leaves quantization to DWM; the UNORM backbuffers keep the pass.
@@ -878,10 +870,11 @@ impl Renderer {
 
     /// UNORM16 scene the quantize pass reads, as the D2D target.
     fn create_scene_target(&mut self) -> Result<()> {
-        let scene_texture = crate::view::create_scene_texture(
+        let scene_texture = crate::view::create_render_texture(
             &self.d3d_device,
             self.backbuffer_size,
             DXGI_FORMAT_R16G16B16A16_UNORM,
+            D3D11_RESOURCE_MISC_FLAG(0),
         )?;
         let mut scene_view = None;
         unsafe {
@@ -904,61 +897,33 @@ impl Renderer {
     }
 
     fn create_target(&mut self) -> Result<()> {
-        if matches!(self.present_target, PresentTarget::SwapChain { .. }) {
-            self.create_swap_chain_target()
+        if let PresentTarget::SwapChain { swap_chain, .. } = &self.present_target {
+            let swap_chain = swap_chain.clone();
+            self.create_swap_chain_target(&swap_chain)
         } else {
             self.create_composition_target()
         }
     }
 
-    fn create_swap_chain_target(&mut self) -> Result<()> {
-        let PresentTarget::SwapChain { swap_chain, .. } = &self.present_target else {
-            return Err(windows::core::Error::empty());
-        };
-        let swap_chain = swap_chain.clone();
-        let quantizing = self.quantize_pass.is_some();
-        let scene_format = if quantizing {
-            // D2D draws the UNORM16 scene; the pass dithers and quantizes to the backbuffer.
-            DXGI_FORMAT_R16G16B16A16_UNORM
-        } else {
-            self.backbuffer_format
-        };
-        let properties = Self::target_bitmap_properties(scene_format);
-        unsafe {
-            let buffer: ID3D11Texture2D = swap_chain.GetBuffer(0)?;
-            let mut buffer_description = D3D11_TEXTURE2D_DESC::default();
-            buffer.GetDesc(&raw mut buffer_description);
-            self.backbuffer_size = (buffer_description.Width, buffer_description.Height);
-            let surface: IDXGISurface = if quantizing {
-                let scene_texture = crate::view::create_scene_texture(
-                    &self.d3d_device,
-                    self.backbuffer_size,
-                    scene_format,
-                )?;
-                let mut scene_view = None;
-                self.d3d_device.CreateShaderResourceView(
-                    &scene_texture,
-                    None,
-                    Some(&raw mut scene_view),
-                )?;
-                self.scene_shader_resource_view = scene_view;
-                let mut backbuffer_view = None;
-                self.d3d_device.CreateRenderTargetView(
-                    &buffer,
-                    None,
-                    Some(&raw mut backbuffer_view),
-                )?;
-                self.backbuffer_render_target_view = backbuffer_view;
-                scene_texture.cast()?
-            } else {
-                buffer.cast()?
-            };
-            let target = self
-                .d2d_context
-                .CreateBitmapFromDxgiSurface(&surface, Some(&raw const properties))?;
-            self.d2d_context.SetTarget(&target);
-            self.target = Some(target);
+    fn create_swap_chain_target(&mut self, swap_chain: &IDXGISwapChain1) -> Result<()> {
+        let buffer: ID3D11Texture2D = unsafe { swap_chain.GetBuffer(0) }?;
+        let mut buffer_description = D3D11_TEXTURE2D_DESC::default();
+        unsafe { buffer.GetDesc(&raw mut buffer_description) };
+        self.backbuffer_size = (buffer_description.Width, buffer_description.Height);
+        if self.quantize_pass.is_some() {
+            // The pass dithers and quantizes the scene into the backbuffer.
+            self.backbuffer_render_target_view =
+                crate::view::create_render_target_view(&self.d3d_device, &buffer)?;
+            return self.create_scene_target();
         }
+        let properties = Self::target_bitmap_properties(self.backbuffer_format);
+        let surface: IDXGISurface = buffer.cast()?;
+        let target = unsafe {
+            self.d2d_context
+                .CreateBitmapFromDxgiSurface(&surface, Some(&raw const properties))?
+        };
+        unsafe { self.d2d_context.SetTarget(&target) };
+        self.target = Some(target);
         Ok(())
     }
 
@@ -977,15 +942,8 @@ impl Renderer {
                 if quantizing {
                     // The pass writes each presentation buffer; D2D draws the shared scene.
                     slot.d2d_target = None;
-                    let mut view = None;
-                    unsafe {
-                        self.d3d_device.CreateRenderTargetView(
-                            &slot.texture,
-                            None,
-                            Some(&raw mut view),
-                        )?;
-                    }
-                    slot.render_target_view = view;
+                    slot.render_target_view =
+                        crate::view::create_render_target_view(&self.d3d_device, &slot.texture)?;
                 } else {
                     // D2D draws each presentation buffer directly; render retargets per frame.
                     slot.render_target_view = None;
@@ -1018,8 +976,8 @@ impl Renderer {
         self.target = None;
         self.scene_shader_resource_view = None;
         self.backbuffer_render_target_view = None;
-        match &mut self.present_target {
-            PresentTarget::SwapChain { swap_chain, .. } => unsafe {
+        if let PresentTarget::SwapChain { swap_chain, .. } = &mut self.present_target {
+            unsafe {
                 swap_chain.ResizeBuffers(
                     0,
                     width,
@@ -1027,11 +985,10 @@ impl Renderer {
                     DXGI_FORMAT_UNKNOWN,
                     SWAP_CHAIN_FLAGS,
                 )?;
-            },
-            PresentTarget::Composition(_) => {
-                self.backbuffer_size = (width, height);
             }
         }
+        // The swapchain target re-derives this from the buffer it gets back.
+        self.backbuffer_size = (width, height);
         self.create_target()
     }
 
