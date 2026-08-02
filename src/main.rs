@@ -935,7 +935,7 @@ impl Application {
 
     fn rebuild_renderer(&mut self, window: HWND) -> Result<()> {
         self.recover_current_pixels();
-        // The old swapchain must release the window first: DXGI allows one per window.
+        // The old present target must release the window first: either kind allows one per window.
         self.renderer = None;
         self.register_upload_device();
         let color::DisplayColorInfo {
@@ -1143,7 +1143,7 @@ impl Application {
             return;
         };
         if renderer.render(decision, clear_color, draw).is_err() {
-            // Device lost: drop the swapchain, rebuild once and retry.
+            // Device or presentation loss: drop the renderer, rebuild once and retry.
             self.renderer = None;
             if self.rebuild_renderer(window).is_ok()
                 && let Some(renderer) = &mut self.renderer
@@ -2011,7 +2011,7 @@ fn main() -> Result<()> {
         hIcon: application_icon,
         hIconSm: application_icon,
         hCursor: unsafe { LoadCursorW(None, IDC_ARROW)? },
-        // No class brush: the swapchain owns the client area; a system erase would flash on resize.
+        // No class brush: the renderer owns the client area; a system erase would flash on resize.
         hbrBackground: HBRUSH::default(),
         lpszClassName: class_name,
         ..Default::default()
@@ -2025,11 +2025,11 @@ fn main() -> Result<()> {
     Ok(())
 }
 
-/// Pumps messages and waits for the swap chain outside the paint, so input keeps flowing.
+/// Pumps messages and waits for the frame slot outside the paint, so input keeps flowing.
 fn run_message_loop(window: HWND) {
     let mut message = MSG::default();
     loop {
-        // Everything but the paint: these never wait on the swap chain.
+        // Everything but the paint: these never wait on the frame slot.
         while peek_except_paint(&raw mut message) {
             if message.message == WM_QUIT {
                 return;
