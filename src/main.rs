@@ -1494,7 +1494,7 @@ fn dispatch_action(application: &mut Application, window: HWND, action: Action) 
             } else {
                 "Off"
             };
-            application.show_status_text(window, format!("Preserve Zoom: {state}"));
+            application.show_status_text(window, format!("Preserve zoom: {state}"));
             application.request_render(window);
         }
         Action::ShowFileInfo => {
@@ -1514,7 +1514,7 @@ fn dispatch_action(application: &mut Application, window: HWND, action: Action) 
                 "Off"
             };
             // The pill spells out the full option name the short menu label elides.
-            application.show_status_text(window, format!("Loop within Folder: {state}"));
+            application.show_status_text(window, format!("Loop within folder: {state}"));
             application.commit_options(window);
         }
         Action::Slideshow => application.toggle_slideshow(window),
@@ -1590,7 +1590,7 @@ fn dispatch_action(application: &mut Application, window: HWND, action: Action) 
                     SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE,
                 )
             };
-            application.show_status_text(window, format!("Always on Top: {state}"));
+            application.show_status_text(window, format!("Always on top: {state}"));
             application.request_render(window);
         }
         Action::Fullscreen => {

@@ -188,8 +188,8 @@ impl MenuBuilder {
         if !self.state_snapshot.recent_names.is_empty() {
             self.append_separator(recent)?;
         }
-        self.append_action_labeled(recent, Action::ClearRecents, "Clear Recents")?;
-        self.append_submenu(menu, recent, "Open Recent", true)?;
+        self.append_action_labeled(recent, Action::ClearRecents, "Clear recents")?;
+        self.append_submenu(menu, recent, "Open recent", true)?;
         let open_with = unsafe { CreatePopupMenu()? };
         let open_with_items = self.state_snapshot.open_with_items.clone();
         for (index, label) in open_with_items.iter().enumerate() {
@@ -201,12 +201,12 @@ impl MenuBuilder {
         if !open_with_items.is_empty() {
             self.append_separator(open_with)?;
         }
-        self.append_action_labeled(open_with, Action::OpenWithOther, "Other Application...")?;
+        self.append_action_labeled(open_with, Action::OpenWithOther, "Other application...")?;
         // No on-disk file (archive member or URL) means nothing to hand off.
         self.append_submenu(
             menu,
             open_with,
-            "Open With",
+            "Open with",
             self.state_snapshot.has_file_on_disk,
         )?;
         self.append_separator(menu)?;
@@ -258,9 +258,9 @@ impl MenuBuilder {
         let view = unsafe { CreatePopupMenu()? };
         // The label names the axis a click switches to (slideshow convention).
         let fit_label = if self.state_snapshot.fit_height {
-            "Fit Width"
+            "Fit width"
         } else {
-            "Fit Height"
+            "Fit height"
         };
         self.append_action_labeled(view, Action::FitMode, fit_label)?;
         self.append_action(view, Action::PreserveZoom)?;
@@ -282,9 +282,9 @@ impl MenuBuilder {
         self.append_action(tools, Action::Delete)?;
         self.append_separator(tools)?;
         let slideshow_label = if self.state_snapshot.slideshow_active {
-            "Stop Slideshow"
+            "Stop slideshow"
         } else {
-            "Start Slideshow"
+            "Start slideshow"
         };
         self.append_action_labeled(tools, Action::Slideshow, slideshow_label)?;
         self.append_separator(tools)?;
@@ -294,9 +294,9 @@ impl MenuBuilder {
         let window = unsafe { CreatePopupMenu()? };
         self.append_action(window, Action::AlwaysOnTop)?;
         let fullscreen_label = if self.state_snapshot.fullscreen {
-            "Exit Fullscreen"
+            "Exit fullscreen"
         } else {
-            "Enter Fullscreen"
+            "Enter fullscreen"
         };
         self.append_action_labeled(window, Action::Fullscreen, fullscreen_label)?;
         self.append_submenu(menu, window, "Window", true)?;
@@ -389,10 +389,10 @@ mod menu_structure_tests {
 
     #[test]
     fn open_with_follows_the_on_disk_file() {
-        assert!(!submenu_is_grayed(state(), "Open With")); // a plain file can hand off
+        assert!(!submenu_is_grayed(state(), "Open with")); // a plain file can hand off
         let mut without_file = state();
         without_file.has_file_on_disk = false;
-        assert!(submenu_is_grayed(without_file, "Open With")); // URL or archive member cannot
+        assert!(submenu_is_grayed(without_file, "Open with")); // URL or archive member cannot
     }
 
     #[test]
@@ -437,11 +437,11 @@ mod menu_structure_tests {
         let menu = builder.build().expect("menu builds");
         let view = submenu_by_label(menu, "View");
         // The fit label names the other axis: width is current here.
-        assert_eq!(bare_label(view, 0), "Fit Height");
-        assert_eq!(bare_label(view, 1), "Preserve Zoom");
-        assert_eq!(bare_label(view, 3), "Zoom In");
-        assert_eq!(bare_label(view, 4), "Zoom Out");
-        assert_eq!(bare_label(view, 5), "Toggle Zoom");
+        assert_eq!(bare_label(view, 0), "Fit height");
+        assert_eq!(bare_label(view, 1), "Preserve zoom");
+        assert_eq!(bare_label(view, 3), "Zoom in");
+        assert_eq!(bare_label(view, 4), "Zoom out");
+        assert_eq!(bare_label(view, 5), "Toggle zoom");
 
         let mut height_state = state();
         height_state.fit_height = true;
@@ -451,7 +451,7 @@ mod menu_structure_tests {
         };
         let menu = builder.build().expect("menu builds");
         let view = submenu_by_label(menu, "View");
-        assert_eq!(bare_label(view, 0), "Fit Width");
+        assert_eq!(bare_label(view, 0), "Fit width");
     }
 
     #[test]
@@ -468,10 +468,10 @@ mod menu_structure_tests {
         let menu = builder.build().expect("menu builds");
         // GetMenuString returns the stored text; "&&" draws as a literal "&".
         assert_eq!(
-            item_label(submenu_by_label(menu, "Open Recent"), 0),
+            item_label(submenu_by_label(menu, "Open recent"), 0),
             "c&&d.png"
         );
-        assert_eq!(item_label(submenu_by_label(menu, "Open With"), 0), "E && F");
+        assert_eq!(item_label(submenu_by_label(menu, "Open with"), 0), "E && F");
         assert_eq!(
             item_label(submenu_by_label(menu, "Playlist"), 0),
             "a&&b.png"
@@ -557,8 +557,8 @@ mod menu_structure_tests {
         let expected: Vec<&str> = vec![
             "Open...",
             "Open URL...",
-            "Open Recent",
-            "Open With",
+            "Open recent",
+            "Open with",
             "", // separator
             "Playlist",
             "Loop",
@@ -567,7 +567,7 @@ mod menu_structure_tests {
             "Next",
             "Playback",
             "", // separator
-            "Show File Info",
+            "Show file info",
             "Reload",
             "", // separator
             "View",
@@ -587,8 +587,8 @@ mod menu_structure_tests {
         };
         let menu = builder.build().expect("menu builds");
         let window = submenu_by_label(menu, "Window");
-        assert_eq!(bare_label(window, 0), "Always on Top");
-        assert_eq!(bare_label(window, 1), "Enter Fullscreen");
+        assert_eq!(bare_label(window, 0), "Always on top");
+        assert_eq!(bare_label(window, 1), "Enter fullscreen");
         let tools = submenu_by_label(menu, "Tools");
         let tools_labels: Vec<String> = (0..unsafe { GetMenuItemCount(Some(tools)) })
             .map(|position| bare_label(tools, position as u32))
@@ -600,7 +600,7 @@ mod menu_structure_tests {
                 "Rename...",
                 "Delete",
                 "", // separator
-                "Start Slideshow",
+                "Start slideshow",
                 "", // separator
                 "Settings...",
             ]
