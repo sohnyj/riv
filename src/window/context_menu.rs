@@ -139,12 +139,12 @@ impl MenuBuilder {
         }
     }
 
-    /// A disabled "..." line; its hidden-name count rides the shortcut column, zero appends nothing.
+    /// A disabled line counting the names hidden on that side; zero appends nothing.
     fn append_playlist_overflow(menu: HMENU, hidden: usize) -> Result<()> {
         if hidden == 0 {
             return Ok(());
         }
-        let label = format!("...\t{hidden} more");
+        let label = format!("... {hidden} more");
         unsafe {
             AppendMenuW(
                 menu,
@@ -597,8 +597,8 @@ mod menu_structure_tests {
             assert!(MENU_ITEM_FLAGS(flags) & MF_GRAYED == MF_GRAYED);
             String::from_utf16_lossy(&text[..length as usize])
         };
-        assert_eq!(overflow_line(0), "...\t38 more");
-        assert_eq!(overflow_line(21), "...\t42 more");
+        assert_eq!(overflow_line(0), "... 38 more");
+        assert_eq!(overflow_line(21), "... 42 more");
         // The current file carries the check marker, shifted past the leading overflow line.
         let current_flags = unsafe { GetMenuState(submenu, 13, MF_BYPOSITION) };
         assert!(MENU_ITEM_FLAGS(current_flags) & MF_CHECKED == MF_CHECKED);
