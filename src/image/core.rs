@@ -2860,7 +2860,7 @@ mod navigation_direction_tests {
     }
 }
 
-/// The menu playlist shows a fixed window with the current item centered.
+/// The menu playlist shows a window of the asked size with the current item centered.
 #[cfg(test)]
 mod playlist_window_tests {
     use super::*;

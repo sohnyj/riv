@@ -37,7 +37,7 @@ use view::renderer::{
     ToneMapInfo, create_device,
 };
 use view::transform::{FitMode, Size, ViewTransform};
-use window::context_menu::{self, MenuSelection, MenuState};
+use window::context_menu::{self, MenuSelection, MenuState, MenuTarget};
 use window::dwm;
 use window::overlay::{self, Overlay, OverlayContent};
 use windows::System::DispatcherQueueController;
@@ -151,7 +151,7 @@ struct Application {
     window_title: String,
     /// The window's current monitor; a WM_MOVE re-evaluates color only when it changes.
     current_monitor: HMONITOR,
-    /// Playlist names the display fits; recomputed when the display or the monitor changes.
+    /// Playlist names the display fits; remeasured when the display, the scaling, or the monitor changes.
     playlist_capacity: usize,
     /// Inside a modal move loop, where the system invalidates but the content cannot change.
     window_moving: bool,
@@ -1464,7 +1464,7 @@ fn dispatch_action(application: &mut Application, window: HWND, action: Action) 
         }
         Action::Playlist => {
             let (x, y) = window_center(window);
-            show_menu(application, window, x, y, true);
+            show_menu(application, window, x, y, MenuTarget::Playlist);
         }
         Action::Reload => {
             let displayed = application.image_core.reload_current();
@@ -1811,7 +1811,7 @@ fn window_center(window: HWND) -> (i32, i32) {
 }
 
 /// Tracks the context menu, or just its playlist submenu, and applies what the user picked.
-fn show_menu(application: &mut Application, window: HWND, x: i32, y: i32, playlist_only: bool) {
+fn show_menu(application: &mut Application, window: HWND, x: i32, y: i32, target: MenuTarget) {
     let playlist = application
         .image_core
         .playlist_window(application.playlist_capacity);
@@ -1867,11 +1867,7 @@ fn show_menu(application: &mut Application, window: HWND, x: i32, y: i32, playli
             })
             .collect(),
     };
-    let selection = if playlist_only {
-        context_menu::show_playlist(window, state, x, y)
-    } else {
-        context_menu::show(window, state, x, y)
-    };
+    let selection = context_menu::show(window, state, x, y, target);
     // The menu pumped messages; re-fetch in case the window was destroyed.
     if let Some(selection) = selection
         && let Some(application) = application_from_window(window)
@@ -1932,11 +1928,7 @@ fn handle_key(application: &mut Application, window: HWND, virtual_key: u16) -> 
 
 fn handle_wheel(application: &mut Application, window: HWND, wheel_delta: i16) {
     let modifiers = current_modifiers();
-    let base = if wheel_delta > 0 {
-        MouseBase::WheelUp
-    } else {
-        MouseBase::WheelDown
-    };
+    let base = MouseBase::from_wheel_delta(wheel_delta);
     let Some(action) = application.bindings.lookup_mouse(modifiers, base) else {
         return;
     };
@@ -2077,10 +2069,7 @@ fn run_message_loop(window: HWND) {
             if message.message == WM_QUIT {
                 return;
             }
-            if !consume_key_binding(&message) {
-                let _ = unsafe { TranslateMessage(&raw const message) };
-                unsafe { DispatchMessageW(&raw const message) };
-            }
+            deliver_message(&message);
         }
         // A handle means the next frame still owes a wait.
         let slot_handle = application_from_window(window)
@@ -2099,11 +2088,17 @@ fn run_message_loop(window: HWND) {
         if result.0 <= 0 {
             return;
         }
-        if !consume_key_binding(&message) {
-            let _ = unsafe { TranslateMessage(&raw const message) };
-            unsafe { DispatchMessageW(&raw const message) };
-        }
+        deliver_message(&message);
     }
+}
+
+/// Bindings get first refusal, and a key they take never reaches translation or the window.
+fn deliver_message(message: &MSG) {
+    if consume_key_binding(message) {
+        return;
+    }
+    let _ = unsafe { TranslateMessage(message) };
+    unsafe { DispatchMessageW(message) };
 }
 
 /// The two ranges around WM_PAINT: only the paint is held back for a frame slot.
@@ -2475,14 +2470,8 @@ extern "system" fn window_procedure(
             }
             LRESULT(0)
         }
-        // The message loop runs the bindings, so only keys they left over arrive here.
-        WM_KEYDOWN | WM_SYSKEYDOWN => {
-            if message == WM_SYSKEYDOWN {
-                unsafe { DefWindowProcW(window, message, wparam, lparam) }
-            } else {
-                LRESULT(0)
-            }
-        }
+        // Bindings run in the message loop, so an unbound key lands here and Alt keys fall through.
+        WM_KEYDOWN => LRESULT(0),
         // Swallow Alt+chars consumed by bindings; DefWindowProc would beep.
         WM_SYSCHAR => {
             let character = char::from_u32(wparam.0 as u32).unwrap_or('\0');
@@ -2602,11 +2591,7 @@ extern "system" fn window_procedure(
         }
         WM_XBUTTONDOWN => {
             if let Some(application) = application_from_window(window) {
-                let base = if (wparam.0 >> 16) & 0xFFFF == 1 {
-                    MouseBase::Back
-                } else {
-                    MouseBase::Forward
-                };
+                let base = MouseBase::from_xbutton_flags((wparam.0 >> 16) as u16);
                 if let Some(action) = application.bindings.lookup_mouse(current_modifiers(), base) {
                     dispatch_action(application, window, action);
                 }
@@ -2615,13 +2600,12 @@ extern "system" fn window_procedure(
         }
         WM_CONTEXTMENU => {
             if let Some(application) = application_from_window(window) {
-                let (mut x, mut y) = point_from_lparam(lparam);
-                if x == -1 && y == -1 {
-                    let (center_x, center_y) = window_center(window);
-                    x = center_x;
-                    y = center_y;
-                }
-                show_menu(application, window, x, y, false);
+                // The keyboard menu key reports no point of its own.
+                let (x, y) = match point_from_lparam(lparam) {
+                    (-1, -1) => window_center(window),
+                    point => point,
+                };
+                show_menu(application, window, x, y, MenuTarget::Full);
             }
             LRESULT(0)
         }

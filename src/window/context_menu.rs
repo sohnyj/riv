@@ -6,20 +6,21 @@ use windows::Win32::Foundation::{HWND, RECT};
 use windows::Win32::Graphics::Gdi::{
     GetMonitorInfoW, MONITOR_DEFAULTTONEAREST, MONITORINFO, MonitorFromWindow,
 };
-use windows::Win32::UI::HiDpi::{
-    AdjustWindowRectExForDpi, GetDpiForWindow, GetSystemMetricsForDpi,
-};
+use windows::Win32::UI::HiDpi::{AdjustWindowRectExForDpi, GetSystemMetricsForDpi};
 use windows::Win32::UI::WindowsAndMessaging::{
-    AppendMenuW, CreatePopupMenu, DestroyMenu, HMENU, MF_CHECKED, MF_DISABLED, MF_GRAYED, MF_POPUP,
-    MF_SEPARATOR, MF_STRING, SM_CYMENU, TPM_CENTERALIGN, TPM_RETURNCMD, TPM_RIGHTBUTTON,
-    TPM_VCENTERALIGN, TrackPopupMenuEx, WINDOW_EX_STYLE, WS_OVERLAPPEDWINDOW,
+    AppendMenuW, CreatePopupMenu, DestroyMenu, HMENU, MENU_ITEM_FLAGS, MF_CHECKED, MF_DISABLED,
+    MF_GRAYED, MF_POPUP, MF_SEPARATOR, MF_STRING, SM_CYMENU, TPM_CENTERALIGN, TPM_RETURNCMD,
+    TPM_RIGHTBUTTON, TPM_VCENTERALIGN, TrackPopupMenuEx, WINDOW_EX_STYLE, WS_OVERLAPPEDWINDOW,
 };
 use windows::core::{HSTRING, Result};
 
 use crate::actions::{Action, ActivationGate};
 
-/// Playlist size cap, and the size to use when the display cannot be measured.
-pub const PLAYLIST_CAPACITY: usize = 25;
+/// What one menu level is meant to hold, whatever the display measures.
+const MENU_LEVEL_CAPACITY: usize = 25;
+
+/// Names to show when the display cannot be measured: what a 720p screen holds at the heaviest scaling.
+const UNMEASURED_CAPACITY: usize = 9;
 
 #[derive(Clone, Copy)]
 pub enum MenuSelection {
@@ -94,6 +95,25 @@ impl MenuBuilder {
         self.append_action_labeled(menu, action, action.label())
     }
 
+    /// The one place text reaches the menu, so every label is escaped exactly once.
+    fn append_text(
+        menu: HMENU,
+        flags: MENU_ITEM_FLAGS,
+        identifier: usize,
+        text: &str,
+    ) -> Result<()> {
+        let escaped = escape_mnemonics(text);
+        unsafe { AppendMenuW(menu, flags, identifier, &HSTRING::from(escaped.as_str())) }
+    }
+
+    /// An action's label with its shortcut in a tab-separated column.
+    fn menu_text(&self, action: Action, label: &str) -> String {
+        match self.state_snapshot.shortcuts.get(action.name()) {
+            Some(shortcut) => format!("{label}\t{shortcut}"),
+            None => label.to_string(),
+        }
+    }
+
     fn append_action_labeled(&mut self, menu: HMENU, action: Action, label: &str) -> Result<()> {
         self.entries.push(MenuSelection::Action(action));
         let identifier = self.entries.len();
@@ -117,26 +137,14 @@ impl MenuBuilder {
         if checked {
             flags |= MF_CHECKED;
         }
-        // Text after a tab renders as the right-aligned shortcut column.
-        let label = escape_mnemonics(label);
-        let text = match self.state_snapshot.shortcuts.get(action.name()) {
-            Some(shortcut) => format!("{label}\t{shortcut}"),
-            None => label,
-        };
-        unsafe { AppendMenuW(menu, flags, identifier, &HSTRING::from(text.as_str())) }
+        let text = self.menu_text(action, label);
+        Self::append_text(menu, flags, identifier, &text)
     }
 
     fn append_open_with_entry(&mut self, menu: HMENU, index: usize, label: &str) -> Result<()> {
         self.entries.push(MenuSelection::OpenWithEntry(index));
         let identifier = self.entries.len();
-        unsafe {
-            AppendMenuW(
-                menu,
-                MF_STRING,
-                identifier,
-                &HSTRING::from(escape_mnemonics(label).as_str()),
-            )
-        }
+        Self::append_text(menu, MF_STRING, identifier, label)
     }
 
     /// A disabled line counting the names hidden on that side; zero appends nothing.
@@ -145,14 +153,7 @@ impl MenuBuilder {
             return Ok(());
         }
         let label = format!("... {hidden} more");
-        unsafe {
-            AppendMenuW(
-                menu,
-                MF_STRING | MF_GRAYED | MF_DISABLED,
-                0,
-                &HSTRING::from(label.as_str()),
-            )
-        }
+        Self::append_text(menu, MF_STRING | MF_GRAYED | MF_DISABLED, 0, &label)
     }
 
     fn append_playlist_entry(&mut self, menu: HMENU, slot: usize, label: &str) -> Result<()> {
@@ -164,14 +165,7 @@ impl MenuBuilder {
         if self.state_snapshot.playlist_current_slot == Some(slot) {
             flags |= MF_CHECKED;
         }
-        unsafe {
-            AppendMenuW(
-                menu,
-                flags,
-                identifier,
-                &HSTRING::from(escape_mnemonics(label).as_str()),
-            )
-        }
+        Self::append_text(menu, flags, identifier, label)
     }
 
     fn append_separator(&self, menu: HMENU) -> Result<()> {
@@ -189,7 +183,7 @@ impl MenuBuilder {
         if !enabled {
             flags |= MF_GRAYED | MF_DISABLED;
         }
-        unsafe { AppendMenuW(menu, flags, submenu.0 as usize, &HSTRING::from(label)) }
+        Self::append_text(menu, flags, submenu.0 as usize, label)
     }
 
     fn build(&mut self) -> Result<HMENU> {
@@ -237,16 +231,13 @@ impl MenuBuilder {
         Self::append_playlist_overflow(playlist, self.state_snapshot.playlist_hidden_after)?;
         self.playlist_menu = playlist;
         // The playlist key opens this same submenu, so the label carries that shortcut.
-        let playlist_label = match self.state_snapshot.shortcuts.get(Action::Playlist.name()) {
-            Some(shortcut) => format!("Playlist\t{shortcut}"),
-            None => "Playlist".to_string(),
-        };
+        let playlist_label = self.menu_text(Action::Playlist, Action::Playlist.label());
         // No folder listing means nothing to jump to.
         self.append_submenu(
             menu,
             playlist,
             &playlist_label,
-            self.state_snapshot.has_navigation_targets,
+            self.gate_satisfied(Action::Playlist.gate()),
         )?;
         self.append_action(menu, Action::Loop)?;
         self.append_separator(menu)?;
@@ -356,60 +347,57 @@ fn title_bar_height(dpi: u32) -> i32 {
 
 /// Names that leave both "..." lines room; odd, so the current file sits in the middle.
 fn capacity_for_height(usable_height: i32, row_height: i32) -> usize {
-    let names = usable_height / row_height.max(1) - 2;
-    if names < 3 {
-        return 1;
-    }
-    // An even count would seat the current file off center by half a row.
-    let names = if names % 2 == 0 { names - 1 } else { names };
-    // One menu level holds 25 items at most, however tall the display is.
-    (names as usize).min(PLAYLIST_CAPACITY)
+    let name_count = usable_height / row_height.max(1) - 2;
+    let odd_name_count = if name_count % 2 == 0 {
+        name_count - 1
+    } else {
+        name_count
+    };
+    // Too short to center a list still offers the current file; too tall stops at a menu level.
+    (odd_name_count.max(1) as usize).min(MENU_LEVEL_CAPACITY)
 }
 
 /// Names the display shows with the taskbar and the title bar left clear.
 pub fn playlist_capacity(window: HWND) -> usize {
     let monitor = unsafe { MonitorFromWindow(window, MONITOR_DEFAULTTONEAREST) };
-    let mut info = MONITORINFO {
+    let mut monitor_info = MONITORINFO {
         cbSize: size_of::<MONITORINFO>() as u32,
         ..Default::default()
     };
-    if !unsafe { GetMonitorInfoW(monitor, &raw mut info) }.as_bool() {
-        return PLAYLIST_CAPACITY;
+    // Without a measurement, guess low so the menu still fits a small display.
+    if !unsafe { GetMonitorInfoW(monitor, &raw mut monitor_info) }.as_bool() {
+        return UNMEASURED_CAPACITY;
     }
-    let dpi = match unsafe { GetDpiForWindow(window) } {
-        0 => 96,
-        dpi => dpi,
-    };
+    let dpi = super::dpi_for_window(window);
     // The work area already excludes the taskbar.
-    let work_height = info.rcWork.bottom - info.rcWork.top;
+    let work_height = monitor_info.rcWork.bottom - monitor_info.rcWork.top;
     capacity_for_height(work_height - title_bar_height(dpi), menu_row_height(dpi))
 }
 
-pub fn show(window: HWND, state: MenuState, x: i32, y: i32) -> Option<MenuSelection> {
-    track(window, state, x, y, false)
+/// Which menu goes on screen; one build serves both.
+#[derive(Clone, Copy)]
+pub enum MenuTarget {
+    /// The whole context menu, at the point.
+    Full,
+    /// Only the Playlist submenu, centered on the point.
+    Playlist,
 }
 
-/// The same menu opened at its Playlist submenu, centered on the point.
-pub fn show_playlist(window: HWND, state: MenuState, x: i32, y: i32) -> Option<MenuSelection> {
-    track(window, state, x, y, true)
-}
-
-fn track(
+pub fn show(
     window: HWND,
     state: MenuState,
     x: i32,
     y: i32,
-    playlist_only: bool,
+    target: MenuTarget,
 ) -> Option<MenuSelection> {
     let mut builder = MenuBuilder::new(state);
     let menu = builder.build().ok()?;
-    let (tracked, flags) = if playlist_only {
-        (
+    let (tracked, flags) = match target {
+        MenuTarget::Full => (menu, TPM_RETURNCMD | TPM_RIGHTBUTTON),
+        MenuTarget::Playlist => (
             builder.playlist_menu,
             TPM_RETURNCMD | TPM_RIGHTBUTTON | TPM_CENTERALIGN | TPM_VCENTERALIGN,
-        )
-    } else {
-        (menu, TPM_RETURNCMD | TPM_RIGHTBUTTON)
+        ),
     };
     let selected = unsafe { TrackPopupMenuEx(tracked, flags.0, x, y, window, None) };
     // Destroying the menu takes its submenus with it.
@@ -624,11 +612,13 @@ mod menu_structure_tests {
         // 1080p at 200%: work area 984 less the title bar, rows of about 47.
         assert_eq!(capacity_for_height(920, 47), 17);
         // A tall display stops at the cap one menu level is meant to hold.
-        assert_eq!(capacity_for_height(2000, 35), PLAYLIST_CAPACITY);
+        assert_eq!(capacity_for_height(2000, 35), MENU_LEVEL_CAPACITY);
         for height in 0..2000 {
             let names = capacity_for_height(height, 35);
             assert!(names % 2 == 1, "{names} names for {height} pixels");
         }
+        // Where the unmeasured count comes from: a 720p work area at 200% scaling.
+        assert_eq!(capacity_for_height(624 - 62, 47), UNMEASURED_CAPACITY);
     }
 
     #[test]

@@ -35,7 +35,7 @@ use crate::bindings;
 use crate::dialogs::about;
 use crate::dialogs::resource::*;
 use crate::dialogs::shortcut_capture;
-use crate::image::decode;
+use crate::image;
 use crate::settings::{Options, SettingsFile};
 use crate::shell::{file_association, start_menu};
 use crate::text::wide;
@@ -1000,14 +1000,7 @@ fn initialize_association_page(state: &mut OptionsState) {
         )
     };
 
-    let mut formats: Vec<(&'static str, &'static [&'static str])> =
-        decode::format_groups().collect();
-    // Archive extensions appear only when archiveint.dll provides the support.
-    if archive_reader::available() {
-        formats.extend(archive_reader::format_groups());
-    }
-    formats.sort_by_key(|(name, _)| *name);
-    for (name, extension_list) in formats {
+    for (name, extension_list) in image::sorted_format_groups(archive_reader::available()) {
         if extension_list.len() == 1 {
             let extension = format!(".{}", extension_list[0]);
             let checked = state.saved_associations.contains(&extension);

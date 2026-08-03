@@ -1,4 +1,4 @@
-//! Keyboard/mouse binding encoding, defaults, and lookup.
+//! Keyboard/mouse binding encoding, defaults, lookup, and the live input readers.
 
 use serde_json::{Map, Value};
 
@@ -32,6 +32,7 @@ pub fn current_modifiers() -> u8 {
 }
 
 #[derive(Clone, Copy, PartialEq, Eq)]
+#[repr(u8)]
 pub enum MouseBase {
     DoubleClick,
     WheelButton,
@@ -39,6 +40,45 @@ pub enum MouseBase {
     Forward,
     WheelUp,
     WheelDown,
+}
+
+impl MouseBase {
+    /// Recovers a base sent as its discriminant; the capture dialog packs one into a WPARAM.
+    pub fn from_index(index: u8) -> Option<Self> {
+        match index {
+            0 => Some(Self::DoubleClick),
+            1 => Some(Self::WheelButton),
+            2 => Some(Self::Back),
+            3 => Some(Self::Forward),
+            4 => Some(Self::WheelUp),
+            5 => Some(Self::WheelDown),
+            _ => None,
+        }
+    }
+
+    /// The discriminant `from_index` reads back.
+    pub fn index(self) -> u8 {
+        self as u8
+    }
+
+    /// Wheel messages carry the direction in the sign of their delta.
+    pub fn from_wheel_delta(delta: i16) -> Self {
+        if delta > 0 {
+            Self::WheelUp
+        } else {
+            Self::WheelDown
+        }
+    }
+
+    /// The high word of an X button message names which of the two was pressed.
+    pub fn from_xbutton_flags(flags: u16) -> Self {
+        use windows::Win32::UI::WindowsAndMessaging::XBUTTON2;
+        if flags & XBUTTON2 != 0 {
+            Self::Forward
+        } else {
+            Self::Back
+        }
+    }
 }
 
 struct KeyBinding {

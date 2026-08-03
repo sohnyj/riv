@@ -12,23 +12,15 @@ use windows::Win32::UI::Shell::{
 use windows::core::{HSTRING, PCWSTR};
 
 use crate::archive::reader as archive_reader;
-use crate::image::decode;
+use crate::image;
 
 pub fn show(window: HWND, initial_directory: Option<&str>) -> Vec<PathBuf> {
     select_files(window, initial_directory).unwrap_or_default()
 }
 
-/// One filter per format in the file association order, then the two catch-alls;
-/// the second return is the position of the supported files filter.
+/// A filter per format in the file association order, then the two catch-alls and where they begin.
 fn filters(archives: bool) -> (Vec<(String, String)>, usize) {
-    let mut formats: Vec<(&'static str, &'static [&'static str])> =
-        decode::format_groups().collect();
-    // Archive extensions appear only when the inbox library provides the support.
-    if archives {
-        formats.extend(archive_reader::format_groups());
-    }
-    formats.sort_by_key(|(name, _)| *name);
-
+    let formats = image::sorted_format_groups(archives);
     let mut filters = Vec::with_capacity(formats.len() + 2);
     for (name, extensions) in formats {
         let pattern = extensions
@@ -40,12 +32,12 @@ fn filters(archives: bool) -> (Vec<(String, String)>, usize) {
     }
     let supported_position = filters.len();
     // The name leaves the patterns out: the list is long and the formats are right above it.
-    let everything = filters
+    let all_patterns = filters
         .iter()
         .map(|(_, pattern)| pattern.as_str())
         .collect::<Vec<_>>()
         .join(";");
-    filters.push(("Supported files".to_string(), everything));
+    filters.push(("Supported files".to_string(), all_patterns));
     filters.push(("All files (*)".to_string(), "*.*".to_string()));
     (filters, supported_position)
 }
@@ -115,10 +107,10 @@ mod filter_tests {
         assert_eq!(names[supported], "Supported files");
         assert_eq!(names[supported + 1], "All files (*)");
         // The name drops the patterns, the filter itself keeps every one of them.
-        let everything = &filters[supported].1;
-        assert!(everything.contains("*.apng"));
-        assert!(everything.contains("*.cbz"));
-        assert!(everything.ends_with("*.webp"));
+        let all_patterns = &filters[supported].1;
+        assert!(all_patterns.contains("*.apng"));
+        assert!(all_patterns.contains("*.cbz"));
+        assert!(all_patterns.ends_with("*.webp"));
     }
 
     #[test]

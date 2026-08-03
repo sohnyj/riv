@@ -29,12 +29,17 @@ pub fn work_area_centered_origin(width: i32, height: i32) -> Option<(i32, i32)> 
     ))
 }
 
-/// Window size holding a logical client size, framed and scaled at the window's own DPI.
-pub fn window_size_for_client(window: HWND, width: i32, height: i32) -> Option<(i32, i32)> {
-    let dpi = match unsafe { GetDpiForWindow(window) } {
+/// The window's dots per inch, falling back to the screen default when the query fails.
+pub fn dpi_for_window(window: HWND) -> u32 {
+    match unsafe { GetDpiForWindow(window) } {
         0 => 96,
         dpi => dpi,
-    };
+    }
+}
+
+/// Window size holding a logical client size, framed and scaled at the window's own DPI.
+pub fn window_size_for_client(window: HWND, width: i32, height: i32) -> Option<(i32, i32)> {
+    let dpi = dpi_for_window(window);
     let scale = |logical: i32| logical * dpi as i32 / 96;
     let mut window_bounds = RECT {
         left: 0,
