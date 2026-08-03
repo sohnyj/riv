@@ -23,6 +23,7 @@ pub enum Action {
     Recent(u8),
     ClearRecents,
     OpenWithOther,
+    Playlist,
     Loop,
     FirstFile,
     PreviousFile,
@@ -86,6 +87,12 @@ const ACTION_TABLE: &[(Action, &str, &str, ActivationGate)] = &[
         "otherapplication",
         "Other application...",
         ActivationGate::FileOnDisk,
+    ),
+    (
+        Action::Playlist,
+        "playlist",
+        "Playlist",
+        ActivationGate::NavigationTargets,
     ),
     (
         Action::Loop,

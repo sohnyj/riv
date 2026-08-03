@@ -5,7 +5,8 @@ use std::collections::HashMap;
 use windows::Win32::Foundation::HWND;
 use windows::Win32::UI::WindowsAndMessaging::{
     AppendMenuW, CreatePopupMenu, DestroyMenu, HMENU, MF_CHECKED, MF_DISABLED, MF_GRAYED, MF_POPUP,
-    MF_SEPARATOR, MF_STRING, TPM_RETURNCMD, TPM_RIGHTBUTTON, TrackPopupMenuEx,
+    MF_SEPARATOR, MF_STRING, TPM_CENTERALIGN, TPM_RETURNCMD, TPM_RIGHTBUTTON, TPM_VCENTERALIGN,
+    TrackPopupMenuEx,
 };
 use windows::core::{HSTRING, Result};
 
@@ -54,6 +55,8 @@ struct MenuBuilder {
     /// Command IDs are entries index + 1; 0 means dismissed.
     entries: Vec<MenuSelection>,
     state_snapshot: MenuState,
+    /// The Playlist submenu, kept so the playlist key can open the menu at it.
+    playlist_menu: HMENU,
 }
 
 /// Win32 menus read "&" as a mnemonic prefix; double it to render literally.
@@ -62,6 +65,14 @@ fn escape_mnemonics(label: &str) -> String {
 }
 
 impl MenuBuilder {
+    fn new(state: MenuState) -> Self {
+        Self {
+            entries: Vec::new(),
+            state_snapshot: state,
+            playlist_menu: HMENU::default(),
+        }
+    }
+
     fn gate_satisfied(&self, gate: ActivationGate) -> bool {
         match gate {
             ActivationGate::Window => true,
@@ -218,11 +229,17 @@ impl MenuBuilder {
             self.append_playlist_entry(playlist, slot, name)?;
         }
         Self::append_playlist_overflow(playlist, self.state_snapshot.playlist_hidden_after)?;
+        self.playlist_menu = playlist;
+        // The playlist key opens this same submenu, so the label carries that shortcut.
+        let playlist_label = match self.state_snapshot.shortcuts.get(Action::Playlist.name()) {
+            Some(shortcut) => format!("Playlist\t{shortcut}"),
+            None => "Playlist".to_string(),
+        };
         // No folder listing means nothing to jump to.
         self.append_submenu(
             menu,
             playlist,
-            "Playlist",
+            &playlist_label,
             self.state_snapshot.has_navigation_targets,
         )?;
         self.append_action(menu, Action::Loop)?;
@@ -307,21 +324,33 @@ impl MenuBuilder {
 }
 
 pub fn show(window: HWND, state: MenuState, x: i32, y: i32) -> Option<MenuSelection> {
-    let mut builder = MenuBuilder {
-        entries: Vec::new(),
-        state_snapshot: state,
-    };
+    track(window, state, x, y, false)
+}
+
+/// The same menu opened at its Playlist submenu, centered on the point.
+pub fn show_playlist(window: HWND, state: MenuState, x: i32, y: i32) -> Option<MenuSelection> {
+    track(window, state, x, y, true)
+}
+
+fn track(
+    window: HWND,
+    state: MenuState,
+    x: i32,
+    y: i32,
+    playlist_only: bool,
+) -> Option<MenuSelection> {
+    let mut builder = MenuBuilder::new(state);
     let menu = builder.build().ok()?;
-    let selected = unsafe {
-        TrackPopupMenuEx(
-            menu,
-            (TPM_RETURNCMD | TPM_RIGHTBUTTON).0,
-            x,
-            y,
-            window,
-            None,
+    let (tracked, flags) = if playlist_only {
+        (
+            builder.playlist_menu,
+            TPM_RETURNCMD | TPM_RIGHTBUTTON | TPM_CENTERALIGN | TPM_VCENTERALIGN,
         )
+    } else {
+        (menu, TPM_RETURNCMD | TPM_RIGHTBUTTON)
     };
+    let selected = unsafe { TrackPopupMenuEx(tracked, flags.0, x, y, window, None) };
+    // Destroying the menu takes its submenus with it.
     let _ = unsafe { DestroyMenu(menu) };
     let identifier = selected.0 as usize;
     (identifier > 0)
@@ -366,10 +395,7 @@ mod menu_structure_tests {
     }
 
     fn submenu_is_grayed(state: MenuState, label: &str) -> bool {
-        let mut builder = MenuBuilder {
-            entries: Vec::new(),
-            state_snapshot: state,
-        };
+        let mut builder = MenuBuilder::new(state);
         let menu = builder.build().expect("menu builds");
         let count = unsafe { GetMenuItemCount(Some(menu)) };
         let mut grayed = None;
@@ -430,10 +456,7 @@ mod menu_structure_tests {
 
     #[test]
     fn view_leads_with_the_fit_toggle() {
-        let mut builder = MenuBuilder {
-            entries: Vec::new(),
-            state_snapshot: state(),
-        };
+        let mut builder = MenuBuilder::new(state());
         let menu = builder.build().expect("menu builds");
         let view = submenu_by_label(menu, "View");
         // The fit label names the other axis: width is current here.
@@ -445,10 +468,7 @@ mod menu_structure_tests {
 
         let mut height_state = state();
         height_state.fit_height = true;
-        let mut builder = MenuBuilder {
-            entries: Vec::new(),
-            state_snapshot: height_state,
-        };
+        let mut builder = MenuBuilder::new(height_state);
         let menu = builder.build().expect("menu builds");
         let view = submenu_by_label(menu, "View");
         assert_eq!(bare_label(view, 0), "Fit width");
@@ -461,10 +481,7 @@ mod menu_structure_tests {
         with_names.playlist_names = vec!["a&b.png".to_string()];
         with_names.recent_names = vec!["c&d.png".to_string()];
         with_names.open_with_items = vec!["E & F".to_string()];
-        let mut builder = MenuBuilder {
-            entries: Vec::new(),
-            state_snapshot: with_names,
-        };
+        let mut builder = MenuBuilder::new(with_names);
         let menu = builder.build().expect("menu builds");
         // GetMenuString returns the stored text; "&&" draws as a literal "&".
         assert_eq!(
@@ -496,10 +513,7 @@ mod menu_structure_tests {
         with_folder.playlist_first_index = 38;
         with_folder.playlist_current_slot = Some(12);
         with_folder.playlist_hidden_after = 42;
-        let mut builder = MenuBuilder {
-            entries: Vec::new(),
-            state_snapshot: with_folder,
-        };
+        let mut builder = MenuBuilder::new(with_folder);
         let menu = builder.build().expect("menu builds");
         let count = unsafe { GetMenuItemCount(Some(menu)) };
         let mut submenu = None;
@@ -539,11 +553,25 @@ mod menu_structure_tests {
     }
 
     #[test]
+    fn the_playlist_submenu_shows_the_playlist_shortcut() {
+        let mut with_shortcut = state();
+        with_shortcut
+            .shortcuts
+            .insert(Action::Playlist.name(), "E".to_string());
+        let mut builder = MenuBuilder::new(with_shortcut);
+        let menu = builder.build().expect("menu builds");
+        let labels: Vec<String> = (0..unsafe { GetMenuItemCount(Some(menu)) })
+            .map(|position| item_label(menu, position as u32))
+            .collect();
+        assert!(labels.contains(&"Playlist\tE".to_string()));
+        // The key opens this submenu itself, so the builder hands its handle back.
+        assert_eq!(builder.playlist_menu, submenu_by_label(menu, "Playlist\tE"));
+        let _ = unsafe { DestroyMenu(menu) };
+    }
+
+    #[test]
     fn top_level_items_follow_the_menu_order() {
-        let mut builder = MenuBuilder {
-            entries: Vec::new(),
-            state_snapshot: state(),
-        };
+        let mut builder = MenuBuilder::new(state());
         let menu = builder.build().expect("menu builds");
         let count = unsafe { GetMenuItemCount(Some(menu)) };
         let mut labels = Vec::new();
@@ -581,10 +609,7 @@ mod menu_structure_tests {
 
     #[test]
     fn window_and_tools_carry_their_sections() {
-        let mut builder = MenuBuilder {
-            entries: Vec::new(),
-            state_snapshot: state(),
-        };
+        let mut builder = MenuBuilder::new(state());
         let menu = builder.build().expect("menu builds");
         let window = submenu_by_label(menu, "Window");
         assert_eq!(bare_label(window, 0), "Always on top");

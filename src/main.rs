@@ -1456,6 +1456,10 @@ fn dispatch_action(application: &mut Application, window: HWND, action: Action) 
         Action::LastFile => {
             execute_navigation(application, window, NavigationCommand::Last);
         }
+        Action::Playlist => {
+            let (x, y) = window_center(window);
+            show_menu(application, window, x, y, true);
+        }
         Action::Reload => {
             let displayed = application.image_core.reload_current();
             application.apply_load_outcome(window, displayed);
@@ -1791,6 +1795,112 @@ fn toggle_fullscreen(application: &mut Application, window: HWND) {
     application.update_cursor_autohide(window);
 }
 
+fn window_center(window: HWND) -> (i32, i32) {
+    let mut bounds = RECT::default();
+    let _ = unsafe { GetWindowRect(window, &raw mut bounds) };
+    (
+        (bounds.left + bounds.right) / 2,
+        (bounds.top + bounds.bottom) / 2,
+    )
+}
+
+/// Tracks the context menu, or just its playlist submenu, and applies what the user picked.
+fn show_menu(application: &mut Application, window: HWND, x: i32, y: i32, playlist_only: bool) {
+    let playlist = application
+        .image_core
+        .playlist_window(context_menu::PLAYLIST_CAPACITY);
+    let state = MenuState {
+        has_image: application.gate_satisfied(ActivationGate::Image),
+        has_file_on_disk: application.gate_satisfied(ActivationGate::FileOnDisk),
+        has_containing_file: application.gate_satisfied(ActivationGate::ContainingFile),
+        has_navigation_targets: application.gate_satisfied(ActivationGate::NavigationTargets),
+        file_info_shown: application.show_file_info,
+        loop_enabled: application.settings.options.loop_within_folder,
+        open_url_available: curl::available(),
+        playlist_names: playlist.names,
+        playlist_first_index: playlist.first_index,
+        playlist_current_slot: playlist.current_slot,
+        playlist_hidden_after: playlist.hidden_after,
+        has_animation: application.gate_satisfied(ActivationGate::Animation),
+        animation_paused: application
+            .animation
+            .as_ref()
+            .is_some_and(|animation| animation.paused),
+        fit_height: application.settings.options.fit_mode == 1,
+        preserve_zoom: application.preserve_zoom,
+        always_on_top: application.always_on_top,
+        mirrored: application.view_transform.mirrored,
+        flipped: application.view_transform.flipped,
+        fullscreen: application.fullscreen_restore.is_some(),
+        slideshow_active: application.slideshow_item_shown_at.is_some(),
+        recent_names: application
+            .settings
+            .recent_files()
+            .into_iter()
+            .map(|(name, _)| name)
+            .collect(),
+        open_with_items: application
+            .current_open_with_list()
+            .map_or_else(Vec::new, |list| {
+                list.items
+                    .iter()
+                    .map(|item| item.display_name.clone())
+                    .collect()
+            }),
+        open_with_has_default: application
+            .current_open_with_list()
+            .is_some_and(|list| list.has_default),
+        shortcuts: Action::all_bindable()
+            .filter_map(|action| {
+                bindings::menu_shortcut_text(
+                    application.settings.keyboard_bindings(),
+                    application.settings.mouse_bindings(),
+                    action.name(),
+                )
+                .map(|text| (action.name(), text))
+            })
+            .collect(),
+    };
+    let selection = if playlist_only {
+        context_menu::show_playlist(window, state, x, y)
+    } else {
+        context_menu::show(window, state, x, y)
+    };
+    // The menu pumped messages; re-fetch in case the window was destroyed.
+    if let Some(selection) = selection
+        && let Some(application) = application_from_window(window)
+    {
+        match selection {
+            MenuSelection::Action(action) => {
+                dispatch_action(application, window, action);
+            }
+            MenuSelection::OpenWithEntry(index) => {
+                if let (Some(path), Some(list)) = (
+                    application.image_core.current_file(),
+                    application.current_open_with_list(),
+                ) && let Some(item) = list.items.get(index)
+                {
+                    let _ = open_with::invoke(path, &item.executable_path);
+                }
+            }
+            MenuSelection::PlaylistEntry(index) => {
+                let result = application.image_core.navigate_to_entry(index);
+                apply_navigation_result(application, window, result);
+            }
+        }
+    }
+}
+
+/// Bindings are the accelerator table: a key they take never turns into a character.
+fn consume_key_binding(message: &MSG) -> bool {
+    if message.message != WM_KEYDOWN && message.message != WM_SYSKEYDOWN {
+        return false;
+    }
+    let window = message.hwnd;
+    application_from_window(window)
+        .is_some_and(|application| handle_key(application, window, message.wParam.0 as u16))
+}
+
 fn handle_key(application: &mut Application, window: HWND, virtual_key: u16) -> bool {
     if [VK_CONTROL, VK_SHIFT, VK_MENU, VK_LWIN, VK_RWIN]
         .iter()
@@ -1961,8 +2071,10 @@ fn run_message_loop(window: HWND) {
             if message.message == WM_QUIT {
                 return;
             }
-            let _ = unsafe { TranslateMessage(&raw const message) };
-            unsafe { DispatchMessageW(&raw const message) };
+            if !consume_key_binding(&message) {
+                let _ = unsafe { TranslateMessage(&raw const message) };
+                unsafe { DispatchMessageW(&raw const message) };
+            }
         }
         // A handle means the next frame still owes a wait.
         let slot_handle = application_from_window(window)
@@ -1981,8 +2093,10 @@ fn run_message_loop(window: HWND) {
         if result.0 <= 0 {
             return;
         }
-        let _ = unsafe { TranslateMessage(&raw const message) };
-        unsafe { DispatchMessageW(&raw const message) };
+        if !consume_key_binding(&message) {
+            let _ = unsafe { TranslateMessage(&raw const message) };
+            unsafe { DispatchMessageW(&raw const message) };
+        }
     }
 }
 
@@ -2355,10 +2469,9 @@ extern "system" fn window_procedure(
             }
             LRESULT(0)
         }
+        // The message loop runs the bindings, so only keys they left over arrive here.
         WM_KEYDOWN | WM_SYSKEYDOWN => {
-            let handled = application_from_window(window)
-                .is_some_and(|application| handle_key(application, window, wparam.0 as u16));
-            if !handled && message == WM_SYSKEYDOWN {
+            if message == WM_SYSKEYDOWN {
                 unsafe { DefWindowProcW(window, message, wparam, lparam) }
             } else {
                 LRESULT(0)
@@ -2504,92 +2617,11 @@ extern "system" fn window_procedure(
             if let Some(application) = application_from_window(window) {
                 let (mut x, mut y) = point_from_lparam(lparam);
                 if x == -1 && y == -1 {
-                    let mut bounds = RECT::default();
-                    let _ = unsafe { GetWindowRect(window, &raw mut bounds) };
-                    x = (bounds.left + bounds.right) / 2;
-                    y = (bounds.top + bounds.bottom) / 2;
+                    let (center_x, center_y) = window_center(window);
+                    x = center_x;
+                    y = center_y;
                 }
-                let playlist = application
-                    .image_core
-                    .playlist_window(context_menu::PLAYLIST_CAPACITY);
-                let state = MenuState {
-                    has_image: application.gate_satisfied(ActivationGate::Image),
-                    has_file_on_disk: application.gate_satisfied(ActivationGate::FileOnDisk),
-                    has_containing_file: application.gate_satisfied(ActivationGate::ContainingFile),
-                    has_navigation_targets: application
-                        .gate_satisfied(ActivationGate::NavigationTargets),
-                    file_info_shown: application.show_file_info,
-                    loop_enabled: application.settings.options.loop_within_folder,
-                    open_url_available: curl::available(),
-                    playlist_names: playlist.names,
-                    playlist_first_index: playlist.first_index,
-                    playlist_current_slot: playlist.current_slot,
-                    playlist_hidden_after: playlist.hidden_after,
-                    has_animation: application.gate_satisfied(ActivationGate::Animation),
-                    animation_paused: application
-                        .animation
-                        .as_ref()
-                        .is_some_and(|animation| animation.paused),
-                    fit_height: application.settings.options.fit_mode == 1,
-                    preserve_zoom: application.preserve_zoom,
-                    always_on_top: application.always_on_top,
-                    mirrored: application.view_transform.mirrored,
-                    flipped: application.view_transform.flipped,
-                    fullscreen: application.fullscreen_restore.is_some(),
-                    slideshow_active: application.slideshow_item_shown_at.is_some(),
-                    recent_names: application
-                        .settings
-                        .recent_files()
-                        .into_iter()
-                        .map(|(name, _)| name)
-                        .collect(),
-                    open_with_items: application.current_open_with_list().map_or_else(
-                        Vec::new,
-                        |list| {
-                            list.items
-                                .iter()
-                                .map(|item| item.display_name.clone())
-                                .collect()
-                        },
-                    ),
-                    open_with_has_default: application
-                        .current_open_with_list()
-                        .is_some_and(|list| list.has_default),
-                    shortcuts: Action::all_bindable()
-                        .filter_map(|action| {
-                            bindings::menu_shortcut_text(
-                                application.settings.keyboard_bindings(),
-                                application.settings.mouse_bindings(),
-                                action.name(),
-                            )
-                            .map(|text| (action.name(), text))
-                        })
-                        .collect(),
-                };
-                let selection = context_menu::show(window, state, x, y);
-                // The menu pumped messages; re-fetch in case the window was destroyed.
-                if let Some(selection) = selection
-                    && let Some(application) = application_from_window(window)
-                {
-                    match selection {
-                        MenuSelection::Action(action) => {
-                            dispatch_action(application, window, action);
-                        }
-                        MenuSelection::OpenWithEntry(index) => {
-                            if let (Some(path), Some(list)) = (
-                                application.image_core.current_file(),
-                                application.current_open_with_list(),
-                            ) && let Some(item) = list.items.get(index)
-                            {
-                                let _ = open_with::invoke(path, &item.executable_path);
-                            }
-                        }
-                        MenuSelection::PlaylistEntry(index) => {
-                            let result = application.image_core.navigate_to_entry(index);
-                            apply_navigation_result(application, window, result);
-                        }
-                    }
-                }
+                show_menu(application, window, x, y, false);
             }
             LRESULT(0)
         }

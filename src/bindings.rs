@@ -62,6 +62,7 @@ pub struct Bindings {
 const DEFAULT_KEYBOARD: &[(&str, &[&str])] = &[
     ("open", &["Ctrl+O"]),
     ("pasteurl", &["Ctrl+V"]),
+    ("playlist", &["E"]),
     ("loop", &["L"]),
     ("firstfile", &["Home"]),
     ("previous", &["Left"]),
