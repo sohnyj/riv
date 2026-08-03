@@ -2,7 +2,7 @@
 
 use std::path::Path;
 
-use windows::Win32::Foundation::{HWND, LPARAM, WPARAM};
+use windows::Win32::Foundation::HWND;
 use windows::Win32::System::Com::{
     COINIT_MULTITHREADED, CoInitializeEx, CoTaskMemFree, IDataObject,
 };
@@ -11,7 +11,7 @@ use windows::Win32::UI::Shell::{
     BHID_DataObject, IAssocHandler, IShellItem, OAIF_ALLOW_REGISTRATION, OAIF_EXEC, OPENASINFO,
     SHAssocEnumHandlers, SHCreateItemFromParsingName, SHOpenWithDialog,
 };
-use windows::Win32::UI::WindowsAndMessaging::{PostMessageW, WM_APP};
+use windows::Win32::UI::WindowsAndMessaging::WM_APP;
 use windows::core::{HSTRING, PCWSTR, Result};
 
 pub const WM_APP_OPEN_WITH_LIST: u32 = WM_APP + 4;
@@ -27,28 +27,12 @@ pub struct OpenWithList {
     pub items: Vec<OpenWithItem>,
 }
 
-/// Extension without the dot, folded so lists match regardless of how a file spells it.
-pub fn lowercase_extension(path: &Path) -> Option<String> {
-    Some(path.extension()?.to_string_lossy().to_lowercase())
-}
-
 pub fn enumerate_in_background(window: HWND, extension: String) {
     let window_handle = window.0 as isize;
     std::thread::spawn(move || {
         let initialized = unsafe { CoInitializeEx(None, COINIT_MULTITHREADED) }.is_ok();
         let list = Box::new(enumerate(&extension));
-        let pointer = Box::into_raw(list);
-        let posted = unsafe {
-            PostMessageW(
-                Some(HWND(window_handle as *mut core::ffi::c_void)),
-                WM_APP_OPEN_WITH_LIST,
-                WPARAM(0),
-                LPARAM(pointer as isize),
-            )
-        };
-        if posted.is_err() {
-            drop(unsafe { Box::from_raw(pointer) });
-        }
+        crate::window::post_boxed(window_handle, WM_APP_OPEN_WITH_LIST, list);
         if initialized {
             unsafe { windows::Win32::System::Com::CoUninitialize() };
         }
@@ -99,7 +83,7 @@ fn enumerate(extension: &str) -> OpenWithList {
 }
 
 pub fn invoke(path: &Path, executable_path: &str) -> Result<()> {
-    let Some(extension) = lowercase_extension(path) else {
+    let Some(extension) = crate::text::lowercase_extension(path) else {
         return Ok(());
     };
     for handler in handlers_for(&extension) {
@@ -183,5 +167,5 @@ fn default_executable_for(extension: &str) -> Option<String> {
 fn compare_natural_text(a: &str, b: &str) -> std::cmp::Ordering {
     let a_wide = crate::text::wide(a);
     let b_wide = crate::text::wide(b);
-    crate::image::core::natural_order(&a_wide, &b_wide)
+    crate::text::natural_order(&a_wide, &b_wide)
 }

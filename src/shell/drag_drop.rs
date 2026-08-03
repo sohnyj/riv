@@ -3,14 +3,14 @@
 use std::cell::Cell;
 use std::path::PathBuf;
 
-use windows::Win32::Foundation::{HWND, LPARAM, POINTL, WPARAM};
+use windows::Win32::Foundation::{HWND, POINTL};
 use windows::Win32::System::Com::{DVASPECT_CONTENT, FORMATETC, IDataObject, TYMED_HGLOBAL};
 use windows::Win32::System::Ole::{
     CF_HDROP, DROPEFFECT, DROPEFFECT_COPY, DROPEFFECT_NONE, IDropTarget, IDropTarget_Impl,
     RegisterDragDrop, ReleaseStgMedium,
 };
 use windows::Win32::UI::Shell::{DragQueryFileW, HDROP};
-use windows::Win32::UI::WindowsAndMessaging::{PostMessageW, WM_APP};
+use windows::Win32::UI::WindowsAndMessaging::WM_APP;
 use windows::core::{Result, implement};
 
 pub const WM_APP_DROP_PATHS: u32 = WM_APP + 3;
@@ -119,18 +119,7 @@ impl IDropTarget_Impl for DropTarget_Impl {
     ) -> Result<()> {
         let paths = dropped_paths(data_object.as_ref());
         if !paths.is_empty() {
-            let pointer = Box::into_raw(Box::new(paths));
-            let posted = unsafe {
-                PostMessageW(
-                    Some(self.window),
-                    WM_APP_DROP_PATHS,
-                    WPARAM(0),
-                    LPARAM(pointer as isize),
-                )
-            };
-            if posted.is_err() {
-                drop(unsafe { Box::from_raw(pointer) });
-            }
+            crate::window::post_boxed(self.window.0 as isize, WM_APP_DROP_PATHS, Box::new(paths));
             unsafe { *effect = DROPEFFECT_COPY };
         } else {
             unsafe { *effect = DROPEFFECT_NONE };

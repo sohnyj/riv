@@ -8,7 +8,7 @@ use windows::Win32::Graphics::Gdi::{
     MoveToEx, PAINTSTRUCT, PS_SOLID, SelectObject, SetBkMode, SetTextColor, TRANSPARENT,
 };
 use windows::Win32::System::LibraryLoader::GetModuleHandleW;
-use windows::Win32::UI::Controls::{DRAWITEMSTRUCT, ODS_SELECTED, TASKDIALOGCONFIG};
+use windows::Win32::UI::Controls::{DRAWITEMSTRUCT, ODS_SELECTED};
 use windows::Win32::UI::Input::KeyboardAndMouse::{
     SetFocus, VK_CONTROL, VK_LWIN, VK_MENU, VK_RWIN, VK_SHIFT,
 };
@@ -99,20 +99,12 @@ fn show_capture_dialog(
 }
 
 fn warn_conflict(dialog: HWND, encoding: &str, owner_label: &str) {
-    let content = crate::text::wide(format!(
-        "\"{encoding}\" is already bound to \"{owner_label}\""
-    ));
-    let configuration = TASKDIALOGCONFIG {
-        cbSize: size_of::<TASKDIALOGCONFIG>() as u32,
-        hwndParent: dialog,
-        pszWindowTitle: w!("riv"),
-        pszMainInstruction: w!("Shortcut already used"),
-        pszContent: PCWSTR(content.as_ptr()),
-        ..Default::default()
-    };
-    let _ = unsafe {
-        windows::Win32::UI::Controls::TaskDialogIndirect(&raw const configuration, None, None, None)
-    };
+    crate::dialogs::show_message(
+        Some(dialog),
+        "Shortcut already used",
+        &format!("\"{encoding}\" is already bound to \"{owner_label}\""),
+        Default::default(),
+    );
 }
 
 struct KeyboardCaptureState {

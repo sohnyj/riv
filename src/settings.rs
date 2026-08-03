@@ -212,18 +212,6 @@ impl SettingsFile {
         self.document.get("mousebindings")?.as_object()
     }
 
-    pub fn set_option_boolean(&mut self, key: &str, value: bool) {
-        self.document
-            .as_object_mut()
-            .expect("settings document is object")
-            .entry("options")
-            .or_insert_with(|| Value::Object(Map::new()))
-            .as_object_mut()
-            .expect("options is object")
-            .insert(key.to_string(), Value::Bool(value));
-        self.options = Options::from_document(&self.document);
-    }
-
     /// Writes the in-memory options into the settings document (persisted at exit/Apply).
     pub fn store_options(&mut self) {
         let options = std::mem::take(&mut self.options);
@@ -497,7 +485,10 @@ impl SettingsFile {
     }
 
     pub fn recent_files(&self) -> Vec<(String, String)> {
-        recent_files_of(&self.document)
+        let mut files = recent_files_of(&self.document);
+        // A hand-edited document can exceed the cap; every reader sees at most the limit.
+        files.truncate(RECENT_FILES_LIMIT);
+        files
     }
 
     /// Fold other instances' recents back in (union, this session first) before writing.

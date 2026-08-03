@@ -33,8 +33,8 @@ use shell::open_with::{self, OpenWithList, WM_APP_OPEN_WITH_LIST};
 use shell::{clipboard, file_ops, open_dialog};
 use view::dither::DitherMode;
 use view::renderer::{
-    self, FrameDecision, GraphicsDevice, OutputMode, PendingDevice, Renderer, ToneMapInfo,
-    create_device,
+    self, FrameDecision, GraphicsDevice, OutputMode, PendingDevice, Renderer, ScalingFilter,
+    ToneMapInfo, create_device,
 };
 use view::transform::{FitMode, Size, ViewTransform};
 use window::context_menu::{self, MenuSelection, MenuState};
@@ -46,10 +46,6 @@ use windows::Win32::Foundation::{
 };
 use windows::Win32::Graphics::Direct2D::Common::D2D1_COLOR_F;
 use windows::Win32::Graphics::Direct2D::D2D1_INTERPOLATION_MODE;
-use windows::Win32::Graphics::Direct2D::{
-    D2D1_INTERPOLATION_MODE_CUBIC, D2D1_INTERPOLATION_MODE_HIGH_QUALITY_CUBIC,
-    D2D1_INTERPOLATION_MODE_LINEAR, D2D1_INTERPOLATION_MODE_NEAREST_NEIGHBOR,
-};
 use windows::Win32::Graphics::Gdi::{
     GetMonitorInfoW, HBRUSH, HMONITOR, InvalidateRect, MONITOR_DEFAULTTONEAREST, MONITORINFO,
     MonitorFromWindow, SC_SCREENSAVE, ScreenToClient, ValidateRect,
@@ -165,10 +161,9 @@ struct Application {
     title_bar_dark: Option<bool>,
     /// Received bytes of the pending URL download the view reports on.
     download_progress: Option<(ItemLocation, u64)>,
-    slideshow_active: bool,
     /// The named power request keeping the system awake while the slideshow runs.
     power_request: Option<HANDLE>,
-    /// When the current slideshow item began showing, for the animation-aware interval.
+    /// When the current slideshow item began showing; Some while the slideshow runs.
     slideshow_item_shown_at: Option<std::time::Instant>,
     animation: Option<Animation>,
     drop_target: Option<IDropTarget>,
@@ -251,7 +246,7 @@ fn create_renderer(
     device: GraphicsDevice,
 ) -> Result<Renderer> {
     let (width, height) = client_size(window);
-    let (target_nits, full_frame_nits) = tone_map_targets(capabilities);
+    let (target_nits, full_frame_nits) = capabilities.tone_map_targets();
     Renderer::new(
         window,
         width.max(1),
@@ -336,7 +331,6 @@ impl Application {
             render_requested: false,
             title_bar_dark: None,
             download_progress: None,
-            slideshow_active: false,
             power_request: None,
             slideshow_item_shown_at: None,
             animation: None,
@@ -403,17 +397,7 @@ impl Application {
             }
             stale = true;
         }
-        let (max_luminance, max_full_frame) = if is_hdr_output {
-            (
-                capabilities.max_luminance,
-                capabilities.max_full_frame_luminance,
-            )
-        } else {
-            (None, None)
-        };
-        let target_nits = tone_map_target_luminance(is_hdr_output, max_luminance);
-        let full_frame_nits =
-            tone_map_full_frame_luminance(is_hdr_output, max_full_frame, target_nits);
+        let (target_nits, full_frame_nits) = capabilities.tone_map_targets();
         if self
             .renderer
             .as_mut()
@@ -442,7 +426,7 @@ impl Application {
             return false;
         }
         self.sdr_white_boost = capabilities.sdr_white_boost_for(capabilities.hdr);
-        let (target_nits, full_frame_nits) = tone_map_targets(capabilities);
+        let (target_nits, full_frame_nits) = capabilities.tone_map_targets();
         let reconfigured = self.renderer.as_mut().is_some_and(|renderer| {
             renderer
                 .reconfigure_output(mode, target_nits, full_frame_nits)
@@ -456,20 +440,12 @@ impl Application {
     }
 
     fn output_color_target(&self) -> color::OutputColorTarget {
-        let Some(renderer) = &self.renderer else {
-            return color::OutputColorTarget::Srgb;
-        };
-        if !renderer.is_hdr_output() {
-            if renderer.is_sdr_wide_gamut() {
-                // Advanced-color SDR: overlay and clear colors go out as linear scRGB too.
-                return color::OutputColorTarget::ScrgbLinear {
-                    sdr_white_boost: self.sdr_white_boost,
-                };
-            }
-            return color::OutputColorTarget::Srgb;
-        }
-        color::OutputColorTarget::ScrgbLinear {
-            sdr_white_boost: self.sdr_white_boost,
+        // The FP16 scRGB backbuffer takes overlay and clear colors linearly; 8-bit takes sRGB.
+        match &self.renderer {
+            Some(renderer) if renderer.is_scrgb_output() => color::OutputColorTarget::ScrgbLinear {
+                sdr_white_boost: self.sdr_white_boost,
+            },
+            _ => color::OutputColorTarget::Srgb,
         }
     }
 
@@ -492,13 +468,12 @@ impl Application {
         }
     }
 
+    fn scaling_filter(&self) -> ScalingFilter {
+        ScalingFilter::from_setting(self.settings.options.scaling_filter)
+    }
+
     fn interpolation_mode(&self) -> D2D1_INTERPOLATION_MODE {
-        match self.settings.options.scaling_filter {
-            0 => D2D1_INTERPOLATION_MODE_NEAREST_NEIGHBOR,
-            2 => D2D1_INTERPOLATION_MODE_CUBIC,
-            3 => D2D1_INTERPOLATION_MODE_HIGH_QUALITY_CUBIC,
-            _ => D2D1_INTERPOLATION_MODE_LINEAR,
-        }
+        self.scaling_filter().interpolation()
     }
 
     fn scaling_description(&self, frame: Option<FrameDecision>) -> &'static str {
@@ -506,12 +481,7 @@ impl Application {
         if frame.is_some_and(FrameDecision::is_identity_draw) {
             return "None (1:1)";
         }
-        match self.settings.options.scaling_filter {
-            0 => "Nearest",
-            2 => "Bicubic",
-            3 => "High Quality",
-            _ => "Bilinear",
-        }
+        self.scaling_filter().description()
     }
 
     fn background_color(&self) -> D2D1_COLOR_F {
@@ -685,8 +655,8 @@ impl Application {
                 "Animation: First frame only (over 1 GiB)".to_string(),
             );
         }
-        if self.slideshow_active {
-            self.slideshow_item_shown_at = Some(std::time::Instant::now());
+        if let Some(shown) = &mut self.slideshow_item_shown_at {
+            *shown = std::time::Instant::now();
         }
         if !same_view {
             // Members list the archive itself; URL items stay out of recents.
@@ -696,7 +666,6 @@ impl Application {
             self.start_open_with_enumeration(window);
         }
         self.preload_after_display = true;
-        self.update_window_title(window);
         self.request_render(window);
     }
 
@@ -844,7 +813,7 @@ impl Application {
 
     /// The slideshow pauses while unfocused and resumes on return; animations keep playing.
     fn update_slideshow_focus(&mut self, window: HWND) {
-        if !self.slideshow_active {
+        if self.slideshow_item_shown_at.is_none() {
             return;
         }
         if self.window_active {
@@ -874,14 +843,13 @@ impl Application {
     }
 
     fn toggle_slideshow(&mut self, window: HWND) {
-        if self.slideshow_active {
+        if self.slideshow_item_shown_at.is_some() {
             self.stop_slideshow(window);
         } else {
             self.restart_slideshow_timer(window);
             // The declared direction aims the preload before the first tick.
             self.image_core
                 .set_navigation_direction(self.settings.options.slideshow_reversed);
-            self.slideshow_active = true;
             self.slideshow_item_shown_at = Some(std::time::Instant::now());
             self.keep_system_awake(true);
             self.show_status_text(window, "Slideshow: Start".to_string());
@@ -889,8 +857,7 @@ impl Application {
         }
     }
 
-    /// Blocks system sleep and display power-off under a name powercfg /requests can show;
-    /// the screen saver is blocked in WM_SYSCOMMAND.
+    /// Blocks sleep and display-off, visible to powercfg; WM_SYSCOMMAND blocks the screen saver.
     fn keep_system_awake(&mut self, active: bool) {
         if active && self.power_request.is_none() {
             let mut reason: Vec<u16> = "Slideshow\0".encode_utf16().collect();
@@ -916,9 +883,8 @@ impl Application {
     }
 
     fn stop_slideshow(&mut self, window: HWND) {
-        if self.slideshow_active {
+        if self.slideshow_item_shown_at.take().is_some() {
             let _ = unsafe { KillTimer(Some(window), SLIDESHOW_TIMER) };
-            self.slideshow_active = false;
             self.keep_system_awake(false);
             self.show_status_text(window, "Slideshow: Stop".to_string());
             self.request_render(window);
@@ -1134,7 +1100,7 @@ impl Application {
             .map(|renderer| renderer.decide_frame(matrix, interpolation));
         let content = self.overlay_content(background, decision);
         let clear_color = color::output_color(background, self.output_color_target());
-        let overlay = &self.overlay;
+        let overlay = &mut self.overlay;
         let draw = |context: &_| overlay.draw(context, viewport.width, viewport.height, &content);
         let Some((decision, renderer)) = decision.zip(self.renderer.as_mut()) else {
             return;
@@ -1146,7 +1112,7 @@ impl Application {
                 && let Some(renderer) = &mut self.renderer
             {
                 let decision = renderer.decide_frame(matrix, interpolation);
-                let overlay = &self.overlay;
+                let overlay = &mut self.overlay;
                 let _ = renderer.render(decision, clear_color, |context| {
                     overlay.draw(context, viewport.width, viewport.height, &content)
                 });
@@ -1204,7 +1170,7 @@ impl Application {
         let Some(extension) = self
             .image_core
             .current_file()
-            .and_then(open_with::lowercase_extension)
+            .and_then(text::lowercase_extension)
         else {
             return;
         };
@@ -1224,7 +1190,7 @@ impl Application {
         let extension = self
             .image_core
             .current_file()
-            .and_then(open_with::lowercase_extension)?;
+            .and_then(text::lowercase_extension)?;
         self.open_with_list
             .as_ref()
             .filter(|list| list.extension == extension)
@@ -1371,43 +1337,6 @@ fn client_size(window: HWND) -> (u32, u32) {
     )
 }
 
-/// SDR tone-map target: the BT.2100 reference white.
-const SDR_TONE_MAP_TARGET_NITS: f32 = 203.0;
-/// HDR tone-map target when the monitor reports no peak luminance.
-const HDR_PEAK_FALLBACK_NITS: f32 = 600.0;
-
-fn tone_map_target_luminance(is_hdr_output: bool, max_luminance: Option<f32>) -> f32 {
-    if is_hdr_output {
-        max_luminance.unwrap_or(HDR_PEAK_FALLBACK_NITS)
-    } else {
-        SDR_TONE_MAP_TARGET_NITS
-    }
-}
-
-/// Full-frame limit paired with the tone-map target, for the overlay diagnostics.
-fn tone_map_full_frame_luminance(
-    is_hdr_output: bool,
-    max_full_frame: Option<f32>,
-    target: f32,
-) -> f32 {
-    if is_hdr_output {
-        max_full_frame.unwrap_or(target)
-    } else {
-        target
-    }
-}
-
-/// The tone-map target and paired full-frame limit for a display's capabilities.
-fn tone_map_targets(capabilities: &color::DisplayCapabilities) -> (f32, f32) {
-    let target = tone_map_target_luminance(capabilities.hdr, capabilities.max_luminance);
-    let full_frame = tone_map_full_frame_luminance(
-        capabilities.hdr,
-        capabilities.max_full_frame_luminance,
-        target,
-    );
-    (target, full_frame)
-}
-
 /// Signed coordinates packed into a mouse-message LPARAM (GET_X_LPARAM / GET_Y_LPARAM).
 fn point_from_lparam(lparam: LPARAM) -> (i32, i32) {
     (
@@ -1425,10 +1354,15 @@ fn cursor_from_center(window: HWND) -> Option<(f32, f32)> {
     if point.x < 0 || point.y < 0 || point.x >= width as i32 || point.y >= height as i32 {
         return None;
     }
-    Some((
-        point.x as f32 - width as f32 / 2.0,
-        point.y as f32 - height as f32 / 2.0,
-    ))
+    Some(center_offset(point, (width, height)))
+}
+
+/// Offset of a client-space point from the client-area center.
+fn center_offset(point: POINT, client: (u32, u32)) -> (f32, f32) {
+    (
+        point.x as f32 - client.0 as f32 / 2.0,
+        point.y as f32 - client.1 as f32 / 2.0,
+    )
 }
 
 fn start_cursor_hide_timer(window: HWND) {
@@ -1452,7 +1386,7 @@ fn execute_navigation(
 ) -> bool {
     let result = application.image_core.navigate(command);
     let navigated = apply_navigation_result(application, window, result);
-    if navigated && application.slideshow_active {
+    if navigated && application.slideshow_item_shown_at.is_some() {
         // A manual or auto move restarts the interval so the new item gets a full turn.
         application.restart_slideshow_timer(window);
     }
@@ -1703,7 +1637,6 @@ fn dispatch_action(application: &mut Application, window: HWND, action: Action) 
                 open_with::show_open_with_dialog(window, &path);
             }
         }
-        Action::OpenWith => {}
         Action::Pause => {
             if let Some(animation) = application.animation.as_mut() {
                 animation.paused = !animation.paused;
@@ -1754,7 +1687,8 @@ fn delete_current_file(application: &mut Application, window: HWND, permanent: b
             return;
         }
         if !permanent && confirmation.do_not_ask_again {
-            application.settings.set_option_boolean("askdelete", false);
+            application.settings.options.ask_delete = false;
+            application.settings.store_options();
         }
     }
     let (command, opposite) = if application.settings.options.after_delete == 0 {
@@ -1769,7 +1703,7 @@ fn delete_current_file(application: &mut Application, window: HWND, permanent: b
         .find_map(|direction| {
             application
                 .image_core
-                .peek_navigation_target(direction)
+                .navigation_target(direction)
                 .filter(|candidate| *candidate != deleted)
         })
         .and_then(|candidate| candidate.as_file().map(Path::to_path_buf));
@@ -1937,11 +1871,7 @@ fn handle_gesture(application: &mut Application, window: HWND, lparam: LPARAM) -
                     y: i32::from(information.ptsLocation.y),
                 };
                 let _ = unsafe { ScreenToClient(window, &raw mut hotpoint) };
-                let (width, height) = client_size(window);
-                let anchor = (
-                    hotpoint.x as f32 - width as f32 / 2.0,
-                    hotpoint.y as f32 - height as f32 / 2.0,
-                );
+                let anchor = center_offset(hotpoint, client_size(window));
                 application.zoom_at(window, distance / previous, Some(anchor));
             }
             true
@@ -2181,19 +2111,8 @@ fn process_is_elevated() -> bool {
 }
 
 fn fail_fast_dialog(instruction: &str, content: &str) {
-    use windows::Win32::UI::Controls::{TASKDIALOGCONFIG, TDCBF_CLOSE_BUTTON, TaskDialogIndirect};
-
-    let instruction_wide = crate::text::wide(instruction);
-    let content_wide = crate::text::wide(content);
-    let configuration = TASKDIALOGCONFIG {
-        cbSize: size_of::<TASKDIALOGCONFIG>() as u32,
-        pszWindowTitle: w!("riv"),
-        pszMainInstruction: PCWSTR(instruction_wide.as_ptr()),
-        pszContent: PCWSTR(content_wide.as_ptr()),
-        dwCommonButtons: TDCBF_CLOSE_BUTTON,
-        ..Default::default()
-    };
-    let _ = unsafe { TaskDialogIndirect(&raw const configuration, None, None, None) };
+    use windows::Win32::UI::Controls::TDCBF_CLOSE_BUTTON;
+    dialogs::show_message(None, instruction, content, TDCBF_CLOSE_BUTTON);
 }
 
 fn application_from_window(window: HWND) -> Option<&'static mut Application> {
@@ -2594,10 +2513,11 @@ extern "system" fn window_procedure(
                     .image_core
                     .playlist_window(context_menu::PLAYLIST_CAPACITY);
                 let state = MenuState {
-                    has_image: application.image_core.current.is_some(),
-                    has_file_on_disk: application.image_core.current_file().is_some(),
-                    has_containing_file: application.image_core.current_containing_file().is_some(),
-                    has_navigation_targets: application.image_core.has_navigation_targets(),
+                    has_image: application.gate_satisfied(ActivationGate::Image),
+                    has_file_on_disk: application.gate_satisfied(ActivationGate::FileOnDisk),
+                    has_containing_file: application.gate_satisfied(ActivationGate::ContainingFile),
+                    has_navigation_targets: application
+                        .gate_satisfied(ActivationGate::NavigationTargets),
                     file_info_shown: application.show_file_info,
                     loop_enabled: application.settings.options.loop_within_folder,
                     open_url_available: curl::available(),
@@ -2605,11 +2525,7 @@ extern "system" fn window_procedure(
                     playlist_first_index: playlist.first_index,
                     playlist_current_slot: playlist.current_slot,
                     playlist_hidden_after: playlist.hidden_after,
-                    has_animation: application
-                        .image_core
-                        .current
-                        .as_ref()
-                        .is_some_and(|current| current.image.frames.len() > 1),
+                    has_animation: application.gate_satisfied(ActivationGate::Animation),
                     animation_paused: application
                         .animation
                         .as_ref()
@@ -2620,7 +2536,7 @@ extern "system" fn window_procedure(
                     mirrored: application.view_transform.mirrored,
                     flipped: application.view_transform.flipped,
                     fullscreen: application.fullscreen_restore.is_some(),
-                    slideshow_active: application.slideshow_active,
+                    slideshow_active: application.slideshow_item_shown_at.is_some(),
                     recent_names: application
                         .settings
                         .recent_files()
@@ -2742,7 +2658,7 @@ extern "system" fn window_procedure(
             let command = wparam.0 as u32 & 0xFFF0;
             let blocked = (command == SC_SCREENSAVE || command == SC_MONITORPOWER)
                 && application_from_window(window)
-                    .is_some_and(|application| application.slideshow_active);
+                    .is_some_and(|application| application.slideshow_item_shown_at.is_some());
             if blocked {
                 LRESULT(0)
             } else {

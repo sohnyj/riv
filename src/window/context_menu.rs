@@ -122,8 +122,7 @@ impl MenuBuilder {
         }
     }
 
-    /// A disabled "..." line whose hidden-name count rides the shortcut column; zero appends
-    /// nothing.
+    /// A disabled "..." line; its hidden-name count rides the shortcut column, zero appends nothing.
     fn append_playlist_overflow(menu: HMENU, hidden: usize) -> Result<()> {
         if hidden == 0 {
             return Ok(());
@@ -182,12 +181,7 @@ impl MenuBuilder {
         self.append_action(menu, Action::OpenUrl)?;
 
         let recent = unsafe { CreatePopupMenu()? };
-        for index in 0..self
-            .state_snapshot
-            .recent_names
-            .len()
-            .min(crate::settings::RECENT_FILES_LIMIT)
-        {
+        for index in 0..self.state_snapshot.recent_names.len() {
             let name = self.state_snapshot.recent_names[index].clone();
             self.append_action_labeled(recent, Action::Recent(index as u8), &name)?;
         }

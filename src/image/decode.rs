@@ -518,11 +518,15 @@ fn png_has_animation_control(header: &[u8]) -> bool {
     false
 }
 
+/// Formats rastered at the largest monitor's size, so cached weights expire with it.
+pub fn weight_depends_on_display(extension: &str) -> bool {
+    descriptor_for_extension(extension)
+        .is_some_and(|descriptor| matches!(descriptor.adapter, Adapter::Svg))
+}
+
 fn descriptor_for_path(path: &Path) -> Option<&'static FormatDescriptor> {
     let header = read_header(path);
-    let by_extension = path
-        .extension()
-        .map(|extension| extension.to_string_lossy().to_lowercase())
+    let by_extension = crate::text::lowercase_extension(path)
         .and_then(|extension| descriptor_for_extension(&extension));
     match (by_extension, header) {
         (Some(descriptor), Some(header)) => Some(refine_by_content(descriptor, &header)),
@@ -676,11 +680,10 @@ pub fn decode_animation_first_frame(
             if unsafe { decoder.GetFrameCount()? } <= 1 {
                 return Ok(None);
             }
-            decode_animation(factory, &decoder, 1, cancellation).map(Some)
+            decode_animation(factory, &decoder, 1, descriptor.name, cancellation).map(Some)
         })
         .ok()
-        .flatten()
-        .map(|frames| frames.into_image(descriptor.name)),
+        .flatten(),
         // The acTL chunk already proved the animation; WIC hands back the default image.
         Adapter::Apng => decode_with_wic(
             &input,
@@ -832,8 +835,7 @@ fn probe_webp_weight(input: &DecodeInput<'_>) -> Option<u64> {
 
 /// Extension-only descriptor lookup, so the UI-thread gates do no I/O.
 fn descriptor_for_path_extension(path: &Path) -> Option<&'static FormatDescriptor> {
-    let extension = path.extension()?.to_string_lossy().to_lowercase();
-    descriptor_for_extension(&extension)
+    descriptor_for_extension(&crate::text::lowercase_extension(path)?)
 }
 
 /// A file whose decode runs preview first; magic probing never yields these formats.
@@ -857,14 +859,7 @@ pub fn decode_two_stage_preview(path: &Path, cancellation: &AtomicBool) -> Optio
 
 fn decode_raw_preview(path: &Path, cancellation: &AtomicBool) -> Option<DecodedImage> {
     let decoded = with_wic_factory(|factory| {
-        let decoder = unsafe {
-            factory.CreateDecoderFromFilename(
-                &HSTRING::from(path.as_os_str()),
-                None,
-                GENERIC_READ,
-                WICDecodeMetadataCacheOnDemand,
-            )?
-        };
+        let decoder = create_wic_decoder(factory, &DecodeInput::File(path))?;
         let preview =
             unsafe { decoder.GetPreview() }.or_else(|_| unsafe { decoder.GetThumbnail() })?;
         let frame = unsafe { decoder.GetFrame(0) }.ok();
@@ -879,11 +874,12 @@ fn decode_raw_preview(path: &Path, cancellation: &AtomicBool) -> Option<DecodedI
         let (source, pixel_width, pixel_height) =
             downscale_to_device_limit(factory, source, width, height)?;
         let pixels = copy_pixels(&source, pixel_width, pixel_height, 4, cancellation)?;
-        Ok(DecodedFrames {
+        Ok(DecodedImage {
             width,
             height,
             pixel_width,
             pixel_height,
+            format_name: "RAW",
             icc_profile,
             exif,
             storage: PixelStorage::Bgra8,
@@ -898,7 +894,7 @@ fn decode_raw_preview(path: &Path, cancellation: &AtomicBool) -> Option<DecodedI
         })
     })
     .ok()?;
-    Some(decoded.into_image("RAW"))
+    Some(decoded)
 }
 
 /// Preview request: a quarter for float sources, half for the rest, capped near the monitor.
@@ -935,11 +931,11 @@ fn decode_subresolution_preview(path: &Path, cancellation: &AtomicBool) -> Optio
         let Some(scaled) = subresolution_source(factory, &frame, cancellation)? else {
             return Ok(None);
         };
-        decode_frame_source(factory, &frame, scaled, cancellation).map(Some)
+        decode_frame_source(factory, &frame, scaled, format_name, cancellation).map(Some)
     })
     .ok()
     .flatten()?;
-    Some(decoded.into_image(format_name))
+    Some(decoded)
 }
 
 /// Sub-resolution copy through the decoder's native scaler; None when it cannot help.
@@ -1001,61 +997,26 @@ fn with_wic_factory<T>(
     })
 }
 
-struct DecodedFrames {
-    width: u32,
-    height: u32,
-    pixel_width: u32,
-    pixel_height: u32,
-    icc_profile: Option<Vec<u8>>,
-    exif: Option<ExifInfo>,
-    storage: PixelStorage,
-    source_bits_per_channel: u32,
-    peak_luminance_nits: Option<f32>,
-    source_primaries: Option<[[f32; 2]; 3]>,
-    frames: Vec<Frame>,
-    frames_truncated: bool,
-}
-
-impl DecodedFrames {
-    fn into_image(self, format_name: &'static str) -> DecodedImage {
-        DecodedImage {
-            width: self.width,
-            height: self.height,
-            pixel_width: self.pixel_width,
-            pixel_height: self.pixel_height,
-            format_name,
-            icc_profile: self.icc_profile,
-            exif: self.exif,
-            storage: self.storage,
-            source_bits_per_channel: self.source_bits_per_channel,
-            peak_luminance_nits: self.peak_luminance_nits,
-            source_primaries: self.source_primaries,
-            frames: self.frames,
-            frames_truncated: self.frames_truncated,
-        }
-    }
-}
-
 fn decode_with_wic(
     input: &DecodeInput<'_>,
     format_name: &'static str,
     semantics: &FrameSemantics,
     cancellation: &AtomicBool,
 ) -> Result<DecodedImage, DecodeError> {
-    let decoded = with_wic_factory(|factory| {
+    with_wic_factory(|factory| {
         let decoder = create_wic_decoder(factory, input)?;
         let frame_count = unsafe { decoder.GetFrameCount()? }.max(1);
         match semantics {
             FrameSemantics::Animation if frame_count > 1 => {
-                decode_animation(factory, &decoder, frame_count, cancellation)
+                decode_animation(factory, &decoder, frame_count, format_name, cancellation)
             }
             FrameSemantics::SizeVariants if frame_count > 1 => {
-                decode_largest_frame(factory, &decoder, frame_count, cancellation)
+                decode_largest_frame(factory, &decoder, frame_count, format_name, cancellation)
             }
-            _ => decode_single_frame(factory, &decoder, 0, cancellation),
+            _ => decode_single_frame(factory, &decoder, 0, format_name, cancellation),
         }
-    })?;
-    Ok(decoded.into_image(format_name))
+    })
+    .map_err(DecodeError::from)
 }
 
 fn create_wic_decoder(
@@ -1152,11 +1113,12 @@ fn decode_single_frame(
     factory: &IWICImagingFactory,
     decoder: &IWICBitmapDecoder,
     index: u32,
+    format_name: &'static str,
     cancellation: &AtomicBool,
-) -> WindowsResult<DecodedFrames> {
+) -> WindowsResult<DecodedImage> {
     let frame = unsafe { decoder.GetFrame(index)? };
     let pixel_source = frame.cast()?;
-    decode_frame_source(factory, &frame, pixel_source, cancellation)
+    decode_frame_source(factory, &frame, pixel_source, format_name, cancellation)
 }
 
 /// The single-frame pipeline over the frame itself or a sub-resolution copy of it.
@@ -1164,8 +1126,9 @@ fn decode_frame_source(
     factory: &IWICImagingFactory,
     frame: &IWICBitmapFrameDecode,
     pixel_source: IWICBitmapSource,
+    format_name: &'static str,
     cancellation: &AtomicBool,
-) -> WindowsResult<DecodedFrames> {
+) -> WindowsResult<DecodedImage> {
     let orientation = exif_orientation(frame);
     let icc_profile = icc_profile_bytes(factory, frame);
     let exif = read_exif(frame);
@@ -1248,11 +1211,12 @@ fn decode_frame_source(
         }
         None => None,
     };
-    Ok(DecodedFrames {
+    Ok(DecodedImage {
         width,
         height,
         pixel_width,
         pixel_height,
+        format_name,
         icc_profile,
         exif,
         storage,
@@ -1996,10 +1960,11 @@ fn decode_largest_frame(
     factory: &IWICImagingFactory,
     decoder: &IWICBitmapDecoder,
     frame_count: u32,
+    format_name: &'static str,
     cancellation: &AtomicBool,
-) -> WindowsResult<DecodedFrames> {
+) -> WindowsResult<DecodedImage> {
     let largest_index = largest_frame_index(decoder, frame_count)?;
-    decode_single_frame(factory, decoder, largest_index, cancellation)
+    decode_single_frame(factory, decoder, largest_index, format_name, cancellation)
 }
 
 /// Index of the frame with the most pixels; the size-variant display rule.
@@ -2045,8 +2010,9 @@ fn decode_animation(
     factory: &IWICImagingFactory,
     decoder: &IWICBitmapDecoder,
     frame_count: u32,
+    format_name: &'static str,
     cancellation: &AtomicBool,
-) -> WindowsResult<DecodedFrames> {
+) -> WindowsResult<DecodedImage> {
     let container_reader = unsafe { decoder.GetMetadataQueryReader() }.ok();
     let container_query = |name: PCWSTR| {
         container_reader
@@ -2114,11 +2080,12 @@ fn decode_animation(
             _ => {}
         }
     }
-    Ok(DecodedFrames {
+    Ok(DecodedImage {
         width: canvas_width,
         height: canvas_height,
         pixel_width: canvas_width,
         pixel_height: canvas_height,
+        format_name,
         icc_profile,
         exif: None,
         storage: PixelStorage::Bgra8,
@@ -2273,36 +2240,45 @@ fn read_exif(frame: &IWICBitmapFrameDecode) -> Option<ExifInfo> {
     information.any_present().then_some(information)
 }
 
-fn query_f64(reader: &IWICMetadataQueryReader, name: PCWSTR) -> Option<f64> {
+/// Runs `convert` on the named metadata PROPVARIANT, clearing it afterwards.
+fn query_propvariant<T>(
+    reader: &IWICMetadataQueryReader,
+    name: PCWSTR,
+    convert: impl FnOnce(&PROPVARIANT) -> Option<T>,
+) -> Option<T> {
     let mut value = PROPVARIANT::default();
     unsafe { reader.GetMetadataByName(name, &raw mut value) }.ok()?;
-    let result = unsafe { PropVariantToDouble(&raw const value) }.ok();
+    let result = convert(&value);
     let _ = unsafe { PropVariantClear(&raw mut value) };
-    result.filter(|number| number.is_finite())
+    result
+}
+
+fn query_f64(reader: &IWICMetadataQueryReader, name: PCWSTR) -> Option<f64> {
+    query_propvariant(reader, name, |value| {
+        unsafe { PropVariantToDouble(std::ptr::from_ref(value)) }.ok()
+    })
+    .filter(|number| number.is_finite())
 }
 
 fn query_string(reader: &IWICMetadataQueryReader, name: PCWSTR) -> Option<String> {
-    let mut value = PROPVARIANT::default();
-    unsafe { reader.GetMetadataByName(name, &raw mut value) }.ok()?;
-    let text = unsafe { PropVariantToStringAlloc(&raw const value) }
-        .ok()
-        .map(|out| {
-            let result = String::from_utf16_lossy(unsafe { out.as_wide() });
-            unsafe { windows::Win32::System::Com::CoTaskMemFree(Some(out.0.cast())) };
-            result
-        });
-    let _ = unsafe { PropVariantClear(&raw mut value) };
-    text.map(|text| text.trim().to_string())
-        .filter(|text| !text.is_empty())
+    query_propvariant(reader, name, |value| {
+        unsafe { PropVariantToStringAlloc(std::ptr::from_ref(value)) }
+            .ok()
+            .map(|out| {
+                let result = String::from_utf16_lossy(unsafe { out.as_wide() });
+                unsafe { windows::Win32::System::Com::CoTaskMemFree(Some(out.0.cast())) };
+                result
+            })
+    })
+    .map(|text| text.trim().to_string())
+    .filter(|text| !text.is_empty())
 }
 
 fn query_filetime(reader: &IWICMetadataQueryReader, name: PCWSTR) -> Option<std::time::SystemTime> {
     use windows::Win32::System::Variant::PSTF_UTC;
-    let mut value = PROPVARIANT::default();
-    unsafe { reader.GetMetadataByName(name, &raw mut value) }.ok()?;
-    let file_time = unsafe { PropVariantToFileTime(&raw const value, PSTF_UTC) }.ok();
-    let _ = unsafe { PropVariantClear(&raw mut value) };
-    let file_time = file_time?;
+    let file_time = query_propvariant(reader, name, |value| {
+        unsafe { PropVariantToFileTime(std::ptr::from_ref(value), PSTF_UTC) }.ok()
+    })?;
     let intervals =
         (u64::from(file_time.dwHighDateTime) << 32) | u64::from(file_time.dwLowDateTime);
     let unix_intervals = intervals.checked_sub(FILETIME_UNIX_EPOCH)?;
@@ -2310,11 +2286,9 @@ fn query_filetime(reader: &IWICMetadataQueryReader, name: PCWSTR) -> Option<std:
 }
 
 fn query_u32(reader: &IWICMetadataQueryReader, name: PCWSTR) -> Option<u32> {
-    let mut value = PROPVARIANT::default();
-    unsafe { reader.GetMetadataByName(name, &raw mut value) }.ok()?;
-    let result = unsafe { PropVariantToUInt32(&raw const value) }.ok();
-    let _ = unsafe { PropVariantClear(&raw mut value) };
-    result
+    query_propvariant(reader, name, |value| {
+        unsafe { PropVariantToUInt32(std::ptr::from_ref(value)) }.ok()
+    })
 }
 
 fn source_size(source: &IWICBitmapSource) -> WindowsResult<(u32, u32)> {

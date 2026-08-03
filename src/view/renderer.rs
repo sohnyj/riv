@@ -18,9 +18,10 @@ use windows::Win32::Graphics::Direct2D::{
     D2D1_FACTORY_TYPE_SINGLE_THREADED, D2D1_GAMMA1_G10, D2D1_HDRTONEMAP_DISPLAY_MODE_HDR,
     D2D1_HDRTONEMAP_PROP_DISPLAY_MODE, D2D1_HDRTONEMAP_PROP_INPUT_MAX_LUMINANCE,
     D2D1_HDRTONEMAP_PROP_OUTPUT_MAX_LUMINANCE, D2D1_INTERPOLATION_MODE,
-    D2D1_INTERPOLATION_MODE_NEAREST_NEIGHBOR, D2D1_PROPERTY_TYPE_COLOR_CONTEXT,
-    D2D1_PROPERTY_TYPE_ENUM, D2D1_PROPERTY_TYPE_FLOAT, D2D1_SIMPLE_COLOR_PROFILE,
-    D2D1_WHITELEVELADJUSTMENT_PROP_INPUT_WHITE_LEVEL,
+    D2D1_INTERPOLATION_MODE_CUBIC, D2D1_INTERPOLATION_MODE_HIGH_QUALITY_CUBIC,
+    D2D1_INTERPOLATION_MODE_LINEAR, D2D1_INTERPOLATION_MODE_NEAREST_NEIGHBOR,
+    D2D1_PROPERTY_TYPE_COLOR_CONTEXT, D2D1_PROPERTY_TYPE_ENUM, D2D1_PROPERTY_TYPE_FLOAT,
+    D2D1_SIMPLE_COLOR_PROFILE, D2D1_WHITELEVELADJUSTMENT_PROP_INPUT_WHITE_LEVEL,
     D2D1_WHITELEVELADJUSTMENT_PROP_OUTPUT_WHITE_LEVEL, D2D1CreateFactory, ID2D1Bitmap1,
     ID2D1ColorContext, ID2D1DeviceContext, ID2D1DeviceContext5, ID2D1Effect, ID2D1Factory1,
     ID2D1Image,
@@ -73,8 +74,7 @@ pub const FRAME_SLOT_TIMEOUT_MS: u32 = 1000;
 /// Two presentation buffers: draw one while the last presented one retires.
 const PRESENTATION_BUFFER_COUNT: usize = 2;
 
-/// Where frames go out: DWM-composed presentation buffers, or the hwnd swapchain
-/// kept for systems without presentation-manager support (WARP, wine).
+/// Where frames go out: composed presentation buffers, or the hwnd swapchain where unsupported.
 enum PresentTarget {
     Composition(CompositionPresenter),
     SwapChain {
@@ -84,6 +84,7 @@ enum PresentTarget {
     },
 }
 
+#[derive(Default)]
 struct ModeEffects {
     color_management_effect: Option<ID2D1Effect>,
     hdr_tone_map_effect: Option<ID2D1Effect>,
@@ -115,6 +116,44 @@ impl OutputMode {
     }
 }
 
+/// The scaling-filter setting: the D2D interpolation and its info-panel label.
+#[derive(Clone, Copy)]
+pub enum ScalingFilter {
+    Nearest,
+    Bilinear,
+    Bicubic,
+    HighQuality,
+}
+
+impl ScalingFilter {
+    pub fn from_setting(value: u32) -> Self {
+        match value {
+            0 => Self::Nearest,
+            2 => Self::Bicubic,
+            3 => Self::HighQuality,
+            _ => Self::Bilinear,
+        }
+    }
+
+    pub fn interpolation(self) -> D2D1_INTERPOLATION_MODE {
+        match self {
+            Self::Nearest => D2D1_INTERPOLATION_MODE_NEAREST_NEIGHBOR,
+            Self::Bilinear => D2D1_INTERPOLATION_MODE_LINEAR,
+            Self::Bicubic => D2D1_INTERPOLATION_MODE_CUBIC,
+            Self::HighQuality => D2D1_INTERPOLATION_MODE_HIGH_QUALITY_CUBIC,
+        }
+    }
+
+    pub fn description(self) -> &'static str {
+        match self {
+            Self::Nearest => "Nearest",
+            Self::Bilinear => "Bilinear",
+            Self::Bicubic => "Bicubic",
+            Self::HighQuality => "High Quality",
+        }
+    }
+}
+
 /// Tone-map luminances for the info overlay (nits).
 #[derive(Clone, Copy, PartialEq)]
 pub struct ToneMapInfo {
@@ -127,9 +166,6 @@ pub struct ToneMapInfo {
 pub struct Renderer {
     /// The mode as built, so a caller can compare against a fresh display query.
     output_mode: OutputMode,
-    is_hdr_output: bool,
-    /// Advanced-color SDR: FP16 scRGB output so DWM color-manages the wide gamut.
-    is_sdr_wide_gamut: bool,
     backbuffer_format: DXGI_FORMAT,
     tone_map_target_nits: f32,
     /// Display's sustained full-frame luminance, shown in the overlay diagnostics.
@@ -150,11 +186,7 @@ pub struct Renderer {
     target: Option<ID2D1Bitmap1>,
     image: Option<ID2D1Bitmap1>,
     effect_output: Option<ID2D1Image>,
-    color_management_effect: Option<ID2D1Effect>,
-    white_level_effect: Option<ID2D1Effect>,
-    hdr_tone_map_effect: Option<ID2D1Effect>,
-    tone_map_normalize_effect: Option<ID2D1Effect>,
-    output_color_management_effect: Option<ID2D1Effect>,
+    mode_effects: ModeEffects,
     dither_setting: DitherMode,
     image_storage: PixelStorage,
     image_source_bits_per_channel: u32,
@@ -227,11 +259,7 @@ impl Drop for Renderer {
         self.target = None;
         self.scene_shader_resource_view = None;
         self.backbuffer_render_target_view = None;
-        self.color_management_effect = None;
-        self.white_level_effect = None;
-        self.hdr_tone_map_effect = None;
-        self.tone_map_normalize_effect = None;
-        self.output_color_management_effect = None;
+        self.mode_effects = ModeEffects::default();
     }
 }
 
@@ -715,8 +743,6 @@ impl Renderer {
             upload_device_generation: UPLOAD_DEVICE_GENERATIONS
                 .fetch_add(1, std::sync::atomic::Ordering::Relaxed),
             upload_maximum_frame_bytes,
-            is_hdr_output,
-            is_sdr_wide_gamut,
             backbuffer_format,
             tone_map_target_nits,
             display_full_frame_nits: full_frame_nits,
@@ -731,11 +757,7 @@ impl Renderer {
             target: None,
             image: None,
             effect_output: None,
-            color_management_effect: mode_effects.color_management_effect,
-            white_level_effect: mode_effects.white_level_effect,
-            hdr_tone_map_effect: mode_effects.hdr_tone_map_effect,
-            tone_map_normalize_effect: mode_effects.tone_map_normalize_effect,
-            output_color_management_effect: mode_effects.output_color_management_effect,
+            mode_effects,
             dither_setting: DitherMode::None,
             image_storage: PixelStorage::Bgra8,
             image_source_bits_per_channel: 8,
@@ -759,7 +781,7 @@ impl Renderer {
     }
 
     pub fn is_hdr_output(&self) -> bool {
-        self.is_hdr_output
+        self.output_mode.hdr
     }
 
     /// The mode this renderer was built or reconfigured with.
@@ -770,7 +792,7 @@ impl Renderer {
     /// Tone-map luminances for the info overlay: display caps and the output target.
     pub fn tone_map_info(&self) -> ToneMapInfo {
         ToneMapInfo {
-            hdr_display: self.is_hdr_output,
+            hdr_display: self.is_hdr_output(),
             display_peak_nits: self.tone_map_target_nits,
             display_full_frame_nits: self.display_full_frame_nits,
             output_target_nits: self.tone_map_target_nits,
@@ -779,7 +801,12 @@ impl Renderer {
 
     /// The SDR output is advanced-color FP16 scRGB, wide gamut handed to DWM.
     pub fn is_sdr_wide_gamut(&self) -> bool {
-        self.is_sdr_wide_gamut
+        self.output_mode.is_sdr_wide_gamut()
+    }
+
+    /// The backbuffer is FP16 scRGB; app-drawn colors encode linearly for it.
+    pub fn is_scrgb_output(&self) -> bool {
+        self.backbuffer_format == DXGI_FORMAT_R16G16B16A16_FLOAT
     }
 
     /// Active backbuffer, for the info overlay. ACM-off SDR names the gamut it maps into.
@@ -868,6 +895,18 @@ impl Renderer {
         }
     }
 
+    /// D2D bitmap over a D3D texture, through the DXGI surface cast.
+    fn bitmap_over_texture(
+        d2d_context: &ID2D1DeviceContext,
+        texture: &ID3D11Texture2D,
+        properties: &D2D1_BITMAP_PROPERTIES1,
+    ) -> Result<ID2D1Bitmap1> {
+        let surface: IDXGISurface = texture.cast()?;
+        unsafe {
+            d2d_context.CreateBitmapFromDxgiSurface(&surface, Some(std::ptr::from_ref(properties)))
+        }
+    }
+
     /// UNORM16 scene the quantize pass reads, as the D2D target.
     fn create_scene_target(&mut self) -> Result<()> {
         let scene_texture = crate::view::create_render_texture(
@@ -886,11 +925,7 @@ impl Renderer {
         }
         self.scene_shader_resource_view = scene_view;
         let properties = Self::target_bitmap_properties(DXGI_FORMAT_R16G16B16A16_UNORM);
-        let surface: IDXGISurface = scene_texture.cast()?;
-        let target = unsafe {
-            self.d2d_context
-                .CreateBitmapFromDxgiSurface(&surface, Some(&raw const properties))?
-        };
+        let target = Self::bitmap_over_texture(&self.d2d_context, &scene_texture, &properties)?;
         unsafe { self.d2d_context.SetTarget(&target) };
         self.target = Some(target);
         Ok(())
@@ -917,11 +952,7 @@ impl Renderer {
             return self.create_scene_target();
         }
         let properties = Self::target_bitmap_properties(self.backbuffer_format);
-        let surface: IDXGISurface = buffer.cast()?;
-        let target = unsafe {
-            self.d2d_context
-                .CreateBitmapFromDxgiSurface(&surface, Some(&raw const properties))?
-        };
+        let target = Self::bitmap_over_texture(&self.d2d_context, &buffer, &properties)?;
         unsafe { self.d2d_context.SetTarget(&target) };
         self.target = Some(target);
         Ok(())
@@ -947,11 +978,8 @@ impl Renderer {
                 } else {
                     // D2D draws each presentation buffer directly; render retargets per frame.
                     slot.render_target_view = None;
-                    let surface: IDXGISurface = slot.texture.cast()?;
-                    let target = unsafe {
-                        self.d2d_context
-                            .CreateBitmapFromDxgiSurface(&surface, Some(&raw const properties))?
-                    };
+                    let target =
+                        Self::bitmap_over_texture(&self.d2d_context, &slot.texture, &properties)?;
                     if first_target.is_none() {
                         first_target = Some(target.clone());
                     }
@@ -1007,8 +1035,6 @@ impl Renderer {
         let display_profile = mode.display_profile;
         // Adopt the target state first so a partial failure cannot retry every WM_MOVE.
         self.output_mode = output_mode;
-        self.is_hdr_output = is_hdr_output;
-        self.is_sdr_wide_gamut = is_sdr_wide_gamut;
         (self.display_color_context, self.destination_gamut_label) =
             Self::display_context_and_label(
                 &self.d2d_context,
@@ -1071,18 +1097,14 @@ impl Renderer {
             self.scrgb_color_context.as_ref(),
             self.sdr_destination_context(),
         );
-        self.color_management_effect = mode_effects.color_management_effect;
-        self.white_level_effect = mode_effects.white_level_effect;
-        self.hdr_tone_map_effect = mode_effects.hdr_tone_map_effect;
-        self.tone_map_normalize_effect = mode_effects.tone_map_normalize_effect;
-        self.output_color_management_effect = mode_effects.output_color_management_effect;
+        self.mode_effects = mode_effects;
         self.backbuffer_format = backbuffer_format;
         self.refresh_output_label();
         self.create_target()
     }
 
     pub fn set_sdr_white_boost(&mut self, boost: f32) {
-        if let Some(effect) = &self.white_level_effect {
+        if let Some(effect) = &self.mode_effects.white_level_effect {
             let _ = set_white_level_input(effect, SDR_REFERENCE_WHITE_NITS * boost.max(0.01));
         }
     }
@@ -1137,12 +1159,8 @@ impl Renderer {
         uploaded: &UploadedTexture,
         image: &DecodedImage,
     ) -> Result<()> {
-        let surface: IDXGISurface = uploaded.texture.cast()?;
         let properties = image_bitmap_properties(image.storage);
-        let bitmap = unsafe {
-            self.d2d_context
-                .CreateBitmapFromDxgiSurface(&surface, Some(&raw const properties))?
-        };
+        let bitmap = Self::bitmap_over_texture(&self.d2d_context, &uploaded.texture, &properties)?;
         self.adopt_image_bitmap(bitmap, image);
         Ok(())
     }
@@ -1235,16 +1253,18 @@ impl Renderer {
             .map(nearest_gamut_label)
             .or_else(|| icc_profile.and_then(icc_gamut_label));
         self.refresh_output_label();
-        let Some(color_management) = &self.color_management_effect else {
+        let Some(color_management) = &self.mode_effects.color_management_effect else {
             return;
         };
         // HDR passes through; SDR maps content above SDR white to the target.
         let hdr_content = peak_luminance_nits.is_some_and(|peak| peak > SDR_REFERENCE_WHITE_NITS);
         let tone_map = self
+            .mode_effects
             .hdr_tone_map_effect
             .as_ref()
             .zip(peak_luminance_nits.filter(|_| hdr_content));
-        let scrgb_destination = self.is_hdr_output || self.is_sdr_wide_gamut || tone_map.is_some();
+        let scrgb_destination =
+            self.is_hdr_output() || self.is_sdr_wide_gamut() || tone_map.is_some();
         // A source already in the destination space skips CM; the conversion would change nothing.
         if storage == PixelStorage::Bgra8
             && !scrgb_destination
@@ -1341,7 +1361,7 @@ impl Renderer {
                 let tone_mapped = unsafe { tone_map_effect.GetOutput() }.ok();
                 // Reinterpret scene-referred white as display-referred, then re-encode to sRGB.
                 tone_mapped.and_then(|tone_mapped| {
-                    let normalize = self.tone_map_normalize_effect.as_ref()?;
+                    let normalize = self.mode_effects.tone_map_normalize_effect.as_ref()?;
                     let display_white = self.tone_map_target_nits.min(input_maximum);
                     unsafe {
                         normalize.SetValue(
@@ -1353,18 +1373,19 @@ impl Renderer {
                     .ok()?;
                     unsafe { normalize.SetInput(0, &tone_mapped, true) };
                     let normalized = unsafe { normalize.GetOutput() }.ok()?;
-                    if self.is_sdr_wide_gamut {
+                    if self.is_sdr_wide_gamut() {
                         // FP16 scRGB backbuffer: keep the tone-mapped scRGB, no sRGB re-encode.
                         return Some(normalized);
                     }
-                    let output_encoding = self.output_color_management_effect.as_ref()?;
+                    let output_encoding =
+                        self.mode_effects.output_color_management_effect.as_ref()?;
                     unsafe { output_encoding.SetInput(0, &normalized, true) };
                     unsafe { output_encoding.GetOutput() }.ok()
                 })
             }
             None => {
                 // SDR content takes the white-level boost; HDR content passes through.
-                match &self.white_level_effect {
+                match &self.mode_effects.white_level_effect {
                     Some(white_level) if !hdr_content => {
                         unsafe { white_level.SetInput(0, &converted, true) };
                         unsafe { white_level.GetOutput() }.ok()

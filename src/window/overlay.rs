@@ -70,6 +70,23 @@ enum PanelPlacement {
     TopCenter,
 }
 
+impl PanelPlacement {
+    fn cache_slot(&self) -> usize {
+        match self {
+            Self::TopLeft => 0,
+            Self::TopCenter => 1,
+        }
+    }
+}
+
+/// A shaped panel layout reused while its text and wrap width hold still.
+struct PanelLayout {
+    text: String,
+    wrap_width: f32,
+    layout: IDWriteTextLayout,
+    metrics: DWRITE_TEXT_METRICS,
+}
+
 /// A solid brush for `color` mapped to the output color target.
 fn solid_brush(
     context: &ID2D1DeviceContext,
@@ -85,6 +102,8 @@ pub struct Overlay {
     wordmark_format: IDWriteTextFormat,
     dwrite_factory: IDWriteFactory,
     scale: f32,
+    /// One slot per placement, so the panel and the status pill cache independently.
+    panel_layouts: [Option<PanelLayout>; 2],
 }
 
 impl Overlay {
@@ -99,6 +118,7 @@ impl Overlay {
             wordmark_format,
             dwrite_factory,
             scale: 1.0,
+            panel_layouts: [None, None],
         })
     }
 
@@ -114,11 +134,12 @@ impl Overlay {
             self.centered_format = centered_format;
             self.wordmark_format = wordmark_format;
             self.scale = scale;
+            self.panel_layouts = [None, None];
         }
     }
 
     pub fn draw(
-        &self,
+        &mut self,
         context: &ID2D1DeviceContext,
         viewport_width: f32,
         viewport_height: f32,
@@ -172,25 +193,35 @@ impl Overlay {
         Ok(())
     }
 
-    fn panel_layout(&self, text: &str, viewport_width: f32) -> Result<IDWriteTextLayout> {
-        self.create_layout(
-            text,
-            &self.text_format,
-            (viewport_width - (PANEL_MARGIN * 2.0 + PANEL_PADDING_X * 2.0) * self.scale).max(0.0),
-        )
-    }
-
     fn draw_panel(
-        &self,
+        &mut self,
         context: &ID2D1DeviceContext,
         text: &str,
         placement: PanelPlacement,
         viewport_width: f32,
         output_color_target: color::OutputColorTarget,
     ) -> Result<()> {
-        let layout = self.panel_layout(text, viewport_width)?;
-        let mut metrics = DWRITE_TEXT_METRICS::default();
-        unsafe { layout.GetMetrics(&raw mut metrics)? };
+        let wrap_width =
+            (viewport_width - (PANEL_MARGIN * 2.0 + PANEL_PADDING_X * 2.0) * self.scale).max(0.0);
+        let slot = placement.cache_slot();
+        let stale = self.panel_layouts[slot]
+            .as_ref()
+            .is_none_or(|cached| cached.text != text || cached.wrap_width != wrap_width);
+        if stale {
+            let layout = self.create_layout(text, &self.text_format, wrap_width)?;
+            let mut metrics = DWRITE_TEXT_METRICS::default();
+            unsafe { layout.GetMetrics(&raw mut metrics)? };
+            self.panel_layouts[slot] = Some(PanelLayout {
+                text: text.to_string(),
+                wrap_width,
+                layout,
+                metrics,
+            });
+        }
+        let cached = self.panel_layouts[slot]
+            .as_ref()
+            .expect("panel layout cached");
+        let metrics = cached.metrics;
         let padding_x = PANEL_PADDING_X * self.scale;
         let padding_y = PANEL_PADDING_Y * self.scale;
         let margin = PANEL_MARGIN * self.scale;
@@ -219,7 +250,7 @@ impl Overlay {
                     X: left + padding_x,
                     Y: top + padding_y,
                 },
-                &layout,
+                &cached.layout,
                 &foreground,
                 D2D1_DRAW_TEXT_OPTIONS_NONE,
             );

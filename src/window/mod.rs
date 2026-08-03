@@ -3,8 +3,9 @@ pub mod dwm;
 pub mod menu_theme;
 pub mod overlay;
 
-use windows::Win32::Foundation::{HWND, RECT};
+use windows::Win32::Foundation::{HWND, LPARAM, RECT, WPARAM};
 use windows::Win32::UI::HiDpi::{AdjustWindowRectExForDpi, GetDpiForWindow};
+use windows::Win32::UI::WindowsAndMessaging::PostMessageW;
 use windows::Win32::UI::WindowsAndMessaging::{
     GWL_STYLE, GetWindowLongPtrW, SPI_GETWORKAREA, SYSTEM_PARAMETERS_INFO_UPDATE_FLAGS,
     SystemParametersInfoW, WINDOW_EX_STYLE, WINDOW_STYLE,
@@ -56,4 +57,20 @@ pub fn window_size_for_client(window: HWND, width: i32, height: i32) -> Option<(
         window_bounds.right - window_bounds.left,
         window_bounds.bottom - window_bounds.top,
     ))
+}
+
+/// Posts an owned payload; reclaims it when the message cannot be delivered.
+pub fn post_boxed<T>(window: isize, message: u32, payload: Box<T>) {
+    let pointer = Box::into_raw(payload);
+    let posted = unsafe {
+        PostMessageW(
+            Some(HWND(window as *mut core::ffi::c_void)),
+            message,
+            WPARAM(0),
+            LPARAM(pointer as isize),
+        )
+    };
+    if posted.is_err() {
+        drop(unsafe { Box::from_raw(pointer) });
+    }
 }

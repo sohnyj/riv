@@ -154,17 +154,12 @@ pub fn rename_file(path: &Path, new_name: &str) -> std::io::Result<PathBuf> {
 }
 
 pub fn show_rename_error(window: HWND, error: &std::io::Error) {
-    let content = crate::text::wide(error.to_string());
-    let configuration = TASKDIALOGCONFIG {
-        cbSize: size_of::<TASKDIALOGCONFIG>() as u32,
-        hwndParent: window,
-        pszWindowTitle: w!("riv"),
-        pszMainInstruction: w!("Cannot rename the file"),
-        pszContent: PCWSTR(content.as_ptr()),
-        dwCommonButtons: TDCBF_CLOSE_BUTTON,
-        ..Default::default()
-    };
-    let _ = unsafe { TaskDialogIndirect(&raw const configuration, None, None, None) };
+    crate::dialogs::show_message(
+        Some(window),
+        "Cannot rename the file",
+        &error.to_string(),
+        TDCBF_CLOSE_BUTTON,
+    );
 }
 
 #[cfg(test)]

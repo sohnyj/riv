@@ -467,10 +467,11 @@ pub fn probe_heif_dimensions_and_storage(data: &[u8]) -> Option<(u32, u32, Pixel
     size
 }
 
-fn probe_heif_primary_image(
+/// Reads the buffer into the context and takes the primary image handle.
+fn heif_primary_handle(
     context: *mut HeifContext,
     data: &[u8],
-) -> Option<(u32, u32, PixelStorage)> {
+) -> Result<*mut HeifImageHandle, DecodeError> {
     unsafe {
         heif_context_read_from_memory_without_copy(
             context,
@@ -479,12 +480,17 @@ fn probe_heif_primary_image(
             std::ptr::null(),
         )
     }
-    .into_result()
-    .ok()?;
+    .into_result()?;
     let mut handle: *mut HeifImageHandle = std::ptr::null_mut();
-    unsafe { heif_context_get_primary_image_handle(context, &raw mut handle) }
-        .into_result()
-        .ok()?;
+    unsafe { heif_context_get_primary_image_handle(context, &raw mut handle) }.into_result()?;
+    Ok(handle)
+}
+
+fn probe_heif_primary_image(
+    context: *mut HeifContext,
+    data: &[u8],
+) -> Option<(u32, u32, PixelStorage)> {
+    let handle = heif_primary_handle(context, data).ok()?;
     let width = unsafe { heif_image_handle_get_width(handle) };
     let height = unsafe { heif_image_handle_get_height(handle) };
     // The same gate the decode takes, so the budget matches the storage it will produce.
@@ -508,17 +514,7 @@ fn decode_heif_primary_image(
     data: &[u8],
     format_name: &'static str,
 ) -> Result<DecodedImage, DecodeError> {
-    unsafe {
-        heif_context_read_from_memory_without_copy(
-            context,
-            data.as_ptr().cast(),
-            data.len(),
-            std::ptr::null(),
-        )
-    }
-    .into_result()?;
-    let mut handle: *mut HeifImageHandle = std::ptr::null_mut();
-    unsafe { heif_context_get_primary_image_handle(context, &raw mut handle) }.into_result()?;
+    let handle = heif_primary_handle(context, data)?;
 
     // PQ/HLG survives only a 16-bit request; libheif converts no transfer function.
     let hdr_encoding = heif_hdr_encoding(handle);

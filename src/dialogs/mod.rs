@@ -7,7 +7,11 @@ pub mod shortcut_capture;
 pub mod text_input;
 
 use windows::Win32::Foundation::HWND;
+use windows::Win32::UI::Controls::{
+    TASKDIALOG_COMMON_BUTTON_FLAGS, TASKDIALOGCONFIG, TaskDialogIndirect,
+};
 use windows::Win32::UI::WindowsAndMessaging::{GetWindowLongPtrW, WINDOW_LONG_PTR_INDEX};
+use windows::core::{PCWSTR, w};
 
 pub const IDOK: usize = 1;
 pub const IDCANCEL: usize = 2;
@@ -50,4 +54,25 @@ pub fn center_on_owner(dialog: HWND) {
             SWP_NOSIZE | SWP_NOZORDER | SWP_NOACTIVATE,
         )
     };
+}
+
+/// One-message task dialog under the application title.
+pub fn show_message(
+    owner: Option<HWND>,
+    instruction: &str,
+    content: &str,
+    buttons: TASKDIALOG_COMMON_BUTTON_FLAGS,
+) {
+    let instruction = crate::text::wide(instruction);
+    let content = crate::text::wide(content);
+    let configuration = TASKDIALOGCONFIG {
+        cbSize: size_of::<TASKDIALOGCONFIG>() as u32,
+        hwndParent: owner.unwrap_or_default(),
+        pszWindowTitle: w!("riv"),
+        pszMainInstruction: PCWSTR(instruction.as_ptr()),
+        pszContent: PCWSTR(content.as_ptr()),
+        dwCommonButtons: buttons,
+        ..Default::default()
+    };
+    let _ = unsafe { TaskDialogIndirect(&raw const configuration, None, None, None) };
 }

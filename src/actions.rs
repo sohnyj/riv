@@ -22,7 +22,6 @@ pub enum Action {
     PasteUrl,
     Recent(u8),
     ClearRecents,
-    OpenWith,
     OpenWithOther,
     Loop,
     FirstFile,
@@ -81,12 +80,6 @@ const ACTION_TABLE: &[(Action, &str, &str, ActivationGate)] = &[
         "clearrecents",
         "Clear Recents",
         ActivationGate::Window,
-    ),
-    (
-        Action::OpenWith,
-        "openwith",
-        "Open With",
-        ActivationGate::FileOnDisk,
     ),
     (
         Action::OpenWithOther,
@@ -271,7 +264,7 @@ const ACTION_TABLE: &[(Action, &str, &str, ActivationGate)] = &[
     (Action::Quit, "quit", "Exit", ActivationGate::Window),
 ];
 
-const RECENT_NAMES: [&str; 10] = [
+const RECENT_NAMES: [&str; crate::settings::RECENT_FILES_LIMIT] = [
     "recent0", "recent1", "recent2", "recent3", "recent4", "recent5", "recent6", "recent7",
     "recent8", "recent9",
 ];
@@ -288,10 +281,7 @@ impl Action {
     }
 
     pub fn all_bindable() -> impl Iterator<Item = Self> {
-        ACTION_TABLE
-            .iter()
-            .map(|(action, _, _, _)| *action)
-            .filter(|action| !matches!(action, Self::OpenWith))
+        ACTION_TABLE.iter().map(|(action, _, _, _)| *action)
     }
 
     pub fn name(self) -> &'static str {

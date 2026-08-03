@@ -1,7 +1,6 @@
 //! Load state machine, item listing, preload cache, and the decode worker pool.
 
 use std::collections::{HashMap, HashSet, VecDeque};
-use std::ffi::c_void;
 use std::hash::{Hash, Hasher};
 use std::os::windows::fs::MetadataExt;
 use std::path::{Path, PathBuf};
@@ -9,18 +8,17 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Condvar, Mutex, mpsc};
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
-use windows::Win32::Foundation::{HWND, LPARAM, WPARAM};
+use windows::Win32::Foundation::HWND;
 use windows::Win32::Storage::FileSystem::FILE_ATTRIBUTE_HIDDEN;
 use windows::Win32::System::Com::{COINIT_MULTITHREADED, CoInitializeEx};
-use windows::Win32::UI::Shell::StrCmpLogicalW;
-use windows::Win32::UI::WindowsAndMessaging::{PostMessageW, WM_APP};
-use windows::core::PCWSTR;
+use windows::Win32::UI::WindowsAndMessaging::WM_APP;
 
 use super::decode::{
     self, DecodeError, DecodedImage, UploadDevice, UploadedTexture, upload_still_texture,
 };
 use crate::archive::reader as archive_reader;
 use crate::network::curl;
+use crate::window::post_boxed;
 
 pub const WM_APP_DECODE_COMPLETE: u32 = WM_APP + 1;
 pub const WM_APP_DOWNLOAD_PROGRESS: u32 = WM_APP + 7;
@@ -65,11 +63,11 @@ impl Hash for ItemLocation {
         match self {
             Self::File(path) => {
                 0u8.hash(state);
-                path_identity(path).hash(state);
+                hash_path_identity(path, state);
             }
             Self::ArchiveMember { archive, member } => {
                 1u8.hash(state);
-                path_identity(archive).hash(state);
+                hash_path_identity(archive, state);
                 member.hash(state);
             }
             Self::Url(url) => {
@@ -154,9 +152,7 @@ impl ItemLocation {
             Self::ArchiveMember { member, .. } => Path::new(member),
             Self::Url(url) => return curl::extension_lowercase(url),
         };
-        name_path
-            .extension()
-            .map(|extension| extension.to_string_lossy().to_lowercase())
+        crate::text::lowercase_extension(name_path)
     }
 }
 
@@ -658,9 +654,7 @@ impl ImageCore {
             });
             return false;
         }
-        let extension = path
-            .extension()
-            .map(|extension| extension.to_string_lossy().to_lowercase());
+        let extension = crate::text::lowercase_extension(&path);
         if extension
             .as_deref()
             .is_some_and(archive_reader::is_archive_extension)
@@ -848,14 +842,7 @@ impl ImageCore {
         let location = ItemLocation::Url(url.to_string());
         if let Some(message) = failure {
             self.pending_display = None;
-            self.load_error = Some((
-                location,
-                DecodeError {
-                    code: 0,
-                    message: message.to_string(),
-                    store_codec_names: &[],
-                },
-            ));
+            self.load_error = Some((location, decode::uncoded_error(message)));
             // A refused URL still leaves the single-item state; the listing is gone.
             self.refresh_preload();
             return false;
@@ -893,11 +880,7 @@ impl ImageCore {
                 None => {
                     self.load_error = Some((
                         location.clone(),
-                        DecodeError {
-                            code: 0,
-                            message: "member no longer exists in the archive".to_string(),
-                            store_codec_names: &[],
-                        },
+                        decode::uncoded_error("member no longer exists in the archive"),
                     ));
                     return false;
                 }
@@ -1041,10 +1024,6 @@ impl ImageCore {
         Some(self.load_item(&target))
     }
 
-    pub fn peek_navigation_target(&self, command: NavigationCommand) -> Option<ItemLocation> {
-        self.navigation_target(command)
-    }
-
     /// Empty-window state for when a delete leaves nothing to show.
     pub fn clear_current_item(&mut self) {
         self.pending_display = None;
@@ -1178,7 +1157,7 @@ impl ImageCore {
         }
     }
 
-    fn navigation_target(&self, command: NavigationCommand) -> Option<ItemLocation> {
+    pub fn navigation_target(&self, command: NavigationCommand) -> Option<ItemLocation> {
         if self.entries.is_empty() {
             return None;
         }
@@ -1354,7 +1333,7 @@ impl ImageCore {
                 .is_none_or(|current| current.location != *pending)
         });
         let (backward, forward, budget) = self.preload_plan();
-        // Candidates in priority order; a missing anchor still names neighbors.
+        // Candidates in priority order; a missing anchor still names adjacent entries.
         let length = self.entries.len();
         let anchor = self.anchor_index();
         let candidates: Vec<usize> = preload_offsets(backward, forward)
@@ -1467,7 +1446,11 @@ impl ImageCore {
     /// SVG rasters at the largest monitor's size, so its weights expire with it.
     pub fn invalidate_svg_weights(&mut self) {
         for entry in &mut self.entries {
-            if format_name_of(&entry.location) == "SVG" {
+            let display_sized = entry
+                .location
+                .extension_lowercase()
+                .is_some_and(|extension| decode::weight_depends_on_display(&extension));
+            if display_sized {
                 entry.weight = DecodedWeight::Unknown;
             }
         }
@@ -1610,7 +1593,7 @@ fn playlist_window_start(total: usize, anchor: Option<usize>, capacity: usize) -
 fn anchor_start(anchor: AnchorIndex, forward: bool) -> Option<isize> {
     match anchor {
         AnchorIndex::Listed(index) => Some(index as isize),
-        // A missing anchor sits between its neighbors, so both directions land next to it.
+        // A missing anchor sits between two entries, so both directions land next to it.
         AnchorIndex::Missing(index) => Some(index as isize - isize::from(forward)),
         AnchorIndex::Unlisted => None,
     }
@@ -1705,9 +1688,13 @@ fn paths_equal(a: &Path, b: &Path) -> bool {
         .eq_ignore_ascii_case(&b.as_os_str().to_string_lossy())
 }
 
-/// Hash key for paths_equal; component-wise equality would not match this folding.
-fn path_identity(path: &Path) -> String {
-    path.as_os_str().to_string_lossy().to_ascii_lowercase()
+/// Hash matching paths_equal's folding, fed per byte so no key string is allocated.
+fn hash_path_identity<H: Hasher>(path: &Path, state: &mut H) {
+    for byte in path.as_os_str().to_string_lossy().bytes() {
+        state.write_u8(byte.to_ascii_lowercase());
+    }
+    // A terminator, so adjacent hashed fields cannot blur together.
+    state.write_u8(0xFF);
 }
 
 fn scan_folder(directory: &Path, options: &CoreOptions) -> Vec<ListingEntry> {
@@ -1730,9 +1717,7 @@ fn scan_folder(directory: &Path, options: &CoreOptions) -> Vec<ListingEntry> {
         if display_name.starts_with("._") {
             continue; // skip macOS metadata files
         }
-        let extension_matched = Path::new(&file_name)
-            .extension()
-            .map(|extension| extension.to_string_lossy().to_lowercase())
+        let extension_matched = crate::text::lowercase_extension(Path::new(&file_name))
             .is_some_and(|extension| decode::is_supported_extension(&extension));
         let included = extension_matched
             || (options.detect_format_by_content
@@ -1755,9 +1740,7 @@ fn scan_folder(directory: &Path, options: &CoreOptions) -> Vec<ListingEntry> {
 
 /// Entry for an image member; other member types drop out of the listing.
 fn member_entry(archive: &Path, member: archive_reader::MemberInfo) -> Option<ListingEntry> {
-    Path::new(&member.name)
-        .extension()
-        .map(|extension| extension.to_string_lossy().to_lowercase())
+    crate::text::lowercase_extension(Path::new(&member.name))
         .filter(|extension| decode::is_supported_extension(extension))?;
     let wide_name = crate::text::wide(&member.name);
     Some(ListingEntry {
@@ -1805,13 +1788,7 @@ fn sort_entries(entries: &mut [ListingEntry], options: &CoreOptions) {
 }
 
 fn compare_natural_names(a: &ListingEntry, b: &ListingEntry) -> std::cmp::Ordering {
-    natural_order(&a.wide_name, &b.wide_name)
-}
-
-/// Explorer's natural order over null-terminated UTF-16 names.
-pub fn natural_order(a: &[u16], b: &[u16]) -> std::cmp::Ordering {
-    let result = unsafe { StrCmpLogicalW(PCWSTR(a.as_ptr()), PCWSTR(b.as_ptr())) };
-    result.cmp(&0)
+    crate::text::natural_order(&a.wide_name, &b.wide_name)
 }
 
 fn format_name_of(location: &ItemLocation) -> &'static str {
@@ -2019,9 +1996,7 @@ fn worker_loop(shared: &PoolShared, window: isize) {
             ItemLocation::ArchiveMember { archive, member } => {
                 match archive_reader::read_member(archive, member, &job.cancellation) {
                     Ok(data) => {
-                        let extension = Path::new(member)
-                            .extension()
-                            .map(|extension| extension.to_string_lossy().to_lowercase());
+                        let extension = job.location.extension_lowercase();
                         decode::decode_bytes(&data, extension.as_deref(), &job.cancellation)
                     }
                     Err(error) => Err(error.into()),
@@ -2125,22 +2100,6 @@ fn url_decode_error(error: DecodeError) -> DecodeError {
     error
 }
 
-/// Posts an owned payload; reclaims it when the message cannot be delivered.
-fn post_boxed<T>(window: isize, message: u32, payload: Box<T>) {
-    let pointer = Box::into_raw(payload);
-    let posted = unsafe {
-        PostMessageW(
-            Some(HWND(window as *mut c_void)),
-            message,
-            WPARAM(0),
-            LPARAM(pointer as isize),
-        )
-    };
-    if posted.is_err() {
-        drop(unsafe { Box::from_raw(pointer) });
-    }
-}
-
 #[cfg(test)]
 mod step_index_tests {
     use super::*;
@@ -2161,7 +2120,7 @@ mod step_index_tests {
     }
 
     #[test]
-    fn a_missing_anchor_lands_on_both_of_its_neighbors() {
+    fn a_missing_anchor_lands_on_both_adjacent_entries() {
         assert_eq!(step_index(AnchorIndex::Missing(2), 1, 4, false), Some(2));
         assert_eq!(step_index(AnchorIndex::Missing(2), -1, 4, false), Some(1));
         // The place after the last entry: forward runs out, backward keeps the last one.
@@ -2201,7 +2160,7 @@ mod preload_geometry_tests {
     }
 
     #[test]
-    fn a_missing_anchor_preloads_the_neighbors_it_sat_between() {
+    fn a_missing_anchor_preloads_the_entries_it_sat_between() {
         let (backward, forward, _) = PRELOAD_SPECIFICATIONS[1];
         let anchor = AnchorIndex::Missing(10);
         let targets: Vec<usize> = preload_offsets(backward, forward)
@@ -2217,7 +2176,7 @@ mod preload_geometry_tests {
         assert_eq!(
             index_at_offset(AnchorIndex::Unlisted, 1, 100, false),
             None,
-            "an anchor outside the listing has no neighbors to speculate on"
+            "an anchor outside the listing has no adjacent entries to speculate on"
         );
         let priorities = preload_priorities(AnchorIndex::Unlisted, backward, forward, 100, false);
         assert!(priorities.is_empty());
@@ -2768,7 +2727,7 @@ mod listing_scan_tests {
     }
 
     #[test]
-    fn a_vanished_item_leaves_a_slot_its_neighbors_still_answer() {
+    fn a_vanished_item_leaves_a_slot_adjacent_entries_still_answer() {
         let directory = std::env::temp_dir().join("riv-reload-vanished");
         std::fs::create_dir_all(&directory).expect("fixture directory");
         for name in ["a.png", "b.png", "c.png"] {
@@ -2789,26 +2748,26 @@ mod listing_scan_tests {
             core.navigation_target(command)
                 .and_then(|location| location.as_file().map(Path::to_path_buf))
         }
-        let neighbors = |core: &ImageCore| {
+        let adjacent_entries = |core: &ImageCore| {
             (
                 target(core, NavigationCommand::Next),
                 target(core, NavigationCommand::Previous),
             )
         };
         let expected = (Some(directory.join("c.png")), Some(directory.join("a.png")));
-        assert_eq!(neighbors(&core), expected);
+        assert_eq!(adjacent_entries(&core), expected);
         // A second reload of the same missing item keeps the place it left.
         assert!(!core.reload_current());
         let scan = ScannedListing::of(ListingScope::Directory(directory.clone()), &core.options);
         core.install_listing_scan(scan);
-        assert_eq!(neighbors(&core), expected);
-        // A file added ahead of it shifts every index; the place follows its neighbor.
+        assert_eq!(adjacent_entries(&core), expected);
+        // A file added ahead of it shifts every index; the place follows the entry beside it.
         std::fs::write(directory.join("a0.png"), b"listing only").expect("fixture file");
         assert!(!core.reload_current());
         let scan = ScannedListing::of(ListingScope::Directory(directory.clone()), &core.options);
         core.install_listing_scan(scan);
         assert_eq!(core.entries.len(), 3);
-        assert_eq!(neighbors(&core), expected);
+        assert_eq!(adjacent_entries(&core), expected);
         let _ = std::fs::remove_dir_all(&directory);
     }
 

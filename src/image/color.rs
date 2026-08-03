@@ -19,8 +19,7 @@ use windows::Win32::Graphics::Gdi::{
 use windows::Win32::UI::WindowsAndMessaging::PostMessageW;
 use windows::core::{IInspectable, Interface};
 
-/// The DisplayInformation activation factory's desktop interop, absent from the crate's
-/// bindings; the first three slots are IInspectable's, keeping the vtable layout.
+/// DisplayInformation's desktop interop, absent from the crate; IInspectable slots keep the vtable.
 #[allow(non_snake_case)]
 mod interop {
     use windows::Win32::Foundation::HWND;
@@ -122,7 +121,27 @@ pub struct DisplayCapabilities {
     pub sdr_white_boost: f32,
 }
 
+/// The BT.2100 reference white, the SDR tone-map target.
+const SDR_TONE_MAP_TARGET_NITS: f32 = 203.0;
+/// HDR tone-map target when the monitor reports no peak luminance.
+const HDR_PEAK_FALLBACK_NITS: f32 = 600.0;
+
 impl DisplayCapabilities {
+    /// The tone-map target and paired full-frame limit for this display.
+    pub fn tone_map_targets(&self) -> (f32, f32) {
+        let target = if self.hdr {
+            self.max_luminance.unwrap_or(HDR_PEAK_FALLBACK_NITS)
+        } else {
+            SDR_TONE_MAP_TARGET_NITS
+        };
+        let full_frame = if self.hdr {
+            self.max_full_frame_luminance.unwrap_or(target)
+        } else {
+            target
+        };
+        (target, full_frame)
+    }
+
     /// SDR white boost for the given output; 1.0 outside HDR (ACM output is display-referred).
     pub fn sdr_white_boost_for(&self, hdr_output: bool) -> f32 {
         if hdr_output {
