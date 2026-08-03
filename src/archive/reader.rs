@@ -31,12 +31,6 @@ pub fn format_groups() -> impl Iterator<Item = (&'static str, &'static [&'static
     FORMAT_GROUPS.iter().copied()
 }
 
-pub fn supported_extensions() -> impl Iterator<Item = &'static str> {
-    FORMAT_GROUPS
-        .iter()
-        .flat_map(|(_, extensions)| extensions.iter().copied())
-}
-
 pub fn is_archive_extension(extension: &str) -> bool {
     FORMAT_GROUPS
         .iter()

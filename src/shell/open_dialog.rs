@@ -9,13 +9,45 @@ use windows::Win32::UI::Shell::{
     FOS_ALLOWMULTISELECT, FOS_FILEMUSTEXIST, FileOpenDialog, IFileOpenDialog, IShellItem,
     SHCreateItemFromParsingName, SIGDN_FILESYSPATH,
 };
-use windows::core::{HSTRING, PCWSTR, w};
+use windows::core::{HSTRING, PCWSTR};
 
 use crate::archive::reader as archive_reader;
 use crate::image::decode;
 
 pub fn show(window: HWND, initial_directory: Option<&str>) -> Vec<PathBuf> {
     select_files(window, initial_directory).unwrap_or_default()
+}
+
+/// One filter per format in the file association order, then the two catch-alls;
+/// the second return is the position of the supported files filter.
+fn filters(archives: bool) -> (Vec<(String, String)>, usize) {
+    let mut formats: Vec<(&'static str, &'static [&'static str])> =
+        decode::format_groups().collect();
+    // Archive extensions appear only when the inbox library provides the support.
+    if archives {
+        formats.extend(archive_reader::format_groups());
+    }
+    formats.sort_by_key(|(name, _)| *name);
+
+    let mut filters = Vec::with_capacity(formats.len() + 2);
+    for (name, extensions) in formats {
+        let pattern = extensions
+            .iter()
+            .map(|extension| format!("*.{extension}"))
+            .collect::<Vec<_>>()
+            .join(";");
+        filters.push((format!("{name} ({pattern})"), pattern));
+    }
+    let supported_position = filters.len();
+    // The name leaves the patterns out: the list is long and the formats are right above it.
+    let everything = filters
+        .iter()
+        .map(|(_, pattern)| pattern.as_str())
+        .collect::<Vec<_>>()
+        .join(";");
+    filters.push(("Supported files".to_string(), everything));
+    filters.push(("All files (*)".to_string(), "*.*".to_string()));
+    (filters, supported_position)
 }
 
 fn select_files(
@@ -25,28 +57,22 @@ fn select_files(
     let dialog: IFileOpenDialog =
         unsafe { CoCreateInstance(&FileOpenDialog, None, CLSCTX_INPROC_SERVER)? };
 
-    let mut patterns: Vec<String> = decode::supported_extensions()
-        .map(|extension| format!("*.{extension}"))
+    let (filter_texts, supported_position) = filters(archive_reader::available());
+    let filter_texts: Vec<(HSTRING, HSTRING)> = filter_texts
+        .into_iter()
+        .map(|(name, pattern)| (HSTRING::from(name), HSTRING::from(pattern)))
         .collect();
-    if archive_reader::available() {
-        patterns.extend(
-            archive_reader::supported_extensions().map(|extension| format!("*.{extension}")),
-        );
-    }
-    let display = HSTRING::from(format!("Supported files ({})", patterns.join(" ")));
-    let pattern = HSTRING::from(patterns.join(";"));
-    let filters = [
-        COMDLG_FILTERSPEC {
-            pszName: PCWSTR(display.as_ptr()),
+    let filters: Vec<COMDLG_FILTERSPEC> = filter_texts
+        .iter()
+        .map(|(name, pattern)| COMDLG_FILTERSPEC {
+            pszName: PCWSTR(name.as_ptr()),
             pszSpec: PCWSTR(pattern.as_ptr()),
-        },
-        COMDLG_FILTERSPEC {
-            pszName: w!("All files (*)"),
-            pszSpec: w!("*.*"),
-        },
-    ];
+        })
+        .collect();
     unsafe {
         dialog.SetFileTypes(&filters)?;
+        // One-based; the dialog opens on everything riv reads, not on a single format.
+        dialog.SetFileTypeIndex(supported_position as u32 + 1)?;
         let options = dialog.GetOptions()?;
         dialog.SetOptions(options | FOS_ALLOWMULTISELECT | FOS_FILEMUSTEXIST)?;
         if let Some(directory) = initial_directory
@@ -70,5 +96,36 @@ fn select_files(
             }
         }
         Ok(paths)
+    }
+}
+
+#[cfg(test)]
+mod filter_tests {
+    use super::*;
+
+    #[test]
+    fn formats_lead_and_the_supported_filter_carries_them_all() {
+        let (filters, supported) = filters(true);
+        // Same order as the file association list, which sorts by format name.
+        let names: Vec<&str> = filters.iter().map(|(name, _)| name.as_str()).collect();
+        assert_eq!(names[0], "APNG (*.apng)");
+        assert_eq!(names[1], "AVIF (*.avif)");
+        assert_eq!(names[2], "Archive (*.zip;*.7z;*.rar;*.tar)");
+        assert!(names.contains(&"HEIF (*.heic;*.heif;*.hif)"));
+        assert_eq!(names[supported], "Supported files");
+        assert_eq!(names[supported + 1], "All files (*)");
+        // The name drops the patterns, the filter itself keeps every one of them.
+        let everything = &filters[supported].1;
+        assert!(everything.contains("*.apng"));
+        assert!(everything.contains("*.cbz"));
+        assert!(everything.ends_with("*.webp"));
+    }
+
+    #[test]
+    fn archives_drop_out_when_the_library_is_missing() {
+        let (filters, supported) = filters(false);
+        let names: Vec<&str> = filters.iter().map(|(name, _)| name.as_str()).collect();
+        assert!(!names.iter().any(|name| name.starts_with("Archive")));
+        assert!(!filters[supported].1.contains("*.cbz"));
     }
 }

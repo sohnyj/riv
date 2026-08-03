@@ -407,12 +407,6 @@ pub fn format_groups() -> impl Iterator<Item = (&'static str, &'static [&'static
         .map(|descriptor| (descriptor.name, descriptor.extensions))
 }
 
-pub fn supported_extensions() -> impl Iterator<Item = &'static str> {
-    REGISTRY
-        .iter()
-        .flat_map(|descriptor| descriptor.extensions.iter().copied())
-}
-
 pub fn is_supported_extension(extension: &str) -> bool {
     REGISTRY
         .iter()
