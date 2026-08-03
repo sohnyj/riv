@@ -226,17 +226,16 @@ unsafe extern "system" fn mouse_procedure(
         }
         WM_RIV_MOUSE_CAPTURED => {
             let modifiers = (wparam.0 >> 8) as u8;
-            let double_click = wparam.0 & 0x80 != 0;
-            let base = match wparam.0 & 0x7F {
-                0 => MouseBase::Left,
-                1 => MouseBase::Middle,
+            let base = match wparam.0 & 0xFF {
+                0 => MouseBase::DoubleClick,
+                1 => MouseBase::WheelButton,
                 2 => MouseBase::Back,
                 3 => MouseBase::Forward,
                 4 => MouseBase::WheelUp,
                 _ => MouseBase::WheelDown,
             };
             if let Some(state) = state_mut::<MouseCaptureState>(dialog) {
-                let encoding = bindings::format_mouse_encoding(modifiers, double_click, base);
+                let encoding = bindings::format_mouse_encoding(modifiers, base);
                 set_mouse_field_text(dialog, Some(&encoding));
                 state.binding = Some(encoding);
             }
@@ -587,9 +586,8 @@ unsafe extern "system" fn mouse_field_procedure(
     wparam: WPARAM,
     lparam: LPARAM,
 ) -> LRESULT {
-    fn notify(field: HWND, double_click: bool, base_index: usize) -> LRESULT {
-        let packed =
-            ((current_modifiers() as usize) << 8) | (usize::from(double_click) << 7) | base_index;
+    fn notify(field: HWND, base_index: usize) -> LRESULT {
+        let packed = ((current_modifiers() as usize) << 8) | base_index;
         if let Ok(parent) = unsafe { GetParent(field) } {
             unsafe { SendMessageW(parent, WM_RIV_MOUSE_CAPTURED, Some(WPARAM(packed)), None) };
         }
@@ -604,15 +602,15 @@ unsafe extern "system" fn mouse_field_procedure(
             let _ = unsafe { SetFocus(Some(field)) };
             LRESULT(0)
         }
-        WM_LBUTTONDBLCLK => notify(field, true, 0),
-        WM_MBUTTONDOWN | WM_MBUTTONDBLCLK => notify(field, false, 1),
+        WM_LBUTTONDBLCLK => notify(field, 0),
+        WM_MBUTTONDOWN | WM_MBUTTONDBLCLK => notify(field, 1),
         WM_XBUTTONDOWN | WM_XBUTTONDBLCLK => {
             let base_index = if (wparam.0 >> 16) & 0x2 != 0 { 3 } else { 2 };
-            notify(field, false, base_index)
+            notify(field, base_index)
         }
         WM_MOUSEWHEEL => {
             let delta = ((wparam.0 >> 16) & 0xFFFF) as u16 as i16;
-            notify(field, false, if delta > 0 { 4 } else { 5 })
+            notify(field, if delta > 0 { 4 } else { 5 })
         }
         WM_SETFOCUS | WM_KILLFOCUS => {
             let _ = unsafe { InvalidateRect(Some(field), None, true) };

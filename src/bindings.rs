@@ -33,8 +33,8 @@ pub fn current_modifiers() -> u8 {
 
 #[derive(Clone, Copy, PartialEq, Eq)]
 pub enum MouseBase {
-    Left,
-    Middle,
+    DoubleClick,
+    WheelButton,
     Back,
     Forward,
     WheelUp,
@@ -49,7 +49,6 @@ struct KeyBinding {
 
 struct MouseBinding {
     modifiers: u8,
-    double_click: bool,
     base: MouseBase,
     action: Action,
 }
@@ -105,8 +104,8 @@ const DEFAULT_MOUSE: &[(&str, &[&str])] = &[
     ("next", &["WheelDown"]),
     ("zoomin", &["Ctrl+WheelUp"]),
     ("zoomout", &["Ctrl+WheelDown"]),
-    ("togglezoom", &["Double+Left"]),
-    ("fullscreen", &["Middle"]),
+    ("togglezoom", &["Double-click"]),
+    ("fullscreen", &["WheelButton"]),
 ];
 
 impl Bindings {
@@ -124,9 +123,8 @@ impl Bindings {
             .collect();
         let mouse = collect_bindings(DEFAULT_MOUSE, mouse_overrides, parse_mouse_encoding)
             .into_iter()
-            .map(|((modifiers, double_click, base), action)| MouseBinding {
+            .map(|((modifiers, base), action)| MouseBinding {
                 modifiers,
-                double_click,
                 base,
                 action,
             })
@@ -141,19 +139,10 @@ impl Bindings {
             .map(|binding| binding.action)
     }
 
-    pub fn lookup_mouse(
-        &self,
-        modifiers: u8,
-        double_click: bool,
-        base: MouseBase,
-    ) -> Option<Action> {
+    pub fn lookup_mouse(&self, modifiers: u8, base: MouseBase) -> Option<Action> {
         self.mouse
             .iter()
-            .find(|binding| {
-                binding.modifiers == modifiers
-                    && binding.double_click == double_click
-                    && binding.base == base
-            })
+            .find(|binding| binding.modifiers == modifiers && binding.base == base)
             .map(|binding| binding.action)
     }
 
@@ -187,20 +176,16 @@ pub fn format_key_sequence(modifiers: u8, virtual_key: u16) -> Option<String> {
     Some(format!("{}{base}", modifier_prefix(modifiers)))
 }
 
-pub fn format_mouse_encoding(modifiers: u8, double_click: bool, base: MouseBase) -> String {
+pub fn format_mouse_encoding(modifiers: u8, base: MouseBase) -> String {
     let base_name = match base {
-        MouseBase::Left => "Left",
-        MouseBase::Middle => "Middle",
+        MouseBase::DoubleClick => "Double-click",
+        MouseBase::WheelButton => "WheelButton",
         MouseBase::Back => "Back",
         MouseBase::Forward => "Forward",
         MouseBase::WheelUp => "WheelUp",
         MouseBase::WheelDown => "WheelDown",
     };
-    format!(
-        "{}{}{base_name}",
-        modifier_prefix(modifiers),
-        if double_click { "Double+" } else { "" }
-    )
+    format!("{}{base_name}", modifier_prefix(modifiers))
 }
 
 pub fn modifier_prefix(modifiers: u8) -> String {
@@ -263,8 +248,8 @@ pub fn resolved_mouse_encodings(
     override_or_default(overrides, action_name, default_mouse_encodings(action_name))
         .iter()
         .filter_map(|encoding| {
-            let (modifiers, double_click, base) = parse_mouse_encoding(encoding)?;
-            Some(format_mouse_encoding(modifiers, double_click, base))
+            let (modifiers, base) = parse_mouse_encoding(encoding)?;
+            Some(format_mouse_encoding(modifiers, base))
         })
         .collect()
 }
@@ -340,9 +325,8 @@ fn parse_key_sequence(sequence: &str) -> Option<(u8, u16)> {
     virtual_key.map(|key| (modifiers, key))
 }
 
-fn parse_mouse_encoding(encoding: &str) -> Option<(u8, bool, MouseBase)> {
+fn parse_mouse_encoding(encoding: &str) -> Option<(u8, MouseBase)> {
     let mut modifiers = 0u8;
-    let mut double_click = false;
     let mut base = None;
     for token in encoding.split('+') {
         match token {
@@ -350,9 +334,8 @@ fn parse_mouse_encoding(encoding: &str) -> Option<(u8, bool, MouseBase)> {
             "Shift" => modifiers |= MODIFIER_SHIFT,
             "Alt" => modifiers |= MODIFIER_ALT,
             "Meta" => modifiers |= MODIFIER_META,
-            "Double" => double_click = true,
-            "Left" => base = Some(MouseBase::Left),
-            "Middle" => base = Some(MouseBase::Middle),
+            "Double-click" => base = Some(MouseBase::DoubleClick),
+            "WheelButton" => base = Some(MouseBase::WheelButton),
             "Back" => base = Some(MouseBase::Back),
             "Forward" => base = Some(MouseBase::Forward),
             "WheelUp" => base = Some(MouseBase::WheelUp),
@@ -360,11 +343,7 @@ fn parse_mouse_encoding(encoding: &str) -> Option<(u8, bool, MouseBase)> {
             _ => return None,
         }
     }
-    let base = base?;
-    if (base == MouseBase::Left) != double_click {
-        return None;
-    }
-    Some((modifiers, double_click, base))
+    Some((modifiers, base?))
 }
 
 fn virtual_key_from_name(name: &str) -> Option<u16> {
@@ -473,7 +452,7 @@ mod normalization_tests {
     fn resolved_bindings_round_trip_and_discard_junk() {
         let overrides = serde_json::json!({
             "next": ["Right", "Ctrl+Ctrl+X", "A".repeat(300)],
-            "fullscreen": ["Middle", "Nope"],
+            "fullscreen": ["WheelButton", "Nope"],
         });
         let map = overrides.as_object().expect("object");
         assert_eq!(
@@ -482,7 +461,7 @@ mod normalization_tests {
         );
         assert_eq!(
             resolved_mouse_encodings(Some(map), "fullscreen"),
-            ["Middle"]
+            ["WheelButton"]
         );
     }
 }

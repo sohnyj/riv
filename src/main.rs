@@ -1937,7 +1937,7 @@ fn handle_wheel(application: &mut Application, window: HWND, wheel_delta: i16) {
     } else {
         MouseBase::WheelDown
     };
-    let Some(action) = application.bindings.lookup_mouse(modifiers, false, base) else {
+    let Some(action) = application.bindings.lookup_mouse(modifiers, base) else {
         return;
     };
     if !application.gate_satisfied(action.gate()) {
@@ -2582,10 +2582,9 @@ extern "system" fn window_procedure(
         }
         WM_LBUTTONDBLCLK => {
             if let Some(application) = application_from_window(window)
-                && let Some(action) =
-                    application
-                        .bindings
-                        .lookup_mouse(current_modifiers(), true, MouseBase::Left)
+                && let Some(action) = application
+                    .bindings
+                    .lookup_mouse(current_modifiers(), MouseBase::DoubleClick)
             {
                 dispatch_action(application, window, action);
             }
@@ -2593,10 +2592,9 @@ extern "system" fn window_procedure(
         }
         WM_MBUTTONDOWN => {
             if let Some(application) = application_from_window(window)
-                && let Some(action) =
-                    application
-                        .bindings
-                        .lookup_mouse(current_modifiers(), false, MouseBase::Middle)
+                && let Some(action) = application
+                    .bindings
+                    .lookup_mouse(current_modifiers(), MouseBase::WheelButton)
             {
                 dispatch_action(application, window, action);
             }
@@ -2609,11 +2607,7 @@ extern "system" fn window_procedure(
                 } else {
                     MouseBase::Forward
                 };
-                if let Some(action) =
-                    application
-                        .bindings
-                        .lookup_mouse(current_modifiers(), false, base)
-                {
+                if let Some(action) = application.bindings.lookup_mouse(current_modifiers(), base) {
                     dispatch_action(application, window, action);
                 }
             }
