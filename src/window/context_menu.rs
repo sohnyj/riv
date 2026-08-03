@@ -18,7 +18,7 @@ use windows::core::{HSTRING, Result};
 
 use crate::actions::{Action, ActivationGate};
 
-/// Playlist size when the display cannot be measured; names beyond it collapse into "..." lines.
+/// Playlist size cap, and the size to use when the display cannot be measured.
 pub const PLAYLIST_CAPACITY: usize = 25;
 
 #[derive(Clone, Copy)]
@@ -361,7 +361,9 @@ fn capacity_for_height(usable_height: i32, row_height: i32) -> usize {
         return 1;
     }
     // An even count would seat the current file off center by half a row.
-    (if names % 2 == 0 { names - 1 } else { names }) as usize
+    let names = if names % 2 == 0 { names - 1 } else { names };
+    // One menu level holds 25 items at most, however tall the display is.
+    (names as usize).min(PLAYLIST_CAPACITY)
 }
 
 /// Names the display shows with the taskbar and the title bar left clear.
@@ -621,6 +623,8 @@ mod menu_structure_tests {
         assert_eq!(capacity_for_height(100, 35), 1);
         // 1080p at 200%: work area 984 less the title bar, rows of about 47.
         assert_eq!(capacity_for_height(920, 47), 17);
+        // A tall display stops at the cap one menu level is meant to hold.
+        assert_eq!(capacity_for_height(2000, 35), PLAYLIST_CAPACITY);
         for height in 0..2000 {
             let names = capacity_for_height(height, 35);
             assert!(names % 2 == 1, "{names} names for {height} pixels");
