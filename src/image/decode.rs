@@ -284,7 +284,7 @@ static REGISTRY: &[FormatDescriptor] = &[
     },
     FormatDescriptor {
         name: "JPEG",
-        extensions: &["jpg", "jpeg", "jpe"],
+        extensions: &["jpe", "jpeg", "jpg"],
         magic: &[&[(0, b"\xFF\xD8\xFF")]],
         semantics: FrameSemantics::Single,
         adapter: Adapter::Wic,
@@ -325,7 +325,7 @@ static REGISTRY: &[FormatDescriptor] = &[
     },
     FormatDescriptor {
         name: "TIFF",
-        extensions: &["tif", "tiff"],
+        extensions: &["tiff", "tif"],
         magic: &[&[(0, b"II*\x00")], &[(0, b"MM\x00*")]],
         semantics: FrameSemantics::Single,
         adapter: Adapter::Wic,
@@ -382,7 +382,7 @@ static REGISTRY: &[FormatDescriptor] = &[
     },
     FormatDescriptor {
         name: "JPEG XR",
-        extensions: &["jxr", "wdp", "hdp"],
+        extensions: &["jxr", "wdp"],
         magic: &[&[(0, b"II\xBC\x01")], &[(0, b"II\xBC\x00")]],
         semantics: FrameSemantics::Single,
         adapter: Adapter::WicSubresolutionTwoStage,
