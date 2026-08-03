@@ -178,7 +178,7 @@ pub struct SettingsFile {
 fn recent_files_of(document: &Value) -> Vec<(String, String)> {
     document
         .get("recents")
-        .and_then(|recents| recents.get("recentFiles"))
+        .and_then(|recents| recents.get("recentfiles"))
         .and_then(Value::as_array)
         .map(|list| {
             list.iter()
@@ -476,7 +476,7 @@ impl SettingsFile {
     pub fn last_file_dialog_directory(&self) -> Option<String> {
         self.document
             .get("recents")?
-            .get("lastFileDialogDir")?
+            .get("lastfiledialogdirectory")?
             .as_str()
             .map(str::to_string)
     }
@@ -490,7 +490,7 @@ impl SettingsFile {
             .as_object_mut()
             .expect("recents is object")
             .insert(
-                "lastFileDialogDir".to_string(),
+                "lastfiledialogdirectory".to_string(),
                 Value::String(directory.to_string()),
             );
     }
@@ -540,7 +540,7 @@ impl SettingsFile {
             .or_insert_with(|| Value::Object(Map::new()))
             .as_object_mut()
             .expect("recents is object")
-            .insert("recentFiles".to_string(), Value::Array(list));
+            .insert("recentfiles".to_string(), Value::Array(list));
     }
 
     pub fn add_recent_file(&mut self, path: &std::path::Path) {
