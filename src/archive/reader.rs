@@ -12,7 +12,7 @@ use super::libarchive::{
 /// Extension groups parallel to decode::format_groups.
 const FORMAT_GROUPS: &[(&str, &[&str])] = &[
     ("Archive", &["zip", "7z", "rar", "tar"]),
-    ("Comic Book Archive", &["cbz", "cb7", "cbr", "cbt"]),
+    ("Comic book archive", &["cbz", "cb7", "cbr", "cbt"]),
 ];
 
 /// Uncompressed per-member ceiling; guards against decompression bombs.
