@@ -151,6 +151,8 @@ struct Application {
     window_title: String,
     /// The window's current monitor; a WM_MOVE re-evaluates color only when it changes.
     current_monitor: HMONITOR,
+    /// Playlist names the display fits; recomputed when the display or the monitor changes.
+    playlist_capacity: usize,
     /// Inside a modal move loop, where the system invalidates but the content cannot change.
     window_moving: bool,
     /// Activation as WM_ACTIVATE reports it; the slideshow follows this, not a foreground query.
@@ -326,6 +328,7 @@ impl Application {
             display_labels: display_labels(&capabilities, gamut),
             window_title: "riv".to_string(),
             current_monitor: unsafe { MonitorFromWindow(window, MONITOR_DEFAULTTONEAREST) },
+            playlist_capacity: context_menu::playlist_capacity(window),
             window_moving: false,
             window_active: true,
             render_requested: false,
@@ -357,6 +360,9 @@ impl Application {
         let monitor = unsafe { MonitorFromWindow(window, MONITOR_DEFAULTTONEAREST) };
         let changed = monitor != self.current_monitor;
         self.current_monitor = monitor;
+        if changed {
+            self.playlist_capacity = context_menu::playlist_capacity(window);
+        }
         changed
     }
 
@@ -1808,7 +1814,7 @@ fn window_center(window: HWND) -> (i32, i32) {
 fn show_menu(application: &mut Application, window: HWND, x: i32, y: i32, playlist_only: bool) {
     let playlist = application
         .image_core
-        .playlist_window(context_menu::PLAYLIST_CAPACITY);
+        .playlist_window(application.playlist_capacity);
     let state = MenuState {
         has_image: application.gate_satisfied(ActivationGate::Image),
         has_file_on_disk: application.gate_satisfied(ActivationGate::FileOnDisk),
@@ -2640,6 +2646,8 @@ extern "system" fn window_procedure(
             // HDR/ACM toggle, bit depth, or monitor reconfigure: re-evaluate once.
             if let Some(application) = application_from_window(window) {
                 let _ = application.update_current_monitor(window);
+                // A mode change moves the work area even when the monitor stays.
+                application.playlist_capacity = context_menu::playlist_capacity(window);
                 application.image_core.invalidate_svg_weights();
                 application.refresh_display_state(window);
             }
@@ -2649,6 +2657,8 @@ extern "system" fn window_procedure(
             if let Some(application) = application_from_window(window) {
                 let ratio = (wparam.0 & 0xFFFF) as f32 / 96.0;
                 application.overlay.set_scale(ratio);
+                // Menu rows scale with the new dots per inch.
+                application.playlist_capacity = context_menu::playlist_capacity(window);
             }
             let suggested_bounds = unsafe { &*(lparam.0 as *const RECT) };
             let _ = unsafe {

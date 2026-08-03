@@ -2,17 +2,23 @@
 
 use std::collections::HashMap;
 
-use windows::Win32::Foundation::HWND;
+use windows::Win32::Foundation::{HWND, RECT};
+use windows::Win32::Graphics::Gdi::{
+    GetMonitorInfoW, MONITOR_DEFAULTTONEAREST, MONITORINFO, MonitorFromWindow,
+};
+use windows::Win32::UI::HiDpi::{
+    AdjustWindowRectExForDpi, GetDpiForWindow, GetSystemMetricsForDpi,
+};
 use windows::Win32::UI::WindowsAndMessaging::{
     AppendMenuW, CreatePopupMenu, DestroyMenu, HMENU, MF_CHECKED, MF_DISABLED, MF_GRAYED, MF_POPUP,
-    MF_SEPARATOR, MF_STRING, TPM_CENTERALIGN, TPM_RETURNCMD, TPM_RIGHTBUTTON, TPM_VCENTERALIGN,
-    TrackPopupMenuEx,
+    MF_SEPARATOR, MF_STRING, SM_CYMENU, TPM_CENTERALIGN, TPM_RETURNCMD, TPM_RIGHTBUTTON,
+    TPM_VCENTERALIGN, TrackPopupMenuEx, WINDOW_EX_STYLE, WS_OVERLAPPEDWINDOW,
 };
 use windows::core::{HSTRING, Result};
 
 use crate::actions::{Action, ActivationGate};
 
-/// Playlist submenu size; names beyond the window collapse into "..." lines at either end.
+/// Playlist size when the display cannot be measured; names beyond it collapse into "..." lines.
 pub const PLAYLIST_CAPACITY: usize = 25;
 
 #[derive(Clone, Copy)]
@@ -323,6 +329,60 @@ impl MenuBuilder {
     }
 }
 
+/// Popup rows stand taller than the menu bar row this metric names; the quarter is measured margin.
+fn menu_row_height(dpi: u32) -> i32 {
+    let bar_row = unsafe { GetSystemMetricsForDpi(SM_CYMENU, dpi) }.max(1);
+    bar_row + bar_row / 4
+}
+
+/// The title bar and top frame a normal window wears, which the menu leaves clear.
+fn title_bar_height(dpi: u32) -> i32 {
+    let mut frame = RECT::default();
+    if unsafe {
+        AdjustWindowRectExForDpi(
+            &raw mut frame,
+            WS_OVERLAPPEDWINDOW,
+            false,
+            WINDOW_EX_STYLE(0),
+            dpi,
+        )
+    }
+    .is_err()
+    {
+        return 0;
+    }
+    -frame.top
+}
+
+/// Names that leave both "..." lines room; odd, so the current file sits in the middle.
+fn capacity_for_height(usable_height: i32, row_height: i32) -> usize {
+    let names = usable_height / row_height.max(1) - 2;
+    if names < 3 {
+        return 1;
+    }
+    // An even count would seat the current file off center by half a row.
+    (if names % 2 == 0 { names - 1 } else { names }) as usize
+}
+
+/// Names the display shows with the taskbar and the title bar left clear.
+pub fn playlist_capacity(window: HWND) -> usize {
+    let monitor = unsafe { MonitorFromWindow(window, MONITOR_DEFAULTTONEAREST) };
+    let mut info = MONITORINFO {
+        cbSize: size_of::<MONITORINFO>() as u32,
+        ..Default::default()
+    };
+    if !unsafe { GetMonitorInfoW(monitor, &raw mut info) }.as_bool() {
+        return PLAYLIST_CAPACITY;
+    }
+    let dpi = match unsafe { GetDpiForWindow(window) } {
+        0 => 96,
+        dpi => dpi,
+    };
+    // The work area already excludes the taskbar.
+    let work_height = info.rcWork.bottom - info.rcWork.top;
+    capacity_for_height(work_height - title_bar_height(dpi), menu_row_height(dpi))
+}
+
 pub fn show(window: HWND, state: MenuState, x: i32, y: i32) -> Option<MenuSelection> {
     track(window, state, x, y, false)
 }
@@ -550,6 +610,21 @@ mod menu_structure_tests {
                 .any(|entry| matches!(entry, MenuSelection::PlaylistEntry(50)))
         );
         let _ = unsafe { DestroyMenu(menu) };
+    }
+
+    #[test]
+    fn the_name_count_stays_odd_below_the_display() {
+        // Ten rows: two go to the "..." lines, and the odd count centers the current file.
+        assert_eq!(capacity_for_height(350, 35), 7);
+        assert_eq!(capacity_for_height(385, 35), 9);
+        // A display too short for a centered list still offers the current file.
+        assert_eq!(capacity_for_height(100, 35), 1);
+        // 1080p at 200%: work area 984 less the title bar, rows of about 47.
+        assert_eq!(capacity_for_height(920, 47), 17);
+        for height in 0..2000 {
+            let names = capacity_for_height(height, 35);
+            assert!(names % 2 == 1, "{names} names for {height} pixels");
+        }
     }
 
     #[test]
