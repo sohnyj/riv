@@ -702,7 +702,7 @@ mod menu_structure_tests {
                 "", // separator
                 "Start slideshow",
                 "", // separator
-                "Settings...",
+                "Settings",
             ]
         );
         let _ = unsafe { DestroyMenu(menu) };

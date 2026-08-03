@@ -33,7 +33,7 @@ fn select_files(
             archive_reader::supported_extensions().map(|extension| format!("*.{extension}")),
         );
     }
-    let display = HSTRING::from(format!("Supported Files ({})", patterns.join(" ")));
+    let display = HSTRING::from(format!("Supported files ({})", patterns.join(" ")));
     let pattern = HSTRING::from(patterns.join(";"));
     let filters = [
         COMDLG_FILTERSPEC {
@@ -41,7 +41,7 @@ fn select_files(
             pszSpec: PCWSTR(pattern.as_ptr()),
         },
         COMDLG_FILTERSPEC {
-            pszName: w!("All Files (*)"),
+            pszName: w!("All files (*)"),
             pszSpec: w!("*.*"),
         },
     ];

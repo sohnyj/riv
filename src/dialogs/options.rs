@@ -328,8 +328,8 @@ fn initialize_frame(state: &mut OptionsState) {
         "Image",
         "Miscellaneous",
         "Shortcuts",
-        "File Association",
-        "Start Menu",
+        "File association",
+        "Start menu",
         "About",
     ]
     .iter()
@@ -671,10 +671,10 @@ fn initialize_window_page(state: &OptionsState) {
         page,
         IDC_WINDOW_TITLEBAR_MODE,
         &[
-            "App Name",
-            "File Name",
-            "[N/N] File Name",
-            "[N/N] Folder\\File Name",
+            "App name",
+            "File name",
+            "[N/N] File name",
+            "[N/N] Folder\\File name",
         ],
     );
 }
@@ -684,7 +684,7 @@ fn initialize_image_page(state: &OptionsState) {
     combo_fill(
         page,
         IDC_IMAGE_SCALING,
-        &["Nearest", "Bilinear", "Bicubic", "High Quality"],
+        &["Nearest", "Bilinear", "Bicubic", "High quality"],
     );
     combo_fill(page, IDC_IMAGE_DITHER, &["None", "Ordered", "Fruit"]);
     combo_fill(page, IDC_IMAGE_FITMODE, &["Width", "Height"]);
@@ -703,10 +703,10 @@ fn initialize_miscellaneous_page(state: &OptionsState) {
     combo_fill(
         page,
         IDC_MISC_SORT,
-        &["Name", "Date Modified", "Date Created", "Size", "Type"],
+        &["Name", "Date modified", "Date created", "Size", "Type"],
     );
     combo_fill(page, IDC_MISC_SLIDESHOW_DIRECTION, &["Backward", "Forward"]);
-    combo_fill(page, IDC_MISC_AFTER_DELETE, &["Move Back", "Move Forward"]);
+    combo_fill(page, IDC_MISC_AFTER_DELETE, &["Move back", "Move forward"]);
     if let Ok(spin) = unsafe { GetDlgItem(Some(page), IDC_MISC_SLIDESHOW_INTERVAL_SPIN) } {
         unsafe { SendMessageW(spin, UDM_SETRANGE32, Some(WPARAM(1)), Some(LPARAM(3600))) };
     }

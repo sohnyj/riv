@@ -253,7 +253,7 @@ const ACTION_TABLE: &[(Action, &str, &str, ActivationGate)] = &[
     (
         Action::Options,
         "settings",
-        "Settings...",
+        "Settings",
         ActivationGate::Window,
     ),
     (

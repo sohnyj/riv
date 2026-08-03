@@ -52,7 +52,7 @@ pub fn confirm_delete(window: HWND, path: &Path, permanent: bool) -> DeleteConfi
         nButtonID: IDYES.0,
         pszButtonText: PCWSTR(delete_label.as_ptr()),
     };
-    let verification = w!("Do not ask again");
+    let verification = w!("Don't ask again");
     let mut configuration = TASKDIALOGCONFIG {
         cbSize: size_of::<TASKDIALOGCONFIG>() as u32,
         hwndParent: window,

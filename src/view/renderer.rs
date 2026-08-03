@@ -149,7 +149,7 @@ impl ScalingFilter {
             Self::Nearest => "Nearest",
             Self::Bilinear => "Bilinear",
             Self::Bicubic => "Bicubic",
-            Self::HighQuality => "High Quality",
+            Self::HighQuality => "High quality",
         }
     }
 }
