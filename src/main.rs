@@ -516,7 +516,7 @@ impl Application {
     }
 
     fn restore_window_geometry(&mut self, window: HWND) {
-        if !self.settings.options.save_window_position {
+        if !self.settings.options.remember_window_size_and_position {
             return;
         }
         let Some((x, y, width, height, maximized)) = self.settings.window_geometry() else {
@@ -539,7 +539,7 @@ impl Application {
 
     /// Exit persistence: geometry (when enabled), then the merged save.
     fn save_on_exit(&mut self, window: HWND) {
-        if self.settings.options.save_window_position {
+        if self.settings.options.remember_window_size_and_position {
             let mut placement = WINDOWPLACEMENT {
                 length: size_of::<WINDOWPLACEMENT>() as u32,
                 ..Default::default()
@@ -574,7 +574,7 @@ impl Application {
             let file_name = anchor
                 .map(|location| location.display_name())
                 .filter(|name| !name.is_empty());
-            match (self.settings.options.title_bar_mode, file_name) {
+            match (self.settings.options.title_bar_text, file_name) {
                 (0, _) | (_, None) => "riv".to_string(),
                 (2, Some(name)) => self.prefix_with_position(name),
                 (3, Some(name)) => {
@@ -849,7 +849,7 @@ impl Application {
             self.restart_slideshow_timer(window);
             // The declared direction aims the preload before the first tick.
             self.image_core
-                .set_navigation_direction(self.settings.options.slideshow_reversed);
+                .set_navigation_direction(self.settings.options.slideshow_backward());
             self.slideshow_item_shown_at = Some(std::time::Instant::now());
             self.keep_system_awake(true);
             self.show_status_text(window, "Slideshow: Start".to_string());
@@ -1319,9 +1319,9 @@ impl Application {
 
 fn core_options(options: &Options) -> CoreOptions {
     CoreOptions {
-        sort_mode: SortMode::from_setting(options.sort_mode),
+        sort_mode: SortMode::from_setting(options.sort_files_by),
         sort_descending: options.sort_descending,
-        preloading_mode: options.preloading_mode as usize,
+        preloading_mode: options.preloading as usize,
         loop_within_folder: options.loop_within_folder,
         skip_hidden: options.skip_hidden,
         detect_format_by_content: options.detect_format_by_content,
@@ -1691,7 +1691,7 @@ fn delete_current_file(application: &mut Application, window: HWND, permanent: b
             application.settings.store_options();
         }
     }
-    let (command, opposite) = if application.settings.options.after_delete == 0 {
+    let (command, opposite) = if application.settings.options.after_deletion == 0 {
         (NavigationCommand::Previous, NavigationCommand::Next)
     } else {
         (NavigationCommand::Next, NavigationCommand::Previous)
@@ -2333,7 +2333,7 @@ extern "system" fn window_procedure(
                 if hold > elapsed {
                     application.schedule_slideshow_timer(window, hold - elapsed);
                 } else {
-                    let command = if application.settings.options.slideshow_reversed {
+                    let command = if application.settings.options.slideshow_backward() {
                         NavigationCommand::Previous
                     } else {
                         NavigationCommand::Next

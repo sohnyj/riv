@@ -83,7 +83,7 @@ const ACTION_TABLE: &[(Action, &str, &str, ActivationGate)] = &[
     ),
     (
         Action::OpenWithOther,
-        "openwithother",
+        "otherapplication",
         "Other application...",
         ActivationGate::FileOnDisk,
     ),
@@ -101,13 +101,13 @@ const ACTION_TABLE: &[(Action, &str, &str, ActivationGate)] = &[
     ),
     (
         Action::PreviousFile,
-        "previousfile",
+        "previous",
         "Previous",
         ActivationGate::NavigationTargets,
     ),
     (
         Action::NextFile,
-        "nextfile",
+        "next",
         "Next",
         ActivationGate::NavigationTargets,
     ),
@@ -157,7 +157,7 @@ const ACTION_TABLE: &[(Action, &str, &str, ActivationGate)] = &[
     (Action::Reload, "reload", "Reload", ActivationGate::Image),
     (
         Action::FitMode,
-        "fitmode",
+        "togglefitmode",
         "Toggle fit mode",
         ActivationGate::Image,
     ),
@@ -215,7 +215,7 @@ const ACTION_TABLE: &[(Action, &str, &str, ActivationGate)] = &[
     (Action::Flip, "flip", "Flip", ActivationGate::Image),
     (
         Action::OpenContainingFolder,
-        "opencontainingfolder",
+        "showinexplorer",
         "Show in Explorer",
         ActivationGate::ContainingFile,
     ),
@@ -233,19 +233,19 @@ const ACTION_TABLE: &[(Action, &str, &str, ActivationGate)] = &[
     ),
     (
         Action::DeletePermanent,
-        "deletepermanent",
+        "deletepermanently",
         "Delete permanently",
         ActivationGate::FileOnDisk,
     ),
     (
         Action::Slideshow,
-        "slideshow",
+        "toggleslideshow",
         "Toggle slideshow",
         ActivationGate::NavigationTargets,
     ),
     (
         Action::Options,
-        "options",
+        "settings",
         "Settings...",
         ActivationGate::Window,
     ),
@@ -261,7 +261,7 @@ const ACTION_TABLE: &[(Action, &str, &str, ActivationGate)] = &[
         "Enter fullscreen",
         ActivationGate::Window,
     ),
-    (Action::Quit, "quit", "Exit", ActivationGate::Window),
+    (Action::Quit, "exit", "Exit", ActivationGate::Window),
 ];
 
 const RECENT_NAMES: [&str; crate::settings::RECENT_FILES_LIMIT] = [

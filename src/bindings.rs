@@ -64,8 +64,8 @@ const DEFAULT_KEYBOARD: &[(&str, &[&str])] = &[
     ("pasteurl", &["Ctrl+V"]),
     ("loop", &["L"]),
     ("firstfile", &["Home"]),
-    ("previousfile", &["Left"]),
-    ("nextfile", &["Right"]),
+    ("previous", &["Left"]),
+    ("next", &["Right"]),
     ("lastfile", &["End"]),
     ("pause", &["Space"]),
     ("previousframe", &["B"]),
@@ -75,7 +75,7 @@ const DEFAULT_KEYBOARD: &[(&str, &[&str])] = &[
     ("resetspeed", &["\\"]),
     ("showfileinfo", &["I", "Tab"]),
     ("reload", &["Ctrl+R", "F5"]),
-    ("fitmode", &["V"]),
+    ("togglefitmode", &["V"]),
     ("preservezoom", &["Z"]),
     ("zoomin", &["="]),
     ("zoomout", &["-"]),
@@ -88,20 +88,20 @@ const DEFAULT_KEYBOARD: &[(&str, &[&str])] = &[
     ("rotateright", &["Shift+Right"]),
     ("mirror", &["Shift+M"]),
     ("flip", &["Shift+F"]),
-    ("opencontainingfolder", &["Ctrl+E"]),
+    ("showinexplorer", &["Ctrl+E"]),
     ("rename", &["R", "F2"]),
     ("delete", &["Delete"]),
-    ("deletepermanent", &["Shift+Delete"]),
-    ("slideshow", &["S"]),
-    ("options", &["Ctrl+,"]),
+    ("deletepermanently", &["Shift+Delete"]),
+    ("toggleslideshow", &["S"]),
+    ("settings", &["Ctrl+,"]),
     ("alwaysontop", &["T"]),
     ("fullscreen", &["F", "F11"]),
-    ("quit", &["Ctrl+W", "Escape"]),
+    ("exit", &["Ctrl+W", "Escape"]),
 ];
 
 const DEFAULT_MOUSE: &[(&str, &[&str])] = &[
-    ("previousfile", &["WheelUp"]),
-    ("nextfile", &["WheelDown"]),
+    ("previous", &["WheelUp"]),
+    ("next", &["WheelDown"]),
     ("zoomin", &["Ctrl+WheelUp"]),
     ("zoomout", &["Ctrl+WheelDown"]),
     ("togglezoom", &["Double+Left"]),
@@ -471,12 +471,12 @@ mod normalization_tests {
     #[test]
     fn resolved_bindings_round_trip_and_discard_junk() {
         let overrides = serde_json::json!({
-            "nextfile": ["Right", "Ctrl+Ctrl+X", "A".repeat(300)],
+            "next": ["Right", "Ctrl+Ctrl+X", "A".repeat(300)],
             "fullscreen": ["Middle", "Nope"],
         });
         let map = overrides.as_object().expect("object");
         assert_eq!(
-            resolved_keyboard_sequences(Some(map), "nextfile"),
+            resolved_keyboard_sequences(Some(map), "next"),
             ["Right", "Ctrl+X"]
         );
         assert_eq!(

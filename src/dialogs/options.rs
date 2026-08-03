@@ -582,13 +582,13 @@ fn handle_page_command(
             choose_background_color(state, page);
         }
         (IDC_WINDOW_TITLEBAR_MODE, CBN_SELCHANGE) => {
-            options.title_bar_mode = combo_selection(page, control);
+            options.title_bar_text = combo_selection(page, control);
         }
         (IDC_IMAGE_FITMODE, CBN_SELCHANGE) => {
             options.fit_mode = combo_selection(page, control);
         }
         (IDC_WINDOW_SAVE_POSITION, BN_CLICKED) => {
-            options.save_window_position = is_checked(page, control);
+            options.remember_window_size_and_position = is_checked(page, control);
         }
         (IDC_WINDOW_CTRL_DRAG, BN_CLICKED) => {
             options.control_drag_window = is_checked(page, control);
@@ -612,24 +612,24 @@ fn handle_page_command(
         (IDC_IMAGE_FRACTIONAL_WHEEL_ZOOM, BN_CLICKED) => {
             options.fractional_wheel_zoom = is_checked(page, control);
         }
-        (IDC_MISC_SORT, CBN_SELCHANGE) => options.sort_mode = combo_selection(page, control),
+        (IDC_MISC_SORT, CBN_SELCHANGE) => options.sort_files_by = combo_selection(page, control),
         (IDC_MISC_ASCENDING, BN_CLICKED) => options.sort_descending = false,
         (IDC_MISC_DESCENDING, BN_CLICKED) => options.sort_descending = true,
         (IDC_IMAGE_PRELOADING, CBN_SELCHANGE) => {
-            options.preloading_mode = combo_selection(page, control);
+            options.preloading = combo_selection(page, control);
         }
         (IDC_MISC_LOOP_WITHIN_FOLDER, BN_CLICKED) => {
             options.loop_within_folder = is_checked(page, control);
         }
         (IDC_MISC_SLIDESHOW_DIRECTION, CBN_SELCHANGE) => {
-            options.slideshow_reversed = combo_selection(page, control) == 0;
+            options.slideshow_direction = combo_selection(page, control);
         }
         (IDC_MISC_SLIDESHOW_INTERVAL_EDIT, EN_CHANGE) => {
             let value = unsafe { GetDlgItemInt(page, control, None, false) };
             options.slideshow_interval_seconds = value.clamp(1, 3600);
         }
         (IDC_MISC_AFTER_DELETE, CBN_SELCHANGE) => {
-            options.after_delete = combo_selection(page, control);
+            options.after_deletion = combo_selection(page, control);
         }
         (IDC_MISC_ASK_DELETE, BN_CLICKED) => options.ask_delete = is_checked(page, control),
         (IDC_MISC_CONTENT_DETECTION, BN_CLICKED) => {
@@ -724,12 +724,12 @@ fn sync_all_pages(state: &mut OptionsState) {
     combo_select(
         window_page,
         IDC_WINDOW_TITLEBAR_MODE,
-        options.title_bar_mode,
+        options.title_bar_text,
     );
     set_check(
         window_page,
         IDC_WINDOW_SAVE_POSITION,
-        options.save_window_position,
+        options.remember_window_size_and_position,
     );
     set_check(
         window_page,
@@ -747,7 +747,7 @@ fn sync_all_pages(state: &mut OptionsState) {
     combo_select(image_page, IDC_IMAGE_SCALING, options.scaling_filter);
     combo_select(image_page, IDC_IMAGE_DITHER, options.dither_mode);
     combo_select(image_page, IDC_IMAGE_FITMODE, options.fit_mode);
-    combo_select(image_page, IDC_IMAGE_PRELOADING, options.preloading_mode);
+    combo_select(image_page, IDC_IMAGE_PRELOADING, options.preloading);
     set_dialog_item_text(
         image_page,
         IDC_IMAGE_ZOOM_STEP_EDIT,
@@ -761,7 +761,7 @@ fn sync_all_pages(state: &mut OptionsState) {
     );
 
     let miscellaneous_page = state.pages[2];
-    combo_select(miscellaneous_page, IDC_MISC_SORT, options.sort_mode);
+    combo_select(miscellaneous_page, IDC_MISC_SORT, options.sort_files_by);
     let _ = unsafe {
         CheckRadioButton(
             miscellaneous_page,
@@ -782,7 +782,7 @@ fn sync_all_pages(state: &mut OptionsState) {
     combo_select(
         miscellaneous_page,
         IDC_MISC_SLIDESHOW_DIRECTION,
-        u32::from(!options.slideshow_reversed),
+        options.slideshow_direction,
     );
     set_dialog_item_text(
         miscellaneous_page,
@@ -792,7 +792,7 @@ fn sync_all_pages(state: &mut OptionsState) {
     combo_select(
         miscellaneous_page,
         IDC_MISC_AFTER_DELETE,
-        options.after_delete,
+        options.after_deletion,
     );
     set_check(miscellaneous_page, IDC_MISC_ASK_DELETE, options.ask_delete);
     set_check(

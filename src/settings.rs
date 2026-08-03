@@ -14,9 +14,9 @@ pub const DEFAULT_BACKGROUND_COLOR: (u8, u8, u8) = (0x21, 0x21, 0x21);
 pub struct Options {
     pub background_color_enabled: bool,
     pub background_color: (u8, u8, u8),
-    pub title_bar_mode: u32,
+    pub title_bar_text: u32,
     pub control_drag_window: bool,
-    pub save_window_position: bool,
+    pub remember_window_size_and_position: bool,
     pub hide_cursor_fullscreen: bool,
     pub scaling_filter: u32,
     pub fit_mode: u32,
@@ -24,13 +24,13 @@ pub struct Options {
     pub dither_mode: u32,
     pub fractional_wheel_zoom: bool,
     pub cursor_zoom: bool,
-    pub sort_mode: u32,
+    pub sort_files_by: u32,
     pub sort_descending: bool,
-    pub preloading_mode: u32,
+    pub preloading: u32,
     pub loop_within_folder: bool,
-    pub slideshow_reversed: bool,
+    pub slideshow_direction: u32,
     pub slideshow_interval_seconds: u32,
-    pub after_delete: u32,
+    pub after_deletion: u32,
     pub ask_delete: bool,
     pub detect_format_by_content: bool,
     pub remember_recents: bool,
@@ -42,9 +42,9 @@ impl Default for Options {
         Self {
             background_color_enabled: false,
             background_color: DEFAULT_BACKGROUND_COLOR,
-            title_bar_mode: 1,
+            title_bar_text: 1,
             control_drag_window: true,
-            save_window_position: true,
+            remember_window_size_and_position: true,
             hide_cursor_fullscreen: true,
             scaling_filter: 1,
             fit_mode: 0,
@@ -52,13 +52,13 @@ impl Default for Options {
             dither_mode: 2,
             fractional_wheel_zoom: true,
             cursor_zoom: true,
-            sort_mode: 0,
+            sort_files_by: 0,
             sort_descending: false,
-            preloading_mode: 1,
+            preloading: 1,
             loop_within_folder: true,
-            slideshow_reversed: false,
+            slideshow_direction: 1,
             slideshow_interval_seconds: 5,
-            after_delete: 1,
+            after_deletion: 1,
             ask_delete: true,
             detect_format_by_content: false,
             remember_recents: true,
@@ -68,6 +68,11 @@ impl Default for Options {
 }
 
 impl Options {
+    /// The slideshow steps backward; 0 = "Backward" in the direction combo.
+    pub fn slideshow_backward(&self) -> bool {
+        self.slideshow_direction == 0
+    }
+
     fn from_document(document: &Value) -> Self {
         let default = Self::default();
         let Some(options) = document.get("options").and_then(Value::as_object) else {
@@ -91,15 +96,21 @@ impl Options {
             if value <= maximum { value } else { fallback }
         };
         Self {
-            background_color_enabled: boolean("bgcolorenabled", default.background_color_enabled),
+            background_color_enabled: boolean(
+                "backgroundcolorenabled",
+                default.background_color_enabled,
+            ),
             background_color: options
-                .get("bgcolor")
+                .get("backgroundcolor")
                 .and_then(Value::as_str)
                 .and_then(parse_hex_color)
                 .unwrap_or(default.background_color),
-            title_bar_mode: bounded("titlebarmode", 3, default.title_bar_mode),
+            title_bar_text: bounded("titlebartext", 3, default.title_bar_text),
             control_drag_window: boolean("ctrldragwindow", default.control_drag_window),
-            save_window_position: boolean("savewindowposition", default.save_window_position),
+            remember_window_size_and_position: boolean(
+                "rememberwindowsizeandposition",
+                default.remember_window_size_and_position,
+            ),
             hide_cursor_fullscreen: boolean("hidecursorfullscreen", default.hide_cursor_fullscreen),
             scaling_filter: bounded("scaling", 3, default.scaling_filter),
             fit_mode: bounded("fitmode", 1, default.fit_mode),
@@ -107,17 +118,17 @@ impl Options {
             dither_mode: bounded("dither", 2, default.dither_mode),
             fractional_wheel_zoom: boolean("fractionalwheelzoom", default.fractional_wheel_zoom),
             cursor_zoom: boolean("cursorzoom", default.cursor_zoom),
-            sort_mode: bounded("sortmode", 4, default.sort_mode),
+            sort_files_by: bounded("sortfilesby", 4, default.sort_files_by),
             sort_descending: boolean("sortdescending", default.sort_descending),
-            preloading_mode: bounded("preloadingmode", 2, default.preloading_mode),
+            preloading: bounded("preloading", 2, default.preloading),
             loop_within_folder: boolean("loopwithinfolder", default.loop_within_folder),
-            slideshow_reversed: boolean("slideshowreversed", default.slideshow_reversed),
+            slideshow_direction: bounded("slideshowdirection", 1, default.slideshow_direction),
             slideshow_interval_seconds: unsigned(
                 "slideshowinterval",
                 default.slideshow_interval_seconds,
             )
             .clamp(1, 3600),
-            after_delete: bounded("afterdelete", 1, default.after_delete),
+            after_deletion: bounded("afterdeletion", 1, default.after_deletion),
             ask_delete: boolean("askdelete", default.ask_delete),
             detect_format_by_content: boolean(
                 "detectformatbycontent",
@@ -222,19 +233,19 @@ impl SettingsFile {
         let default = Options::default();
         let entries: [(&str, Value, Value); 23] = [
             (
-                "bgcolorenabled",
+                "backgroundcolorenabled",
                 Value::Bool(options.background_color_enabled),
                 Value::Bool(default.background_color_enabled),
             ),
             (
-                "bgcolor",
+                "backgroundcolor",
                 Value::String(format_hex_color(options.background_color)),
                 Value::String(format_hex_color(default.background_color)),
             ),
             (
-                "titlebarmode",
-                Value::from(options.title_bar_mode),
-                Value::from(default.title_bar_mode),
+                "titlebartext",
+                Value::from(options.title_bar_text),
+                Value::from(default.title_bar_text),
             ),
             (
                 "ctrldragwindow",
@@ -242,9 +253,9 @@ impl SettingsFile {
                 Value::Bool(default.control_drag_window),
             ),
             (
-                "savewindowposition",
-                Value::Bool(options.save_window_position),
-                Value::Bool(default.save_window_position),
+                "rememberwindowsizeandposition",
+                Value::Bool(options.remember_window_size_and_position),
+                Value::Bool(default.remember_window_size_and_position),
             ),
             (
                 "hidecursorfullscreen",
@@ -282,9 +293,9 @@ impl SettingsFile {
                 Value::Bool(default.cursor_zoom),
             ),
             (
-                "sortmode",
-                Value::from(options.sort_mode),
-                Value::from(default.sort_mode),
+                "sortfilesby",
+                Value::from(options.sort_files_by),
+                Value::from(default.sort_files_by),
             ),
             (
                 "sortdescending",
@@ -292,9 +303,9 @@ impl SettingsFile {
                 Value::Bool(default.sort_descending),
             ),
             (
-                "preloadingmode",
-                Value::from(options.preloading_mode),
-                Value::from(default.preloading_mode),
+                "preloading",
+                Value::from(options.preloading),
+                Value::from(default.preloading),
             ),
             (
                 "loopwithinfolder",
@@ -302,9 +313,9 @@ impl SettingsFile {
                 Value::Bool(default.loop_within_folder),
             ),
             (
-                "slideshowreversed",
-                Value::Bool(options.slideshow_reversed),
-                Value::Bool(default.slideshow_reversed),
+                "slideshowdirection",
+                Value::from(options.slideshow_direction),
+                Value::from(default.slideshow_direction),
             ),
             (
                 "slideshowinterval",
@@ -312,9 +323,9 @@ impl SettingsFile {
                 Value::from(default.slideshow_interval_seconds),
             ),
             (
-                "afterdelete",
-                Value::from(options.after_delete),
-                Value::from(default.after_delete),
+                "afterdeletion",
+                Value::from(options.after_deletion),
+                Value::from(default.after_deletion),
             ),
             (
                 "askdelete",
@@ -615,23 +626,23 @@ mod option_bounds_tests {
     #[test]
     fn out_of_range_indexes_fall_back_to_defaults() {
         let document = serde_json::json!({ "options": {
-            "titlebarmode": 9,
+            "titlebartext": 9,
             "scaling": 9,
             "fitmode": 9,
-            "preloadingmode": 9,
+            "preloading": 9,
             "dither": 9,
-            "sortmode": 9,
-            "afterdelete": 9,
+            "sortfilesby": 9,
+            "afterdeletion": 9,
         }});
         let options = Options::from_document(&document);
         let default = Options::default();
-        assert_eq!(options.title_bar_mode, default.title_bar_mode);
+        assert_eq!(options.title_bar_text, default.title_bar_text);
         assert_eq!(options.scaling_filter, default.scaling_filter);
         assert_eq!(options.fit_mode, default.fit_mode);
-        assert_eq!(options.preloading_mode, default.preloading_mode);
+        assert_eq!(options.preloading, default.preloading);
         assert_eq!(options.dither_mode, default.dither_mode);
-        assert_eq!(options.sort_mode, default.sort_mode);
-        assert_eq!(options.after_delete, default.after_delete);
+        assert_eq!(options.sort_files_by, default.sort_files_by);
+        assert_eq!(options.after_deletion, default.after_deletion);
     }
 
     #[test]
@@ -648,17 +659,17 @@ mod option_bounds_tests {
     #[test]
     fn in_range_values_are_kept() {
         let document = serde_json::json!({ "options": {
-            "titlebarmode": 2,
+            "titlebartext": 2,
             "scaling": 3,
             "fitmode": 1,
-            "preloadingmode": 2,
+            "preloading": 2,
             "zoomstep": 200,
         }});
         let options = Options::from_document(&document);
-        assert_eq!(options.title_bar_mode, 2);
+        assert_eq!(options.title_bar_text, 2);
         assert_eq!(options.scaling_filter, 3);
         assert_eq!(options.fit_mode, 1);
-        assert_eq!(options.preloading_mode, 2);
+        assert_eq!(options.preloading, 2);
         assert_eq!(options.zoom_step_percent, 200);
     }
 }
