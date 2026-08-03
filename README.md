@@ -45,8 +45,7 @@ Formats that need a codec extension from the Microsoft Store:
 |---|---|
 | HEIC / HEIF | HEIF Image Extension + HEVC Video Extensions (Microsoft Corporation) |
 
-**HEVC Video Extensions is paid.** Without it, these files fall back to the
-built-in decoder.
+**HEVC Video Extensions is paid.** Without it, the built-in decoder takes over.
 
 Decoded by built-in codecs:
 
