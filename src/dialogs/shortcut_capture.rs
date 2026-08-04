@@ -31,6 +31,7 @@ use crate::dialogs::resource::{
 };
 
 use crate::dialogs::modal::{DWLP_USER, IDCANCEL, IDOK, state_mut};
+use crate::window::message::{high_word, high_word_signed, low_word, point_from_packed};
 
 const WM_RIV_KEY_CAPTURED: u32 = WM_APP + 0x40;
 const WM_RIV_MOUSE_CAPTURED: u32 = WM_APP + 0x41;
@@ -122,8 +123,8 @@ unsafe extern "system" fn keyboard_procedure(
             0
         }
         WM_RIV_KEY_CAPTURED => {
-            let modifiers = (wparam.0 >> 16) as u8;
-            let virtual_key = (wparam.0 & 0xFFFF) as u16;
+            let modifiers = high_word(wparam.0) as u8;
+            let virtual_key = low_word(wparam.0) as u16;
             if let Some(sequence) = bindings::format_key_sequence(modifiers, virtual_key)
                 && let Some(state) = state_mut::<KeyboardCaptureState>(dialog)
                 && !state.sequences.contains(&sequence)
@@ -152,8 +153,8 @@ unsafe extern "system" fn keyboard_procedure(
             0
         }
         WM_COMMAND => {
-            let command = wparam.0 & 0xFFFF;
-            match command as i32 {
+            let command = low_word(wparam.0) as i32;
+            match command {
                 IDC_CAPTURE_KEY_CLEAR => {
                     if let Some(state) = state_mut::<KeyboardCaptureState>(dialog) {
                         state.sequences.clear();
@@ -221,8 +222,8 @@ unsafe extern "system" fn mouse_procedure(
             1
         }
         WM_COMMAND => {
-            let command = wparam.0 & 0xFFFF;
-            match command as i32 {
+            let command = low_word(wparam.0) as i32;
+            match command {
                 IDC_CAPTURE_MOUSE_CLEAR => {
                     if let Some(state) = state_mut::<MouseCaptureState>(dialog) {
                         state.binding = None;
@@ -391,8 +392,7 @@ unsafe extern "system" fn key_list_procedure(
         return LRESULT(1);
     }
     if message == WM_LBUTTONDOWN {
-        let x = (lparam.0 & 0xFFFF) as i16 as i32;
-        let y = ((lparam.0 >> 16) & 0xFFFF) as i16 as i32;
+        let (x, y) = point_from_packed(lparam.0 as usize);
         let selected = unsafe { SendMessageW(listbox, LB_GETCURSEL, None, None) }.0;
         if selected >= 0 {
             let mut item = RECT::default();
@@ -601,12 +601,12 @@ unsafe extern "system" fn mouse_field_procedure(
         WM_MBUTTONDOWN | WM_MBUTTONDBLCLK => notify(field, MouseBase::WheelButton),
         WM_XBUTTONDOWN | WM_XBUTTONDBLCLK => notify(
             field,
-            MouseBase::from_xbutton_flags((wparam.0 >> 16) as u16),
+            MouseBase::from_xbutton_flags(high_word(wparam.0) as u16),
         ),
-        WM_MOUSEWHEEL => {
-            let delta = ((wparam.0 >> 16) & 0xFFFF) as u16 as i16;
-            notify(field, MouseBase::from_wheel_delta(delta))
-        }
+        WM_MOUSEWHEEL => notify(
+            field,
+            MouseBase::from_wheel_delta(high_word_signed(wparam.0)),
+        ),
         WM_SETFOCUS | WM_KILLFOCUS => {
             let _ = unsafe { InvalidateRect(Some(field), None, false) };
             LRESULT(0)

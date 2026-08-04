@@ -127,6 +127,17 @@ const SDR_TONE_MAP_TARGET_NITS: f32 = 203.0;
 const HDR_PEAK_FALLBACK_NITS: f32 = 600.0;
 
 impl DisplayCapabilities {
+    /// Matches DISPLAYCONFIG_ADVANCED_COLOR_MODE (SDR/WCG/HDR) from the existing signals.
+    pub fn color_mode_label(&self) -> &'static str {
+        if self.hdr {
+            "HDR"
+        } else if self.advanced_color {
+            "WCG"
+        } else {
+            "SDR"
+        }
+    }
+
     /// The tone-map target and paired full-frame limit for this display.
     pub fn tone_map_targets(&self) -> (f32, f32) {
         let target = if self.hdr {
@@ -297,6 +308,29 @@ fn capabilities_from(information: Option<&AdvancedColorInfo>, window: HWND) -> D
             information.and_then(|information| information.SdrWhiteLevelInNits().ok()),
         )
         .map_or(1.0, |white| white / SDR_REFERENCE_WHITE_NITS),
+    }
+}
+
+/// Advanced-color mode, EDID gamut label, and wire depth of the display, for the info overlay.
+#[derive(Clone, Copy, PartialEq)]
+pub struct DisplayLabels {
+    pub color_mode: &'static str,
+    pub gamut: &'static str,
+    pub bits_per_color: u32,
+}
+
+impl DisplayLabels {
+    pub fn new(capabilities: &DisplayCapabilities, gamut: Option<DisplayGamut>) -> Self {
+        Self {
+            color_mode: capabilities.color_mode_label(),
+            gamut: gamut.map_or("unknown", |gamut| gamut.label()),
+            bits_per_color: capabilities.bits_per_color,
+        }
+    }
+
+    /// The display line mirrors the output line's "[bits] [gamut]" form.
+    pub fn display_description(&self) -> String {
+        format!("{}-bit {}", self.bits_per_color, self.gamut)
     }
 }
 

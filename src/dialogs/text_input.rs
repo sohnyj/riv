@@ -73,7 +73,7 @@ extern "system" fn dialog_procedure(
             0 // FALSE: focus set explicitly
         }
         WM_COMMAND => {
-            let command = wparam.0 & 0xFFFF;
+            let command = crate::window::message::low_word(wparam.0) as usize;
             match command {
                 IDOK => {
                     if let Some(state) = crate::dialogs::modal::state_mut::<TextInputState>(dialog)

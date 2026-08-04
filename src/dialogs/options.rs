@@ -43,6 +43,7 @@ use crate::image;
 use crate::settings::{Options, SettingsFile};
 use crate::shell::{file_association, start_menu};
 use crate::text::wide;
+use crate::window::message::{high_word, low_word, point_from_packed};
 
 pub const WM_APP_OPTIONS_APPLIED: u32 = WM_APP + 5;
 
@@ -235,8 +236,8 @@ unsafe extern "system" fn frame_procedure(
             0
         }
         WM_COMMAND => {
-            let command = wparam.0 & 0xFFFF;
-            match command as i32 {
+            let command = low_word(wparam.0) as i32;
+            match command {
                 command if command == IDOK as i32 => {
                     if let Some(state) = state_mut(dialog) {
                         apply(state);
@@ -538,8 +539,8 @@ unsafe extern "system" fn page_procedure(
             if state.syncing {
                 return 0;
             }
-            let control = (wparam.0 & 0xFFFF) as i32;
-            let notification = wparam.0 >> 16;
+            let control = low_word(wparam.0) as i32;
+            let notification = high_word(wparam.0) as usize;
             handle_page_command(state, page, control, notification)
         }
         WM_NOTIFY => {
@@ -1255,12 +1256,9 @@ fn tree_set_state_image(tree: HWND, item: HTREEITEM, state_image: isize) {
 }
 
 fn toggle_association_at_cursor(state: &mut OptionsState, tree: HWND) {
-    let position = unsafe { GetMessagePos() };
+    let (x, y) = point_from_packed(unsafe { GetMessagePos() } as usize);
     let mut hit = TVHITTESTINFO {
-        pt: POINT {
-            x: (position & 0xFFFF) as i16 as i32,
-            y: (position >> 16) as i16 as i32,
-        },
+        pt: POINT { x, y },
         ..Default::default()
     };
     let mut corner = [hit.pt];

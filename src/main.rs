@@ -22,7 +22,7 @@ use actions::{Action, ActivationGate};
 use bindings::{Bindings, MODIFIER_CONTROL, MouseBase, current_modifiers};
 use dialogs::options::WM_APP_OPTIONS_APPLIED;
 use image::animation::Animation;
-use image::color;
+use image::color::{self, DisplayLabels};
 use image::core::{
     CoreOptions, DecodeCompletion, DownloadProgress, ImageCore, ItemLocation, ListingInstall,
     NavigationCommand, ProbeCompletion, ScannedListing, SortMode, WM_APP_DECODE_COMPLETE,
@@ -42,6 +42,7 @@ use view::renderer::{
 use view::transform::{FitMode, Size, ViewTransform};
 use window::context_menu::{self, MenuSelection, MenuState, MenuTarget};
 use window::dwm;
+use window::message::{high_word, high_word_signed, low_word, point_from_packed};
 use window::overlay::{self, Overlay, OverlayContent};
 use windows::System::DispatcherQueueController;
 use windows::Win32::Foundation::{
@@ -202,14 +203,6 @@ struct InfoTextCache {
     text: Rc<str>,
 }
 
-/// Advanced-color mode, EDID gamut label, and wire depth of the display, for the info overlay.
-#[derive(Clone, Copy, PartialEq)]
-struct DisplayLabels {
-    color_mode: &'static str,
-    gamut: &'static str,
-    bits_per_color: u32,
-}
-
 /// The output mode the renderer drives, from the display's current capabilities.
 fn output_mode(
     capabilities: &color::DisplayCapabilities,
@@ -219,26 +212,6 @@ fn output_mode(
         hdr: capabilities.hdr,
         advanced_color: capabilities.advanced_color,
         display_profile,
-    }
-}
-
-fn display_labels(
-    capabilities: &color::DisplayCapabilities,
-    gamut: Option<color::DisplayGamut>,
-) -> DisplayLabels {
-    // Matches DISPLAYCONFIG_ADVANCED_COLOR_MODE (SDR/WCG/HDR) from the existing signals.
-    let color_mode = if capabilities.hdr {
-        "HDR"
-    } else if capabilities.advanced_color {
-        "WCG"
-    } else {
-        "SDR"
-    };
-    let gamut = gamut.map_or("unknown", |gamut| gamut.label());
-    DisplayLabels {
-        color_mode,
-        gamut,
-        bits_per_color: capabilities.bits_per_color,
     }
 }
 
@@ -332,7 +305,7 @@ impl Application {
             show_file_info: false,
             status_text: None,
             info_text_cache: None,
-            display_labels: display_labels(&capabilities, gamut),
+            display_labels: DisplayLabels::new(&capabilities, gamut),
             window_title: "riv".to_string(),
             current_monitor: unsafe { MonitorFromWindow(window, MONITOR_DEFAULTTONEAREST) },
             window_moving: false,
@@ -385,7 +358,7 @@ impl Application {
             gamut,
             display_profile,
         } = color::display_color_info(self.display_watcher.as_ref(), window);
-        let labels = display_labels(&capabilities, gamut);
+        let labels = DisplayLabels::new(&capabilities, gamut);
         // A label-only change (wire depth, gamut) still owes the panel a repaint.
         let labels_changed = labels != self.display_labels;
         self.display_labels = labels;
@@ -1053,11 +1026,7 @@ impl Application {
                 && cache.display_labels == self.display_labels
         });
         if !reuse {
-            // The display line mirrors the output line's "[bits] [gamut]" form.
-            let display_description = format!(
-                "{}-bit {}",
-                self.display_labels.bits_per_color, self.display_labels.gamut
-            );
+            let display_description = self.display_labels.display_description();
             let text = overlay::build_info_text(
                 &current.location.display_name(),
                 &current.location.display_text(),
@@ -1364,13 +1333,6 @@ fn client_size(window: HWND) -> (u32, u32) {
 }
 
 /// Signed coordinates packed into a mouse-message LPARAM (GET_X_LPARAM / GET_Y_LPARAM).
-fn point_from_lparam(lparam: LPARAM) -> (i32, i32) {
-    (
-        (lparam.0 & 0xFFFF) as u16 as i16 as i32,
-        ((lparam.0 >> 16) & 0xFFFF) as u16 as i16 as i32,
-    )
-}
-
 /// Cursor offset from the client center while over the client area.
 fn cursor_from_center(window: HWND) -> Option<(f32, f32)> {
     let mut point = POINT::default();
@@ -2293,7 +2255,7 @@ extern "system" fn window_procedure(
         WM_ACTIVATE => {
             if let Some(application) = application_from_window(window) {
                 // The message states the change; the foreground window has not moved yet.
-                application.window_active = (wparam.0 & 0xFFFF) as u32 != WA_INACTIVE;
+                application.window_active = low_word(wparam.0) != WA_INACTIVE;
                 application.update_slideshow_focus(window);
             }
             LRESULT(0)
@@ -2302,8 +2264,8 @@ extern "system" fn window_procedure(
             if let Some(application) = application_from_window(window) {
                 // A size change inside the modal loop still needs every frame drawn.
                 application.window_moving = false;
-                let width = (lparam.0 & 0xFFFF) as u32;
-                let height = ((lparam.0 >> 16) & 0xFFFF) as u32;
+                let width = low_word(lparam.0 as usize);
+                let height = high_word(lparam.0 as usize);
                 if width > 0 && height > 0 {
                     let resized = application
                         .renderer
@@ -2513,14 +2475,14 @@ extern "system" fn window_procedure(
         }
         WM_MOUSEHWHEEL => {
             if let Some(application) = application_from_window(window) {
-                let delta = ((wparam.0 >> 16) & 0xFFFF) as u16 as i16;
+                let delta = high_word_signed(wparam.0);
                 application.pan_by(window, f32::from(delta) / -2.0, 0.0);
             }
             LRESULT(0)
         }
         WM_MOUSEWHEEL => {
             if let Some(application) = application_from_window(window) {
-                let wheel_delta = ((wparam.0 >> 16) & 0xFFFF) as u16 as i16;
+                let wheel_delta = high_word_signed(wparam.0);
                 handle_wheel(application, window, wheel_delta);
             }
             LRESULT(0)
@@ -2546,14 +2508,14 @@ extern "system" fn window_procedure(
                     if !application.cursor_hidden {
                         unsafe { SetCursor(Some(application.pan_cursor)) };
                     }
-                    application.pan_drag_position = Some(point_from_lparam(lparam));
+                    application.pan_drag_position = Some(point_from_packed(lparam.0 as usize));
                 }
             }
             LRESULT(0)
         }
         WM_MOUSEMOVE => {
             if let Some(application) = application_from_window(window) {
-                let (x, y) = point_from_lparam(lparam);
+                let (x, y) = point_from_packed(lparam.0 as usize);
                 application.record_pointer_activity(window, (x, y));
                 if let Some((last_x, last_y)) = application.pan_drag_position {
                     application.pan_drag_position = Some((x, y));
@@ -2572,7 +2534,7 @@ extern "system" fn window_procedure(
         }
         WM_SETCURSOR => {
             if let Some(application) = application_from_window(window) {
-                let over_client = (lparam.0 & 0xFFFF) as u32 == HTCLIENT;
+                let over_client = low_word(lparam.0 as usize) == HTCLIENT;
                 if application.pan_drag_position.is_some() {
                     unsafe { SetCursor(Some(application.pan_cursor)) };
                     return LRESULT(1);
@@ -2616,7 +2578,7 @@ extern "system" fn window_procedure(
         WM_CONTEXTMENU => {
             if let Some(application) = application_from_window(window) {
                 // The keyboard menu key reports no point of its own.
-                let (x, y) = match point_from_lparam(lparam) {
+                let (x, y) = match point_from_packed(lparam.0 as usize) {
                     (-1, -1) => window_center(window),
                     point => point,
                 };
@@ -2646,7 +2608,7 @@ extern "system" fn window_procedure(
         }
         WM_DPICHANGED => {
             if let Some(application) = application_from_window(window) {
-                let ratio = (wparam.0 & 0xFFFF) as f32 / 96.0;
+                let ratio = low_word(wparam.0) as f32 / 96.0;
                 application.overlay.set_scale(ratio);
             }
             let suggested_bounds = unsafe { &*(lparam.0 as *const RECT) };
