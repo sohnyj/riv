@@ -19,6 +19,10 @@ pub fn compile_all(output_directory: &Path, xwin_root: &str) {
 /// Builds the helper against the xwin SDK; d3dcompiler_47 resolves under wine.
 fn build_compiler(output_directory: &Path, xwin_root: &str) -> PathBuf {
     let executable = output_directory.join("shader_compiler.exe");
+    let source = PathBuf::from(format!("{SHADER_DIRECTORY}/compiler.c"));
+    if !crate::is_stale(&executable, &[&source]) {
+        return executable;
+    }
     let status = Command::new("clang-cl")
         .args([
             "--target=x86_64-pc-windows-msvc",
@@ -33,7 +37,7 @@ fn build_compiler(output_directory: &Path, xwin_root: &str) -> PathBuf {
             format!("-imsvc{xwin_root}/sdk/include/um"),
             format!("-imsvc{xwin_root}/sdk/include/shared"),
         ])
-        .arg(format!("{SHADER_DIRECTORY}/compiler.c"))
+        .arg(&source)
         .arg(format!("/Fo{}\\", output_directory.display()))
         .arg(format!("/Fe{}", executable.display()))
         .arg("/link")
@@ -55,6 +59,11 @@ fn build_compiler(output_directory: &Path, xwin_root: &str) -> PathBuf {
 fn compile(compiler: &Path, name: &str, profile: &str, output_directory: &Path) {
     let source = format!("{name}.hlsl");
     let output = output_directory.join(format!("{name}.dxbc"));
+    let source_path = PathBuf::from(format!("{SHADER_DIRECTORY}/{source}"));
+    let shared_path = PathBuf::from(format!("{SHADER_DIRECTORY}/ps_shared.hlsl"));
+    if !crate::is_stale(&output, &[&source_path, &shared_path, compiler]) {
+        return;
+    }
     let result = Command::new("wine")
         .arg(compiler)
         .arg(&source)

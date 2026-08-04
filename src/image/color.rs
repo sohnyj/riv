@@ -47,7 +47,7 @@ mod interop {
 use interop::IDisplayInformationStaticsInterop;
 
 /// Encoding of app-drawn colors (overlay, clear) for the current backbuffer.
-#[derive(Clone, Copy)]
+#[derive(Clone, Copy, PartialEq)]
 pub enum OutputColorTarget {
     Srgb,
     ScrgbLinear { sdr_white_boost: f32 },

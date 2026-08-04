@@ -1,5 +1,6 @@
 //! DirectWrite overlays: info panel, status pill, centered error text.
 
+use std::rc::Rc;
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use windows::Win32::Foundation::{FILETIME, SYSTEMTIME};
@@ -56,7 +57,7 @@ pub struct OverlayContent {
     pub error_text: Option<String>,
     /// Centered like an error while a remote image downloads (no image is up then).
     pub download_text: Option<String>,
-    pub info_text: Option<String>,
+    pub info_text: Option<Rc<str>>,
     pub status_text: Option<String>,
     /// Centered "riv" wordmark for the empty-window state.
     pub show_wordmark: bool,
@@ -79,12 +80,48 @@ impl PanelPlacement {
     }
 }
 
-/// A shaped panel layout reused while its text and wrap width hold still.
-struct PanelLayout {
+/// One cache slot per shaped text: the info panel, the status pill, a message, the wordmark.
+const SHAPED_TEXT_SLOTS: usize = 4;
+const CENTERED_MESSAGE_SLOT: usize = 2;
+const WORDMARK_SLOT: usize = 3;
+
+/// A shaped layout reused while its text and the box it wraps into hold still.
+struct ShapedText {
     text: String,
     wrap_width: f32,
+    max_height: f32,
     layout: IDWriteTextLayout,
     metrics: DWRITE_TEXT_METRICS,
+}
+
+/// The cached layout for one slot, reshaped when its text or its box changed.
+fn shaped_text<'a>(
+    slot: &'a mut Option<ShapedText>,
+    dwrite_factory: &IDWriteFactory,
+    text: &str,
+    format: &IDWriteTextFormat,
+    wrap_width: f32,
+    max_height: f32,
+) -> Result<&'a ShapedText> {
+    let stale = slot.as_ref().is_none_or(|cached| {
+        cached.text != text || cached.wrap_width != wrap_width || cached.max_height != max_height
+    });
+    if stale {
+        let utf16: Vec<u16> = text.encode_utf16().collect();
+        let layout = unsafe {
+            dwrite_factory.CreateTextLayout(&utf16, format, wrap_width.max(1.0), max_height)
+        }?;
+        let mut metrics = DWRITE_TEXT_METRICS::default();
+        unsafe { layout.GetMetrics(&raw mut metrics)? };
+        *slot = Some(ShapedText {
+            text: text.to_string(),
+            wrap_width,
+            max_height,
+            layout,
+            metrics,
+        });
+    }
+    Ok(slot.as_ref().expect("layout shaped"))
 }
 
 /// A solid brush for `color` mapped to the output color target.
@@ -96,14 +133,41 @@ fn solid_brush(
     unsafe { context.CreateSolidColorBrush(&color::output_color(color, target), None) }
 }
 
+/// The overlay's three colors as brushes; the target decides what each one encodes.
+struct Brushes {
+    target: color::OutputColorTarget,
+    panel_background: ID2D1SolidColorBrush,
+    white: ID2D1SolidColorBrush,
+    black: ID2D1SolidColorBrush,
+}
+
+/// The cached brushes, remade when the output target changes.
+fn brushes_for<'a>(
+    slot: &'a mut Option<Brushes>,
+    context: &ID2D1DeviceContext,
+    target: color::OutputColorTarget,
+) -> Result<&'a Brushes> {
+    if slot.as_ref().is_none_or(|brushes| brushes.target != target) {
+        *slot = Some(Brushes {
+            target,
+            panel_background: solid_brush(context, PANEL_BACKGROUND, target)?,
+            white: solid_brush(context, WHITE, target)?,
+            black: solid_brush(context, BLACK, target)?,
+        });
+    }
+    Ok(slot.as_ref().expect("brushes created"))
+}
+
 pub struct Overlay {
     text_format: IDWriteTextFormat,
     centered_format: IDWriteTextFormat,
     wordmark_format: IDWriteTextFormat,
     dwrite_factory: IDWriteFactory,
     scale: f32,
-    /// One slot per placement, so the panel and the status pill cache independently.
-    panel_layouts: [Option<PanelLayout>; 2],
+    /// One slot per shaped text, so each caches independently of the others.
+    layouts: [Option<ShapedText>; SHAPED_TEXT_SLOTS],
+    /// Brushes belong to the renderer's device context, so a rebuilt renderer voids them.
+    brushes: Option<Brushes>,
 }
 
 impl Overlay {
@@ -118,8 +182,14 @@ impl Overlay {
             wordmark_format,
             dwrite_factory,
             scale: 1.0,
-            panel_layouts: [None, None],
+            layouts: [const { None }; SHAPED_TEXT_SLOTS],
+            brushes: None,
         })
+    }
+
+    /// Called when the renderer is rebuilt: the brushes belong to its device context.
+    pub fn release_brushes(&mut self) {
+        self.brushes = None;
     }
 
     pub fn set_scale(&mut self, scale: f32) {
@@ -134,7 +204,7 @@ impl Overlay {
             self.centered_format = centered_format;
             self.wordmark_format = wordmark_format;
             self.scale = scale;
-            self.panel_layouts = [None, None];
+            self.layouts = [const { None }; SHAPED_TEXT_SLOTS];
         }
     }
 
@@ -172,7 +242,6 @@ impl Overlay {
             self.draw_centered_text(
                 context,
                 centered_text,
-                &self.centered_format,
                 viewport_width,
                 viewport_height,
                 content,
@@ -183,7 +252,6 @@ impl Overlay {
             self.draw_centered_text(
                 context,
                 "riv",
-                &self.wordmark_format,
                 viewport_width,
                 viewport_height,
                 content,
@@ -203,24 +271,14 @@ impl Overlay {
     ) -> Result<()> {
         let wrap_width =
             (viewport_width - (PANEL_MARGIN * 2.0 + PANEL_PADDING_X * 2.0) * self.scale).max(0.0);
-        let slot = placement.cache_slot();
-        let stale = self.panel_layouts[slot]
-            .as_ref()
-            .is_none_or(|cached| cached.text != text || cached.wrap_width != wrap_width);
-        if stale {
-            let layout = self.create_layout(text, &self.text_format, wrap_width)?;
-            let mut metrics = DWRITE_TEXT_METRICS::default();
-            unsafe { layout.GetMetrics(&raw mut metrics)? };
-            self.panel_layouts[slot] = Some(PanelLayout {
-                text: text.to_string(),
-                wrap_width,
-                layout,
-                metrics,
-            });
-        }
-        let cached = self.panel_layouts[slot]
-            .as_ref()
-            .expect("panel layout cached");
+        let cached = shaped_text(
+            &mut self.layouts[placement.cache_slot()],
+            &self.dwrite_factory,
+            text,
+            &self.text_format,
+            wrap_width,
+            f32::MAX,
+        )?;
         let metrics = cached.metrics;
         let padding_x = PANEL_PADDING_X * self.scale;
         let padding_y = PANEL_PADDING_Y * self.scale;
@@ -241,17 +299,16 @@ impl Overlay {
             radiusX: PANEL_CORNER_RADIUS * self.scale,
             radiusY: PANEL_CORNER_RADIUS * self.scale,
         };
+        let brushes = brushes_for(&mut self.brushes, context, output_color_target)?;
         unsafe {
-            let background = solid_brush(context, PANEL_BACKGROUND, output_color_target)?;
-            context.FillRoundedRectangle(&raw const panel, &background);
-            let foreground = solid_brush(context, WHITE, output_color_target)?;
+            context.FillRoundedRectangle(&raw const panel, &brushes.panel_background);
             context.DrawTextLayout(
                 Vector2 {
                     X: left + padding_x,
                     Y: top + padding_y,
                 },
                 &cached.layout,
-                &foreground,
+                &brushes.white,
                 D2D1_DRAW_TEXT_OPTIONS_NONE,
             );
         }
@@ -259,12 +316,10 @@ impl Overlay {
     }
 
     /// Boxed messages take the panel styling; the unboxed wordmark follows the background.
-    #[expect(clippy::too_many_arguments)]
     fn draw_centered_text(
-        &self,
+        &mut self,
         context: &ID2D1DeviceContext,
         text: &str,
-        format: &IDWriteTextFormat,
         viewport_width: f32,
         viewport_height: f32,
         content: &OverlayContent,
@@ -278,12 +333,23 @@ impl Overlay {
         } else {
             0.0
         };
-        let layout = self.create_layout(text, format, viewport_width - inset * 2.0)?;
+        let (slot, format) = if boxed {
+            (CENTERED_MESSAGE_SLOT, &self.centered_format)
+        } else {
+            (WORDMARK_SLOT, &self.wordmark_format)
+        };
+        let cached = shaped_text(
+            &mut self.layouts[slot],
+            &self.dwrite_factory,
+            text,
+            format,
+            viewport_width - inset * 2.0,
+            viewport_height,
+        )?;
+        let metrics = cached.metrics;
+        let brushes = brushes_for(&mut self.brushes, context, content.output_color_target)?;
         unsafe {
-            layout.SetMaxHeight(viewport_height)?;
             if boxed {
-                let mut metrics = DWRITE_TEXT_METRICS::default();
-                layout.GetMetrics(&raw mut metrics)?;
                 let panel = D2D1_ROUNDED_RECT {
                     rect: D2D_RECT_F {
                         left: inset + metrics.left - padding_x,
@@ -294,37 +360,21 @@ impl Overlay {
                     radiusX: PANEL_CORNER_RADIUS * self.scale,
                     radiusY: PANEL_CORNER_RADIUS * self.scale,
                 };
-                let background =
-                    solid_brush(context, PANEL_BACKGROUND, content.output_color_target)?;
-                context.FillRoundedRectangle(&raw const panel, &background);
+                context.FillRoundedRectangle(&raw const panel, &brushes.panel_background);
             }
-            let text_color = if boxed || !content.background_is_bright {
-                WHITE
+            let text_brush = if boxed || !content.background_is_bright {
+                &brushes.white
             } else {
-                BLACK
+                &brushes.black
             };
-            let brush = solid_brush(context, text_color, content.output_color_target)?;
             context.DrawTextLayout(
                 Vector2 { X: inset, Y: 0.0 },
-                &layout,
-                &brush,
+                &cached.layout,
+                text_brush,
                 D2D1_DRAW_TEXT_OPTIONS_NONE,
             );
         }
         Ok(())
-    }
-
-    fn create_layout(
-        &self,
-        text: &str,
-        format: &IDWriteTextFormat,
-        max_width: f32,
-    ) -> Result<IDWriteTextLayout> {
-        let utf16: Vec<u16> = text.encode_utf16().collect();
-        unsafe {
-            self.dwrite_factory
-                .CreateTextLayout(&utf16, format, max_width.max(1.0), f32::MAX)
-        }
     }
 }
 
@@ -833,6 +883,8 @@ fn format_local_datetime(time: SystemTime) -> String {
 
 #[cfg(test)]
 mod info_text_tests {
+    use std::sync::Arc;
+
     use super::*;
     use crate::image::decode::Frame;
 
@@ -898,7 +950,7 @@ mod info_text_tests {
             "sRGB",
         );
         assert!(untagged.contains("Color profile: None"));
-        image.icc_profile = Some(vec![0; 4]);
+        image.icc_profile = Some(Arc::from(&[0u8; 4][..]));
         let unparsable = build_info_text(
             "a.png",
             "C:\\a.png",

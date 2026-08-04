@@ -248,6 +248,8 @@ pub struct ListingEntry {
     file_size: u64,
     modified: SystemTime,
     created: SystemTime,
+    /// Format name for Type sorting; the scan already knows the extension.
+    format_name: &'static str,
     /// Cache weight of the fully decoded item; a probe or an arrival records it.
     weight: DecodedWeight,
 }
@@ -1722,9 +1724,9 @@ fn scan_folder(directory: &Path, options: &CoreOptions) -> Vec<ListingEntry> {
             continue; // skip macOS metadata files
         }
         let path = entry.path();
-        let extension_matched = crate::text::lowercase_extension(Path::new(&file_name))
-            .is_some_and(|extension| decode::is_supported_extension(&extension));
-        let included = extension_matched
+        let format_name = crate::text::lowercase_extension(Path::new(&file_name))
+            .and_then(|extension| decode::format_name_for_extension(&extension));
+        let included = format_name.is_some()
             || (options.detect_format_by_content
                 && decode::descriptor_for_content(&path).is_some());
         if !included {
@@ -1737,6 +1739,7 @@ fn scan_folder(directory: &Path, options: &CoreOptions) -> Vec<ListingEntry> {
             file_size: metadata.len(),
             modified: metadata.modified().unwrap_or(UNIX_EPOCH),
             created: metadata.created().unwrap_or(UNIX_EPOCH),
+            format_name: format_name.unwrap_or(""),
             weight: DecodedWeight::Unknown,
         });
     }
@@ -1745,8 +1748,8 @@ fn scan_folder(directory: &Path, options: &CoreOptions) -> Vec<ListingEntry> {
 
 /// Entry for an image member; other member types drop out of the listing.
 fn member_entry(archive: &Path, member: archive_reader::MemberInfo) -> Option<ListingEntry> {
-    crate::text::lowercase_extension(Path::new(&member.name))
-        .filter(|extension| decode::is_supported_extension(extension))?;
+    let format_name = crate::text::lowercase_extension(Path::new(&member.name))
+        .and_then(|extension| decode::format_name_for_extension(&extension))?;
     let wide_name = crate::text::wide(&member.name);
     Some(ListingEntry {
         location: ItemLocation::ArchiveMember {
@@ -1757,6 +1760,7 @@ fn member_entry(archive: &Path, member: archive_reader::MemberInfo) -> Option<Li
         file_size: member.size,
         modified: member.modified,
         created: member.modified, // archives do not record creation times
+        format_name,
         weight: DecodedWeight::Unknown,
     })
 }
@@ -1768,23 +1772,27 @@ fn sort_entries(entries: &mut [ListingEntry], options: &CoreOptions) {
             entries.sort_by(|a, b| {
                 b.modified
                     .cmp(&a.modified)
-                    .then(compare_natural_names(a, b))
+                    .then_with(|| compare_natural_names(a, b))
             });
         }
         SortMode::Created => {
-            entries.sort_by(|a, b| b.created.cmp(&a.created).then(compare_natural_names(a, b)));
+            entries.sort_by(|a, b| {
+                b.created
+                    .cmp(&a.created)
+                    .then_with(|| compare_natural_names(a, b))
+            });
         }
         SortMode::Size => {
             entries.sort_by(|a, b| {
                 b.file_size
                     .cmp(&a.file_size)
-                    .then(compare_natural_names(a, b))
+                    .then_with(|| compare_natural_names(a, b))
             });
         }
         SortMode::Type => entries.sort_by(|a, b| {
-            format_name_of(&a.location)
-                .cmp(format_name_of(&b.location))
-                .then(compare_natural_names(a, b))
+            a.format_name
+                .cmp(b.format_name)
+                .then_with(|| compare_natural_names(a, b))
         }),
     }
     if options.sort_descending {
@@ -1794,13 +1802,6 @@ fn sort_entries(entries: &mut [ListingEntry], options: &CoreOptions) {
 
 fn compare_natural_names(a: &ListingEntry, b: &ListingEntry) -> std::cmp::Ordering {
     crate::text::natural_order(&a.wide_name, &b.wide_name)
-}
-
-fn format_name_of(location: &ItemLocation) -> &'static str {
-    location
-        .extension_lowercase()
-        .and_then(|extension| decode::format_name_for_extension(&extension))
-        .unwrap_or("")
 }
 
 /// Fixed once a worker takes the job; PreviewOnly and the speculative flag keep preload cheap.
@@ -2360,8 +2361,21 @@ mod item_location_tests {
 
     #[test]
     fn member_extension_resolves_format_names() {
-        assert_eq!(format_name_of(&member("C:\\a.cbz", "art/01.png")), "PNG");
-        assert_eq!(format_name_of(&member("C:\\a.cbz", "readme.txt")), "");
+        let entry = |name: &str| {
+            member_entry(
+                Path::new("C:\\a.cbz"),
+                archive_reader::MemberInfo {
+                    name: name.to_string(),
+                    size: 0,
+                    modified: UNIX_EPOCH,
+                },
+            )
+        };
+        assert_eq!(
+            entry("art/01.png").map(|entry| entry.format_name),
+            Some("PNG")
+        );
+        assert!(entry("readme.txt").is_none());
     }
 
     #[test]
@@ -2372,7 +2386,7 @@ mod item_location_tests {
         assert_eq!(location.display_text(), "https://a.com/b/c.png?width=1");
         assert_eq!(location.containing_file(), None);
         assert_eq!(location.as_file(), None);
-        assert_eq!(format_name_of(&location), "PNG");
+        assert_eq!(location.extension_lowercase().as_deref(), Some("png"));
         // URLs compare exactly; remote paths are case-sensitive.
         assert!(location == url("https://a.com/b/c.png?width=1"));
         assert!(location != url("https://a.com/b/C.png?width=1"));
@@ -2418,6 +2432,7 @@ mod url_session_state_tests {
             file_size: 0,
             modified: UNIX_EPOCH,
             created: UNIX_EPOCH,
+            format_name: "PNG",
             weight: DecodedWeight::Unknown,
         }];
     }
@@ -2456,6 +2471,7 @@ mod url_session_state_tests {
             file_size: 0,
             modified: UNIX_EPOCH,
             created: UNIX_EPOCH,
+            format_name: "PNG",
             weight: DecodedWeight::Unknown,
         });
         core.load_error = Some((
@@ -2842,6 +2858,7 @@ mod playlist_window_tests {
                 file_size: 0,
                 modified: UNIX_EPOCH,
                 created: UNIX_EPOCH,
+                format_name: "PNG",
                 weight: DecodedWeight::Unknown,
             })
             .collect();

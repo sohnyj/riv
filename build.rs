@@ -1,7 +1,7 @@
 //! Build script: blue-noise table, HLSL blobs, resources, and the static codec links.
 
 use std::env;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::process::Command;
 
 #[path = "res/shaders/blue_noise.rs"]
@@ -13,11 +13,27 @@ mod shaders;
 const XWIN_LIBRARY_DIRECTORIES: [&str; 3] =
     ["crt/lib/x86_64", "sdk/lib/um/x86_64", "sdk/lib/ucrt/x86_64"];
 
+/// True when the output is missing or older than an input it is generated from.
+fn is_stale(output: &Path, inputs: &[&Path]) -> bool {
+    let Ok(output_time) = std::fs::metadata(output).and_then(|data| data.modified()) else {
+        return true;
+    };
+    inputs.iter().any(|input| {
+        std::fs::metadata(input)
+            .and_then(|data| data.modified())
+            .is_ok_and(|input_time| input_time > output_time)
+    })
+}
+
 fn main() {
     println!("cargo:rerun-if-changed=res/shaders");
 
     let output_directory = PathBuf::from(env::var("OUT_DIR").unwrap());
-    blue_noise::write_table(&output_directory);
+    // The texels are a pure function of the generator, so an up-to-date table is kept.
+    let blue_noise_table = output_directory.join("blue_noise.bin");
+    if is_stale(&blue_noise_table, &[Path::new("res/shaders/blue_noise.rs")]) {
+        blue_noise::write_table(&blue_noise_table);
+    }
 
     // xwin CRT/SDK import libraries; override the splat location with XWIN_ROOT.
     println!("cargo:rerun-if-env-changed=XWIN_ROOT");

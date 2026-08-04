@@ -4,8 +4,8 @@ use std::cell::RefCell;
 use std::fs::File;
 use std::io::{BufRead, BufReader, Cursor, Read, Seek};
 use std::path::Path;
-use std::sync::OnceLock;
 use std::sync::atomic::{AtomicBool, AtomicU32, Ordering};
+use std::sync::{Arc, OnceLock};
 
 use windows::Win32::Foundation::{
     E_ABORT, GENERIC_READ, WINCODEC_ERR_COMPONENTINITIALIZEFAILURE, WINCODEC_ERR_COMPONENTNOTFOUND,
@@ -73,7 +73,7 @@ pub struct DecodedImage {
     pub pixel_width: u32,
     pub pixel_height: u32,
     pub format_name: &'static str,
-    pub icc_profile: Option<Vec<u8>>,
+    pub icc_profile: Option<Arc<[u8]>>,
     pub exif: Option<ExifInfo>,
     pub storage: PixelStorage,
     /// Meaningful bits per channel of the decoded pixels (8 for Bgra8 storage).
@@ -407,12 +407,6 @@ pub fn format_groups() -> impl Iterator<Item = (&'static str, &'static [&'static
         .map(|descriptor| (descriptor.name, descriptor.extensions))
 }
 
-pub fn is_supported_extension(extension: &str) -> bool {
-    REGISTRY
-        .iter()
-        .any(|descriptor| descriptor.extensions.contains(&extension))
-}
-
 pub fn format_name_for_extension(extension: &str) -> Option<&'static str> {
     descriptor_for_extension(extension).map(|descriptor| descriptor.name)
 }
@@ -460,6 +454,11 @@ static ANIMATED_WEBP: FormatDescriptor = FormatDescriptor {
     adapter: Adapter::WebPAnimation,
     store_codec_names: &[],
 };
+
+/// The names refine_by_content can reclassify; keep the two in step.
+fn refines_by_content(descriptor: &FormatDescriptor) -> bool {
+    matches!(descriptor.name, "PNG" | "WebP" | "HEIF")
+}
 
 /// PNG + acTL = APNG; WebP + VP8X ANIM flag = animated WebP; HEIF + avif brand = AVIF.
 fn refine_by_content(
@@ -519,17 +518,20 @@ pub fn weight_depends_on_display(extension: &str) -> bool {
 }
 
 fn descriptor_for_path(path: &Path) -> Option<&'static FormatDescriptor> {
-    let header = read_header(path);
     let by_extension = crate::text::lowercase_extension(path)
         .and_then(|extension| descriptor_for_extension(&extension));
-    match (by_extension, header) {
-        (Some(descriptor), Some(header)) => Some(refine_by_content(descriptor, &header)),
-        (Some(descriptor), None) => Some(descriptor),
-        (None, Some(header)) => {
-            descriptor_for_magic(&header).map(|descriptor| refine_by_content(descriptor, &header))
+    if let Some(descriptor) = by_extension {
+        // Only the names a header can reclassify pay for the read.
+        if !refines_by_content(descriptor) {
+            return Some(descriptor);
         }
-        (None, None) => None,
+        return Some(match read_header(path) {
+            Some(header) => refine_by_content(descriptor, &header),
+            None => descriptor,
+        });
     }
+    let header = read_header(path)?;
+    descriptor_for_magic(&header).map(|descriptor| refine_by_content(descriptor, &header))
 }
 
 fn descriptor_for_bytes(data: &[u8], extension: Option<&str>) -> Option<&'static FormatDescriptor> {
@@ -1930,7 +1932,7 @@ fn f32_to_half(value: f32) -> u16 {
 fn icc_profile_bytes(
     factory: &IWICImagingFactory,
     frame: &IWICBitmapFrameDecode,
-) -> Option<Vec<u8>> {
+) -> Option<Arc<[u8]>> {
     let mut count = 0u32;
     unsafe { frame.GetColorContexts(&mut [], &raw mut count) }.ok()?;
     if count == 0 {
@@ -1957,7 +1959,7 @@ fn icc_profile_bytes(
         let mut written = 0u32;
         unsafe { context.GetProfileBytes(&mut buffer, &raw mut written) }.ok()?;
         buffer.truncate(written as usize);
-        return Some(buffer);
+        return Some(Arc::from(buffer));
     }
     None
 }
@@ -2327,7 +2329,7 @@ fn decode_apng<Input: BufRead + Seek>(
         .info()
         .icc_profile
         .as_ref()
-        .map(|profile| profile.to_vec());
+        .map(|profile| Arc::from(&profile[..]));
     let animation_frame_count = reader
         .info()
         .animation_control

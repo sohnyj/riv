@@ -15,6 +15,7 @@ mod view;
 mod window;
 
 use std::path::Path;
+use std::rc::Rc;
 use std::sync::Arc;
 
 use actions::{Action, ActivationGate};
@@ -197,7 +198,8 @@ struct InfoTextCache {
     dither_description: &'static str,
     tone_map: Option<ToneMapInfo>,
     display_labels: DisplayLabels,
-    text: String,
+    /// Shared with the overlay content, so showing it again costs no copy.
+    text: Rc<str>,
 }
 
 /// Advanced-color mode, EDID gamut label, and wire depth of the display, for the info overlay.
@@ -911,6 +913,7 @@ impl Application {
         self.recover_current_pixels();
         // The old present target must release the window first: either kind allows one per window.
         self.renderer = None;
+        self.overlay.release_brushes();
         self.register_upload_device();
         let color::DisplayColorInfo {
             capabilities,
@@ -1026,7 +1029,7 @@ impl Application {
     }
 
     /// Info panel text, rebuilt only when a display input changes (else the cached copy).
-    fn cached_info_text(&mut self, frame: Option<FrameDecision>) -> Option<String> {
+    fn cached_info_text(&mut self, frame: Option<FrameDecision>) -> Option<Rc<str>> {
         let output_label = self
             .renderer
             .as_ref()
@@ -1075,12 +1078,12 @@ impl Application {
                 dither_description,
                 tone_map,
                 display_labels: self.display_labels,
-                text,
+                text: Rc::from(text),
             });
         }
         self.info_text_cache
             .as_ref()
-            .map(|cache| cache.text.clone())
+            .map(|cache| Rc::clone(&cache.text))
     }
 
     fn render(&mut self, window: HWND) {
@@ -2025,6 +2028,9 @@ fn handle_gesture(application: &mut Application, window: HWND, lparam: LPARAM) -
 }
 
 fn main() -> Result<()> {
+    // The device needs nothing from COM or the window, so it builds while both come up.
+    let pending_device = PendingDevice::start();
+
     unsafe { OleInitialize(None) }?;
 
     if process_is_elevated() {
@@ -2041,9 +2047,6 @@ fn main() -> Result<()> {
         );
         return Ok(());
     }
-
-    // The device needs nothing from the window, so it builds while the window comes up.
-    let pending_device = PendingDevice::start();
 
     window::menu_theme::enable_dark_menus();
     // Per-thread state the dialogs paint through; without it every paint rebuilds it.

@@ -2,6 +2,7 @@
 
 use std::ffi::{CStr, c_char, c_int, c_void};
 use std::path::Path;
+use std::sync::Arc;
 
 use crate::image::decode::{
     DecodeError, DecodedImage, Frame, HdrEncoding, PixelStorage, animation_budget_exceeded,
@@ -537,7 +538,7 @@ fn decode_heif_primary_image(
             unsafe { heif_image_handle_get_raw_color_profile(handle, buffer.as_mut_ptr().cast()) }
                 .into_result()
                 .ok()
-                .map(|()| buffer)
+                .map(|()| Arc::from(buffer))
         } else {
             None
         }

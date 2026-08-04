@@ -200,7 +200,7 @@ pub struct Renderer {
     source_gamut_label: Option<&'static str>,
     /// Cached backbuffer label for the info overlay, refreshed on format/mode/gamut change.
     output_label: String,
-    source_icc_profile: Option<Vec<u8>>,
+    source_icc_profile: Option<Arc<[u8]>>,
     source_color_context: Option<ID2D1ColorContext>,
     linear_source_primaries: Option<[[f32; 2]; 3]>,
     linear_source_context: Option<ID2D1ColorContext>,
@@ -1217,7 +1217,7 @@ impl Renderer {
         self.image_source_bits_per_channel = image.source_bits_per_channel;
         self.rewire_effect_chain(
             &bitmap,
-            image.icc_profile.as_deref(),
+            image.icc_profile.as_ref(),
             image.storage,
             image.peak_luminance_nits,
             image.source_primaries,
@@ -1242,15 +1242,16 @@ impl Renderer {
     fn rewire_effect_chain(
         &mut self,
         bitmap: &ID2D1Bitmap1,
-        icc_profile: Option<&[u8]>,
+        icc_profile: Option<&Arc<[u8]>>,
         storage: PixelStorage,
         peak_luminance_nits: Option<f32>,
         source_primaries: Option<[[f32; 2]; 3]>,
     ) {
+        let icc_bytes = icc_profile.map(|profile| &**profile);
         self.effect_output = None;
         self.source_gamut_label = source_primaries
             .map(nearest_gamut_label)
-            .or_else(|| icc_profile.and_then(icc_gamut_label));
+            .or_else(|| icc_bytes.and_then(icc_gamut_label));
         self.refresh_output_label();
         let Some(color_management) = &self.mode_effects.color_management_effect else {
             return;
@@ -1267,7 +1268,7 @@ impl Renderer {
         // A source already in the destination space skips CM; the conversion would change nothing.
         if storage == PixelStorage::Bgra8
             && !scrgb_destination
-            && self.is_destination_space(icc_profile)
+            && self.is_destination_space(icc_bytes)
         {
             // Unwire the previous bitmap so the effect does not keep it alive.
             unsafe { color_management.SetInput(0, None, true) };
@@ -1293,9 +1294,9 @@ impl Renderer {
             Some(context) => context,
             None => {
                 if self.source_color_context.is_none()
-                    || self.source_icc_profile.as_deref() != icc_profile
+                    || self.source_icc_profile.as_deref() != icc_bytes
                 {
-                    self.source_color_context = match icc_profile {
+                    self.source_color_context = match icc_bytes {
                         Some(icc_profile) => unsafe {
                             self.d2d_context
                                 .CreateColorContext(D2D1_COLOR_SPACE_CUSTOM, Some(icc_profile))
@@ -1310,7 +1311,7 @@ impl Renderer {
                         }
                         .ok()
                     });
-                    self.source_icc_profile = icc_profile.map(<[u8]>::to_vec);
+                    self.source_icc_profile = icc_profile.cloned();
                 }
                 let Some(source_context) = &self.source_color_context else {
                     return;

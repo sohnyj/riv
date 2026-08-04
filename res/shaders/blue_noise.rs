@@ -4,12 +4,12 @@
 use std::path::Path;
 
 /// Writes the matrix as little-endian f32 texels for the quantize pass to include.
-pub fn write_table(output_directory: &Path) {
+pub fn write_table(table: &Path) {
     let texels: Vec<u8> = generate()
         .iter()
         .flat_map(|value| value.to_le_bytes())
         .collect();
-    std::fs::write(output_directory.join("blue_noise.bin"), texels).expect("blue noise writable");
+    std::fs::write(table, texels).expect("blue noise writable");
 }
 
 const SIZE_BITS: usize = 6;
