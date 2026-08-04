@@ -1525,10 +1525,12 @@ fn dispatch_action(application: &mut Application, window: HWND, action: Action) 
         Action::ClearRecents => {
             application.settings.clear_recent_files();
         }
-        Action::PanUp => application.pan_by(window, 0.0, PAN_STEP),
-        Action::PanDown => application.pan_by(window, 0.0, -PAN_STEP),
-        Action::PanLeft => application.pan_by(window, PAN_STEP, 0.0),
-        Action::PanRight => application.pan_by(window, -PAN_STEP, 0.0),
+        // The action owns the axis and the sign; this caller sets the distance.
+        Action::PanUp | Action::PanDown | Action::PanLeft | Action::PanRight => {
+            if let Some((x, y)) = action.pan_direction() {
+                application.pan_by(window, x * PAN_STEP, y * PAN_STEP);
+            }
+        }
         Action::RotateRight | Action::RotateLeft => {
             let step = if action == Action::RotateRight { 1 } else { -1 };
             let viewport = application.viewport(window);
@@ -1918,19 +1920,20 @@ fn handle_wheel(application: &mut Application, window: HWND, wheel_delta: i16) {
     if !application.gate_satisfied(action.gate()) {
         return;
     }
-    let pan_amount = f32::from(wheel_delta.abs()) / 2.0;
-    match action {
-        Action::ZoomIn | Action::ZoomOut => application.wheel_zoom(window, wheel_delta),
-        Action::PanUp => application.pan_by(window, 0.0, pan_amount),
-        Action::PanDown => application.pan_by(window, 0.0, -pan_amount),
-        Action::PanLeft => application.pan_by(window, pan_amount, 0.0),
-        Action::PanRight => application.pan_by(window, -pan_amount, 0.0),
-        action => {
-            let notches = application.accumulate_wheel_notches(wheel_delta);
-            for _ in 0..notches.abs() {
-                dispatch_action(application, window, action);
-            }
-        }
+    // The wheel sets its own distance; the action still owns the axis and the sign.
+    if let Some((x, y)) = action.pan_direction() {
+        let distance = f32::from(wheel_delta.abs()) / 2.0;
+        application.pan_by(window, x * distance, y * distance);
+        return;
+    }
+    // A zoom bound to the wheel follows the delta's sign, not the action's name.
+    if matches!(action, Action::ZoomIn | Action::ZoomOut) {
+        application.wheel_zoom(window, wheel_delta);
+        return;
+    }
+    let notches = application.accumulate_wheel_notches(wheel_delta);
+    for _ in 0..notches.abs() {
+        dispatch_action(application, window, action);
     }
 }
 

@@ -319,4 +319,15 @@ impl Action {
         }
         self.entry().3
     }
+
+    /// Which way the four pan actions move the image; the caller sets how far.
+    pub fn pan_direction(self) -> Option<(f32, f32)> {
+        match self {
+            Self::PanUp => Some((0.0, 1.0)),
+            Self::PanDown => Some((0.0, -1.0)),
+            Self::PanLeft => Some((1.0, 0.0)),
+            Self::PanRight => Some((-1.0, 0.0)),
+            _ => None,
+        }
+    }
 }
