@@ -207,13 +207,29 @@ pub enum SortMode {
 }
 
 impl SortMode {
+    /// Stored order: the settings value is a position here, and so is the combo row.
+    pub const IN_SETTING_ORDER: [Self; 5] = [
+        Self::Name,
+        Self::Modified,
+        Self::Created,
+        Self::Size,
+        Self::Type,
+    ];
+
     pub fn from_setting(value: u32) -> Self {
-        match value {
-            1 => Self::Modified,
-            2 => Self::Created,
-            3 => Self::Size,
-            4 => Self::Type,
-            _ => Self::Name,
+        Self::IN_SETTING_ORDER
+            .get(value as usize)
+            .copied()
+            .unwrap_or(Self::Name)
+    }
+
+    pub fn description(self) -> &'static str {
+        match self {
+            Self::Name => "Name",
+            Self::Modified => "Date modified",
+            Self::Created => "Date created",
+            Self::Size => "Size",
+            Self::Type => "Type",
         }
     }
 }

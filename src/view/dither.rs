@@ -14,12 +14,14 @@ pub enum DitherMode {
 }
 
 impl DitherMode {
+    /// Stored order: the settings value is a position here, and so is the combo row.
+    pub const IN_SETTING_ORDER: [Self; 3] = [Self::None, Self::Ordered, Self::Fruit];
+
     pub fn from_setting(value: u32) -> Self {
-        match value {
-            1 => Self::Ordered,
-            2 => Self::Fruit,
-            _ => Self::None,
-        }
+        Self::IN_SETTING_ORDER
+            .get(value as usize)
+            .copied()
+            .unwrap_or(Self::None)
     }
 
     /// Name for the info panel.

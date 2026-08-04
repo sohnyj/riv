@@ -8,11 +8,20 @@ pub enum FitMode {
 }
 
 impl FitMode {
+    /// Stored order: the settings value is a position here, and so is the combo row.
+    pub const IN_SETTING_ORDER: [Self; 2] = [Self::Width, Self::Height];
+
     pub fn from_setting(value: u32) -> Self {
-        if value == 1 {
-            Self::Height
-        } else {
-            Self::Width
+        Self::IN_SETTING_ORDER
+            .get(value as usize)
+            .copied()
+            .unwrap_or(Self::Width)
+    }
+
+    pub fn description(self) -> &'static str {
+        match self {
+            Self::Width => "Width",
+            Self::Height => "Height",
         }
     }
 }

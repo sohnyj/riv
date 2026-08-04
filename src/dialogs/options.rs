@@ -40,9 +40,16 @@ use crate::dialogs::about;
 use crate::dialogs::resource::*;
 use crate::dialogs::shortcut_capture;
 use crate::image;
-use crate::settings::{Options, SettingsFile};
+use crate::image::core::SortMode;
+use crate::settings::{
+    AFTER_DELETION_CHOICES, Options, PRELOADING_CHOICES, SLIDESHOW_DIRECTION_CHOICES, SettingsFile,
+    TITLE_BAR_TEXT_CHOICES,
+};
 use crate::shell::{file_association, start_menu};
 use crate::text::wide;
+use crate::view::dither::DitherMode;
+use crate::view::renderer::ScalingFilter;
+use crate::view::transform::FitMode;
 use crate::window::message::{high_word, low_word, point_from_packed};
 
 pub const WM_APP_OPTIONS_APPLIED: u32 = WM_APP + 5;
@@ -717,16 +724,7 @@ fn handle_page_command(
 
 fn initialize_window_page(state: &OptionsState) {
     let page = state.pages[0];
-    combo_fill(
-        page,
-        IDC_WINDOW_TITLEBAR_MODE,
-        &[
-            "App name",
-            "File name",
-            "[N/N] File name",
-            "[N/N] Folder\\File name",
-        ],
-    );
+    combo_fill(page, IDC_WINDOW_TITLEBAR_MODE, &TITLE_BAR_TEXT_CHOICES);
 }
 
 fn initialize_image_page(state: &OptionsState) {
@@ -734,15 +732,19 @@ fn initialize_image_page(state: &OptionsState) {
     combo_fill(
         page,
         IDC_IMAGE_SCALING,
-        &["Nearest", "Bilinear", "Bicubic", "High quality"],
+        &ScalingFilter::IN_SETTING_ORDER.map(ScalingFilter::description),
     );
-    combo_fill(page, IDC_IMAGE_DITHER, &["None", "Ordered", "Fruit"]);
-    combo_fill(page, IDC_IMAGE_FITMODE, &["Width", "Height"]);
     combo_fill(
         page,
-        IDC_IMAGE_PRELOADING,
-        &["Disabled", "Nearby", "Extended"],
+        IDC_IMAGE_DITHER,
+        &DitherMode::IN_SETTING_ORDER.map(DitherMode::description),
     );
+    combo_fill(
+        page,
+        IDC_IMAGE_FITMODE,
+        &FitMode::IN_SETTING_ORDER.map(FitMode::description),
+    );
+    combo_fill(page, IDC_IMAGE_PRELOADING, &PRELOADING_CHOICES);
     if let Ok(spin) = unsafe { GetDlgItem(Some(page), IDC_IMAGE_ZOOM_STEP_SPIN) } {
         unsafe { SendMessageW(spin, UDM_SETRANGE32, Some(WPARAM(1)), Some(LPARAM(200))) };
     }
@@ -753,17 +755,17 @@ fn initialize_miscellaneous_page(state: &OptionsState) {
     combo_fill(
         page,
         IDC_MISCELLANEOUS_SORT,
-        &["Name", "Date modified", "Date created", "Size", "Type"],
+        &SortMode::IN_SETTING_ORDER.map(SortMode::description),
     );
     combo_fill(
         page,
         IDC_MISCELLANEOUS_SLIDESHOW_DIRECTION,
-        &["Backward", "Forward"],
+        &SLIDESHOW_DIRECTION_CHOICES,
     );
     combo_fill(
         page,
         IDC_MISCELLANEOUS_AFTER_DELETE,
-        &["Move back", "Move forward"],
+        &AFTER_DELETION_CHOICES,
     );
     if let Ok(spin) = unsafe { GetDlgItem(Some(page), IDC_MISCELLANEOUS_SLIDESHOW_INTERVAL_SPIN) } {
         unsafe { SendMessageW(spin, UDM_SETRANGE32, Some(WPARAM(1)), Some(LPARAM(3600))) };

@@ -126,13 +126,19 @@ pub enum ScalingFilter {
 }
 
 impl ScalingFilter {
+    /// Stored order: the settings value is a position here, and so is the combo row.
+    pub const IN_SETTING_ORDER: [Self; 4] = [
+        Self::Nearest,
+        Self::Bilinear,
+        Self::Bicubic,
+        Self::HighQuality,
+    ];
+
     pub fn from_setting(value: u32) -> Self {
-        match value {
-            0 => Self::Nearest,
-            2 => Self::Bicubic,
-            3 => Self::HighQuality,
-            _ => Self::Bilinear,
-        }
+        Self::IN_SETTING_ORDER
+            .get(value as usize)
+            .copied()
+            .unwrap_or(Self::Bilinear)
     }
 
     pub fn interpolation(self) -> D2D1_INTERPOLATION_MODE {
