@@ -7,7 +7,9 @@ pub mod shortcut_capture;
 pub mod text_input;
 
 use windows::Win32::Foundation::{HWND, LPARAM, POINT, RECT, WPARAM};
-use windows::Win32::Graphics::Gdi::MapWindowPoints;
+use windows::Win32::Graphics::Gdi::{
+    GetMonitorInfoW, MONITOR_DEFAULTTONEAREST, MONITORINFO, MapWindowPoints, MonitorFromRect,
+};
 use windows::Win32::System::LibraryLoader::GetModuleHandleW;
 use windows::Win32::UI::Controls::{
     TASKDIALOG_BUTTON, TASKDIALOG_FLAGS, TASKDIALOGCONFIG, TDF_POSITION_RELATIVE_TO_WINDOW,
@@ -50,6 +52,30 @@ pub fn state_mut<State>(dialog: HWND) -> Option<&'static mut State> {
     unsafe { pointer.as_mut() }
 }
 
+/// Holds a placement inside the work area of the monitor it lands on.
+pub fn clamp_to_work_area(x: i32, y: i32, width: i32, height: i32) -> (i32, i32) {
+    let target = RECT {
+        left: x,
+        top: y,
+        right: x + width,
+        bottom: y + height,
+    };
+    let monitor = unsafe { MonitorFromRect(&raw const target, MONITOR_DEFAULTTONEAREST) };
+    let mut information = MONITORINFO {
+        cbSize: size_of::<MONITORINFO>() as u32,
+        ..Default::default()
+    };
+    if !unsafe { GetMonitorInfoW(monitor, &raw mut information) }.as_bool() {
+        return (x, y);
+    }
+    let work_area = information.rcWork;
+    // Clamped low last, so a dialog taller than the work area keeps its top left corner.
+    (
+        x.min(work_area.right - width).max(work_area.left),
+        y.min(work_area.bottom - height).max(work_area.top),
+    )
+}
+
 /// Center a dialog within its owner window.
 pub fn center_on_owner(dialog: HWND) {
     use windows::Win32::UI::WindowsAndMessaging::{
@@ -65,10 +91,12 @@ pub fn center_on_owner(dialog: HWND) {
     {
         return;
     }
-    let x = owner_bounds.left
-        + (owner_bounds.right - owner_bounds.left - (dialog_bounds.right - dialog_bounds.left)) / 2;
-    let y = owner_bounds.top
-        + (owner_bounds.bottom - owner_bounds.top - (dialog_bounds.bottom - dialog_bounds.top)) / 2;
+    let width = dialog_bounds.right - dialog_bounds.left;
+    let height = dialog_bounds.bottom - dialog_bounds.top;
+    let x = owner_bounds.left + (owner_bounds.right - owner_bounds.left - width) / 2;
+    let y = owner_bounds.top + (owner_bounds.bottom - owner_bounds.top - height) / 2;
+    // An owner at a screen edge centers the dialog past it.
+    let (x, y) = clamp_to_work_area(x, y, width, height);
     let _ = unsafe {
         SetWindowPos(
             dialog,
