@@ -9,7 +9,7 @@ use windows::Win32::Storage::FileSystem::{MOVE_FILE_FLAGS, MoveFileExW};
 use windows::Win32::System::Com::{CLSCTX_INPROC_SERVER, CoCreateInstance};
 use windows::Win32::UI::Controls::{
     TASKDIALOG_BUTTON, TASKDIALOGCONFIG, TDCBF_CANCEL_BUTTON, TDCBF_CLOSE_BUTTON,
-    TDF_ALLOW_DIALOG_CANCELLATION, TaskDialogIndirect,
+    TDF_ALLOW_DIALOG_CANCELLATION, TDF_POSITION_RELATIVE_TO_WINDOW, TaskDialogIndirect,
 };
 use windows::Win32::UI::Shell::{
     FOF_ALLOWUNDO, FOF_NOCONFIRMATION, FOF_SILENT, FileOperation, IFileOperation, IShellItem,
@@ -56,7 +56,7 @@ pub fn confirm_delete(window: HWND, path: &Path, permanent: bool) -> DeleteConfi
     let mut configuration = TASKDIALOGCONFIG {
         cbSize: size_of::<TASKDIALOGCONFIG>() as u32,
         hwndParent: window,
-        dwFlags: TDF_ALLOW_DIALOG_CANCELLATION,
+        dwFlags: TDF_ALLOW_DIALOG_CANCELLATION | TDF_POSITION_RELATIVE_TO_WINDOW,
         dwCommonButtons: TDCBF_CANCEL_BUTTON,
         pszWindowTitle: w!("riv"),
         pszMainInstruction: PCWSTR(instruction.as_ptr()),

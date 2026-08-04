@@ -41,7 +41,6 @@ use crate::shell::{file_association, start_menu};
 use crate::text::wide;
 
 pub const WM_APP_OPTIONS_APPLIED: u32 = WM_APP + 5;
-pub const WM_APP_OPTIONS_GEOMETRY: u32 = WM_APP + 6;
 
 pub struct AppliedOptions {
     pub options: Options,
@@ -97,7 +96,6 @@ struct OptionsState {
     syncing: bool,
     state_images: HIMAGELIST,
     custom_colors: [COLORREF; 16],
-    initial_position: Option<(i32, i32)>,
     /// Fonts owned by the About page, freed when the dialog closes.
     about_fonts: about::AboutFonts,
 }
@@ -175,7 +173,6 @@ pub fn show(parent: HWND, settings: &SettingsFile) {
         syncing: false,
         state_images: HIMAGELIST::default(),
         custom_colors: [COLORREF(0x00FF_FFFF); 16],
-        initial_position: settings.options_geometry(),
         about_fonts: about::AboutFonts::default(),
     };
     let instance = unsafe { GetModuleHandleW(None) }.unwrap_or_default();
@@ -265,18 +262,6 @@ unsafe extern "system" fn frame_procedure(
         }
         WM_DESTROY => {
             if let Some(state) = state_mut(dialog) {
-                let mut bounds = RECT::default();
-                if unsafe { GetWindowRect(dialog, &raw mut bounds) }.is_ok() {
-                    let packed = (bounds.left as u32 as isize) | ((bounds.top as isize) << 32);
-                    unsafe {
-                        SendMessageW(
-                            state.parent,
-                            WM_APP_OPTIONS_GEOMETRY,
-                            None,
-                            Some(LPARAM(packed)),
-                        )
-                    };
-                }
                 for page in state.pages {
                     if !page.is_invalid() {
                         let _ = unsafe { DestroyWindow(page) };
@@ -297,29 +282,7 @@ unsafe extern "system" fn frame_procedure(
 
 fn initialize_frame(state: &mut OptionsState) {
     let dialog = state.dialog;
-    let position = state.initial_position.or_else(|| {
-        let mut bounds = RECT::default();
-        let _ = unsafe { GetWindowRect(dialog, &raw mut bounds) };
-        crate::window::work_area_centered_origin(
-            bounds.right - bounds.left,
-            bounds.bottom - bounds.top,
-        )
-    });
-    if let Some((x, y)) = position {
-        let _ = unsafe {
-            SetWindowPos(
-                dialog,
-                None,
-                x,
-                y,
-                0,
-                0,
-                windows::Win32::UI::WindowsAndMessaging::SWP_NOSIZE
-                    | windows::Win32::UI::WindowsAndMessaging::SWP_NOZORDER
-                    | windows::Win32::UI::WindowsAndMessaging::SWP_NOACTIVATE,
-            )
-        };
-    }
+    super::center_on_owner(dialog);
     let Ok(tab) = (unsafe { GetDlgItem(Some(dialog), IDC_OPTIONS_TAB) }) else {
         return;
     };

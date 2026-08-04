@@ -17,7 +17,7 @@ use std::sync::Arc;
 
 use actions::{Action, ActivationGate};
 use bindings::{Bindings, MODIFIER_CONTROL, MouseBase, current_modifiers};
-use dialogs::options::{WM_APP_OPTIONS_APPLIED, WM_APP_OPTIONS_GEOMETRY};
+use dialogs::options::WM_APP_OPTIONS_APPLIED;
 use image::animation::Animation;
 use image::color;
 use image::core::{
@@ -2367,14 +2367,6 @@ extern "system" fn window_procedure(
                 let _ = application.settings.save_merging_recents();
                 application.apply_options(window);
                 application.request_render(window);
-            }
-            LRESULT(0)
-        }
-        WM_APP_OPTIONS_GEOMETRY => {
-            if let Some(application) = application_from_window(window) {
-                let x = (lparam.0 & 0xFFFF_FFFF) as u32 as i32;
-                let y = (lparam.0 >> 32) as i32;
-                application.settings.set_options_geometry(x, y);
             }
             LRESULT(0)
         }

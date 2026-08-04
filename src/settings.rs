@@ -457,22 +457,6 @@ impl SettingsFile {
             );
     }
 
-    pub fn options_geometry(&self) -> Option<(i32, i32)> {
-        let geometry = self.document.get("optionsgeometry")?;
-        let read = |key: &str| geometry.get(key)?.as_i64().map(|value| value as i32);
-        Some((read("x")?, read("y")?))
-    }
-
-    pub fn set_options_geometry(&mut self, x: i32, y: i32) {
-        self.document
-            .as_object_mut()
-            .expect("settings document is object")
-            .insert(
-                "optionsgeometry".to_string(),
-                serde_json::json!({ "x": x, "y": y }),
-            );
-    }
-
     pub fn last_file_dialog_directory(&self) -> Option<String> {
         self.document
             .get("recents")?

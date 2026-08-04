@@ -8,7 +8,8 @@ pub mod text_input;
 
 use windows::Win32::Foundation::HWND;
 use windows::Win32::UI::Controls::{
-    TASKDIALOG_COMMON_BUTTON_FLAGS, TASKDIALOGCONFIG, TaskDialogIndirect,
+    TASKDIALOG_COMMON_BUTTON_FLAGS, TASKDIALOG_FLAGS, TASKDIALOGCONFIG,
+    TDF_POSITION_RELATIVE_TO_WINDOW, TaskDialogIndirect,
 };
 use windows::Win32::UI::WindowsAndMessaging::{GetWindowLongPtrW, WINDOW_LONG_PTR_INDEX};
 use windows::core::{PCWSTR, w};
@@ -65,8 +66,14 @@ pub fn show_message(
 ) {
     let instruction = crate::text::wide(instruction);
     let content = crate::text::wide(content);
+    // Without the flag a task dialog centers on the monitor, owner or not.
+    let placement = match owner {
+        Some(_) => TDF_POSITION_RELATIVE_TO_WINDOW,
+        None => TASKDIALOG_FLAGS(0),
+    };
     let configuration = TASKDIALOGCONFIG {
         cbSize: size_of::<TASKDIALOGCONFIG>() as u32,
+        dwFlags: placement,
         hwndParent: owner.unwrap_or_default(),
         pszWindowTitle: w!("riv"),
         pszMainInstruction: PCWSTR(instruction.as_ptr()),
