@@ -279,6 +279,16 @@ impl Application {
         .ok();
         let display_watcher = color::DisplayWatcher::new(window, WM_APP_ADVANCED_COLOR_CHANGED);
         let theme_watcher = dwm::ThemeWatcher::new(window, WM_APP_SYSTEM_COLORS_CHANGED);
+        let settings = SettingsFile::load();
+        let bindings =
+            Bindings::from_settings(settings.keyboard_bindings(), settings.mouse_bindings());
+        let mut view_transform = ViewTransform::new();
+        view_transform.fit_mode = FitMode::from_setting(settings.options.fit_mode);
+        // Submitted before the device is waited on, so a worker reads the file meanwhile.
+        let mut image_core = ImageCore::new(window, core_options(&settings.options));
+        if let Some(path) = initial_path {
+            image_core.load_path(path);
+        }
         let color::DisplayColorInfo {
             capabilities,
             gamut,
@@ -291,11 +301,6 @@ impl Application {
             pending_device.wait()?,
         )?;
         let device_pixel_ratio = unsafe { GetDpiForWindow(window) } as f32 / 96.0;
-        let settings = SettingsFile::load();
-        let bindings =
-            Bindings::from_settings(settings.keyboard_bindings(), settings.mouse_bindings());
-        let mut view_transform = ViewTransform::new();
-        view_transform.fit_mode = FitMode::from_setting(settings.options.fit_mode);
         let mut application = Self {
             renderer: Some(renderer),
             display_watcher,
@@ -303,7 +308,7 @@ impl Application {
             _dispatcher_queue_controller: dispatcher_queue_controller,
             output_reconfigure_pending: false,
             view_transform,
-            image_core: ImageCore::new(window, core_options(&settings.options)),
+            image_core,
             displayed_image: None,
             displayed_location: None,
             preload_after_display: false,
@@ -349,9 +354,6 @@ impl Application {
             ));
         }
         application.overlay.set_scale(device_pixel_ratio);
-        if let Some(path) = initial_path {
-            application.image_core.load_path(path);
-        }
         application.register_upload_device();
         Ok(application)
     }

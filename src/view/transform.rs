@@ -191,16 +191,15 @@ impl ViewTransform {
         let scale_y = self.scale * if self.flipped { -1.0 } else { 1.0 };
         let center_x = image.width / 2.0;
         let center_y = image.height / 2.0;
-        let mut translate_x = viewport.width / 2.0 + self.pan_offset_x;
-        let mut translate_y = viewport.height / 2.0 + self.pan_offset_y;
+        let translate_x = viewport.width / 2.0 + self.pan_offset_x;
+        let translate_y = viewport.height / 2.0 + self.pan_offset_y;
+        let mut origin_x = translate_x - center_x * scale_x * cosine + center_y * scale_y * sine;
+        let mut origin_y = translate_y - center_x * scale_x * sine - center_y * scale_y * cosine;
 
-        let snappable_scale = (self.scale - 1.0).abs() < f32::EPSILON;
-        // Snap the final translation so the texel grid lands on device pixels.
-        if snappable_scale {
-            let origin_x = translate_x - center_x * scale_x * cosine + center_y * scale_y * sine;
-            let origin_y = translate_y - center_x * scale_x * sine - center_y * scale_y * cosine;
-            translate_x += origin_x.round() - origin_x;
-            translate_y += origin_y.round() - origin_y;
+        // Snap the origin so the texel grid lands on device pixels.
+        if (self.scale - 1.0).abs() < f32::EPSILON {
+            origin_x = origin_x.round();
+            origin_y = origin_y.round();
         }
 
         [
@@ -208,8 +207,8 @@ impl ViewTransform {
             scale_x * sine,
             -scale_y * sine,
             scale_y * cosine,
-            -center_x * scale_x * cosine + center_y * scale_y * sine + translate_x,
-            -center_x * scale_x * sine - center_y * scale_y * cosine + translate_y,
+            origin_x,
+            origin_y,
         ]
     }
 }
@@ -320,6 +319,17 @@ mod pixel_snap_tests {
         assert_eq!(matrix[3], 1.0); // unit scale on Y
         assert_eq!(matrix[4], matrix[4].round()); // origin on a whole pixel
         assert_eq!(matrix[5], matrix[5].round());
+        // Rotation and mirroring change which terms build the origin; the snap holds through all.
+        for quadrant in 0..4 {
+            for (mirrored, flipped) in [(false, false), (true, false), (false, true)] {
+                transform.rotation_quadrant = quadrant;
+                transform.mirrored = mirrored;
+                transform.flipped = flipped;
+                let matrix = transform.matrix(odd_viewport, image);
+                assert_eq!(matrix[4], matrix[4].round());
+                assert_eq!(matrix[5], matrix[5].round());
+            }
+        }
     }
 }
 

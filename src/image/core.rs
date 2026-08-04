@@ -2126,6 +2126,8 @@ fn core() -> ImageCore {
 #[cfg(test)]
 fn fixture_directory(name: &str, files: &[&str]) -> PathBuf {
     let directory = std::env::temp_dir().join(name);
+    // The cleanup at the end of a test is best effort, so start from an empty directory.
+    let _ = std::fs::remove_dir_all(&directory);
     std::fs::create_dir_all(&directory).expect("fixture directory");
     for file in files {
         std::fs::write(directory.join(file), b"listing only; never decoded").expect("fixture file");
@@ -2761,7 +2763,8 @@ mod listing_scan_tests {
         core.install_listing_scan(scan);
         assert_eq!(adjacent_entries(&core), expected);
         // A file added ahead of it shifts every index; the place follows the entry beside it.
-        std::fs::write(directory.join("a0.png"), b"listing only").expect("fixture file");
+        // The name starts with a digit so logical order puts it first on every implementation.
+        std::fs::write(directory.join("0.png"), b"listing only").expect("fixture file");
         assert!(!core.reload_current());
         let scan = ScannedListing::of(ListingScope::Directory(directory.clone()), &core.options);
         core.install_listing_scan(scan);

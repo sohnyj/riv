@@ -6,7 +6,6 @@
 #include <ImfThreading.h>
 
 #include <cstdio>
-#include <cstdlib>
 #include <cstring>
 #include <exception>
 #include <stdexcept>
@@ -104,8 +103,10 @@ int probe_stream(Imf::IStream& stream, int* out_width, int* out_height) {
     }
 }
 
-int decode_stream(Imf::IStream& stream, int* out_width, int* out_height,
-                  unsigned short** out_pixels, char* error_message, size_t error_capacity) {
+// Reads into the caller's buffer, which must hold capacity_pixels RGBA halves.
+int decode_stream_into(Imf::IStream& stream, unsigned short* out_pixels, size_t capacity_pixels,
+                       int* out_width, int* out_height, char* error_message,
+                       size_t error_capacity) {
     try {
         static const int thread_count = [] {
             const unsigned int hardware = std::thread::hardware_concurrency();
@@ -121,24 +122,18 @@ int decode_stream(Imf::IStream& stream, int* out_width, int* out_height,
             write_error(error_message, error_capacity, "invalid data window");
             return 1;
         }
-        auto* pixels = static_cast<Imf::Rgba*>(
-            std::malloc(static_cast<size_t>(width * height) * sizeof(Imf::Rgba)));
-        if (pixels == nullptr) {
-            write_error(error_message, error_capacity, "pixel buffer allocation failed");
+        *out_width = static_cast<int>(width);
+        *out_height = static_cast<int>(height);
+        // The caller sized the buffer from a probe; a file that grew since then stops here.
+        if (static_cast<size_t>(width * height) > capacity_pixels) {
+            write_error(error_message, error_capacity, "pixel buffer too small");
             return 1;
         }
+        auto* pixels = reinterpret_cast<Imf::Rgba*>(out_pixels);
         file.setFrameBuffer(pixels - data_window.min.x
                                 - static_cast<long long>(data_window.min.y) * width,
                             1, static_cast<size_t>(width));
-        try {
-            file.readPixels(data_window.min.y, data_window.max.y);
-        } catch (...) {
-            std::free(pixels);
-            throw;
-        }
-        *out_width = static_cast<int>(width);
-        *out_height = static_cast<int>(height);
-        *out_pixels = reinterpret_cast<unsigned short*>(pixels);
+        file.readPixels(data_window.min.y, data_window.max.y);
         return 0;
     } catch (const std::exception& exception) {
         write_error(error_message, error_capacity, exception.what());
@@ -153,25 +148,26 @@ int decode_stream(Imf::IStream& stream, int* out_width, int* out_height,
 
 extern "C" {
 
-// Returns 0 on success; out_pixels is a malloc'd RGBA half buffer freed by riv_exr_free.
-int riv_exr_decode(const wchar_t* path, int* out_width, int* out_height,
-                   unsigned short** out_pixels, char* error_message, size_t error_capacity) {
+// Returns 0 on success, having filled out_pixels; the caller owns that buffer throughout.
+int riv_exr_decode_into(const wchar_t* path, unsigned short* out_pixels, size_t capacity_pixels,
+                        int* out_width, int* out_height, char* error_message,
+                        size_t error_capacity) {
     WideFileStream stream(path);
     if (!stream.valid()) {
         write_error(error_message, error_capacity, "cannot open file");
         return 1;
     }
-    return decode_stream(stream, out_width, out_height, out_pixels, error_message,
-                         error_capacity);
+    return decode_stream_into(stream, out_pixels, capacity_pixels, out_width, out_height,
+                              error_message, error_capacity);
 }
 
-// In-memory variant; the buffer is only borrowed for the duration of the call.
-int riv_exr_decode_memory(const unsigned char* data, size_t size, int* out_width,
-                          int* out_height, unsigned short** out_pixels, char* error_message,
-                          size_t error_capacity) {
+// In-memory variant; the source buffer is only borrowed for the duration of the call.
+int riv_exr_decode_memory_into(const unsigned char* data, size_t size, unsigned short* out_pixels,
+                               size_t capacity_pixels, int* out_width, int* out_height,
+                               char* error_message, size_t error_capacity) {
     MemoryStream stream(data, size);
-    return decode_stream(stream, out_width, out_height, out_pixels, error_message,
-                         error_capacity);
+    return decode_stream_into(stream, out_pixels, capacity_pixels, out_width, out_height,
+                              error_message, error_capacity);
 }
 
 // Returns 0 on success with the data window size; no pixels are read.
@@ -187,10 +183,6 @@ int riv_exr_probe_memory(const unsigned char* data, size_t size, int* out_width,
                          int* out_height) {
     MemoryStream stream(data, size);
     return probe_stream(stream, out_width, out_height);
-}
-
-void riv_exr_free(unsigned short* pixels) {
-    std::free(pixels);
 }
 
 } // extern "C"

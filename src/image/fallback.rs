@@ -112,6 +112,8 @@ fn compose_webp_frames(
     let mut canvas = vec![0u8; canvas_width as usize * canvas_height as usize * 4];
     let mut frames = Vec::with_capacity(iterator.frame_count.max(1) as usize);
     let mut frames_truncated = false;
+    // Reused across frames; the decoder writes every byte it is given.
+    let mut frame_pixels: Vec<u8> = Vec::new();
     loop {
         // The demuxer's frame count is real, so the budget is known after frame one.
         if !frames.is_empty()
@@ -122,7 +124,7 @@ fn compose_webp_frames(
         }
         let frame_width = iterator.width.max(0) as u32;
         let frame_height = iterator.height.max(0) as u32;
-        let mut frame_pixels = vec![0u8; frame_width as usize * frame_height as usize * 4];
+        frame_pixels.resize(frame_width as usize * frame_height as usize * 4, 0);
         let decoded = unsafe {
             WebPDecodeBGRAInto(
                 iterator.fragment.bytes,
@@ -208,24 +210,25 @@ fn premultiply_bgra_in_place(pixels: &mut [u8]) {
 }
 
 unsafe extern "C" {
-    fn riv_exr_decode(
+    fn riv_exr_decode_into(
         path: *const u16,
+        out_pixels: *mut u16,
+        capacity_pixels: usize,
         out_width: *mut c_int,
         out_height: *mut c_int,
-        out_pixels: *mut *mut u16,
         error_message: *mut c_char,
         error_capacity: usize,
     ) -> c_int;
-    fn riv_exr_decode_memory(
+    fn riv_exr_decode_memory_into(
         data: *const u8,
         size: usize,
+        out_pixels: *mut u16,
+        capacity_pixels: usize,
         out_width: *mut c_int,
         out_height: *mut c_int,
-        out_pixels: *mut *mut u16,
         error_message: *mut c_char,
         error_capacity: usize,
     ) -> c_int;
-    fn riv_exr_free(pixels: *mut u16);
     fn riv_exr_probe(path: *const u16, out_width: *mut c_int, out_height: *mut c_int) -> c_int;
     fn riv_exr_probe_memory(
         data: *const u8,
@@ -256,8 +259,17 @@ pub fn decode_exr(path: &Path, format_name: &'static str) -> Result<DecodedImage
     let wide_path = crate::text::wide(path);
     decode_exr_with(
         format_name,
-        |width, height, pixels, message, capacity| unsafe {
-            riv_exr_decode(wide_path.as_ptr(), width, height, pixels, message, capacity)
+        probe_exr_dimensions(path),
+        |pixels, capacity, width, height, message, error_capacity| unsafe {
+            riv_exr_decode_into(
+                wide_path.as_ptr(),
+                pixels,
+                capacity,
+                width,
+                height,
+                message,
+                error_capacity,
+            )
         },
     )
 }
@@ -268,32 +280,47 @@ pub fn decode_exr_bytes(
 ) -> Result<DecodedImage, DecodeError> {
     decode_exr_with(
         format_name,
-        |width, height, pixels, message, capacity| unsafe {
-            riv_exr_decode_memory(
+        probe_exr_bytes_dimensions(data),
+        |pixels, capacity, width, height, message, error_capacity| unsafe {
+            riv_exr_decode_memory_into(
                 data.as_ptr(),
                 data.len(),
+                pixels,
+                capacity,
                 width,
                 height,
-                pixels,
                 message,
-                capacity,
+                error_capacity,
             )
         },
     )
 }
 
+/// The probe sizes the buffer the shim decodes into, so no pixels are copied across the boundary.
 fn decode_exr_with(
     format_name: &'static str,
-    decode: impl FnOnce(*mut c_int, *mut c_int, *mut *mut u16, *mut c_char, usize) -> c_int,
+    dimensions: Option<(u32, u32)>,
+    decode: impl FnOnce(*mut u16, usize, *mut c_int, *mut c_int, *mut c_char, usize) -> c_int,
 ) -> Result<DecodedImage, DecodeError> {
+    let Some((probed_width, probed_height)) = dimensions else {
+        return Err(uncoded_error("EXR header is unreadable"));
+    };
+    let pixel_count = probed_width as usize * probed_height as usize;
+    // Fallible reservation: vec! aborts on OOM; a huge EXR should error, not crash.
+    let mut pixels: Vec<u8> = Vec::new();
+    if pixels.try_reserve_exact(pixel_count * 8).is_err() {
+        return Err(uncoded_error("EXR is too large to fit in memory"));
+    }
+    // The shim writes associated-alpha linear RGBA halves (the FP16 storage layout).
+    pixels.resize(pixel_count * 8, 0);
     let mut width: c_int = 0;
     let mut height: c_int = 0;
-    let mut half_pixels: *mut u16 = std::ptr::null_mut();
     let mut error_message = [0u8; 256];
     let status = decode(
+        pixels.as_mut_ptr().cast::<u16>(),
+        pixel_count,
         &raw mut width,
         &raw mut height,
-        &raw mut half_pixels,
         error_message.as_mut_ptr().cast(),
         error_message.len(),
     );
@@ -304,20 +331,8 @@ fn decode_exr_with(
             });
         return Err(uncoded_error(text));
     }
-    let byte_count = width as usize * height as usize * 8;
-    // Fallible copy: to_vec aborts on OOM; a huge EXR should error, not crash.
-    let mut pixels = Vec::new();
-    let reserved = pixels.try_reserve_exact(byte_count).is_ok();
-    if reserved {
-        // The shim hands over associated-alpha linear RGBA halves (the FP16 storage layout).
-        pixels.extend_from_slice(unsafe {
-            std::slice::from_raw_parts(half_pixels.cast::<u8>(), byte_count)
-        });
-    }
-    unsafe { riv_exr_free(half_pixels) };
-    if !reserved {
-        return Err(uncoded_error("EXR is too large to fit in memory"));
-    }
+    // A file that shrank between the probe and the read leaves the tail untouched.
+    pixels.truncate(width as usize * height as usize * 8);
     let peak_luminance_nits = peak_luminance_from_half_pixels(&pixels);
     Ok(DecodedImage {
         width: width as u32,

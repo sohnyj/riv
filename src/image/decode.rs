@@ -2034,6 +2034,8 @@ fn decode_animation(
     let mut frames = Vec::with_capacity(frame_count as usize);
     let mut frames_truncated = false;
     let mut icc_profile = None;
+    // Reused across frames; the copy writes every byte it is given.
+    let mut frame_pixels: Vec<u8> = Vec::new();
     for index in 0..frame_count {
         if cancellation.load(Ordering::Relaxed) {
             return Err(E_ABORT.into());
@@ -2057,7 +2059,14 @@ fn decode_animation(
         if canvas.is_empty() {
             canvas = vec![0u8; canvas_width as usize * canvas_height as usize * 4];
         }
-        let frame_pixels = copy_pixels(&source, frame_width, frame_height, 4, cancellation)?;
+        copy_pixels_into(
+            &source,
+            frame_width,
+            frame_height,
+            4,
+            cancellation,
+            &mut frame_pixels,
+        )?;
 
         let restore_previous = (metadata.disposal == 3).then(|| canvas.clone());
         blend_over(
@@ -2350,6 +2359,8 @@ fn decode_apng<Input: BufRead + Seek>(
     // The png crate accepts acTL num_frames up to i32::MAX; cap the reservation.
     let mut frames = Vec::with_capacity((animation_frame_count as usize).min(4096));
     let mut frames_truncated = false;
+    // Reused across frames; the conversion writes every byte it is given.
+    let mut region_pixels: Vec<u8> = Vec::new();
     for index in 0..animation_frame_count {
         if cancellation.load(Ordering::Relaxed) {
             return Err(DecodeError::cancelled());
@@ -2369,11 +2380,12 @@ fn decode_apng<Input: BufRead + Seek>(
             ..Default::default()
         });
         let output = reader.next_frame(&mut buffer).map_err(uncoded_error)?;
-        let region_pixels = pixels_to_premultiplied_bgra(
+        pixels_to_premultiplied_bgra_into(
             &buffer[..output.buffer_size()],
             output.color_type,
             frame_control.width,
             frame_control.height,
+            &mut region_pixels,
         )?;
 
         let restore_previous =
@@ -2465,17 +2477,19 @@ pub fn premultiplied_bgra_from_rgba(source: &[u8], output: &mut [u8]) {
     }
 }
 
-fn pixels_to_premultiplied_bgra(
+/// Fills `output` with the converted region, so an animation reuses one buffer across frames.
+fn pixels_to_premultiplied_bgra_into(
     pixels: &[u8],
     color_type: png::ColorType,
     width: u32,
     height: u32,
-) -> Result<Vec<u8>, DecodeError> {
+    output: &mut Vec<u8>,
+) -> Result<(), DecodeError> {
     let pixel_count = width as usize * height as usize;
-    let mut output = vec![0u8; pixel_count * 4];
+    output.resize(pixel_count * 4, 0);
     match color_type {
         png::ColorType::Rgba => {
-            premultiplied_bgra_from_rgba(&pixels[..pixel_count * 4], &mut output);
+            premultiplied_bgra_from_rgba(&pixels[..pixel_count * 4], output);
         }
         png::ColorType::Rgb => {
             for (source_pixel, output_pixel) in pixels[..pixel_count * 3]
@@ -2494,7 +2508,7 @@ fn pixels_to_premultiplied_bgra(
             )));
         }
     }
-    Ok(output)
+    Ok(())
 }
 
 #[expect(clippy::too_many_arguments)]
@@ -2655,9 +2669,30 @@ fn copy_pixels(
     bytes_per_pixel: u32,
     cancellation: &AtomicBool,
 ) -> WindowsResult<Vec<u8>> {
+    let mut pixels = Vec::new();
+    copy_pixels_into(
+        source,
+        width,
+        height,
+        bytes_per_pixel,
+        cancellation,
+        &mut pixels,
+    )?;
+    Ok(pixels)
+}
+
+/// Fills `pixels` with the frame, so an animation reuses one buffer across frames.
+fn copy_pixels_into(
+    source: &IWICBitmapSource,
+    width: u32,
+    height: u32,
+    bytes_per_pixel: u32,
+    cancellation: &AtomicBool,
+    pixels: &mut Vec<u8>,
+) -> WindowsResult<()> {
     const STRIP_ROWS: u32 = 256;
     let stride = width * bytes_per_pixel;
-    let mut pixels = vec![0u8; stride as usize * height as usize];
+    pixels.resize(stride as usize * height as usize, 0);
     let mut row = 0;
     while row < height {
         if cancellation.load(Ordering::Relaxed) {
@@ -2675,7 +2710,7 @@ fn copy_pixels(
         unsafe { source.CopyPixels(&raw const rectangle, stride, &mut pixels[start..end])? };
         row += rows;
     }
-    Ok(pixels)
+    Ok(())
 }
 
 #[cfg(test)]
@@ -3372,10 +3407,10 @@ mod premultiplied_conversion_tests {
     #[test]
     fn rgba_conversion_matches_the_scalar_reference() {
         let rgba = random_pixels(64 * 64, 3);
-        let Ok(converted) = pixels_to_premultiplied_bgra(&rgba, png::ColorType::Rgba, 64, 64)
-        else {
-            panic!("conversion failed");
-        };
+        let mut converted = Vec::new();
+        let converted_ok =
+            pixels_to_premultiplied_bgra_into(&rgba, png::ColorType::Rgba, 64, 64, &mut converted);
+        assert!(converted_ok.is_ok(), "conversion failed");
         let mut expected = Vec::new();
         for pixel in rgba.chunks_exact(4) {
             let alpha = u16::from(pixel[3]);
@@ -3393,9 +3428,10 @@ mod premultiplied_conversion_tests {
             .chunks_exact(4)
             .flat_map(|pixel| [pixel[0], pixel[1], pixel[2]])
             .collect();
-        let Ok(converted) = pixels_to_premultiplied_bgra(&rgb, png::ColorType::Rgb, 64, 64) else {
-            panic!("conversion failed");
-        };
+        let mut converted = Vec::new();
+        let converted_ok =
+            pixels_to_premultiplied_bgra_into(&rgb, png::ColorType::Rgb, 64, 64, &mut converted);
+        assert!(converted_ok.is_ok(), "conversion failed");
         let mut expected = Vec::new();
         for pixel in rgb.chunks_exact(3) {
             expected.extend_from_slice(&[pixel[2], pixel[1], pixel[0], 255]);
@@ -3407,17 +3443,39 @@ mod premultiplied_conversion_tests {
     #[ignore = "manual timing comparison (--nocapture)"]
     fn rgba_conversion_timing() {
         let rgba = random_pixels(1920 * 1080, 17);
+        let mut reused = Vec::new();
         for _ in 0..3 {
             let start = std::time::Instant::now();
             for _ in 0..50 {
-                let Ok(converted) =
-                    pixels_to_premultiplied_bgra(&rgba, png::ColorType::Rgba, 1920, 1080)
-                else {
-                    panic!("conversion failed");
-                };
-                std::hint::black_box(&converted);
+                let mut fresh = Vec::new();
+                let _ = pixels_to_premultiplied_bgra_into(
+                    &rgba,
+                    png::ColorType::Rgba,
+                    1920,
+                    1080,
+                    &mut fresh,
+                );
+                std::hint::black_box(&fresh);
             }
-            println!("rgba conversion 50 frames elapsed={:?}", start.elapsed());
+            println!(
+                "rgba conversion 50 frames, new buffer each={:?}",
+                start.elapsed()
+            );
+            let start = std::time::Instant::now();
+            for _ in 0..50 {
+                let _ = pixels_to_premultiplied_bgra_into(
+                    &rgba,
+                    png::ColorType::Rgba,
+                    1920,
+                    1080,
+                    &mut reused,
+                );
+                std::hint::black_box(&reused);
+            }
+            println!(
+                "rgba conversion 50 frames, one buffer={:?}",
+                start.elapsed()
+            );
         }
     }
 
@@ -3428,17 +3486,36 @@ mod premultiplied_conversion_tests {
             .chunks_exact(4)
             .flat_map(|pixel| [pixel[0], pixel[1], pixel[2]])
             .collect();
+        let mut reused = Vec::new();
         for _ in 0..3 {
             let start = std::time::Instant::now();
             for _ in 0..50 {
-                let Ok(converted) =
-                    pixels_to_premultiplied_bgra(&rgb, png::ColorType::Rgb, 1920, 1080)
-                else {
-                    panic!("conversion failed");
-                };
-                std::hint::black_box(&converted);
+                let mut fresh = Vec::new();
+                let _ = pixels_to_premultiplied_bgra_into(
+                    &rgb,
+                    png::ColorType::Rgb,
+                    1920,
+                    1080,
+                    &mut fresh,
+                );
+                std::hint::black_box(&fresh);
             }
-            println!("rgb conversion 50 frames elapsed={:?}", start.elapsed());
+            println!(
+                "rgb conversion 50 frames, new buffer each={:?}",
+                start.elapsed()
+            );
+            let start = std::time::Instant::now();
+            for _ in 0..50 {
+                let _ = pixels_to_premultiplied_bgra_into(
+                    &rgb,
+                    png::ColorType::Rgb,
+                    1920,
+                    1080,
+                    &mut reused,
+                );
+                std::hint::black_box(&reused);
+            }
+            println!("rgb conversion 50 frames, one buffer={:?}", start.elapsed());
         }
     }
 }
