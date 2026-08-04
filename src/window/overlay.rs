@@ -429,7 +429,7 @@ pub fn build_info_text(
     display_description: &str,
 ) -> String {
     let color_profile = match &image.icc_profile {
-        Some(icc_profile) => crate::image::decode::icc_profile_description(icc_profile)
+        Some(icc_profile) => crate::image::icc::profile_description(icc_profile)
             .unwrap_or_else(|| "Embedded".to_string()),
         None => "None".to_string(),
     };

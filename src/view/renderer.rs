@@ -58,9 +58,9 @@ use std::thread;
 
 use crate::image::color::{SDR_REFERENCE_WHITE_NITS, nearest_gamut_label};
 use crate::image::decode::{
-    DecodedImage, PixelStorage, UploadDevice, UploadedTexture, icc_gamut_label, icc_is_srgb,
-    icc_same_space, maximum_resource_bytes,
+    DecodedImage, PixelStorage, UploadDevice, UploadedTexture, maximum_resource_bytes,
 };
+use crate::image::icc;
 use crate::view::dither::DitherMode;
 use crate::view::presentation::{self, CompositionPresenter};
 use crate::view::quantize::QuantizePass;
@@ -485,7 +485,7 @@ impl Renderer {
         }) else {
             return (None, None);
         };
-        (Some(context), icc_gamut_label(display_profile))
+        (Some(context), icc::gamut_label(display_profile))
     }
 
     fn create_conversion_effect(
@@ -856,8 +856,8 @@ impl Renderer {
         match (icc_profile, destination) {
             // Untagged stands for sRGB, so one side present means that side must be sRGB.
             (None, None) => true,
-            (None, Some(profile)) | (Some(profile), None) => icc_is_srgb(profile),
-            (Some(source), Some(display)) => icc_same_space(source, display),
+            (None, Some(profile)) | (Some(profile), None) => icc::is_srgb(profile),
+            (Some(source), Some(display)) => icc::same_space(source, display),
         }
     }
 
@@ -1251,7 +1251,7 @@ impl Renderer {
         self.effect_output = None;
         self.source_gamut_label = source_primaries
             .map(nearest_gamut_label)
-            .or_else(|| icc_bytes.and_then(icc_gamut_label));
+            .or_else(|| icc_bytes.and_then(icc::gamut_label));
         self.refresh_output_label();
         let Some(color_management) = &self.mode_effects.color_management_effect else {
             return;
