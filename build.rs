@@ -20,16 +20,10 @@ fn main() {
     // xwin CRT/SDK import libraries; override the splat location with XWIN_ROOT.
     println!("cargo:rerun-if-env-changed=XWIN_ROOT");
     let xwin_root = env::var("XWIN_ROOT").unwrap_or_else(|_| {
-        let home = env::var("HOME")
-            .or_else(|_| env::var("USERPROFILE"))
-            .expect("HOME or USERPROFILE set");
+        let home = env::var("HOME").expect("HOME set");
         format!("{home}/.xwin")
     });
     shaders::compile_all(&output_directory, &xwin_root);
-
-    if env::var("CARGO_CFG_TARGET_OS").as_deref() != Ok("windows") {
-        return;
-    }
 
     println!("cargo:rerun-if-changed=res/riv.rc");
     println!("cargo:rerun-if-changed=res/resource.h");
