@@ -466,20 +466,10 @@ mod menu_structure_tests {
     fn submenu_is_grayed(state: MenuState, label: &str) -> bool {
         let mut builder = MenuBuilder::new(state);
         let menu = builder.build().expect("menu builds");
-        let count = unsafe { GetMenuItemCount(Some(menu)) };
-        let mut grayed = None;
-        for position in 0..count {
-            let mut text = [0u16; 64];
-            let length =
-                unsafe { GetMenuStringW(menu, position as u32, Some(&mut text), MF_BYPOSITION) };
-            if String::from_utf16_lossy(&text[..length as usize]) == label {
-                let flags = unsafe { GetMenuState(menu, position as u32, MF_BYPOSITION) };
-                grayed = Some(MENU_ITEM_FLAGS(flags) & MF_GRAYED == MF_GRAYED);
-                break;
-            }
-        }
+        let position = position_of_label(menu, label).expect("submenu present");
+        let grayed = is_grayed(menu, position);
         let _ = unsafe { DestroyMenu(menu) };
-        grayed.expect("submenu present")
+        grayed
     }
 
     #[test]
@@ -499,22 +489,33 @@ mod menu_structure_tests {
     }
 
     fn submenu_by_label(menu: HMENU, label: &str) -> HMENU {
-        let count = unsafe { GetMenuItemCount(Some(menu)) };
-        for position in 0..count {
-            let mut text = [0u16; 64];
-            let length =
-                unsafe { GetMenuStringW(menu, position as u32, Some(&mut text), MF_BYPOSITION) };
-            if String::from_utf16_lossy(&text[..length as usize]) == label {
-                return unsafe { GetSubMenu(menu, position) };
-            }
-        }
-        panic!("{label} submenu present");
+        let position =
+            position_of_label(menu, label).unwrap_or_else(|| panic!("{label} submenu present"));
+        unsafe { GetSubMenu(menu, position as i32) }
     }
 
     fn item_label(menu: HMENU, position: u32) -> String {
         let mut text = [0u16; 64];
         let length = unsafe { GetMenuStringW(menu, position, Some(&mut text), MF_BYPOSITION) };
         String::from_utf16_lossy(&text[..length as usize])
+    }
+
+    fn item_labels(menu: HMENU) -> Vec<String> {
+        (0..unsafe { GetMenuItemCount(Some(menu)) })
+            .map(|position| item_label(menu, position as u32))
+            .collect()
+    }
+
+    fn position_of_label(menu: HMENU, label: &str) -> Option<u32> {
+        item_labels(menu)
+            .iter()
+            .position(|candidate| candidate == label)
+            .map(|position| position as u32)
+    }
+
+    fn is_grayed(menu: HMENU, position: u32) -> bool {
+        let flags = unsafe { GetMenuState(menu, position, MF_BYPOSITION) };
+        MENU_ITEM_FLAGS(flags) & MF_GRAYED == MF_GRAYED
     }
 
     /// Label without the shortcut column.
@@ -584,27 +585,12 @@ mod menu_structure_tests {
         with_folder.playlist_hidden_after = 42;
         let mut builder = MenuBuilder::new(with_folder);
         let menu = builder.build().expect("menu builds");
-        let count = unsafe { GetMenuItemCount(Some(menu)) };
-        let mut submenu = None;
-        for position in 0..count {
-            let mut text = [0u16; 64];
-            let length =
-                unsafe { GetMenuStringW(menu, position as u32, Some(&mut text), MF_BYPOSITION) };
-            if String::from_utf16_lossy(&text[..length as usize]) == "Playlist" {
-                submenu = Some(unsafe { GetSubMenu(menu, position) });
-                break;
-            }
-        }
-        let submenu = submenu.expect("Playlist submenu present");
+        let submenu = submenu_by_label(menu, "Playlist");
         assert_eq!(unsafe { GetMenuItemCount(Some(submenu)) }, 22);
         // Overflow lines at both ends show each side's count and take no selection.
         let overflow_line = |position: u32| {
-            let mut text = [0u16; 64];
-            let length =
-                unsafe { GetMenuStringW(submenu, position, Some(&mut text), MF_BYPOSITION) };
-            let flags = unsafe { GetMenuState(submenu, position, MF_BYPOSITION) };
-            assert!(MENU_ITEM_FLAGS(flags) & MF_GRAYED == MF_GRAYED);
-            String::from_utf16_lossy(&text[..length as usize])
+            assert!(is_grayed(submenu, position));
+            item_label(submenu, position)
         };
         assert_eq!(overflow_line(0), "... 38 more");
         assert_eq!(overflow_line(21), "... 42 more");
@@ -648,9 +634,7 @@ mod menu_structure_tests {
             .insert(Action::Playlist.name(), "E".to_string());
         let mut builder = MenuBuilder::new(with_shortcut);
         let menu = builder.build().expect("menu builds");
-        let labels: Vec<String> = (0..unsafe { GetMenuItemCount(Some(menu)) })
-            .map(|position| item_label(menu, position as u32))
-            .collect();
+        let labels = item_labels(menu);
         assert!(labels.contains(&"Playlist\tE".to_string()));
         // The key opens this submenu itself, so the builder hands its handle back.
         assert_eq!(builder.playlist_menu, submenu_by_label(menu, "Playlist\tE"));
@@ -661,14 +645,7 @@ mod menu_structure_tests {
     fn top_level_items_follow_the_menu_order() {
         let mut builder = MenuBuilder::new(state());
         let menu = builder.build().expect("menu builds");
-        let count = unsafe { GetMenuItemCount(Some(menu)) };
-        let mut labels = Vec::new();
-        for position in 0..count {
-            let mut label = [0u16; 64];
-            let length =
-                unsafe { GetMenuStringW(menu, position as u32, Some(&mut label), MF_BYPOSITION) };
-            labels.push(String::from_utf16_lossy(&label[..length as usize]));
-        }
+        let labels = item_labels(menu);
         let _ = unsafe { DestroyMenu(menu) };
         let expected: Vec<&str> = vec![
             "Open...",

@@ -643,8 +643,11 @@ impl Renderer {
             rendering_controls.bufferPrecision = D2D1_BUFFER_PRECISION_16BPC_FLOAT;
             d2d_context.SetRenderingControls(&raw const rendering_controls);
         }
-        // D2D draws the UNORM16 scene; the pass dithers and its UNORM write quantizes.
-        let mut quantize_pass = (with_quantize_pass
+        let (backbuffer_format, color_space) =
+            Self::mode_format_and_color_space(is_hdr_output, is_sdr_wide_gamut);
+        // D2D draws the UNORM16 scene and the pass quantizes it; FP16 leaves that to DWM.
+        let quantize_pass = (with_quantize_pass
+            && backbuffer_format != DXGI_FORMAT_R16G16B16A16_FLOAT
             && unsafe { d2d_context.IsDxgiFormatSupported(DXGI_FORMAT_R16G16B16A16_UNORM) }
                 .as_bool())
         .then(|| QuantizePass::new(&d3d_device).ok())
@@ -661,8 +664,6 @@ impl Renderer {
             display_profile.as_ref(),
         );
 
-        let (backbuffer_format, color_space) =
-            Self::mode_format_and_color_space(is_hdr_output, is_sdr_wide_gamut);
         // Any composition setup failure keeps the proven hwnd swapchain path.
         let composition =
             CompositionPresenter::new(&d3d_device, window).and_then(|mut presenter| {
@@ -724,10 +725,6 @@ impl Renderer {
                 }
             }
         };
-        // FP16 leaves quantization to DWM; the UNORM backbuffers keep the pass.
-        if backbuffer_format == DXGI_FORMAT_R16G16B16A16_FLOAT {
-            quantize_pass = None;
-        }
         let mode_effects = Self::create_mode_effects(
             &d2d_context,
             is_hdr_output,
@@ -1054,18 +1051,21 @@ impl Renderer {
         self.scene_shader_resource_view = None;
         self.backbuffer_render_target_view = None;
 
-        // The pass depends only on the (unchanged) device, so keep it across reconfigures.
-        if self.quantize_pass.is_none()
+        let (format, color_space) =
+            Self::mode_format_and_color_space(is_hdr_output, is_sdr_wide_gamut);
+        if format == DXGI_FORMAT_R16G16B16A16_FLOAT {
+            // FP16 leaves quantization to DWM.
+            self.quantize_pass = None;
+        } else if self.quantize_pass.is_none()
             && unsafe {
                 self.d2d_context
                     .IsDxgiFormatSupported(DXGI_FORMAT_R16G16B16A16_UNORM)
             }
             .as_bool()
         {
+            // The pass depends only on the (unchanged) device, so keep it across reconfigures.
             self.quantize_pass = QuantizePass::new(&self.d3d_device).ok();
         }
-        let (format, color_space) =
-            Self::mode_format_and_color_space(is_hdr_output, is_sdr_wide_gamut);
         let backbuffer_format = match &mut self.present_target {
             PresentTarget::Composition(presenter) => {
                 presenter.set_color_space(color_space)?;
@@ -1087,9 +1087,6 @@ impl Renderer {
                 format
             }
         };
-        if backbuffer_format == DXGI_FORMAT_R16G16B16A16_FLOAT {
-            self.quantize_pass = None;
-        }
 
         let mode_effects = Self::create_mode_effects(
             &self.d2d_context,

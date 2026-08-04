@@ -5,7 +5,7 @@ use std::fs::File;
 use std::io::{BufRead, BufReader, Cursor, Read, Seek};
 use std::path::Path;
 use std::sync::OnceLock;
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU32, Ordering};
 
 use windows::Win32::Foundation::{
     E_ABORT, GENERIC_READ, WINCODEC_ERR_COMPONENTINITIALIZEFAILURE, WINCODEC_ERR_COMPONENTNOTFOUND,
@@ -863,11 +863,15 @@ fn decode_raw_preview(path: &Path, cancellation: &AtomicBool) -> Option<DecodedI
         let preview =
             unsafe { decoder.GetPreview() }.or_else(|_| unsafe { decoder.GetThumbnail() })?;
         let frame = unsafe { decoder.GetFrame(0) }.ok();
-        let orientation = frame.as_ref().map_or(1, exif_orientation);
+        // One reader for both readers of it: building it parses the whole metadata tree.
+        let metadata = frame
+            .as_ref()
+            .and_then(|frame| unsafe { frame.GetMetadataQueryReader() }.ok());
+        let orientation = exif_orientation(metadata.as_ref());
         let icc_profile = frame
             .as_ref()
             .and_then(|frame| icc_profile_bytes(factory, frame));
-        let exif = frame.as_ref().and_then(read_exif);
+        let exif = metadata.as_ref().and_then(read_exif);
         let source = convert_to_pbgra(factory, &preview)?;
         let source = apply_orientation(factory, source, orientation)?;
         let (width, height) = source_size(&source)?;
@@ -1129,9 +1133,11 @@ fn decode_frame_source(
     format_name: &'static str,
     cancellation: &AtomicBool,
 ) -> WindowsResult<DecodedImage> {
-    let orientation = exif_orientation(frame);
+    // One reader for both readers of it: building it parses the whole metadata tree.
+    let metadata = unsafe { frame.GetMetadataQueryReader() }.ok();
+    let orientation = exif_orientation(metadata.as_ref());
     let icc_profile = icc_profile_bytes(factory, frame);
-    let exif = read_exif(frame);
+    let exif = metadata.as_ref().and_then(read_exif);
     let (native_bits_per_channel, float_native) = frame_pixel_format_info(factory, frame);
     let high_depth = native_bits_per_channel > 8;
     // PQ/HLG integers bypass WIC's sRGB-assuming float conversion.
@@ -1680,7 +1686,9 @@ const PARALLEL_BLOCK_MINIMUM_PIXELS: usize = 262_144;
 /// Block size in bytes: up to one block per core, each a whole number of pixels.
 fn parallel_block_bytes(total_bytes: usize, bytes_per_pixel: usize) -> usize {
     let pixel_count = total_bytes / bytes_per_pixel;
-    let cores = std::thread::available_parallelism().map_or(1, |count| count.get());
+    static CORES: OnceLock<usize> = OnceLock::new();
+    let cores =
+        *CORES.get_or_init(|| std::thread::available_parallelism().map_or(1, |count| count.get()));
     let blocks = cores
         .min(pixel_count / PARALLEL_BLOCK_MINIMUM_PIXELS)
         .max(1);
@@ -2212,28 +2220,26 @@ fn apply_orientation(
     rotator.cast()
 }
 
-fn exif_orientation(frame: &IWICBitmapFrameDecode) -> u32 {
-    let Ok(reader) = (unsafe { frame.GetMetadataQueryReader() }) else {
-        return 1;
-    };
-    query_u32(&reader, w!("System.Photo.Orientation")).unwrap_or(1)
+fn exif_orientation(reader: Option<&IWICMetadataQueryReader>) -> u32 {
+    reader
+        .and_then(|reader| query_u32(reader, w!("System.Photo.Orientation")))
+        .unwrap_or(1)
 }
 
-fn read_exif(frame: &IWICBitmapFrameDecode) -> Option<ExifInfo> {
-    let reader = unsafe { frame.GetMetadataQueryReader() }.ok()?;
+fn read_exif(reader: &IWICMetadataQueryReader) -> Option<ExifInfo> {
     let information = ExifInfo {
-        date_taken: query_filetime(&reader, w!("System.Photo.DateTaken")),
-        rating: query_u32(&reader, w!("System.Rating")),
-        camera_maker: query_string(&reader, w!("System.Photo.CameraManufacturer")),
-        camera_model: query_string(&reader, w!("System.Photo.CameraModel")),
-        f_stop: query_f64(&reader, w!("System.Photo.FNumber")),
-        exposure_time_seconds: query_f64(&reader, w!("System.Photo.ExposureTime")),
-        iso_speed: query_u32(&reader, w!("System.Photo.ISOSpeed")),
-        exposure_bias: query_f64(&reader, w!("System.Photo.ExposureBias")),
-        focal_length_millimeters: query_f64(&reader, w!("System.Photo.FocalLength")),
-        max_aperture: query_f64(&reader, w!("System.Photo.MaxAperture")),
-        metering_mode: query_u32(&reader, w!("System.Photo.MeteringMode")),
-        flash: query_u32(&reader, w!("System.Photo.Flash")),
+        date_taken: query_filetime(reader, w!("System.Photo.DateTaken")),
+        rating: query_u32(reader, w!("System.Rating")),
+        camera_maker: query_string(reader, w!("System.Photo.CameraManufacturer")),
+        camera_model: query_string(reader, w!("System.Photo.CameraModel")),
+        f_stop: query_f64(reader, w!("System.Photo.FNumber")),
+        exposure_time_seconds: query_f64(reader, w!("System.Photo.ExposureTime")),
+        iso_speed: query_u32(reader, w!("System.Photo.ISOSpeed")),
+        exposure_bias: query_f64(reader, w!("System.Photo.ExposureBias")),
+        focal_length_millimeters: query_f64(reader, w!("System.Photo.FocalLength")),
+        max_aperture: query_f64(reader, w!("System.Photo.MaxAperture")),
+        metering_mode: query_u32(reader, w!("System.Photo.MeteringMode")),
+        flash: query_u32(reader, w!("System.Photo.Flash")),
     };
     information.any_present().then_some(information)
 }
@@ -2576,6 +2582,14 @@ fn font_database() -> &'static std::sync::Arc<resvg::usvg::fontdb::Database> {
     })
 }
 
+/// Cleared on a display reconfigure; 0 means "ask the system again".
+static LARGEST_MONITOR_LONG_SIDE: AtomicU32 = AtomicU32::new(0);
+
+/// Forgets the cached monitor size; the listing invalidates display-sized weights alongside.
+pub fn invalidate_monitor_size() {
+    LARGEST_MONITOR_LONG_SIDE.store(0, Ordering::Relaxed);
+}
+
 fn largest_monitor_long_side() -> u32 {
     use windows::Win32::Foundation::{LPARAM, RECT};
     use windows::Win32::Graphics::Gdi::{EnumDisplayMonitors, HDC, HMONITOR};
@@ -2595,6 +2609,10 @@ fn largest_monitor_long_side() -> u32 {
         true.into()
     }
 
+    let cached = LARGEST_MONITOR_LONG_SIDE.load(Ordering::Relaxed);
+    if cached > 0 {
+        return cached;
+    }
     let mut longest = 0i32;
     let _ = unsafe {
         EnumDisplayMonitors(
@@ -2604,7 +2622,27 @@ fn largest_monitor_long_side() -> u32 {
             LPARAM(&raw mut longest as isize),
         )
     };
-    if longest > 0 { longest as u32 } else { 1920 }
+    let longest = if longest > 0 { longest as u32 } else { 1920 };
+    LARGEST_MONITOR_LONG_SIDE.store(longest, Ordering::Relaxed);
+    longest
+}
+
+/// Four-channel test pixels from a linear congruential sequence; alpha hits 0 and 255 too.
+#[cfg(test)]
+pub(crate) fn random_pixels(count: usize, mut state: u32) -> Vec<u8> {
+    let mut pixels = Vec::with_capacity(count * 4);
+    for _ in 0..count {
+        state = state.wrapping_mul(1_664_525).wrapping_add(1_013_904_223);
+        for shift in [0u32, 8, 16] {
+            pixels.push((state >> shift) as u8);
+        }
+        pixels.push(match state >> 30 {
+            0 => 0,
+            1 => 255,
+            _ => (state >> 8) as u8,
+        });
+    }
+    pixels
 }
 
 /// Copies in strips so a cancelled decode can stop between them.
@@ -3328,25 +3366,10 @@ mod premultiplied_conversion_tests {
     use super::*;
 
     /// Deterministic straight-alpha RGBA with frequent fully transparent and opaque pixels.
-    fn rgba_pixels(count: usize, mut state: u32) -> Vec<u8> {
-        let mut pixels = Vec::with_capacity(count * 4);
-        for _ in 0..count {
-            state = state.wrapping_mul(1_664_525).wrapping_add(1_013_904_223);
-            for shift in [0u32, 8, 16] {
-                pixels.push((state >> shift) as u8);
-            }
-            pixels.push(match state >> 30 {
-                0 => 0,
-                1 => 255,
-                _ => (state >> 8) as u8,
-            });
-        }
-        pixels
-    }
 
     #[test]
     fn rgba_conversion_matches_the_scalar_reference() {
-        let rgba = rgba_pixels(64 * 64, 3);
+        let rgba = random_pixels(64 * 64, 3);
         let Ok(converted) = pixels_to_premultiplied_bgra(&rgba, png::ColorType::Rgba, 64, 64)
         else {
             panic!("conversion failed");
@@ -3364,7 +3387,7 @@ mod premultiplied_conversion_tests {
 
     #[test]
     fn rgb_conversion_matches_the_scalar_reference() {
-        let rgb: Vec<u8> = rgba_pixels(64 * 64, 11)
+        let rgb: Vec<u8> = random_pixels(64 * 64, 11)
             .chunks_exact(4)
             .flat_map(|pixel| [pixel[0], pixel[1], pixel[2]])
             .collect();
@@ -3381,7 +3404,7 @@ mod premultiplied_conversion_tests {
     #[test]
     #[ignore = "manual timing comparison (--nocapture)"]
     fn rgba_conversion_timing() {
-        let rgba = rgba_pixels(1920 * 1080, 17);
+        let rgba = random_pixels(1920 * 1080, 17);
         for _ in 0..3 {
             let start = std::time::Instant::now();
             for _ in 0..50 {
@@ -3399,7 +3422,7 @@ mod premultiplied_conversion_tests {
     #[test]
     #[ignore = "manual timing comparison (--nocapture)"]
     fn rgb_conversion_timing() {
-        let rgb: Vec<u8> = rgba_pixels(1920 * 1080, 23)
+        let rgb: Vec<u8> = random_pixels(1920 * 1080, 23)
             .chunks_exact(4)
             .flat_map(|pixel| [pixel[0], pixel[1], pixel[2]])
             .collect();

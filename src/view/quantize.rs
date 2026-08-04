@@ -1,5 +1,7 @@
 //! Fullscreen pass from the UNORM16 scene to the UNORM backbuffer; the dithered write quantizes.
 
+use std::cell::Cell;
+
 use windows::Win32::Graphics::Direct3D::D3D11_PRIMITIVE_TOPOLOGY_TRIANGLELIST;
 use windows::Win32::Graphics::Direct3D11::{
     D3D11_BIND_CONSTANT_BUFFER, D3D11_BIND_SHADER_RESOURCE, D3D11_BUFFER_DESC,
@@ -31,6 +33,8 @@ pub struct QuantizePass {
     ordered_shader: ID3D11PixelShader,
     fruit_shader: ID3D11PixelShader,
     constant_buffer: ID3D11Buffer,
+    /// What the buffer already holds; the depth only moves when the output is rebuilt.
+    written_steps: Cell<Option<u32>>,
     blue_noise_view: ID3D11ShaderResourceView,
 }
 
@@ -97,6 +101,7 @@ impl QuantizePass {
             ordered_shader: ordered_shader.expect("CreatePixelShader succeeded without shader"),
             fruit_shader: fruit_shader.expect("CreatePixelShader succeeded without shader"),
             constant_buffer: constant_buffer.expect("CreateBuffer succeeded without buffer"),
+            written_steps: Cell::new(None),
             blue_noise_view: blue_noise_view
                 .expect("CreateShaderResourceView succeeded without view"),
         })
@@ -107,6 +112,9 @@ impl QuantizePass {
         context: &ID3D11DeviceContext,
         quantization_steps: u32,
     ) -> Result<()> {
+        if self.written_steps.get() == Some(quantization_steps) {
+            return Ok(());
+        }
         let constants = QuantizationConstants {
             quantization_steps: quantization_steps as f32,
             padding: [0.0; 3],
@@ -127,6 +135,7 @@ impl QuantizePass {
             );
             context.Unmap(&self.constant_buffer, 0);
         }
+        self.written_steps.set(Some(quantization_steps));
         Ok(())
     }
 
@@ -140,15 +149,12 @@ impl QuantizePass {
         quantization_steps: u32,
     ) {
         // A constants write failure degrades to the undithered copy.
+        let dithered =
+            dither != DitherMode::None && self.write_constants(context, quantization_steps).is_ok();
         let pixel_shader = match dither {
-            DitherMode::None => &self.copy_shader,
-            DitherMode::Ordered | DitherMode::Fruit
-                if self.write_constants(context, quantization_steps).is_err() =>
-            {
-                &self.copy_shader
-            }
-            DitherMode::Ordered => &self.ordered_shader,
-            DitherMode::Fruit => &self.fruit_shader,
+            DitherMode::Ordered if dithered => &self.ordered_shader,
+            DitherMode::Fruit if dithered => &self.fruit_shader,
+            _ => &self.copy_shader,
         };
         let viewport = D3D11_VIEWPORT {
             TopLeftX: 0.0,

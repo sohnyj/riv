@@ -876,7 +876,7 @@ impl Application {
     /// Blocks sleep and display-off, visible to powercfg; WM_SYSCOMMAND blocks the screen saver.
     fn keep_system_awake(&mut self, active: bool) {
         if active && self.power_request.is_none() {
-            let mut reason: Vec<u16> = "Slideshow\0".encode_utf16().collect();
+            let mut reason = text::wide("Slideshow");
             let context = REASON_CONTEXT {
                 Version: POWER_REQUEST_CONTEXT_VERSION,
                 Flags: POWER_REQUEST_CONTEXT_SIMPLE_STRING,
@@ -1031,11 +1031,6 @@ impl Application {
             .renderer
             .as_ref()
             .map_or("", |renderer| renderer.output_label());
-        // The display line mirrors the output line's "[bits] [gamut]" form.
-        let display_description = format!(
-            "{}-bit {}",
-            self.display_labels.bits_per_color, self.display_labels.gamut
-        );
         let scaling_description = self.scaling_description(frame);
         let dither_description = frame.map_or("None", FrameDecision::dither_description);
         let tone_map = self.renderer.as_ref().map(Renderer::tone_map_info);
@@ -1053,6 +1048,11 @@ impl Application {
                 && cache.display_labels == self.display_labels
         });
         if !reuse {
+            // The display line mirrors the output line's "[bits] [gamut]" form.
+            let display_description = format!(
+                "{}-bit {}",
+                self.display_labels.bits_per_color, self.display_labels.gamut
+            );
             let text = overlay::build_info_text(
                 &current.location.display_name(),
                 &current.location.display_text(),
@@ -1253,8 +1253,13 @@ impl Application {
         self.request_render(window);
     }
 
+    /// One zoom step as a ratio; the setting is a percentage of the current scale.
+    fn zoom_step(&self) -> f32 {
+        1.0 + self.settings.options.zoom_step_percent as f32 / 100.0
+    }
+
     fn wheel_zoom(&mut self, window: HWND, wheel_delta: i16) {
-        let step = 1.0 + self.settings.options.zoom_step_percent as f32 / 100.0;
+        let step = self.zoom_step();
         let exponent = if self.settings.options.fractional_wheel_zoom {
             f32::from(wheel_delta) / 120.0
         } else {
@@ -1455,7 +1460,6 @@ fn dispatch_action(application: &mut Application, window: HWND, action: Action) 
     if !application.gate_satisfied(action.gate()) {
         return;
     }
-    let zoom_step = 1.0 + application.settings.options.zoom_step_percent as f32 / 100.0;
     match action {
         Action::Exit => {
             let _ = unsafe { PostMessageW(Some(window), WM_CLOSE, WPARAM(0), LPARAM(0)) };
@@ -1480,8 +1484,8 @@ fn dispatch_action(application: &mut Application, window: HWND, action: Action) 
             let displayed = application.image_core.reload_current();
             application.apply_load_outcome(window, displayed);
         }
-        Action::ZoomIn => application.zoom_by(window, zoom_step),
-        Action::ZoomOut => application.zoom_by(window, 1.0 / zoom_step),
+        Action::ZoomIn => application.zoom_by(window, application.zoom_step()),
+        Action::ZoomOut => application.zoom_by(window, 1.0 / application.zoom_step()),
         Action::ToggleZoom => {
             let viewport = application.viewport(window);
             let image = application.image_size();

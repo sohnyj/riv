@@ -836,26 +836,35 @@ mod info_text_tests {
     use super::*;
     use crate::image::decode::Frame;
 
-    #[test]
-    fn bit_depth_always_appears() {
-        let image = DecodedImage {
+    /// A two-pixel image; only the fields a test names differ from these.
+    fn image(format_name: &'static str, storage: PixelStorage, bits: u32) -> DecodedImage {
+        let bytes_per_pixel = match storage {
+            PixelStorage::Bgra8 => 4,
+            PixelStorage::RgbaHalf => 8,
+        };
+        DecodedImage {
             width: 2,
             height: 1,
             pixel_width: 2,
             pixel_height: 1,
-            format_name: "PNG",
+            format_name,
             icc_profile: None,
             exif: None,
-            storage: PixelStorage::Bgra8,
-            source_bits_per_channel: 8,
+            storage,
+            source_bits_per_channel: bits,
             peak_luminance_nits: None,
             source_primaries: None,
             frames: vec![Frame {
-                pixels: vec![0; 8],
+                pixels: vec![0; 2 * bytes_per_pixel],
                 delay_milliseconds: 0,
             }],
             frames_truncated: false,
-        };
+        }
+    }
+
+    #[test]
+    fn bit_depth_always_appears() {
+        let image = image("PNG", PixelStorage::Bgra8, 8);
         let text = build_info_text(
             "a.png",
             "C:\\a.png",
@@ -874,24 +883,7 @@ mod info_text_tests {
 
     #[test]
     fn color_profile_line_reports_the_tag_state() {
-        let mut image = DecodedImage {
-            width: 2,
-            height: 1,
-            pixel_width: 2,
-            pixel_height: 1,
-            format_name: "PNG",
-            icc_profile: None,
-            exif: None,
-            storage: PixelStorage::Bgra8,
-            source_bits_per_channel: 8,
-            peak_luminance_nits: None,
-            source_primaries: None,
-            frames: vec![Frame {
-                pixels: vec![0; 8],
-                delay_milliseconds: 0,
-            }],
-            frames_truncated: false,
-        };
+        let mut image = image("PNG", PixelStorage::Bgra8, 8);
         let untagged = build_info_text(
             "a.png",
             "C:\\a.png",
@@ -926,22 +918,8 @@ mod info_text_tests {
     #[test]
     fn hdr_lines_show_content_display_caps_and_the_tone_map() {
         let image = DecodedImage {
-            width: 2,
-            height: 1,
-            pixel_width: 2,
-            pixel_height: 1,
-            format_name: "EXR",
-            icc_profile: None,
-            exif: None,
-            storage: PixelStorage::RgbaHalf,
-            source_bits_per_channel: 16,
             peak_luminance_nits: Some(1000.0),
-            source_primaries: None,
-            frames: vec![Frame {
-                pixels: vec![0; 16],
-                delay_milliseconds: 0,
-            }],
-            frames_truncated: false,
+            ..image("EXR", PixelStorage::RgbaHalf, 16)
         };
         let tone_map = ToneMapInfo {
             hdr_display: true,
@@ -972,22 +950,8 @@ mod info_text_tests {
     #[test]
     fn an_sdr_display_shows_the_tone_map_target() {
         let image = DecodedImage {
-            width: 2,
-            height: 1,
-            pixel_width: 2,
-            pixel_height: 1,
-            format_name: "EXR",
-            icc_profile: None,
-            exif: None,
-            storage: PixelStorage::RgbaHalf,
-            source_bits_per_channel: 16,
             peak_luminance_nits: Some(1000.0),
-            source_primaries: None,
-            frames: vec![Frame {
-                pixels: vec![0; 16],
-                delay_milliseconds: 0,
-            }],
-            frames_truncated: false,
+            ..image("EXR", PixelStorage::RgbaHalf, 16)
         };
         let tone_map = ToneMapInfo {
             hdr_display: false,

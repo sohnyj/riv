@@ -1,5 +1,6 @@
 //! Settings dialog: seven tab pages editing a transient copy applied on OK/Apply.
 
+use std::sync::OnceLock;
 use windows::Win32::Foundation::{COLORREF, HWND, LPARAM, POINT, RECT, WPARAM};
 use windows::Win32::Graphics::Gdi::{
     CreateCompatibleBitmap, CreateCompatibleDC, CreateSolidBrush, DFC_BUTTON, DFCS_BUTTON3STATE,
@@ -24,11 +25,12 @@ use windows::Win32::UI::Controls::{
 use windows::Win32::UI::Input::KeyboardAndMouse::{EnableWindow, VK_SPACE};
 use windows::Win32::UI::WindowsAndMessaging::{
     CB_ADDSTRING, CB_GETCURSEL, CB_SETCURSEL, CreateDialogParamW, DestroyWindow, EndDialog,
-    GetClientRect, GetDlgItem, GetDlgItemInt, GetMessagePos, GetSystemMetrics, GetWindowRect,
-    MapDialogRect, SM_CXVSCROLL, SW_HIDE, SW_SHOW, SWP_NOACTIVATE, SendMessageW, SetDlgItemTextW,
+    GetClientRect, GetDlgItem, GetDlgItemInt, GetMessagePos, GetSystemMetrics, MapDialogRect,
+    SM_CXVSCROLL, SW_HIDE, SW_SHOW, SWP_NOACTIVATE, SendMessageW, SetDlgItemTextW,
     SetWindowLongPtrW, SetWindowPos, ShowWindow, WM_APP, WM_COMMAND, WM_DESTROY, WM_DRAWITEM,
     WM_INITDIALOG, WM_NOTIFY,
 };
+
 use windows::core::PCWSTR;
 
 use crate::actions::Action;
@@ -61,6 +63,15 @@ const GROUP_FLAG: isize = 0x1000_0000;
 const STATE_UNCHECKED: isize = 1;
 const STATE_CHECKED: isize = 2;
 const STATE_PARTIAL: isize = 3;
+
+/// State image for a leaf row; groups pick their own from the member count.
+fn check_state(checked: bool) -> isize {
+    if checked {
+        STATE_CHECKED
+    } else {
+        STATE_UNCHECKED
+    }
+}
 
 #[derive(Clone, PartialEq)]
 struct ShortcutRow {
@@ -133,20 +144,24 @@ impl OptionsState {
     }
 }
 
-fn default_shortcut_rows() -> Vec<ShortcutRow> {
-    Action::all_bindable()
-        .map(|action| ShortcutRow {
-            action,
-            keyboard: bindings::default_keyboard_sequences(action.name())
-                .iter()
-                .map(|sequence| (*sequence).to_string())
-                .collect(),
-            mouse: bindings::default_mouse_encodings(action.name())
-                .iter()
-                .map(|encoding| (*encoding).to_string())
-                .collect(),
-        })
-        .collect()
+/// The defaults never move, and `update_buttons` compares against them on every keystroke.
+fn default_shortcut_rows() -> &'static [ShortcutRow] {
+    static ROWS: OnceLock<Vec<ShortcutRow>> = OnceLock::new();
+    ROWS.get_or_init(|| {
+        Action::all_bindable()
+            .map(|action| ShortcutRow {
+                action,
+                keyboard: bindings::default_keyboard_sequences(action.name())
+                    .iter()
+                    .map(|sequence| (*sequence).to_string())
+                    .collect(),
+                mouse: bindings::default_mouse_encodings(action.name())
+                    .iter()
+                    .map(|encoding| (*encoding).to_string())
+                    .collect(),
+            })
+            .collect()
+    })
 }
 
 pub fn show(parent: HWND, settings: &SettingsFile) {
@@ -242,7 +257,7 @@ unsafe extern "system" fn frame_procedure(
                 IDC_RESTORE_DEFAULTS => {
                     if let Some(state) = state_mut(dialog) {
                         state.transient_options = Options::default();
-                        state.transient_shortcuts = default_shortcut_rows();
+                        state.transient_shortcuts = default_shortcut_rows().to_vec();
                         sync_all_pages(state);
                         update_buttons(state);
                     }
@@ -314,8 +329,8 @@ fn initialize_frame(state: &mut OptionsState) {
 
 /// Where a page sits inside the tab, in the frame's coordinates.
 fn page_area(dialog: HWND, tab: HWND) -> RECT {
-    let mut area = RECT::default();
-    let _ = unsafe { GetWindowRect(tab, &raw mut area) };
+    // TCM_ADJUSTRECT only insets, so it reads the same before or after the mapping.
+    let mut area = crate::dialogs::geometry::control_bounds(dialog, tab).unwrap_or_default();
     unsafe {
         SendMessageW(
             tab,
@@ -324,23 +339,7 @@ fn page_area(dialog: HWND, tab: HWND) -> RECT {
             Some(LPARAM(&raw mut area as isize)),
         )
     };
-    let mut corners = [
-        POINT {
-            x: area.left,
-            y: area.top,
-        },
-        POINT {
-            x: area.right,
-            y: area.bottom,
-        },
-    ];
-    unsafe { windows::Win32::Graphics::Gdi::MapWindowPoints(None, Some(dialog), &mut corners) };
-    RECT {
-        left: corners[0].x,
-        top: corners[0].y,
-        right: corners[1].x,
-        bottom: corners[1].y,
-    }
+    area
 }
 
 /// Builds the page behind a tab if it is not there yet, then shows it.
@@ -690,7 +689,7 @@ fn handle_page_command(
             options.skip_hidden = is_checked(page, control)
         }
         (IDC_SHORTCUTS_RESET, BN_CLICKED) => {
-            state.transient_shortcuts = default_shortcut_rows();
+            state.transient_shortcuts = default_shortcut_rows().to_vec();
             refresh_shortcut_rows(state);
         }
         (IDC_SHORTCUTS_CLEAR_ALL, BN_CLICKED) => {
@@ -771,13 +770,9 @@ fn initialize_miscellaneous_page(state: &OptionsState) {
 }
 
 fn sync_all_pages(state: &mut OptionsState) {
-    state.syncing = true;
-    sync_window_page(state);
-    sync_image_page(state);
-    sync_miscellaneous_page(state);
-    sync_start_menu_page(state);
-    state.syncing = false;
-    refresh_shortcut_rows(state);
+    for index in 0..PAGES.len() {
+        sync_page(state, index);
+    }
 }
 
 /// Writes the transient state into one page, for a page that has just been built.
@@ -1112,24 +1107,13 @@ fn initialize_association_page(state: &mut OptionsState) {
     {
         if extension_list.len() == 1 {
             let extension = format!(".{}", extension_list[0]);
-            let checked = state.saved_associations.contains(&extension);
-            let label = format!("{name} ({extension})");
-            let item = tree_insert(
+            insert_extension(
+                state,
                 tree,
                 TVI_ROOT,
-                &label,
-                state.extensions.len() as isize,
-                if checked {
-                    STATE_CHECKED
-                } else {
-                    STATE_UNCHECKED
-                },
+                &format!("{name} ({extension})"),
+                &extension,
             );
-            state.extensions.push(AssociationExtension {
-                extension,
-                checked,
-                item,
-            });
         } else {
             let group_index = state.groups.len();
             let header = tree_insert(
@@ -1142,24 +1126,9 @@ fn initialize_association_page(state: &mut OptionsState) {
             let mut members = Vec::new();
             for extension_name in extension_list {
                 let extension = format!(".{extension_name}");
-                let checked = state.saved_associations.contains(&extension);
-                let item = tree_insert(
-                    tree,
-                    header,
-                    &extension,
-                    state.extensions.len() as isize,
-                    if checked {
-                        STATE_CHECKED
-                    } else {
-                        STATE_UNCHECKED
-                    },
-                );
-                members.push(state.extensions.len());
-                state.extensions.push(AssociationExtension {
-                    extension,
-                    checked,
-                    item,
-                });
+                members.push(insert_extension(
+                    state, tree, header, &extension, &extension,
+                ));
             }
             state.groups.push(AssociationGroup {
                 item: header,
@@ -1170,6 +1139,28 @@ fn initialize_association_page(state: &mut OptionsState) {
     for group_index in 0..state.groups.len() {
         refresh_group_check_image(state, tree, group_index);
     }
+}
+
+/// Adds one extension row under `parent`, records it, and answers where it landed.
+fn insert_extension(
+    state: &mut OptionsState,
+    tree: HWND,
+    parent: HTREEITEM,
+    label: &str,
+    extension: &str,
+) -> usize {
+    let checked = state
+        .saved_associations
+        .iter()
+        .any(|saved| saved == extension);
+    let index = state.extensions.len();
+    let item = tree_insert(tree, parent, label, index as isize, check_state(checked));
+    state.extensions.push(AssociationExtension {
+        extension: extension.to_string(),
+        checked,
+        item,
+    });
+    index
 }
 
 fn create_tristate_images() -> HIMAGELIST {
@@ -1309,15 +1300,7 @@ fn toggle_association_item(state: &mut OptionsState, tree: HWND, item: HTREEITEM
         for member in &members {
             let entry = &mut state.extensions[*member];
             entry.checked = !all_checked;
-            tree_set_state_image(
-                tree,
-                entry.item,
-                if entry.checked {
-                    STATE_CHECKED
-                } else {
-                    STATE_UNCHECKED
-                },
-            );
+            tree_set_state_image(tree, entry.item, check_state(entry.checked));
         }
         refresh_group_check_image(state, tree, group_index);
     } else {
@@ -1326,15 +1309,7 @@ fn toggle_association_item(state: &mut OptionsState, tree: HWND, item: HTREEITEM
             return;
         };
         entry.checked = !entry.checked;
-        tree_set_state_image(
-            tree,
-            entry.item,
-            if entry.checked {
-                STATE_CHECKED
-            } else {
-                STATE_UNCHECKED
-            },
-        );
+        tree_set_state_image(tree, entry.item, check_state(entry.checked));
         if let Some(group_index) = state
             .groups
             .iter()
@@ -1369,15 +1344,7 @@ fn set_all_associations(state: &mut OptionsState, checked: bool) {
     };
     for entry in &mut state.extensions {
         entry.checked = checked;
-        tree_set_state_image(
-            tree,
-            entry.item,
-            if checked {
-                STATE_CHECKED
-            } else {
-                STATE_UNCHECKED
-            },
-        );
+        tree_set_state_image(tree, entry.item, check_state(checked));
     }
     for group_index in 0..state.groups.len() {
         refresh_group_check_image(state, tree, group_index);

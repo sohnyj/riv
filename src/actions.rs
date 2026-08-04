@@ -291,36 +291,32 @@ impl Action {
         ACTION_TABLE.iter().map(|(action, _, _, _)| *action)
     }
 
+    /// The table row; Recent is dynamic and answers before any caller reaches here.
+    fn entry(self) -> &'static (Self, &'static str, &'static str, ActivationGate) {
+        ACTION_TABLE
+            .iter()
+            .find(|(action, _, _, _)| *action == self)
+            .expect("action in table")
+    }
+
     pub fn name(self) -> &'static str {
         if let Self::Recent(index) = self {
             return RECENT_NAMES[usize::from(index).min(RECENT_NAMES.len() - 1)];
         }
-        ACTION_TABLE
-            .iter()
-            .find(|(action, _, _, _)| *action == self)
-            .map(|(_, name, _, _)| *name)
-            .expect("action in table")
+        self.entry().1
     }
 
     pub fn label(self) -> &'static str {
         if matches!(self, Self::Recent(_)) {
             return "";
         }
-        ACTION_TABLE
-            .iter()
-            .find(|(action, _, _, _)| *action == self)
-            .map(|(_, _, label, _)| *label)
-            .expect("action in table")
+        self.entry().2
     }
 
     pub fn gate(self) -> ActivationGate {
         if matches!(self, Self::Recent(_)) {
             return ActivationGate::Window;
         }
-        ACTION_TABLE
-            .iter()
-            .find(|(action, _, _, _)| *action == self)
-            .map(|(_, _, _, gate)| *gate)
-            .expect("action in table")
+        self.entry().3
     }
 }

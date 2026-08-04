@@ -775,25 +775,10 @@ mod premultiply_tests {
     use super::*;
 
     /// Deterministic straight-alpha BGRA with frequent fully transparent and opaque pixels.
-    fn bgra_pixels(count: usize, mut state: u32) -> Vec<u8> {
-        let mut pixels = Vec::with_capacity(count * 4);
-        for _ in 0..count {
-            state = state.wrapping_mul(1_664_525).wrapping_add(1_013_904_223);
-            for shift in [0u32, 8, 16] {
-                pixels.push((state >> shift) as u8);
-            }
-            pixels.push(match state >> 30 {
-                0 => 0,
-                1 => 255,
-                _ => (state >> 8) as u8,
-            });
-        }
-        pixels
-    }
 
     #[test]
     fn premultiply_matches_the_scalar_reference() {
-        let mut pixels = bgra_pixels(64 * 64, 13);
+        let mut pixels = crate::image::decode::random_pixels(64 * 64, 13);
         let mut expected = pixels.clone();
         for pixel in expected.chunks_exact_mut(4) {
             let alpha = u16::from(pixel[3]);
@@ -811,7 +796,7 @@ mod premultiply_tests {
     #[test]
     #[ignore = "manual timing comparison (--nocapture)"]
     fn premultiply_timing() {
-        let pixels = bgra_pixels(1920 * 1080, 31);
+        let pixels = crate::image::decode::random_pixels(1920 * 1080, 31);
         for _ in 0..3 {
             let mut scratch = pixels.clone();
             let start = std::time::Instant::now();

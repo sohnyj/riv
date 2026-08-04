@@ -225,7 +225,7 @@ impl SettingsFile {
 
     /// Writes the in-memory options into the settings document (persisted at exit/Apply).
     pub fn store_options(&mut self) {
-        let options = std::mem::take(&mut self.options);
+        let options = self.options.clone();
         self.set_options(&options);
     }
 

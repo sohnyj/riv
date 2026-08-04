@@ -23,3 +23,8 @@ pub fn natural_order(a: &[u16], b: &[u16]) -> std::cmp::Ordering {
     let result = unsafe { StrCmpLogicalW(PCWSTR(a.as_ptr()), PCWSTR(b.as_ptr())) };
     result.cmp(&0)
 }
+
+/// The same order over Rust strings, for callers that hold no wide buffer.
+pub fn natural_order_text(a: &str, b: &str) -> std::cmp::Ordering {
+    natural_order(&wide(a), &wide(b))
+}

@@ -642,11 +642,8 @@ mod listbox_item_text_tests {
     #[test]
     #[ignore = "creates a LISTBOX; runs under wine"]
     fn an_item_longer_than_the_old_fixed_buffer_reads_back_fully() {
-        let item: Vec<u16> = "A"
-            .repeat(300) // > the old [u16; 128] buffer that overflowed
-            .encode_utf16()
-            .chain(std::iter::once(0))
-            .collect();
+        // > the old [u16; 128] buffer that overflowed
+        let item = crate::text::wide("A".repeat(300));
         let listbox = unsafe {
             CreateWindowExW(
                 WINDOW_EX_STYLE(0),

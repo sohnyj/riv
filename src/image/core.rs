@@ -753,15 +753,16 @@ impl ImageCore {
 
     /// Hands a rescanned listing the weights already probed; an edited file starts over.
     fn carry_weights_into(&self, entries: &mut [ListingEntry]) {
-        if self.entries.is_empty() {
-            return;
-        }
         let probed: HashMap<&ItemLocation, &ListingEntry> = self
             .entries
             .iter()
             .filter(|entry| entry.weight != DecodedWeight::Unknown)
             .map(|entry| (&entry.location, entry))
             .collect();
+        // Nothing probed means every lookup below would miss, and each one hashes a path.
+        if probed.is_empty() {
+            return;
+        }
         for entry in entries {
             if let Some(previous) = probed.get(&entry.location)
                 && previous.file_size == entry.file_size
@@ -1174,11 +1175,8 @@ impl ImageCore {
     }
 
     pub fn on_decode_complete(&mut self, completion: DecodeCompletion) -> bool {
+        let is_pending = self.is_pending(&completion.location);
         if matches!(completion.stage, DecodeStage::Preview) {
-            let is_pending = self
-                .pending_display
-                .as_ref()
-                .is_some_and(|pending| *pending == completion.location);
             if is_pending && let Ok(image) = completion.result {
                 self.show_image(CurrentImage {
                     location: completion.location,
@@ -1193,10 +1191,6 @@ impl ImageCore {
             return false;
         }
         self.in_flight.remove(&completion.location);
-        let is_pending = self
-            .pending_display
-            .as_ref()
-            .is_some_and(|pending| *pending == completion.location);
         // A retired generation never wraps and carries no pixels; redo like a cancelled decode.
         if completion
             .texture
@@ -1445,7 +1439,12 @@ impl ImageCore {
 
     /// SVG rasters at the largest monitor's size, so its weights expire with it.
     pub fn invalidate_svg_weights(&mut self) {
+        decode::invalidate_monitor_size();
         for entry in &mut self.entries {
+            // An unprobed entry has nothing to forget, and the name lookup is not free.
+            if entry.weight == DecodedWeight::Unknown {
+                continue;
+            }
             let display_sized = entry
                 .location
                 .extension_lowercase()
@@ -1534,15 +1533,20 @@ impl ImageCore {
     /// Evicts entries in reverse preload priority until within budget.
     fn evict_cache(&mut self) {
         let (backward, forward, budget) = self.preload_plan();
+        // Sum first: the usual answer is "within budget", and ranking clones and walks per key.
+        let mut total: u64 = self
+            .cache
+            .iter()
+            .map(|(location, entry)| self.cached_weight(location, entry))
+            .sum();
+        if total <= budget {
+            return;
+        }
         let weighted: Vec<(ItemLocation, u64)> = self
             .cache
             .iter()
             .map(|(location, entry)| (location.clone(), self.cached_weight(location, entry)))
             .collect();
-        let mut total: u64 = weighted.iter().map(|(_, weight)| weight).sum();
-        if total <= budget {
-            return;
-        }
         let anchor = self.navigation_anchor().cloned();
         let priorities = preload_priorities(
             self.anchor_index(),
@@ -1717,17 +1721,18 @@ fn scan_folder(directory: &Path, options: &CoreOptions) -> Vec<ListingEntry> {
         if display_name.starts_with("._") {
             continue; // skip macOS metadata files
         }
+        let path = entry.path();
         let extension_matched = crate::text::lowercase_extension(Path::new(&file_name))
             .is_some_and(|extension| decode::is_supported_extension(&extension));
         let included = extension_matched
             || (options.detect_format_by_content
-                && decode::descriptor_for_content(&entry.path()).is_some());
+                && decode::descriptor_for_content(&path).is_some());
         if !included {
             continue;
         }
         let wide_name = crate::text::wide(&file_name);
         entries.push(ListingEntry {
-            location: ItemLocation::File(entry.path()),
+            location: ItemLocation::File(path),
             wide_name,
             file_size: metadata.len(),
             modified: metadata.modified().unwrap_or(UNIX_EPOCH),
@@ -2100,6 +2105,33 @@ fn url_decode_error(error: DecodeError) -> DecodeError {
     error
 }
 
+/// The listing options every core test starts from.
+#[cfg(test)]
+fn core() -> ImageCore {
+    ImageCore::new(
+        HWND::default(),
+        CoreOptions {
+            sort_mode: SortMode::Name,
+            sort_descending: false,
+            preloading_mode: 1,
+            loop_within_folder: true,
+            skip_hidden: true,
+            detect_format_by_content: false,
+        },
+    )
+}
+
+/// A temp directory holding `files`; the bytes are never decoded, only listed.
+#[cfg(test)]
+fn fixture_directory(name: &str, files: &[&str]) -> PathBuf {
+    let directory = std::env::temp_dir().join(name);
+    std::fs::create_dir_all(&directory).expect("fixture directory");
+    for file in files {
+        std::fs::write(directory.join(file), b"listing only; never decoded").expect("fixture file");
+    }
+    directory
+}
+
 #[cfg(test)]
 mod step_index_tests {
     use super::*;
@@ -2375,20 +2407,6 @@ mod item_location_tests {
 mod url_session_state_tests {
     use super::*;
 
-    fn core() -> ImageCore {
-        ImageCore::new(
-            HWND::default(),
-            CoreOptions {
-                sort_mode: SortMode::Name,
-                sort_descending: false,
-                preloading_mode: 1,
-                loop_within_folder: true,
-                skip_hidden: true,
-                detect_format_by_content: false,
-            },
-        )
-    }
-
     fn folder_state(core: &mut ImageCore, path: &str) {
         let path = PathBuf::from(path);
         core.listing_scope = Some(ListingScope::Directory(
@@ -2517,10 +2535,8 @@ mod url_session_state_tests {
 
     #[test]
     fn a_new_load_clears_the_previous_error() {
-        let directory = std::env::temp_dir().join("riv-error-supersede");
-        std::fs::create_dir_all(&directory).expect("fixture directory");
+        let directory = fixture_directory("riv-error-supersede", &["a.png"]);
         let file = directory.join("a.png");
-        std::fs::write(&file, b"listing only; never decoded").expect("fixture file");
         let mut core = core();
         assert!(!core.load_url("ftp://a.com/b.png"));
         assert!(core.load_error.is_some());
@@ -2531,10 +2547,8 @@ mod url_session_state_tests {
 
     #[test]
     fn a_local_open_after_a_url_restores_the_listing() {
-        let directory = std::env::temp_dir().join("riv-url-session-state");
-        std::fs::create_dir_all(&directory).expect("fixture directory");
+        let directory = fixture_directory("riv-url-session-state", &["a.png"]);
         let file = directory.join("a.png");
-        std::fs::write(&file, b"listing only; never decoded").expect("fixture file");
         let mut core = core();
         assert!(!core.load_url("ftp://a.com/b.png"));
         core.load_path(&file);
@@ -2554,10 +2568,8 @@ mod url_session_state_tests {
 
     #[test]
     fn a_url_open_drops_the_pending_scan() {
-        let directory = std::env::temp_dir().join("riv-url-drops-scan");
-        std::fs::create_dir_all(&directory).expect("fixture directory");
+        let directory = fixture_directory("riv-url-drops-scan", &["a.png"]);
         let file = directory.join("a.png");
-        std::fs::write(&file, b"listing only; never decoded").expect("fixture file");
         let mut core = core();
         core.load_path(&file);
         assert!(core.listing_scan_pending());
@@ -2576,26 +2588,10 @@ mod url_session_state_tests {
 mod listing_scan_tests {
     use super::*;
 
-    fn core() -> ImageCore {
-        ImageCore::new(
-            HWND::default(),
-            CoreOptions {
-                sort_mode: SortMode::Name,
-                sort_descending: false,
-                preloading_mode: 1,
-                loop_within_folder: true,
-                skip_hidden: true,
-                detect_format_by_content: false,
-            },
-        )
-    }
-
     #[test]
     fn a_stale_scan_arrival_is_discarded() {
-        let directory = std::env::temp_dir().join("riv-stale-scan");
-        std::fs::create_dir_all(&directory).expect("fixture directory");
+        let directory = fixture_directory("riv-stale-scan", &["a.png"]);
         let file = directory.join("a.png");
-        std::fs::write(&file, b"listing only; never decoded").expect("fixture file");
         let mut core = core();
         core.load_path(&file);
         assert!(core.listing_scan_pending());
@@ -2612,11 +2608,8 @@ mod listing_scan_tests {
 
     #[test]
     fn the_listing_position_follows_the_pending_anchor() {
-        let directory = std::env::temp_dir().join("riv-anchor-position");
-        std::fs::create_dir_all(&directory).expect("fixture directory");
-        std::fs::write(directory.join("a.png"), b"listing only").expect("fixture file");
+        let directory = fixture_directory("riv-anchor-position", &["a.png", "b.png"]);
         let second = directory.join("b.png");
-        std::fs::write(&second, b"listing only").expect("fixture file");
         let mut core = core();
         core.rescan_folder(&directory);
         core.load_path(&second);
@@ -2627,12 +2620,8 @@ mod listing_scan_tests {
 
     #[test]
     fn a_refresh_keeps_the_weights_it_already_probed() {
-        let directory = std::env::temp_dir().join("riv-refresh-weights");
-        std::fs::create_dir_all(&directory).expect("fixture directory");
-        let kept = directory.join("a.png");
+        let directory = fixture_directory("riv-refresh-weights", &["a.png", "b.png"]);
         let edited = directory.join("b.png");
-        std::fs::write(&kept, b"listing only").expect("fixture file");
-        std::fs::write(&edited, b"listing only").expect("fixture file");
         let mut core = core();
         core.rescan_folder(&directory);
         for entry in &mut core.entries {
@@ -2709,10 +2698,8 @@ mod listing_scan_tests {
 
     #[test]
     fn a_reload_re_collects_the_listing_it_sits_in() {
-        let directory = std::env::temp_dir().join("riv-reload-refresh");
-        std::fs::create_dir_all(&directory).expect("fixture directory");
+        let directory = fixture_directory("riv-reload-refresh", &["a.png"]);
         let first = directory.join("a.png");
-        std::fs::write(&first, b"listing only").expect("fixture file");
         let mut core = core();
         core.rescan_folder(&directory);
         core.load_path(&first);
@@ -2728,11 +2715,7 @@ mod listing_scan_tests {
 
     #[test]
     fn a_vanished_item_leaves_a_slot_adjacent_entries_still_answer() {
-        let directory = std::env::temp_dir().join("riv-reload-vanished");
-        std::fs::create_dir_all(&directory).expect("fixture directory");
-        for name in ["a.png", "b.png", "c.png"] {
-            std::fs::write(directory.join(name), b"listing only").expect("fixture file");
-        }
+        let directory = fixture_directory("riv-reload-vanished", &["a.png", "b.png", "c.png"]);
         let mut core = core();
         core.rescan_folder(&directory);
         let middle = directory.join("b.png");
@@ -2773,10 +2756,7 @@ mod listing_scan_tests {
 
     #[test]
     fn a_directory_open_loads_its_first_entry_on_arrival() {
-        let directory = std::env::temp_dir().join("riv-directory-open");
-        std::fs::create_dir_all(&directory).expect("fixture directory");
-        let file = directory.join("a.png");
-        std::fs::write(&file, b"listing only; never decoded").expect("fixture file");
+        let directory = fixture_directory("riv-directory-open", &["a.png"]);
         let mut core = core();
         assert!(!core.load_path(&directory));
         assert!(core.listing_scan_pending());
@@ -2795,20 +2775,6 @@ mod listing_scan_tests {
 #[cfg(test)]
 mod navigation_direction_tests {
     use super::*;
-
-    fn core() -> ImageCore {
-        ImageCore::new(
-            HWND::default(),
-            CoreOptions {
-                sort_mode: SortMode::Name,
-                sort_descending: false,
-                preloading_mode: 1,
-                loop_within_folder: true,
-                skip_hidden: true,
-                detect_format_by_content: false,
-            },
-        )
-    }
 
     #[test]
     fn a_single_back_step_keeps_the_forward_polarity() {
@@ -2866,17 +2832,7 @@ mod playlist_window_tests {
     use super::*;
 
     fn core_with_files(count: usize, anchor: Option<usize>) -> ImageCore {
-        let mut core = ImageCore::new(
-            HWND::default(),
-            CoreOptions {
-                sort_mode: SortMode::Name,
-                sort_descending: false,
-                preloading_mode: 1,
-                loop_within_folder: true,
-                skip_hidden: true,
-                detect_format_by_content: false,
-            },
-        );
+        let mut core = core();
         core.entries = (0..count)
             .map(|index| ListingEntry {
                 location: ItemLocation::File(PathBuf::from(format!(

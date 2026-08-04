@@ -5,7 +5,6 @@ use windows::Win32::Graphics::Gdi::{
     CLEARTYPE_QUALITY, CLIP_DEFAULT_PRECIS, CreateFontW, DEFAULT_CHARSET, DeleteObject, FW_NORMAL,
     HFONT, OUT_DEFAULT_PRECIS,
 };
-use windows::Win32::UI::HiDpi::GetDpiForWindow;
 use windows::Win32::UI::WindowsAndMessaging::{
     GetDlgItem, SendMessageW, SetDlgItemTextW, WM_SETFONT,
 };
@@ -42,7 +41,7 @@ pub fn initialize_page(page: HWND) -> AboutFonts {
         IDC_ABOUT_VERSION,
         concat!("version ", env!("CARGO_PKG_VERSION")),
     );
-    let dpi = unsafe { GetDpiForWindow(page) }.max(96) as i32;
+    let dpi = crate::window::geometry::dpi_for_window(page) as i32;
     let fonts = AboutFonts {
         title: create_font(TITLE_POINT_SIZE, dpi),
         version: create_font(VERSION_POINT_SIZE, dpi),

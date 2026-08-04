@@ -1,6 +1,12 @@
 //! Keyboard/mouse binding encoding, defaults, lookup, and the live input readers.
 
 use serde_json::{Map, Value};
+use windows::Win32::UI::Input::KeyboardAndMouse::{
+    VIRTUAL_KEY, VK_BACK, VK_DELETE, VK_DOWN, VK_END, VK_ESCAPE, VK_F1, VK_F24, VK_HOME, VK_INSERT,
+    VK_LEFT, VK_NEXT, VK_OEM_1, VK_OEM_2, VK_OEM_3, VK_OEM_4, VK_OEM_5, VK_OEM_6, VK_OEM_7,
+    VK_OEM_COMMA, VK_OEM_MINUS, VK_OEM_PERIOD, VK_OEM_PLUS, VK_PRIOR, VK_RETURN, VK_RIGHT,
+    VK_SPACE, VK_TAB, VK_UP,
+};
 
 use crate::actions::Action;
 
@@ -9,10 +15,25 @@ pub const MODIFIER_SHIFT: u8 = 1 << 1;
 pub const MODIFIER_ALT: u8 = 1 << 2;
 pub const MODIFIER_META: u8 = 1 << 3;
 
+/// Modifier tokens in prefix order; the parsers and the formatter read this one list.
+const MODIFIER_NAMES: [(u8, &str); 4] = [
+    (MODIFIER_CONTROL, "Ctrl"),
+    (MODIFIER_SHIFT, "Shift"),
+    (MODIFIER_ALT, "Alt"),
+    (MODIFIER_META, "Meta"),
+];
+
+fn modifier_from_token(token: &str) -> Option<u8> {
+    MODIFIER_NAMES
+        .iter()
+        .find(|(_, name)| *name == token)
+        .map(|(modifier, _)| *modifier)
+}
+
 /// Modifier mask from the live keyboard state.
 pub fn current_modifiers() -> u8 {
     use windows::Win32::UI::Input::KeyboardAndMouse::{
-        GetKeyState, VIRTUAL_KEY, VK_CONTROL, VK_LWIN, VK_MENU, VK_RWIN, VK_SHIFT,
+        GetKeyState, VK_CONTROL, VK_LWIN, VK_MENU, VK_RWIN, VK_SHIFT,
     };
     let pressed = |key: VIRTUAL_KEY| unsafe { GetKeyState(i32::from(key.0)) } < 0;
     let mut modifiers = 0u8;
@@ -59,6 +80,27 @@ impl MouseBase {
     /// The discriminant `from_index` reads back.
     pub fn index(self) -> u8 {
         self as u8
+    }
+
+    /// Every base, walked through the discriminant mapping so the two cannot drift.
+    fn all() -> impl Iterator<Item = Self> {
+        (0u8..).map_while(Self::from_index)
+    }
+
+    /// The encoding token; the match is exhaustive, so a new base cannot go unnamed.
+    fn name(self) -> &'static str {
+        match self {
+            Self::DoubleClick => "Double-click",
+            Self::WheelButton => "WheelButton",
+            Self::Back => "Back",
+            Self::Forward => "Forward",
+            Self::WheelUp => "WheelUp",
+            Self::WheelDown => "WheelDown",
+        }
+    }
+
+    fn from_name(name: &str) -> Option<Self> {
+        Self::all().find(|base| base.name() == name)
     }
 
     /// Wheel messages carry the direction in the sign of their delta.
@@ -188,7 +230,6 @@ impl Bindings {
 
     /// Escape acts as exit-fullscreen only while unbound.
     pub fn escape_is_unbound(&self) -> bool {
-        use windows::Win32::UI::Input::KeyboardAndMouse::VK_ESCAPE;
         !self
             .keyboard
             .iter()
@@ -217,30 +258,16 @@ pub fn format_key_sequence(modifiers: u8, virtual_key: u16) -> Option<String> {
 }
 
 pub fn format_mouse_encoding(modifiers: u8, base: MouseBase) -> String {
-    let base_name = match base {
-        MouseBase::DoubleClick => "Double-click",
-        MouseBase::WheelButton => "WheelButton",
-        MouseBase::Back => "Back",
-        MouseBase::Forward => "Forward",
-        MouseBase::WheelUp => "WheelUp",
-        MouseBase::WheelDown => "WheelDown",
-    };
-    format!("{}{base_name}", modifier_prefix(modifiers))
+    format!("{}{}", modifier_prefix(modifiers), base.name())
 }
 
 pub fn modifier_prefix(modifiers: u8) -> String {
     let mut prefix = String::new();
-    if modifiers & MODIFIER_CONTROL != 0 {
-        prefix.push_str("Ctrl+");
-    }
-    if modifiers & MODIFIER_SHIFT != 0 {
-        prefix.push_str("Shift+");
-    }
-    if modifiers & MODIFIER_ALT != 0 {
-        prefix.push_str("Alt+");
-    }
-    if modifiers & MODIFIER_META != 0 {
-        prefix.push_str("Meta+");
+    for (modifier, name) in MODIFIER_NAMES {
+        if modifiers & modifier != 0 {
+            prefix.push_str(name);
+            prefix.push('+');
+        }
     }
     prefix
 }
@@ -354,12 +381,9 @@ fn parse_key_sequence(sequence: &str) -> Option<(u8, u16)> {
     let mut modifiers = 0u8;
     let mut virtual_key = None;
     for token in sequence.split('+') {
-        match token {
-            "Ctrl" => modifiers |= MODIFIER_CONTROL,
-            "Shift" => modifiers |= MODIFIER_SHIFT,
-            "Alt" => modifiers |= MODIFIER_ALT,
-            "Meta" => modifiers |= MODIFIER_META,
-            base => virtual_key = virtual_key_from_name(base),
+        match modifier_from_token(token) {
+            Some(modifier) => modifiers |= modifier,
+            None => virtual_key = virtual_key_from_name(token),
         }
     }
     virtual_key.map(|key| (modifiers, key))
@@ -369,30 +393,45 @@ fn parse_mouse_encoding(encoding: &str) -> Option<(u8, MouseBase)> {
     let mut modifiers = 0u8;
     let mut base = None;
     for token in encoding.split('+') {
-        match token {
-            "Ctrl" => modifiers |= MODIFIER_CONTROL,
-            "Shift" => modifiers |= MODIFIER_SHIFT,
-            "Alt" => modifiers |= MODIFIER_ALT,
-            "Meta" => modifiers |= MODIFIER_META,
-            "Double-click" => base = Some(MouseBase::DoubleClick),
-            "WheelButton" => base = Some(MouseBase::WheelButton),
-            "Back" => base = Some(MouseBase::Back),
-            "Forward" => base = Some(MouseBase::Forward),
-            "WheelUp" => base = Some(MouseBase::WheelUp),
-            "WheelDown" => base = Some(MouseBase::WheelDown),
-            _ => return None,
+        match modifier_from_token(token) {
+            Some(modifier) => modifiers |= modifier,
+            None => base = Some(MouseBase::from_name(token)?),
         }
     }
     Some((modifiers, base?))
 }
 
+/// Named keys, both directions; a one-sided edit would break the parser round trip.
+const KEY_NAMES: [(&str, VIRTUAL_KEY); 26] = [
+    ("Left", VK_LEFT),
+    ("Right", VK_RIGHT),
+    ("Up", VK_UP),
+    ("Down", VK_DOWN),
+    ("Home", VK_HOME),
+    ("End", VK_END),
+    ("Page Up", VK_PRIOR),
+    ("Page Down", VK_NEXT),
+    ("spacebar", VK_SPACE),
+    ("Backspace", VK_BACK),
+    ("Delete", VK_DELETE),
+    ("Insert", VK_INSERT),
+    ("Esc", VK_ESCAPE),
+    ("Enter", VK_RETURN),
+    ("Tab", VK_TAB),
+    ("=", VK_OEM_PLUS),
+    ("-", VK_OEM_MINUS),
+    (",", VK_OEM_COMMA),
+    (".", VK_OEM_PERIOD),
+    (";", VK_OEM_1),
+    ("/", VK_OEM_2),
+    ("`", VK_OEM_3),
+    ("[", VK_OEM_4),
+    ("\\", VK_OEM_5),
+    ("]", VK_OEM_6),
+    ("'", VK_OEM_7),
+];
+
 fn virtual_key_from_name(name: &str) -> Option<u16> {
-    use windows::Win32::UI::Input::KeyboardAndMouse::{
-        VK_BACK, VK_DELETE, VK_DOWN, VK_END, VK_ESCAPE, VK_F1, VK_HOME, VK_INSERT, VK_LEFT,
-        VK_NEXT, VK_OEM_1, VK_OEM_2, VK_OEM_3, VK_OEM_4, VK_OEM_5, VK_OEM_6, VK_OEM_7,
-        VK_OEM_COMMA, VK_OEM_MINUS, VK_OEM_PERIOD, VK_OEM_PLUS, VK_PRIOR, VK_RETURN, VK_RIGHT,
-        VK_SPACE, VK_TAB, VK_UP,
-    };
     let mut characters = name.chars();
     if let (Some(character), None) = (characters.next(), characters.next())
         && character.is_ascii_alphanumeric()
@@ -405,45 +444,13 @@ fn virtual_key_from_name(name: &str) -> Option<u16> {
     {
         return Some(VK_F1.0 + index - 1);
     }
-    let key = match name {
-        "Left" => VK_LEFT,
-        "Right" => VK_RIGHT,
-        "Up" => VK_UP,
-        "Down" => VK_DOWN,
-        "Home" => VK_HOME,
-        "End" => VK_END,
-        "Page Up" => VK_PRIOR,
-        "Page Down" => VK_NEXT,
-        "spacebar" => VK_SPACE,
-        "Backspace" => VK_BACK,
-        "Delete" => VK_DELETE,
-        "Insert" => VK_INSERT,
-        "Esc" => VK_ESCAPE,
-        "Enter" => VK_RETURN,
-        "Tab" => VK_TAB,
-        "=" => VK_OEM_PLUS,
-        "-" => VK_OEM_MINUS,
-        "," => VK_OEM_COMMA,
-        "." => VK_OEM_PERIOD,
-        ";" => VK_OEM_1,
-        "/" => VK_OEM_2,
-        "`" => VK_OEM_3,
-        "[" => VK_OEM_4,
-        "\\" => VK_OEM_5,
-        "]" => VK_OEM_6,
-        "'" => VK_OEM_7,
-        _ => return None,
-    };
-    Some(key.0)
+    KEY_NAMES
+        .iter()
+        .find(|(candidate, _)| *candidate == name)
+        .map(|(_, key)| key.0)
 }
 
 fn key_name_from_virtual_key(virtual_key: u16) -> Option<String> {
-    use windows::Win32::UI::Input::KeyboardAndMouse::{
-        VK_BACK, VK_DELETE, VK_DOWN, VK_END, VK_ESCAPE, VK_F1, VK_F24, VK_HOME, VK_INSERT, VK_LEFT,
-        VK_NEXT, VK_OEM_1, VK_OEM_2, VK_OEM_3, VK_OEM_4, VK_OEM_5, VK_OEM_6, VK_OEM_7,
-        VK_OEM_COMMA, VK_OEM_MINUS, VK_OEM_PERIOD, VK_OEM_PLUS, VK_PRIOR, VK_RETURN, VK_RIGHT,
-        VK_SPACE, VK_TAB, VK_UP,
-    };
     if (u16::from(b'0')..=u16::from(b'9')).contains(&virtual_key)
         || (u16::from(b'A')..=u16::from(b'Z')).contains(&virtual_key)
     {
@@ -452,36 +459,10 @@ fn key_name_from_virtual_key(virtual_key: u16) -> Option<String> {
     if (VK_F1.0..=VK_F24.0).contains(&virtual_key) {
         return Some(format!("F{}", virtual_key - VK_F1.0 + 1));
     }
-    let name = match windows::Win32::UI::Input::KeyboardAndMouse::VIRTUAL_KEY(virtual_key) {
-        VK_LEFT => "Left",
-        VK_RIGHT => "Right",
-        VK_UP => "Up",
-        VK_DOWN => "Down",
-        VK_HOME => "Home",
-        VK_END => "End",
-        VK_PRIOR => "Page Up",
-        VK_NEXT => "Page Down",
-        VK_SPACE => "spacebar",
-        VK_BACK => "Backspace",
-        VK_DELETE => "Delete",
-        VK_INSERT => "Insert",
-        VK_ESCAPE => "Esc",
-        VK_RETURN => "Enter",
-        VK_TAB => "Tab",
-        VK_OEM_PLUS => "=",
-        VK_OEM_MINUS => "-",
-        VK_OEM_COMMA => ",",
-        VK_OEM_PERIOD => ".",
-        VK_OEM_1 => ";",
-        VK_OEM_2 => "/",
-        VK_OEM_3 => "`",
-        VK_OEM_4 => "[",
-        VK_OEM_5 => "\\",
-        VK_OEM_6 => "]",
-        VK_OEM_7 => "'",
-        _ => return None,
-    };
-    Some(name.to_string())
+    KEY_NAMES
+        .iter()
+        .find(|(_, key)| key.0 == virtual_key)
+        .map(|(name, _)| (*name).to_string())
 }
 
 #[cfg(test)]

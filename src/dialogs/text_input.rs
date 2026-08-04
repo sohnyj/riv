@@ -29,11 +29,7 @@ struct TextInputState {
 /// Runs the modal dialog; Some(text as entered) on OK.
 pub fn show(window: HWND, request: &TextInputRequest) -> Option<String> {
     let mut state = TextInputState {
-        initial_text: request
-            .initial_text
-            .encode_utf16()
-            .chain(std::iter::once(0))
-            .collect(),
+        initial_text: crate::text::wide(request.initial_text),
         selection: request.selection,
         accepted_text: None,
     };
