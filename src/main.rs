@@ -14,6 +14,7 @@ mod text;
 mod view;
 mod window;
 
+use std::collections::HashMap;
 use std::path::Path;
 use std::rc::Rc;
 use std::sync::Arc;
@@ -171,7 +172,8 @@ struct Application {
     slideshow_item_shown_at: Option<std::time::Instant>,
     animation: Option<Animation>,
     drop_target: Option<IDropTarget>,
-    open_with_list: Option<OpenWithList>,
+    /// One list per extension seen this session; handler registration is per extension.
+    open_with_lists: HashMap<String, OpenWithList>,
     /// Extension whose enumeration is running; at most one is in flight.
     open_with_pending_extension: Option<String>,
 }
@@ -317,7 +319,7 @@ impl Application {
             slideshow_item_shown_at: None,
             animation: None,
             drop_target: None,
-            open_with_list: None,
+            open_with_lists: HashMap::new(),
             open_with_pending_extension: None,
         };
         if let Some(renderer) = &mut application.renderer {
@@ -1164,26 +1166,22 @@ impl Application {
         else {
             return;
         };
-        let enumerated = self
-            .open_with_list
-            .as_ref()
-            .is_some_and(|list| list.extension == extension);
-        if enumerated || self.open_with_pending_extension.is_some() {
+        if self.open_with_lists.contains_key(&extension)
+            || self.open_with_pending_extension.is_some()
+        {
             return;
         }
         self.open_with_pending_extension = Some(extension.clone());
         open_with::enumerate_in_background(window, extension);
     }
 
-    /// The enumerated list, when it belongs to the extension on screen.
+    /// The enumerated list for the extension on screen.
     fn current_open_with_list(&self) -> Option<&OpenWithList> {
         let extension = self
             .image_core
             .current_file()
             .and_then(text::lowercase_extension)?;
-        self.open_with_list
-            .as_ref()
-            .filter(|list| list.extension == extension)
+        self.open_with_lists.get(&extension)
     }
 
     fn requirement_satisfied(&self, requirement: ActionRequirement) -> bool {
@@ -1688,33 +1686,20 @@ fn delete_current_file(application: &mut Application, window: HWND, permanent: b
             application.settings.store_options();
         }
     }
-    let (command, opposite) = if application.settings.options.after_deletion == 0 {
-        (NavigationCommand::Previous, NavigationCommand::Next)
+    let preferred = if application.settings.options.after_deletion == 0 {
+        NavigationCommand::Previous
     } else {
-        (NavigationCommand::Next, NavigationCommand::Previous)
+        NavigationCommand::Next
     };
     let deleted = ItemLocation::File(path.clone());
-    // Compute the after-delete target before the file disappears; folder ends fall back.
-    let target = [command, opposite]
-        .into_iter()
-        .find_map(|direction| {
-            application
-                .image_core
-                .navigation_target(direction)
-                .filter(|candidate| *candidate != deleted)
-        })
-        .and_then(|candidate| candidate.as_file().map(Path::to_path_buf));
     match file_ops::delete_file(&path, permanent) {
-        Ok(()) => {
-            application.image_core.remove_listing_entry(&deleted);
-            match target {
-                Some(target) => open_external_path(application, window, &target),
-                None => {
-                    application.image_core.clear_current_item();
-                    application.clear_displayed_image(window);
-                }
-            }
-        }
+        Ok(()) => match application
+            .image_core
+            .remove_deleted_item(&deleted, preferred)
+        {
+            Some(target) => open_external_path(application, window, &target),
+            None => application.clear_displayed_image(window),
+        },
         Err(_) => {
             let displayed = application.image_core.reload_current();
             application.apply_load_outcome(window, displayed);
@@ -2445,7 +2430,9 @@ extern "system" fn window_procedure(
             let list = unsafe { Box::from_raw(lparam.0 as *mut OpenWithList) };
             if let Some(application) = application_from_window(window) {
                 application.open_with_pending_extension = None;
-                application.open_with_list = Some(*list);
+                application
+                    .open_with_lists
+                    .insert(list.extension.clone(), *list);
                 // The file on screen may have moved to another extension meanwhile.
                 application.start_open_with_enumeration(window);
             }

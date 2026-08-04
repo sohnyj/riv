@@ -1312,10 +1312,34 @@ impl ImageCore {
     }
 
     /// Drops a deleted item from the listing snapshot; no rescan.
-    pub fn remove_listing_entry(&mut self, location: &ItemLocation) {
+    fn remove_listing_entry(&mut self, location: &ItemLocation) {
         if let Some(index) = self.position_of(location) {
             self.entries.remove(index);
         }
+    }
+
+    /// Drops a deleted item and answers what to show next, resolved while it is still listed.
+    pub fn remove_deleted_item(
+        &mut self,
+        location: &ItemLocation,
+        preferred: NavigationCommand,
+    ) -> Option<PathBuf> {
+        let opposite = match preferred {
+            NavigationCommand::Previous => NavigationCommand::Next,
+            _ => NavigationCommand::Previous,
+        };
+        let successor = [preferred, opposite]
+            .into_iter()
+            .find_map(|direction| {
+                self.navigation_target(direction)
+                    .filter(|candidate| candidate != location)
+            })
+            .and_then(|candidate| candidate.as_file().map(Path::to_path_buf));
+        self.remove_listing_entry(location);
+        if successor.is_none() {
+            self.clear_current_item();
+        }
+        successor
     }
 
     /// Synchronous by design; only opens enumerate off the UI thread.
@@ -2122,6 +2146,25 @@ fn url_decode_error(error: DecodeError) -> DecodeError {
     error
 }
 
+/// A folder of numbered files, optionally anchored on one of them.
+#[cfg(test)]
+fn core_with_files(count: usize, anchor: Option<usize>) -> ImageCore {
+    let mut core = core();
+    core.entries = (0..count)
+        .map(|index| ListingEntry {
+            location: ItemLocation::File(PathBuf::from(format!("C:\\pictures\\{index:03}.png"))),
+            wide_name: Vec::new(),
+            file_size: 0,
+            modified: UNIX_EPOCH,
+            created: UNIX_EPOCH,
+            format_name: "PNG",
+            weight: DecodedWeight::Unknown,
+        })
+        .collect();
+    core.pending_display = anchor.map(|index| core.entries[index].location.clone());
+    core
+}
+
 /// The listing options every core test starts from.
 #[cfg(test)]
 fn core() -> ImageCore {
@@ -2861,29 +2904,48 @@ mod navigation_direction_tests {
     }
 }
 
+/// Deleting commits the listing change and answers what takes the place.
+#[cfg(test)]
+mod deleted_item_tests {
+    use super::*;
+
+    #[test]
+    fn a_deleted_item_hands_the_place_to_its_neighbor() {
+        let file = |index: usize| {
+            ItemLocation::File(PathBuf::from(format!("C:\\pictures\\{index:03}.png")))
+        };
+        let mut core = core_with_files(3, Some(1));
+        // The successor is resolved while the deleted entry is still listed.
+        let successor = core.remove_deleted_item(&file(1), NavigationCommand::Next);
+        assert_eq!(successor, file(2).as_file().map(Path::to_path_buf));
+        assert_eq!(core.entries.len(), 2);
+
+        // Looping wraps at the end of the folder, as a step would.
+        let mut core = core_with_files(3, Some(2));
+        let successor = core.remove_deleted_item(&file(2), NavigationCommand::Next);
+        assert_eq!(successor, file(0).as_file().map(Path::to_path_buf));
+
+        // Without looping the end falls back to the other direction.
+        let mut core = core_with_files(3, Some(2));
+        core.options.loop_within_folder = false;
+        let successor = core.remove_deleted_item(&file(2), NavigationCommand::Next);
+        assert_eq!(successor, file(1).as_file().map(Path::to_path_buf));
+
+        // Nothing left to show clears the current item instead.
+        let mut core = core_with_files(1, Some(0));
+        assert_eq!(
+            core.remove_deleted_item(&file(0), NavigationCommand::Next),
+            None
+        );
+        assert!(core.entries.is_empty());
+        assert!(core.current.is_none() && core.pending_display.is_none());
+    }
+}
+
 /// The menu playlist shows a window of the asked size with the current item centered.
 #[cfg(test)]
 mod playlist_window_tests {
     use super::*;
-
-    fn core_with_files(count: usize, anchor: Option<usize>) -> ImageCore {
-        let mut core = core();
-        core.entries = (0..count)
-            .map(|index| ListingEntry {
-                location: ItemLocation::File(PathBuf::from(format!(
-                    "C:\\pictures\\{index:03}.png"
-                ))),
-                wide_name: Vec::new(),
-                file_size: 0,
-                modified: UNIX_EPOCH,
-                created: UNIX_EPOCH,
-                format_name: "PNG",
-                weight: DecodedWeight::Unknown,
-            })
-            .collect();
-        core.pending_display = anchor.map(|index| core.entries[index].location.clone());
-        core
-    }
 
     #[test]
     fn a_short_listing_shows_whole() {
