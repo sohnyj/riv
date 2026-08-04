@@ -69,7 +69,7 @@ use crate::view::quantize::QuantizePass;
 const SWAP_CHAIN_FLAGS: DXGI_SWAP_CHAIN_FLAG = DXGI_SWAP_CHAIN_FLAG_FRAME_LATENCY_WAITABLE_OBJECT;
 
 /// Frame-slot wait ceiling: a stalled present queue must not freeze the caller.
-pub const FRAME_SLOT_TIMEOUT_MS: u32 = 1000;
+pub const FRAME_SLOT_TIMEOUT_MILLISECONDS: u32 = 1000;
 
 /// Two presentation buffers: draw one while the last presented one retires.
 const PRESENTATION_BUFFER_COUNT: usize = 2;
@@ -1479,7 +1479,8 @@ impl Renderer {
     /// Waits for present-queue room unless the pump already did.
     fn consume_frame_slot(&mut self) {
         if let Some(handle) = self.pending_frame_slot() {
-            let _ = unsafe { WaitForSingleObjectEx(handle, FRAME_SLOT_TIMEOUT_MS, false) };
+            let _ =
+                unsafe { WaitForSingleObjectEx(handle, FRAME_SLOT_TIMEOUT_MILLISECONDS, false) };
         }
         self.frame_slot_held = false;
     }

@@ -560,8 +560,7 @@ pub fn build_error_text(
     } else {
         message.trim().to_string()
     };
-    // Code 0 means "no code" (validation, curl, fallback decoders), not a real HRESULT.
-    // A line ending in a code needs no period; system messages bring their own.
+    // Code 0 is "no code", not an HRESULT; a line that ends in one needs no period.
     let reason = if code != 0 {
         format!("{reason} (Error 0x{code:08X})")
     } else if reason.ends_with('.') {

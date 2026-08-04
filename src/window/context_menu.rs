@@ -231,7 +231,7 @@ impl MenuBuilder {
         if !open_with_items.is_empty() {
             self.append_separator(open_with)?;
         }
-        self.append_action_labeled(open_with, Action::OpenWithOther, "Other application...")?;
+        self.append_action_labeled(open_with, Action::OtherApplication, "Other application...")?;
         // No on-disk file (archive member or URL) means nothing to hand off.
         self.append_submenu(
             menu,
@@ -295,7 +295,7 @@ impl MenuBuilder {
         } else {
             "Fit height"
         };
-        self.append_action_labeled(view, Action::FitMode, fit_label)?;
+        self.append_action_labeled(view, Action::ToggleFitMode, fit_label)?;
         self.append_action(view, Action::PreserveZoom)?;
         self.append_separator(view)?;
         self.append_action(view, Action::ZoomIn)?;
@@ -310,7 +310,7 @@ impl MenuBuilder {
         self.append_submenu(menu, view, "View", true)?;
 
         let tools = unsafe { CreatePopupMenu()? };
-        self.append_action(tools, Action::OpenContainingFolder)?;
+        self.append_action(tools, Action::ShowInExplorer)?;
         self.append_action(tools, Action::Rename)?;
         self.append_action(tools, Action::Delete)?;
         self.append_separator(tools)?;
@@ -319,9 +319,9 @@ impl MenuBuilder {
         } else {
             "Start slideshow"
         };
-        self.append_action_labeled(tools, Action::Slideshow, slideshow_label)?;
+        self.append_action_labeled(tools, Action::ToggleSlideshow, slideshow_label)?;
         self.append_separator(tools)?;
-        self.append_action(tools, Action::Options)?;
+        self.append_action(tools, Action::Settings)?;
         self.append_submenu(menu, tools, "Tools", true)?;
 
         let window = unsafe { CreatePopupMenu()? };
@@ -387,7 +387,7 @@ pub fn playlist_capacity(window: HWND) -> usize {
     if !unsafe { GetMonitorInfoW(monitor, &raw mut monitor_info) }.as_bool() {
         return UNMEASURED_CAPACITY;
     }
-    let dpi = super::geometry::dpi_for_window(window);
+    let dpi = crate::window::geometry::dpi_for_window(window);
     // The work area already excludes the taskbar.
     let work_height = monitor_info.rcWork.bottom - monitor_info.rcWork.top;
     capacity_for_height(work_height - title_bar_height(dpi), menu_row_height(dpi))

@@ -1,7 +1,5 @@
 //! Blue-noise dither matrix, ported from libplacebo src/dither.c
-//! (originally from mpv, Copyright 2013 Wessel Dankers, LGPL-2.1-or-later):
-//! void-and-cluster construction over a toroidal gaussian energy field.
-//! Deterministic, so the build bakes the table and the viewer reads bytes.
+//! (originally from mpv, Copyright 2013 Wessel Dankers, LGPL-2.1-or-later).
 
 use std::path::Path;
 

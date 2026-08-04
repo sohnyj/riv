@@ -50,7 +50,7 @@ pub struct AppliedOptions {
     pub mouse: Vec<(String, Vec<String>)>,
 }
 
-use super::modal::{DWLP_USER, IDCANCEL, IDOK};
+use crate::dialogs::modal::{DWLP_USER, IDCANCEL, IDOK};
 
 const BN_CLICKED: usize = 0;
 const CBN_SELCHANGE: usize = 1;
@@ -181,7 +181,7 @@ pub fn show(parent: HWND, settings: &SettingsFile) {
         custom_colors: [COLORREF(0x00FF_FFFF); 16],
         about_fonts: about::AboutFonts::default(),
     };
-    super::modal::run_modal(
+    crate::dialogs::modal::run_modal(
         parent,
         IDD_OPTIONS,
         frame_procedure,
@@ -190,7 +190,7 @@ pub fn show(parent: HWND, settings: &SettingsFile) {
 }
 
 fn state_mut(dialog: HWND) -> Option<&'static mut OptionsState> {
-    super::modal::state_mut(dialog)
+    crate::dialogs::modal::state_mut(dialog)
 }
 
 unsafe extern "system" fn frame_procedure(
@@ -273,7 +273,7 @@ unsafe extern "system" fn frame_procedure(
 
 fn initialize_frame(state: &mut OptionsState) {
     let dialog = state.dialog;
-    super::geometry::center_on_owner(dialog);
+    crate::dialogs::geometry::center_on_owner(dialog);
     let Ok(tab) = (unsafe { GetDlgItem(Some(dialog), IDC_OPTIONS_TAB) }) else {
         return;
     };
@@ -356,10 +356,10 @@ fn select_page(state: &mut OptionsState, tab: HWND, selected: isize) {
 const PAGES: [(u16, &str); 7] = [
     (IDD_PAGE_WINDOW, "Window"),
     (IDD_PAGE_IMAGE, "Image"),
-    (IDD_PAGE_MISC, "Miscellaneous"),
+    (IDD_PAGE_MISCELLANEOUS, "Miscellaneous"),
     (IDD_PAGE_SHORTCUTS, "Shortcuts"),
     (IDD_PAGE_ASSOCIATION, "File association"),
-    (IDD_PAGE_STARTMENU, "Start menu"),
+    (IDD_PAGE_START_MENU, "Start menu"),
     (IDD_PAGE_ABOUT, "About"),
 ];
 
@@ -373,7 +373,7 @@ fn ensure_page(state: &mut OptionsState, tab: HWND, index: usize) {
     let page = unsafe {
         CreateDialogParamW(
             Some(instance.into()),
-            super::resource::template_name(PAGES[index].0),
+            crate::dialogs::resource::template_name(PAGES[index].0),
             Some(state.dialog),
             Some(page_procedure),
             LPARAM(state_pointer),
@@ -402,7 +402,7 @@ fn ensure_page(state: &mut OptionsState, tab: HWND, index: usize) {
             initialize_shortcuts_page(state);
         }
         4 => {
-            fit_page_controls(page, IDC_ASSOC_TREE, IDC_ASSOC_SELECT_NONE);
+            fit_page_controls(page, IDC_ASSOCIATION_TREE, IDC_ASSOCIATION_SELECT_NONE);
             initialize_association_page(state);
         }
         5 => {}
@@ -446,7 +446,7 @@ fn fit_page_controls(page: HWND, stretch: i32, follow_right_edge: i32) {
         let Ok(handle) = (unsafe { GetDlgItem(Some(page), control) }) else {
             return;
         };
-        let Some(bounds) = super::geometry::control_bounds(page, handle) else {
+        let Some(bounds) = crate::dialogs::geometry::control_bounds(page, handle) else {
             return;
         };
         let _ = unsafe {
@@ -556,7 +556,7 @@ unsafe extern "system" fn page_procedure(
                     }
                     1
                 }
-                IDC_ASSOC_TREE if header.code == NM_CLICK => {
+                IDC_ASSOCIATION_TREE if header.code == NM_CLICK => {
                     toggle_association_at_cursor(state, header.hwndFrom);
                     1
                 }
@@ -564,7 +564,7 @@ unsafe extern "system" fn page_procedure(
                     about::handle_link(lparam);
                     1
                 }
-                IDC_ASSOC_TREE if header.code == TVN_KEYDOWN => {
+                IDC_ASSOCIATION_TREE if header.code == TVN_KEYDOWN => {
                     let key_down = unsafe { &*(lparam.0 as *const NMTVKEYDOWN) };
                     if key_down.wVKey == VK_SPACE.0 {
                         let selected = unsafe {
@@ -589,9 +589,9 @@ unsafe extern "system" fn page_procedure(
                 return 0;
             };
             let draw = unsafe { &*(lparam.0 as *const DRAWITEMSTRUCT) };
-            if draw.CtlID == IDC_WINDOW_BGCOLOR_BUTTON as u32 {
+            if draw.CtlID == IDC_WINDOW_BACKGROUND_COLOR_BUTTON as u32 {
                 let color = rgb_to_colorref(state.transient_options.background_color);
-                super::paint::draw_buffered(draw.hDC, draw.rcItem, |device| unsafe {
+                crate::dialogs::paint::draw_buffered(draw.hDC, draw.rcItem, |device| unsafe {
                     let brush = CreateSolidBrush(color);
                     FillRect(device, &raw const draw.rcItem, brush);
                     FrameRect(
@@ -618,11 +618,11 @@ fn handle_page_command(
     let options = &mut state.transient_options;
     let mut handled = true;
     match (control, notification) {
-        (IDC_WINDOW_BGCOLOR_ENABLED, BN_CLICKED) => {
+        (IDC_WINDOW_BACKGROUND_COLOR_ENABLED, BN_CLICKED) => {
             options.background_color_enabled = is_checked(page, control);
             sync_background_color_button(state, page);
         }
-        (IDC_WINDOW_BGCOLOR_BUTTON, BN_CLICKED) => {
+        (IDC_WINDOW_BACKGROUND_COLOR_BUTTON, BN_CLICKED) => {
             choose_background_color(state, page);
         }
         (IDC_WINDOW_TITLEBAR_MODE, CBN_SELCHANGE) => {
@@ -656,33 +656,39 @@ fn handle_page_command(
         (IDC_IMAGE_FRACTIONAL_WHEEL_ZOOM, BN_CLICKED) => {
             options.fractional_wheel_zoom = is_checked(page, control);
         }
-        (IDC_MISC_SORT, CBN_SELCHANGE) => options.sort_files_by = combo_selection(page, control),
-        (IDC_MISC_ASCENDING, BN_CLICKED) => options.sort_descending = false,
-        (IDC_MISC_DESCENDING, BN_CLICKED) => options.sort_descending = true,
+        (IDC_MISCELLANEOUS_SORT, CBN_SELCHANGE) => {
+            options.sort_files_by = combo_selection(page, control)
+        }
+        (IDC_MISCELLANEOUS_ASCENDING, BN_CLICKED) => options.sort_descending = false,
+        (IDC_MISCELLANEOUS_DESCENDING, BN_CLICKED) => options.sort_descending = true,
         (IDC_IMAGE_PRELOADING, CBN_SELCHANGE) => {
             options.preloading = combo_selection(page, control);
         }
-        (IDC_MISC_LOOP_WITHIN_FOLDER, BN_CLICKED) => {
+        (IDC_MISCELLANEOUS_LOOP_WITHIN_FOLDER, BN_CLICKED) => {
             options.loop_within_folder = is_checked(page, control);
         }
-        (IDC_MISC_SLIDESHOW_DIRECTION, CBN_SELCHANGE) => {
+        (IDC_MISCELLANEOUS_SLIDESHOW_DIRECTION, CBN_SELCHANGE) => {
             options.slideshow_direction = combo_selection(page, control);
         }
-        (IDC_MISC_SLIDESHOW_INTERVAL_EDIT, EN_CHANGE) => {
+        (IDC_MISCELLANEOUS_SLIDESHOW_INTERVAL_EDIT, EN_CHANGE) => {
             let value = unsafe { GetDlgItemInt(page, control, None, false) };
             options.slideshow_interval_seconds = value.clamp(1, 3600);
         }
-        (IDC_MISC_AFTER_DELETE, CBN_SELCHANGE) => {
+        (IDC_MISCELLANEOUS_AFTER_DELETE, CBN_SELCHANGE) => {
             options.after_deletion = combo_selection(page, control);
         }
-        (IDC_MISC_ASK_DELETE, BN_CLICKED) => options.ask_delete = is_checked(page, control),
-        (IDC_MISC_CONTENT_DETECTION, BN_CLICKED) => {
+        (IDC_MISCELLANEOUS_ASK_DELETE, BN_CLICKED) => {
+            options.ask_delete = is_checked(page, control)
+        }
+        (IDC_MISCELLANEOUS_CONTENT_DETECTION, BN_CLICKED) => {
             options.detect_format_by_content = is_checked(page, control);
         }
-        (IDC_MISC_REMEMBER_RECENTS, BN_CLICKED) => {
+        (IDC_MISCELLANEOUS_REMEMBER_RECENTS, BN_CLICKED) => {
             options.remember_recents = is_checked(page, control)
         }
-        (IDC_MISC_SKIP_HIDDEN, BN_CLICKED) => options.skip_hidden = is_checked(page, control),
+        (IDC_MISCELLANEOUS_SKIP_HIDDEN, BN_CLICKED) => {
+            options.skip_hidden = is_checked(page, control)
+        }
         (IDC_SHORTCUTS_RESET, BN_CLICKED) => {
             state.transient_shortcuts = default_shortcut_rows();
             refresh_shortcut_rows(state);
@@ -694,9 +700,9 @@ fn handle_page_command(
             }
             refresh_shortcut_rows(state);
         }
-        (IDC_ASSOC_SELECT_ALL, BN_CLICKED) => set_all_associations(state, true),
-        (IDC_ASSOC_SELECT_NONE, BN_CLICKED) => set_all_associations(state, false),
-        (IDC_STARTMENU_SHORTCUT, BN_CLICKED) => {
+        (IDC_ASSOCIATION_SELECT_ALL, BN_CLICKED) => set_all_associations(state, true),
+        (IDC_ASSOCIATION_SELECT_NONE, BN_CLICKED) => set_all_associations(state, false),
+        (IDC_START_MENU_SHORTCUT, BN_CLICKED) => {
             state.start_menu_desired = is_checked(page, control);
         }
         _ => handled = false,
@@ -746,12 +752,20 @@ fn initialize_miscellaneous_page(state: &OptionsState) {
     let page = state.pages[2];
     combo_fill(
         page,
-        IDC_MISC_SORT,
+        IDC_MISCELLANEOUS_SORT,
         &["Name", "Date modified", "Date created", "Size", "Type"],
     );
-    combo_fill(page, IDC_MISC_SLIDESHOW_DIRECTION, &["Backward", "Forward"]);
-    combo_fill(page, IDC_MISC_AFTER_DELETE, &["Move back", "Move forward"]);
-    if let Ok(spin) = unsafe { GetDlgItem(Some(page), IDC_MISC_SLIDESHOW_INTERVAL_SPIN) } {
+    combo_fill(
+        page,
+        IDC_MISCELLANEOUS_SLIDESHOW_DIRECTION,
+        &["Backward", "Forward"],
+    );
+    combo_fill(
+        page,
+        IDC_MISCELLANEOUS_AFTER_DELETE,
+        &["Move back", "Move forward"],
+    );
+    if let Ok(spin) = unsafe { GetDlgItem(Some(page), IDC_MISCELLANEOUS_SLIDESHOW_INTERVAL_SPIN) } {
         unsafe { SendMessageW(spin, UDM_SETRANGE32, Some(WPARAM(1)), Some(LPARAM(3600))) };
     }
 }
@@ -787,7 +801,7 @@ fn sync_window_page(state: &OptionsState) {
     let window_page = state.pages[0];
     set_check(
         window_page,
-        IDC_WINDOW_BGCOLOR_ENABLED,
+        IDC_WINDOW_BACKGROUND_COLOR_ENABLED,
         options.background_color_enabled,
     );
     combo_select(
@@ -836,53 +850,61 @@ fn sync_image_page(state: &OptionsState) {
 fn sync_miscellaneous_page(state: &OptionsState) {
     let options = &state.transient_options;
     let miscellaneous_page = state.pages[2];
-    combo_select(miscellaneous_page, IDC_MISC_SORT, options.sort_files_by);
+    combo_select(
+        miscellaneous_page,
+        IDC_MISCELLANEOUS_SORT,
+        options.sort_files_by,
+    );
     let _ = unsafe {
         CheckRadioButton(
             miscellaneous_page,
-            IDC_MISC_ASCENDING,
-            IDC_MISC_DESCENDING,
+            IDC_MISCELLANEOUS_ASCENDING,
+            IDC_MISCELLANEOUS_DESCENDING,
             if options.sort_descending {
-                IDC_MISC_DESCENDING
+                IDC_MISCELLANEOUS_DESCENDING
             } else {
-                IDC_MISC_ASCENDING
+                IDC_MISCELLANEOUS_ASCENDING
             },
         )
     };
     set_check(
         miscellaneous_page,
-        IDC_MISC_LOOP_WITHIN_FOLDER,
+        IDC_MISCELLANEOUS_LOOP_WITHIN_FOLDER,
         options.loop_within_folder,
     );
     combo_select(
         miscellaneous_page,
-        IDC_MISC_SLIDESHOW_DIRECTION,
+        IDC_MISCELLANEOUS_SLIDESHOW_DIRECTION,
         options.slideshow_direction,
     );
     set_dialog_item_text(
         miscellaneous_page,
-        IDC_MISC_SLIDESHOW_INTERVAL_EDIT,
+        IDC_MISCELLANEOUS_SLIDESHOW_INTERVAL_EDIT,
         &options.slideshow_interval_seconds.to_string(),
     );
     combo_select(
         miscellaneous_page,
-        IDC_MISC_AFTER_DELETE,
+        IDC_MISCELLANEOUS_AFTER_DELETE,
         options.after_deletion,
     );
-    set_check(miscellaneous_page, IDC_MISC_ASK_DELETE, options.ask_delete);
     set_check(
         miscellaneous_page,
-        IDC_MISC_CONTENT_DETECTION,
+        IDC_MISCELLANEOUS_ASK_DELETE,
+        options.ask_delete,
+    );
+    set_check(
+        miscellaneous_page,
+        IDC_MISCELLANEOUS_CONTENT_DETECTION,
         options.detect_format_by_content,
     );
     set_check(
         miscellaneous_page,
-        IDC_MISC_REMEMBER_RECENTS,
+        IDC_MISCELLANEOUS_REMEMBER_RECENTS,
         options.remember_recents,
     );
     set_check(
         miscellaneous_page,
-        IDC_MISC_SKIP_HIDDEN,
+        IDC_MISCELLANEOUS_SKIP_HIDDEN,
         options.skip_hidden,
     );
 }
@@ -890,13 +912,13 @@ fn sync_miscellaneous_page(state: &OptionsState) {
 fn sync_start_menu_page(state: &OptionsState) {
     set_check(
         state.pages[5],
-        IDC_STARTMENU_SHORTCUT,
+        IDC_START_MENU_SHORTCUT,
         state.start_menu_desired,
     );
 }
 
 fn sync_background_color_button(state: &OptionsState, page: HWND) {
-    if let Ok(button) = unsafe { GetDlgItem(Some(page), IDC_WINDOW_BGCOLOR_BUTTON) } {
+    if let Ok(button) = unsafe { GetDlgItem(Some(page), IDC_WINDOW_BACKGROUND_COLOR_BUTTON) } {
         let _ = unsafe { EnableWindow(button, state.transient_options.background_color_enabled) };
         // The swatch fills its whole rectangle, so an erase would only flash under it.
         let _ = unsafe { windows::Win32::Graphics::Gdi::InvalidateRect(Some(button), None, false) };
@@ -1064,7 +1086,7 @@ fn edit_shortcut(state: &mut OptionsState, row_index: usize, mouse_column: bool)
 
 fn initialize_association_page(state: &mut OptionsState) {
     let page = state.pages[4];
-    let Ok(tree) = (unsafe { GetDlgItem(Some(page), IDC_ASSOC_TREE) }) else {
+    let Ok(tree) = (unsafe { GetDlgItem(Some(page), IDC_ASSOCIATION_TREE) }) else {
         return;
     };
     // Double buffering keeps an item from erasing before it repaints.
@@ -1342,7 +1364,7 @@ fn refresh_group_check_image(state: &OptionsState, tree: HWND, group_index: usiz
 }
 
 fn set_all_associations(state: &mut OptionsState, checked: bool) {
-    let Ok(tree) = (unsafe { GetDlgItem(Some(state.pages[4]), IDC_ASSOC_TREE) }) else {
+    let Ok(tree) = (unsafe { GetDlgItem(Some(state.pages[4]), IDC_ASSOCIATION_TREE) }) else {
         return;
     };
     for entry in &mut state.extensions {

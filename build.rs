@@ -1,3 +1,5 @@
+//! Build script: blue-noise table, HLSL blobs, resources, and the static codec links.
+
 use std::env;
 use std::path::PathBuf;
 use std::process::Command;

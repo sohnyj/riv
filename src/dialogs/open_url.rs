@@ -2,7 +2,7 @@
 
 use windows::Win32::Foundation::HWND;
 
-use super::text_input::{self, TextInputRequest};
+use crate::dialogs::text_input::{self, TextInputRequest};
 
 pub fn show(window: HWND) -> Option<String> {
     text_input::show(

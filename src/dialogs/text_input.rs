@@ -9,8 +9,8 @@ use windows::Win32::UI::WindowsAndMessaging::{
 };
 use windows::core::PCWSTR;
 
-use super::modal::{DWLP_USER, IDCANCEL, IDOK};
-use super::resource::IDC_TEXT_INPUT;
+use crate::dialogs::modal::{DWLP_USER, IDCANCEL, IDOK};
+use crate::dialogs::resource::IDC_TEXT_INPUT;
 
 /// One edit line with OK/Cancel; the template carries the title and the width.
 pub struct TextInputRequest<'a> {
@@ -37,7 +37,7 @@ pub fn show(window: HWND, request: &TextInputRequest) -> Option<String> {
         selection: request.selection,
         accepted_text: None,
     };
-    let dialog_result = super::modal::run_modal(
+    let dialog_result = crate::dialogs::modal::run_modal(
         window,
         request.template,
         dialog_procedure,
@@ -80,7 +80,8 @@ extern "system" fn dialog_procedure(
             let command = wparam.0 & 0xFFFF;
             match command {
                 IDOK => {
-                    if let Some(state) = super::modal::state_mut::<TextInputState>(dialog) {
+                    if let Some(state) = crate::dialogs::modal::state_mut::<TextInputState>(dialog)
+                    {
                         let mut buffer = [0u16; 2048];
                         let length =
                             unsafe { GetDlgItemTextW(dialog, IDC_TEXT_INPUT, &mut buffer) };

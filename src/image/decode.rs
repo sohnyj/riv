@@ -35,7 +35,7 @@ use windows::Win32::System::Com::StructuredStorage::{
 use windows::Win32::System::Com::{CLSCTX_INPROC_SERVER, CoCreateInstance};
 use windows::core::{HSTRING, Interface, PCWSTR, Result as WindowsResult, w};
 
-use super::color::{
+use crate::image::color::{
     self, SDR_REFERENCE_WHITE_NITS, perceptual_quantizer_code, perceptual_quantizer_nits,
 };
 
@@ -633,13 +633,15 @@ fn decode_input(
             }
         },
         Adapter::Svg => decode_svg(&input.read_all()?, format_name),
-        Adapter::WebPAnimation => {
-            super::fallback::decode_webp_animation(&input.read_all()?, format_name, usize::MAX)
-        }
+        Adapter::WebPAnimation => crate::image::fallback::decode_webp_animation(
+            &input.read_all()?,
+            format_name,
+            usize::MAX,
+        ),
         Adapter::Exr => match input {
-            DecodeInput::File(path) => super::fallback::decode_exr(path, format_name),
+            DecodeInput::File(path) => crate::image::fallback::decode_exr(path, format_name),
             DecodeInput::Memory { data, .. } => {
-                super::fallback::decode_exr_bytes(data, format_name)
+                crate::image::fallback::decode_exr_bytes(data, format_name)
             }
         }
         .and_then(|decoded| enforce_device_limit(decoded, cancellation)),
@@ -649,7 +651,7 @@ fn decode_input(
                 if error.is_cancelled() {
                     Err(error)
                 } else {
-                    super::fallback::decode_heif(&input.read_all()?, format_name)
+                    crate::image::fallback::decode_heif(&input.read_all()?, format_name)
                         .and_then(|decoded| enforce_device_limit(decoded, cancellation))
                 }
             })
@@ -686,11 +688,13 @@ pub fn decode_animation_first_frame(
             cancellation,
         )
         .ok(),
-        Adapter::WebPAnimation => {
-            super::fallback::decode_webp_animation(&input.read_all().ok()?, descriptor.name, 1)
-                .and_then(|decoded| enforce_device_limit(decoded, cancellation))
-                .ok()
-        }
+        Adapter::WebPAnimation => crate::image::fallback::decode_webp_animation(
+            &input.read_all().ok()?,
+            descriptor.name,
+            1,
+        )
+        .and_then(|decoded| enforce_device_limit(decoded, cancellation))
+        .ok(),
         _ => None,
     }
 }
@@ -749,9 +753,9 @@ fn probe_weight(input: &DecodeInput<'_>) -> Option<u64> {
         Adapter::WebPAnimation => probe_webp_weight(input),
         Adapter::Exr => {
             let (width, height) = match input {
-                DecodeInput::File(path) => super::fallback::probe_exr_dimensions(path),
+                DecodeInput::File(path) => crate::image::fallback::probe_exr_dimensions(path),
                 DecodeInput::Memory { data, .. } => {
-                    super::fallback::probe_exr_bytes_dimensions(data)
+                    crate::image::fallback::probe_exr_bytes_dimensions(data)
                 }
             }?;
             Some(decoded_weight(width, height, 8, 1))
@@ -760,7 +764,9 @@ fn probe_weight(input: &DecodeInput<'_>) -> Option<u64> {
             // Mirrors the decode dispatch: WIC first, the bundled decoder on failure.
             probe_wic_weight(input, &descriptor.semantics).or_else(|| {
                 let (width, height, storage) =
-                    super::fallback::probe_heif_dimensions_and_storage(&input.read_all().ok()?)?;
+                    crate::image::fallback::probe_heif_dimensions_and_storage(
+                        &input.read_all().ok()?,
+                    )?;
                 Some(decoded_weight(width, height, storage.bytes_per_pixel(), 1))
             })
         }
@@ -1463,9 +1469,7 @@ fn icc_tone_curve(icc: &[u8], tag: &[u8; 4]) -> Option<[f32; TONE_CURVE_SAMPLES]
 
 /// Nearest gamut label from an ICC's matrix primaries; None for non-matrix profiles.
 pub fn icc_gamut_label(icc: &[u8]) -> Option<&'static str> {
-    Some(crate::image::color::nearest_gamut_label(icc_primaries(
-        icc,
-    )?))
+    Some(color::nearest_gamut_label(icc_primaries(icc)?))
 }
 
 /// Bradford adaptation out of the ICC PCS white (D50) into the D65 named gamuts use.
@@ -1541,20 +1545,20 @@ pub fn icc_profile_description(icc: &[u8]) -> Option<String> {
 
 /// CICP code points; Some for an HDR transfer (16 = PQ, 18 = HLG) with convertible primaries.
 pub(crate) fn cicp_hdr_encoding(primaries: u8, transfer: u8) -> Option<HdrEncoding> {
-    const TRANSFER_PQ: u8 = 16;
-    const TRANSFER_HLG: u8 = 18;
-    const PRIMARIES_BT709: u8 = 1;
-    const PRIMARIES_BT2020: u8 = 9;
-    const PRIMARIES_P3_D65: u8 = 12;
+    const CICP_TRANSFER_PQ: u8 = 16;
+    const CICP_TRANSFER_HLG: u8 = 18;
+    const CICP_PRIMARIES_BT709: u8 = 1;
+    const CICP_PRIMARIES_BT2020: u8 = 9;
+    const CICP_PRIMARIES_P3_D65: u8 = 12;
     let transfer = match transfer {
-        TRANSFER_PQ => HdrTransfer::PerceptualQuantizer,
-        TRANSFER_HLG => HdrTransfer::HybridLogGamma,
+        CICP_TRANSFER_PQ => HdrTransfer::PerceptualQuantizer,
+        CICP_TRANSFER_HLG => HdrTransfer::HybridLogGamma,
         _ => return None,
     };
     let primaries = match primaries {
-        PRIMARIES_BT709 => HdrPrimaries::Bt709,
-        PRIMARIES_BT2020 => HdrPrimaries::Bt2020,
-        PRIMARIES_P3_D65 => HdrPrimaries::DisplayP3,
+        CICP_PRIMARIES_BT709 => HdrPrimaries::Bt709,
+        CICP_PRIMARIES_BT2020 => HdrPrimaries::Bt2020,
+        CICP_PRIMARIES_P3_D65 => HdrPrimaries::DisplayP3,
         _ => return None,
     };
     Some(HdrEncoding {
@@ -3414,7 +3418,7 @@ mod premultiplied_conversion_tests {
     }
 }
 
-/// A huge declared acTL num_frames must not drive the reservation (fixture: SECURITY_AUDIT.md).
+/// A huge declared acTL num_frames must not drive the reservation.
 #[cfg(test)]
 mod apng_tests {
     use super::*;

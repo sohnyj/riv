@@ -13,10 +13,10 @@ use windows::Win32::Storage::FileSystem::FILE_ATTRIBUTE_HIDDEN;
 use windows::Win32::System::Com::{COINIT_MULTITHREADED, CoInitializeEx};
 use windows::Win32::UI::WindowsAndMessaging::WM_APP;
 
-use super::decode::{
+use crate::archive::reader as archive_reader;
+use crate::image::decode::{
     self, DecodeError, DecodedImage, UploadDevice, UploadedTexture, upload_still_texture,
 };
-use crate::archive::reader as archive_reader;
 use crate::network::curl;
 use crate::window::message::post_boxed;
 
@@ -94,12 +94,12 @@ impl ItemLocation {
         }
     }
 
-    /// Full user-facing location text ("archive \u{203a} member" for members).
+    /// Full user-facing location text ("archive › member" for members).
     pub fn display_text(&self) -> String {
         match self {
             Self::File(path) => path.display().to_string(),
             Self::ArchiveMember { archive, member } => {
-                format!("{} \u{203a} {member}", archive.display())
+                format!("{} › {member}", archive.display())
             }
             Self::Url(url) => url.clone(),
         }
@@ -851,7 +851,7 @@ impl ImageCore {
     }
 
     fn load_item(&mut self, location: &ItemLocation) -> bool {
-        // Another item becoming the anchor spends the place the last one left.
+        // Another item becoming the anchor drops the place the last one left.
         let same_anchor = self.navigation_anchor() == Some(location);
         if !same_anchor {
             self.missing_anchor = None;
@@ -1230,7 +1230,7 @@ impl ImageCore {
                 ),
             );
             if is_pending {
-                // Waited on: show it and go buy the full decode it stands in for.
+                // Waited on: show it, then go get the full decode it stands in for.
                 return self.load_item(&completion.location);
             }
             self.evict_cache();
@@ -2273,7 +2273,7 @@ mod item_location_tests {
     fn member_display_text_joins_archive_and_member() {
         assert_eq!(
             member("C:\\a.cbz", "art/01.png").display_text(),
-            "C:\\a.cbz \u{203a} art/01.png"
+            "C:\\a.cbz › art/01.png"
         );
     }
 

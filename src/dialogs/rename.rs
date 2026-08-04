@@ -2,7 +2,7 @@
 
 use windows::Win32::Foundation::HWND;
 
-use super::text_input::{self, TextInputRequest};
+use crate::dialogs::text_input::{self, TextInputRequest};
 
 pub fn show(window: HWND, current_name: &str) -> Option<String> {
     let stem_length = current_name.rfind('.').filter(|dot| *dot > 0).map_or_else(

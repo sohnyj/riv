@@ -1,6 +1,6 @@
 //! Animation frame scheduler state; the window drives the timer.
 
-use super::decode::DecodedImage;
+use crate::image::decode::DecodedImage;
 
 const SPEED_MINIMUM_PERCENT: u32 = 50;
 const SPEED_MAXIMUM_PERCENT: u32 = 300;

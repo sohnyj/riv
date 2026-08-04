@@ -7,7 +7,7 @@ use windows::Win32::UI::Controls::{
 };
 use windows::core::PCWSTR;
 
-use super::modal::IDOK;
+use crate::dialogs::modal::IDOK;
 
 /// One-message task dialog titled after the action; the headline leads the message.
 pub fn show_message(owner: Option<HWND>, title: &str, headline: &str, detail: &str, button: &str) {

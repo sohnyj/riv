@@ -1,3 +1,5 @@
+//! Message pump, application state, and the single action dispatcher.
+
 #![windows_subsystem = "windows"]
 
 mod actions;
@@ -1495,7 +1497,7 @@ fn dispatch_action(application: &mut Application, window: HWND, action: Action) 
             application.show_status_text(window, text.to_string());
             application.request_render(window);
         }
-        Action::FitMode => {
+        Action::ToggleFitMode => {
             application.settings.options.fit_mode ^= 1;
             let axis = if application.settings.options.fit_mode == 1 {
                 "Height"
@@ -1535,7 +1537,7 @@ fn dispatch_action(application: &mut Application, window: HWND, action: Action) 
             application.show_status_text(window, format!("Loop within folder: {state}"));
             application.commit_options(window);
         }
-        Action::Slideshow => application.toggle_slideshow(window),
+        Action::ToggleSlideshow => application.toggle_slideshow(window),
         Action::Recent(index) => {
             let path = application
                 .settings
@@ -1562,10 +1564,10 @@ fn dispatch_action(application: &mut Application, window: HWND, action: Action) 
             let image = application.image_size();
             application.view_transform.rotate(step, viewport, image);
             let text = match application.view_transform.rotation_quadrant {
-                1 => "Rotate: R90\u{b0}",
-                2 => "Rotate: 180\u{b0}",
-                3 => "Rotate: L90\u{b0}",
-                _ => "Rotate: 0\u{b0}",
+                1 => "Rotate: R90°",
+                2 => "Rotate: 180°",
+                3 => "Rotate: L90°",
+                _ => "Rotate: 0°",
             };
             application.show_status_text(window, text.to_string());
             application.request_render(window);
@@ -1637,19 +1639,19 @@ fn dispatch_action(application: &mut Application, window: HWND, action: Action) 
             }
         }
         Action::PasteUrl => paste_open_url(application, window),
-        Action::OpenContainingFolder => {
+        Action::ShowInExplorer => {
             // The ContainingFile gate keeps URL items out of here.
             if let Some(file) = application.image_core.current_containing_file() {
                 file_ops::show_in_explorer(file);
             }
         }
-        Action::Delete | Action::DeletePermanent => {
-            delete_current_file(application, window, action == Action::DeletePermanent);
+        Action::Delete | Action::DeletePermanently => {
+            delete_current_file(application, window, action == Action::DeletePermanently);
         }
         Action::Rename => {
             rename_current_file(application, window);
         }
-        Action::OpenWithOther => {
+        Action::OtherApplication => {
             if let Some(path) = application.image_core.current_file() {
                 let path = path.to_path_buf();
                 open_with::show_open_with_dialog(window, &path);
@@ -1688,7 +1690,7 @@ fn dispatch_action(application: &mut Application, window: HWND, action: Action) 
                 application.request_render(window);
             }
         }
-        Action::Options => {
+        Action::Settings => {
             dialogs::options::show(window, &application.settings);
         }
     }
@@ -2129,7 +2131,7 @@ fn wait_for_frame_slot(slot_handle: HANDLE) -> bool {
     let result = unsafe {
         MsgWaitForMultipleObjectsEx(
             Some(&[slot_handle]),
-            renderer::FRAME_SLOT_TIMEOUT_MS,
+            renderer::FRAME_SLOT_TIMEOUT_MILLISECONDS,
             QUEUE_STATUS_FLAGS(QS_ALLINPUT.0 & !QS_PAINT.0),
             MWMO_INPUTAVAILABLE,
         )

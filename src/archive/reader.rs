@@ -5,7 +5,7 @@ use std::path::Path;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
-use super::libarchive::{
+use crate::archive::libarchive::{
     self, ARCHIVE_EOF, ARCHIVE_OK, Api, Archive, ArchiveEntry, FILETYPE_MASK, FILETYPE_REGULAR,
 };
 
@@ -24,8 +24,8 @@ const OPEN_BLOCK_BYTES: usize = 128 * 1024;
 /// Extraction chunk; cancellation is checked between chunks.
 const READ_BLOCK_BYTES: usize = 256 * 1024;
 
-/// Initial reservation cap; the declared size is attacker controlled (SECURITY_AUDIT.md).
-const MEMBER_RESERVATION_CEILING_BYTES: u64 = 16 << 20;
+/// Initial reservation cap; the declared size is attacker controlled.
+const MAXIMUM_MEMBER_RESERVATION_BYTES: u64 = 16 << 20;
 
 pub fn format_groups() -> impl Iterator<Item = (&'static str, &'static [&'static str])> {
     FORMAT_GROUPS.iter().copied()
@@ -199,7 +199,7 @@ impl Reader<'_> {
         let mut data = Vec::with_capacity(
             declared_size
                 .unwrap_or(0)
-                .min(MEMBER_RESERVATION_CEILING_BYTES) as usize,
+                .min(MAXIMUM_MEMBER_RESERVATION_BYTES) as usize,
         );
         let mut block = vec![0u8; READ_BLOCK_BYTES];
         loop {
@@ -259,7 +259,7 @@ mod extension_tests {
             assert!(is_archive_extension(extension), "{extension}");
         }
         assert!(!is_archive_extension("png"));
-        assert!(!is_archive_extension("gz")); // compressed tar is out of scope (Q1)
+        assert!(!is_archive_extension("gz")); // compressed tar is out of scope
     }
 }
 
@@ -321,7 +321,7 @@ mod fixture_tests {
     }
 }
 
-/// A crafted PAX mtime overflowing SystemTime must clamp, not panic (SECURITY_AUDIT.md).
+/// A crafted PAX mtime overflowing SystemTime must clamp, not panic.
 #[cfg(test)]
 mod mtime_tests {
     use super::*;
@@ -335,7 +335,7 @@ mod mtime_tests {
         assert_eq!(members[0].modified, UNIX_EPOCH); // clamped fallback, no panic
     }
 
-    // libarchive returns the declared size verbatim; the cap must hold (SECURITY_AUDIT.md).
+    // libarchive returns the declared size verbatim; the cap must hold.
     #[test]
     #[ignore = "needs archiveint.dll and test/fixture_zip_declared_1gib.zip"]
     fn a_member_declaring_a_huge_size_is_handled_gracefully() {

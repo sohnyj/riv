@@ -6,7 +6,7 @@ use windows::Win32::UI::WindowsAndMessaging::{
     DialogBoxParamW, GetWindowLongPtrW, WINDOW_LONG_PTR_INDEX,
 };
 
-use super::resource;
+use crate::dialogs::resource;
 
 pub const IDOK: usize = 1;
 pub const IDCANCEL: usize = 2;

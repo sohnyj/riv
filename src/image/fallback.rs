@@ -3,7 +3,7 @@
 use std::ffi::{CStr, c_char, c_int, c_void};
 use std::path::Path;
 
-use super::decode::{
+use crate::image::decode::{
     DecodeError, DecodedImage, Frame, HdrEncoding, PixelStorage, animation_budget_exceeded,
     blend_over, cicp_hdr_encoding, clear_rectangle, copy_rectangle, linearize_hdr_pixels,
     peak_luminance_from_half_pixels, peak_luminance_with_maximum_bits,
@@ -824,7 +824,7 @@ mod premultiply_tests {
     }
 }
 
-/// A crafted near-SIZE_MAX scanline offset must error, not read out of bounds (SECURITY_AUDIT.md).
+/// A crafted near-SIZE_MAX scanline offset must error, not read out of bounds.
 #[cfg(test)]
 mod exr_robustness_tests {
     use super::*;

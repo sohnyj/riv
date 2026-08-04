@@ -30,7 +30,7 @@ use crate::dialogs::resource::{
     IDC_CAPTURE_MOUSE_FIELD, IDD_CAPTURE_KEYBOARD, IDD_CAPTURE_MOUSE,
 };
 
-use super::modal::{DWLP_USER, IDCANCEL, IDOK, state_mut};
+use crate::dialogs::modal::{DWLP_USER, IDCANCEL, IDOK, state_mut};
 
 const WM_RIV_KEY_CAPTURED: u32 = WM_APP + 0x40;
 const WM_RIV_MOUSE_CAPTURED: u32 = WM_APP + 0x41;
@@ -562,9 +562,9 @@ unsafe extern "system" fn key_field_procedure(
             if focused {
                 let prefix = bindings::modifier_prefix(current_modifiers());
                 if prefix.is_empty() {
-                    paint_field(field, "Press a key combination\u{2026}", true);
+                    paint_field(field, "Press a key combination…", true);
                 } else {
-                    paint_field(field, &format!("{prefix}\u{2026}"), false);
+                    paint_field(field, &format!("{prefix}…"), false);
                 }
             } else {
                 paint_field(field, "Click here to capture", true);

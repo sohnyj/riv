@@ -1,6 +1,6 @@
 //! The format list the settings tree and the open dialog both read.
 
-use super::decode;
+use crate::image::decode;
 
 /// Format groups the association tree and the open dialog both list, in one shared order.
 pub fn sorted_format_groups(

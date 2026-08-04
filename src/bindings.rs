@@ -104,8 +104,8 @@ const DEFAULT_KEYBOARD: &[(&str, &[&str])] = &[
     ("playlist", &["E"]),
     ("loop", &["L"]),
     ("firstfile", &["Home"]),
-    ("previous", &["Left"]),
-    ("next", &["Right"]),
+    ("previousfile", &["Left"]),
+    ("nextfile", &["Right"]),
     ("lastfile", &["End"]),
     ("pause", &["spacebar"]),
     ("previousframe", &["B"]),
@@ -140,8 +140,8 @@ const DEFAULT_KEYBOARD: &[(&str, &[&str])] = &[
 ];
 
 const DEFAULT_MOUSE: &[(&str, &[&str])] = &[
-    ("previous", &["WheelUp"]),
-    ("next", &["WheelDown"]),
+    ("previousfile", &["WheelUp"]),
+    ("nextfile", &["WheelDown"]),
     ("zoomin", &["Ctrl+WheelUp"]),
     ("zoomout", &["Ctrl+WheelDown"]),
     ("togglezoom", &["Double-click"]),
@@ -491,12 +491,12 @@ mod normalization_tests {
     #[test]
     fn resolved_bindings_round_trip_and_discard_junk() {
         let overrides = serde_json::json!({
-            "next": ["Right", "Ctrl+Ctrl+X", "A".repeat(300)],
+            "nextfile": ["Right", "Ctrl+Ctrl+X", "A".repeat(300)],
             "fullscreen": ["WheelButton", "Nope"],
         });
         let map = overrides.as_object().expect("object");
         assert_eq!(
-            resolved_keyboard_sequences(Some(map), "next"),
+            resolved_keyboard_sequences(Some(map), "nextfile"),
             ["Right", "Ctrl+X"]
         );
         assert_eq!(

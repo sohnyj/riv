@@ -200,7 +200,7 @@ fn ensure_application_registration() {
 }
 
 fn add_extension_association(extension: &str) {
-    // Record first so residue never exists without a record.
+    // Record first so a leftover never exists without a record.
     registry_set_string(FILE_ASSOCIATIONS_KEY, Some(extension), PROGID);
     registry_set_string(
         &format!("Software\\Classes\\{extension}\\OpenWithProgids"),
@@ -210,13 +210,13 @@ fn add_extension_association(extension: &str) {
 }
 
 fn remove_extension_association(extension: &str) {
-    // Record last so a crash leaves the record pointing at the leftover residue.
-    remove_extension_residue(extension);
+    // Record last so a crash leaves the record pointing at the leftovers.
+    remove_extension_leftovers(extension);
     registry_delete_value(FILE_ASSOCIATIONS_KEY, extension);
 }
 
 /// Removes every ProgID trace for one extension, including a UserChoice default pointing at riv.
-fn remove_extension_residue(extension: &str) {
+fn remove_extension_leftovers(extension: &str) {
     let open_with_progids = format!("Software\\Classes\\{extension}\\OpenWithProgids");
     registry_delete_value(&open_with_progids, PROGID);
     if registry_key_is_empty(&open_with_progids) {
@@ -226,10 +226,10 @@ fn remove_extension_residue(extension: &str) {
     if registry_key_is_empty(&extension_key) {
         registry_delete_tree(&extension_key);
     }
-    remove_explorer_residue(extension);
+    remove_explorer_leftovers(extension);
 }
 
-fn remove_explorer_residue(extension: &str) {
+fn remove_explorer_leftovers(extension: &str) {
     let explorer_extension_key = format!("{EXPLORER_FILE_EXTS_KEY}\\{extension}");
     registry_delete_value(
         &format!("{explorer_extension_key}\\OpenWithProgids"),
@@ -243,12 +243,12 @@ fn remove_explorer_residue(extension: &str) {
 
 fn reclaim_all_registration() {
     for extension in registered_extensions() {
-        remove_extension_residue(&extension);
+        remove_extension_leftovers(&extension);
     }
     // Explorer writes FileExts entries on its own.
     for name in registry_subkeys(EXPLORER_FILE_EXTS_KEY) {
         if name.starts_with('.') {
-            remove_explorer_residue(&name);
+            remove_explorer_leftovers(&name);
         }
     }
     registry_delete_value(REGISTERED_APPLICATIONS_KEY, "riv");

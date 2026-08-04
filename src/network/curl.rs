@@ -144,20 +144,20 @@ pub fn download(
     let mut block = vec![0u8; READ_BLOCK_BYTES];
     loop {
         if cancellation.load(Ordering::Relaxed) {
-            return Err(abort(child, NetworkError::cancelled()));
+            return Err(kill_child(child, NetworkError::cancelled()));
         }
         let read_bytes = match stdout.read(&mut block) {
             Ok(0) => break,
             Ok(read_bytes) => read_bytes,
             Err(error) => {
-                return Err(abort(
+                return Err(kill_child(
                     child,
                     NetworkError::new(format!("Download read failed: {error}")),
                 ));
             }
         };
         if data.len() as u64 + read_bytes as u64 > MAXIMUM_DOWNLOAD_BYTES {
-            return Err(abort(
+            return Err(kill_child(
                 child,
                 NetworkError::new("Download exceeds the 1 GiB limit"),
             ));
@@ -189,7 +189,7 @@ pub fn download(
     Ok(data)
 }
 
-fn abort(mut child: Child, error: NetworkError) -> NetworkError {
+fn kill_child(mut child: Child, error: NetworkError) -> NetworkError {
     let _ = child.kill();
     let _ = child.wait();
     error

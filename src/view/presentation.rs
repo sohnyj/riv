@@ -68,14 +68,14 @@ impl Drop for CompositionPresenter {
 
 /// The factory entry point, resolved at run time: wine's dcomp.dll lacks the export.
 fn create_presentation_factory(d3d_device: &ID3D11Device) -> Option<IPresentationFactory> {
-    type CreatePresentationFactoryFn = unsafe extern "system" fn(
+    type CreatePresentationFactoryFunction = unsafe extern "system" fn(
         *mut core::ffi::c_void,
         *const GUID,
         *mut *mut core::ffi::c_void,
     ) -> HRESULT;
     let module = unsafe { LoadLibraryW(w!("dcomp.dll")) }.ok()?;
     let address = unsafe { GetProcAddress(module, s!("CreatePresentationFactory")) }?;
-    let create: CreatePresentationFactoryFn = unsafe { std::mem::transmute(address) };
+    let create: CreatePresentationFactoryFunction = unsafe { std::mem::transmute(address) };
     let mut pointer: *mut core::ffi::c_void = core::ptr::null_mut();
     unsafe {
         create(
