@@ -8,16 +8,17 @@
 #include <cstdio>
 #include <cstring>
 #include <exception>
+#include <limits>
 #include <stdexcept>
 #include <thread>
 
 namespace {
 
-// OpenEXR opens ANSI paths only; supply a _wfopen-backed stream for Unicode.
+// OpenEXR opens ANSI paths only; supply a wide-path stream for Unicode.
 class WideFileStream : public Imf::IStream {
 public:
     explicit WideFileStream(const wchar_t* path)
-        : Imf::IStream("riv-exr"), file_(_wfopen(path, L"rb")) {}
+        : Imf::IStream("riv-exr"), file_(open_wide(path)) {}
     WideFileStream(const WideFileStream&) = delete;
     WideFileStream& operator=(const WideFileStream&) = delete;
     ~WideFileStream() override {
@@ -42,6 +43,11 @@ public:
     }
 
 private:
+    static std::FILE* open_wide(const wchar_t* path) {
+        std::FILE* file = nullptr;
+        return _wfopen_s(&file, path, L"rb") == 0 ? file : nullptr;
+    }
+
     std::FILE* file_;
 };
 
@@ -78,26 +84,24 @@ void write_error(char* error_message, size_t error_capacity, const char* text) {
     }
 }
 
-// Size of the data window with the sanity bound both entry points share.
-bool data_window_size(const Imath::Box2i& data_window, long long* out_width,
-                      long long* out_height) {
-    *out_width = static_cast<long long>(data_window.max.x) - data_window.min.x + 1;
-    *out_height = static_cast<long long>(data_window.max.y) - data_window.min.y + 1;
-    return *out_width > 0 && *out_height > 0 && *out_width * *out_height <= (1LL << 30);
+// Size of the data window; the caller owns the size policy, this only has to fit an int.
+bool data_window_size(const Imath::Box2i& data_window, int* out_width, int* out_height) {
+    const long long width = static_cast<long long>(data_window.max.x) - data_window.min.x + 1;
+    const long long height = static_cast<long long>(data_window.max.y) - data_window.min.y + 1;
+    const long long limit = std::numeric_limits<int>::max();
+    if (width <= 0 || height <= 0 || width > limit || height > limit) {
+        return false;
+    }
+    *out_width = static_cast<int>(width);
+    *out_height = static_cast<int>(height);
+    return true;
 }
 
 // Reads only the header; the caller computes the decode weight from the size.
 int probe_stream(Imf::IStream& stream, int* out_width, int* out_height) {
     try {
         Imf::RgbaInputFile file(stream);
-        long long width = 0;
-        long long height = 0;
-        if (!data_window_size(file.dataWindow(), &width, &height)) {
-            return 1;
-        }
-        *out_width = static_cast<int>(width);
-        *out_height = static_cast<int>(height);
-        return 0;
+        return data_window_size(file.dataWindow(), out_width, out_height) ? 0 : 1;
     } catch (...) {
         return 1;
     }
@@ -108,24 +112,25 @@ int decode_stream_into(Imf::IStream& stream, unsigned short* out_pixels, size_t 
                        int* out_width, int* out_height, char* error_message,
                        size_t error_capacity) {
     try {
-        static const int thread_count = [] {
+        // Library-wide setting, so the first decode fixes it for the process.
+        [[maybe_unused]] static const bool threads_ready = [] {
             const unsigned int hardware = std::thread::hardware_concurrency();
-            return hardware > 0 ? static_cast<int>(hardware) : 2;
+            Imf::setGlobalThreadCount(hardware > 0 ? static_cast<int>(hardware) : 2);
+            return true;
         }();
-        Imf::setGlobalThreadCount(thread_count);
 
         Imf::RgbaInputFile file(stream);
         const Imath::Box2i data_window = file.dataWindow();
-        long long width = 0;
-        long long height = 0;
+        int width = 0;
+        int height = 0;
         if (!data_window_size(data_window, &width, &height)) {
             write_error(error_message, error_capacity, "invalid data window");
             return 1;
         }
-        *out_width = static_cast<int>(width);
-        *out_height = static_cast<int>(height);
+        *out_width = width;
+        *out_height = height;
         // The caller sized the buffer from a probe; a file that grew since then stops here.
-        if (static_cast<size_t>(width * height) > capacity_pixels) {
+        if (static_cast<size_t>(width) * static_cast<size_t>(height) > capacity_pixels) {
             write_error(error_message, error_capacity, "pixel buffer too small");
             return 1;
         }

@@ -296,6 +296,9 @@ pub fn decode_exr_bytes(
     )
 }
 
+/// Size policy for EXR: past this the decode is refused instead of reserving for it.
+const MAXIMUM_EXR_PIXELS: usize = 1 << 30;
+
 /// The probe sizes the buffer the shim decodes into, so no pixels are copied across the boundary.
 fn decode_exr_with(
     format_name: &'static str,
@@ -306,6 +309,9 @@ fn decode_exr_with(
         return Err(uncoded_error("EXR header is unreadable"));
     };
     let pixel_count = probed_width as usize * probed_height as usize;
+    if pixel_count > MAXIMUM_EXR_PIXELS {
+        return Err(uncoded_error("EXR has too many pixels to decode"));
+    }
     // Fallible reservation: vec! aborts on OOM; a huge EXR should error, not crash.
     let mut pixels: Vec<u8> = Vec::new();
     if pixels.try_reserve_exact(pixel_count * 8).is_err() {
