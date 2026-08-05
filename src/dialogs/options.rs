@@ -105,6 +105,10 @@ struct OptionsState {
 impl OptionsState {
     // Sorted so comparisons with saved_associations ignore presentation order.
     fn desired_associations(&self) -> Vec<String> {
+        // An unbuilt page holds no extensions, which is not the same as none checked.
+        if self.extensions.is_empty() {
+            return self.saved_associations.clone();
+        }
         let mut result: Vec<String> = self
             .extensions
             .iter()
@@ -211,7 +215,7 @@ unsafe extern "system" fn frame_procedure(
             {
                 let selected =
                     unsafe { SendMessageW(header.hwndFrom, TCM_GETCURSEL, None, None).0 };
-                show_page(state, selected);
+                select_page(state, header.hwndFrom, selected);
             }
             0
         }
@@ -273,18 +277,7 @@ fn initialize_frame(state: &mut OptionsState) {
     let Ok(tab) = (unsafe { GetDlgItem(Some(dialog), IDC_OPTIONS_TAB) }) else {
         return;
     };
-    for (index, title) in [
-        "Window",
-        "Image",
-        "Miscellaneous",
-        "Shortcuts",
-        "File association",
-        "Start menu",
-        "About",
-    ]
-    .iter()
-    .enumerate()
-    {
+    for (index, (_, title)) in PAGES.iter().enumerate() {
         let text = wide(title);
         let item = TCITEMW {
             mask: TCIF_TEXT,
@@ -315,78 +308,108 @@ fn initialize_frame(state: &mut OptionsState) {
         }
     }
 
-    let mut display_area = RECT::default();
-    let _ = unsafe { GetWindowRect(tab, &raw mut display_area) };
+    select_page(state, tab, 0);
+    update_buttons(state);
+}
+
+/// Where a page sits inside the tab, in the frame's coordinates.
+fn page_area(dialog: HWND, tab: HWND) -> RECT {
+    let mut area = RECT::default();
+    let _ = unsafe { GetWindowRect(tab, &raw mut area) };
     unsafe {
         SendMessageW(
             tab,
             TCM_ADJUSTRECT,
             Some(WPARAM(0)),
-            Some(LPARAM(&raw mut display_area as isize)),
+            Some(LPARAM(&raw mut area as isize)),
         )
     };
     let mut corners = [
         POINT {
-            x: display_area.left,
-            y: display_area.top,
+            x: area.left,
+            y: area.top,
         },
         POINT {
-            x: display_area.right,
-            y: display_area.bottom,
+            x: area.right,
+            y: area.bottom,
         },
     ];
     unsafe { windows::Win32::Graphics::Gdi::MapWindowPoints(None, Some(dialog), &mut corners) };
+    RECT {
+        left: corners[0].x,
+        top: corners[0].y,
+        right: corners[1].x,
+        bottom: corners[1].y,
+    }
+}
 
+/// Builds the page behind a tab if it is not there yet, then shows it.
+fn select_page(state: &mut OptionsState, tab: HWND, selected: isize) {
+    if let Ok(index) = usize::try_from(selected)
+        && index < PAGES.len()
+    {
+        ensure_page(state, tab, index);
+    }
+    show_page(state, selected);
+}
+
+const PAGES: [(u16, &str); 7] = [
+    (IDD_PAGE_WINDOW, "Window"),
+    (IDD_PAGE_IMAGE, "Image"),
+    (IDD_PAGE_MISC, "Miscellaneous"),
+    (IDD_PAGE_SHORTCUTS, "Shortcuts"),
+    (IDD_PAGE_ASSOCIATION, "File association"),
+    (IDD_PAGE_STARTMENU, "Start menu"),
+    (IDD_PAGE_ABOUT, "About"),
+];
+
+/// Builds a page the first time its tab is chosen.
+fn ensure_page(state: &mut OptionsState, tab: HWND, index: usize) {
+    if !state.pages[index].is_invalid() {
+        return;
+    }
     let instance = unsafe { GetModuleHandleW(None) }.unwrap_or_default();
     let state_pointer = state as *mut OptionsState as isize;
-    for (index, template) in [
-        IDD_PAGE_WINDOW,
-        IDD_PAGE_IMAGE,
-        IDD_PAGE_MISC,
-        IDD_PAGE_SHORTCUTS,
-        IDD_PAGE_ASSOCIATION,
-        IDD_PAGE_STARTMENU,
-        IDD_PAGE_ABOUT,
-    ]
-    .iter()
-    .enumerate()
-    {
-        let page = unsafe {
-            CreateDialogParamW(
-                Some(instance.into()),
-                super::resource::template_name(*template),
-                Some(dialog),
-                Some(page_procedure),
-                LPARAM(state_pointer),
-            )
-        }
-        .unwrap_or_default();
-        let _ = unsafe {
-            SetWindowPos(
-                page,
-                Some(tab),
-                corners[0].x,
-                corners[0].y,
-                corners[1].x - corners[0].x,
-                corners[1].y - corners[0].y,
-                windows::Win32::UI::WindowsAndMessaging::SET_WINDOW_POS_FLAGS(0),
-            )
-        };
-        state.pages[index] = page;
+    let page = unsafe {
+        CreateDialogParamW(
+            Some(instance.into()),
+            super::resource::template_name(PAGES[index].0),
+            Some(state.dialog),
+            Some(page_procedure),
+            LPARAM(state_pointer),
+        )
     }
-
-    fit_page_controls(state.pages[3], IDC_SHORTCUTS_LIST, IDC_SHORTCUTS_CLEAR_ALL);
-    fit_page_controls(state.pages[4], IDC_ASSOC_TREE, IDC_ASSOC_SELECT_NONE);
-
-    initialize_image_page(state);
-    initialize_window_page(state);
-    initialize_miscellaneous_page(state);
-    initialize_shortcuts_page(state);
-    initialize_association_page(state);
-    state.about_fonts = about::initialize_page(state.pages[6]);
-    sync_all_pages(state);
-    update_buttons(state);
-    show_page(state, 0);
+    .unwrap_or_default();
+    let area = page_area(state.dialog, tab);
+    let _ = unsafe {
+        SetWindowPos(
+            page,
+            Some(tab),
+            area.left,
+            area.top,
+            area.right - area.left,
+            area.bottom - area.top,
+            windows::Win32::UI::WindowsAndMessaging::SET_WINDOW_POS_FLAGS(0),
+        )
+    };
+    state.pages[index] = page;
+    match index {
+        0 => initialize_window_page(state),
+        1 => initialize_image_page(state),
+        2 => initialize_miscellaneous_page(state),
+        3 => {
+            fit_page_controls(page, IDC_SHORTCUTS_LIST, IDC_SHORTCUTS_CLEAR_ALL);
+            initialize_shortcuts_page(state);
+        }
+        4 => {
+            fit_page_controls(page, IDC_ASSOC_TREE, IDC_ASSOC_SELECT_NONE);
+            initialize_association_page(state);
+        }
+        5 => {}
+        6 => state.about_fonts = about::initialize_page(page),
+        _ => {}
+    }
+    sync_page(state, index);
 }
 
 /// The selected page goes up before the others go down, so the bare tab never shows.
@@ -735,7 +758,32 @@ fn initialize_miscellaneous_page(state: &OptionsState) {
 
 fn sync_all_pages(state: &mut OptionsState) {
     state.syncing = true;
-    let options = state.transient_options.clone();
+    sync_window_page(state);
+    sync_image_page(state);
+    sync_miscellaneous_page(state);
+    sync_start_menu_page(state);
+    state.syncing = false;
+    refresh_shortcut_rows(state);
+}
+
+/// Writes the transient state into one page, for a page that has just been built.
+fn sync_page(state: &mut OptionsState, index: usize) {
+    state.syncing = true;
+    match index {
+        0 => sync_window_page(state),
+        1 => sync_image_page(state),
+        2 => sync_miscellaneous_page(state),
+        5 => sync_start_menu_page(state),
+        _ => {}
+    }
+    state.syncing = false;
+    if index == 3 {
+        refresh_shortcut_rows(state);
+    }
+}
+
+fn sync_window_page(state: &OptionsState) {
+    let options = &state.transient_options;
     let window_page = state.pages[0];
     set_check(
         window_page,
@@ -763,7 +811,10 @@ fn sync_all_pages(state: &mut OptionsState) {
         options.hide_cursor_fullscreen,
     );
     sync_background_color_button(state, window_page);
+}
 
+fn sync_image_page(state: &OptionsState) {
+    let options = &state.transient_options;
     let image_page = state.pages[1];
     combo_select(image_page, IDC_IMAGE_SCALING, options.scaling_filter);
     combo_select(image_page, IDC_IMAGE_DITHER, options.dither_mode);
@@ -780,7 +831,10 @@ fn sync_all_pages(state: &mut OptionsState) {
         IDC_IMAGE_FRACTIONAL_WHEEL_ZOOM,
         options.fractional_wheel_zoom,
     );
+}
 
+fn sync_miscellaneous_page(state: &OptionsState) {
+    let options = &state.transient_options;
     let miscellaneous_page = state.pages[2];
     combo_select(miscellaneous_page, IDC_MISC_SORT, options.sort_files_by);
     let _ = unsafe {
@@ -831,20 +885,21 @@ fn sync_all_pages(state: &mut OptionsState) {
         IDC_MISC_SKIP_HIDDEN,
         options.skip_hidden,
     );
+}
+
+fn sync_start_menu_page(state: &OptionsState) {
     set_check(
         state.pages[5],
         IDC_STARTMENU_SHORTCUT,
         state.start_menu_desired,
     );
-
-    state.syncing = false;
-    refresh_shortcut_rows(state);
 }
 
 fn sync_background_color_button(state: &OptionsState, page: HWND) {
     if let Ok(button) = unsafe { GetDlgItem(Some(page), IDC_WINDOW_BGCOLOR_BUTTON) } {
         let _ = unsafe { EnableWindow(button, state.transient_options.background_color_enabled) };
-        let _ = unsafe { windows::Win32::Graphics::Gdi::InvalidateRect(Some(button), None, true) };
+        // The swatch fills its whole rectangle, so an erase would only flash under it.
+        let _ = unsafe { windows::Win32::Graphics::Gdi::InvalidateRect(Some(button), None, false) };
     }
 }
 

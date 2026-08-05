@@ -14,12 +14,13 @@ use windows::Win32::UI::Input::KeyboardAndMouse::{
 };
 use windows::Win32::UI::WindowsAndMessaging::{
     CS_DBLCLKS, CallWindowProcW, DLGC_WANTALLKEYS, DefWindowProcW, EndDialog, GWLP_USERDATA,
-    GWLP_WNDPROC, GetClientRect, GetDlgItem, GetParent, GetWindowLongPtrW, LB_GETCOUNT,
-    LB_GETITEMHEIGHT, LB_GETTOPINDEX, RegisterClassExW, SendMessageW, SetWindowLongPtrW,
-    SetWindowTextW, WM_APP, WM_COMMAND, WM_DRAWITEM, WM_ERASEBKGND, WM_GETDLGCODE, WM_INITDIALOG,
-    WM_KEYDOWN, WM_KEYUP, WM_KILLFOCUS, WM_LBUTTONDBLCLK, WM_LBUTTONDOWN, WM_MBUTTONDBLCLK,
-    WM_MBUTTONDOWN, WM_MOUSEWHEEL, WM_PAINT, WM_SETFOCUS, WM_SETFONT, WM_SYSKEYDOWN, WM_SYSKEYUP,
-    WM_XBUTTONDBLCLK, WM_XBUTTONDOWN, WNDCLASSEXW, WNDPROC,
+    GWLP_WNDPROC, GetClientRect, GetDlgItem, GetParent, GetWindowLongPtrW, LB_ADDSTRING,
+    LB_DELETESTRING, LB_GETCOUNT, LB_GETCURSEL, LB_GETITEMHEIGHT, LB_GETITEMRECT, LB_GETTEXT,
+    LB_GETTEXTLEN, LB_GETTOPINDEX, LB_RESETCONTENT, RegisterClassExW, SendMessageW,
+    SetWindowLongPtrW, SetWindowTextW, WM_APP, WM_COMMAND, WM_DRAWITEM, WM_ERASEBKGND,
+    WM_GETDLGCODE, WM_INITDIALOG, WM_KEYDOWN, WM_KEYUP, WM_KILLFOCUS, WM_LBUTTONDBLCLK,
+    WM_LBUTTONDOWN, WM_MBUTTONDBLCLK, WM_MBUTTONDOWN, WM_MOUSEWHEEL, WM_PAINT, WM_SETFOCUS,
+    WM_SETFONT, WM_SYSKEYDOWN, WM_SYSKEYUP, WM_XBUTTONDBLCLK, WM_XBUTTONDOWN, WNDCLASSEXW, WNDPROC,
 };
 use windows::core::{PCWSTR, w};
 
@@ -274,8 +275,6 @@ fn remove_icon_bounds(item: &RECT) -> RECT {
 
 /// Reads a list item into a buffer sized from LB_GETTEXTLEN (LB_GETTEXT has no bound).
 fn listbox_item_text(listbox: HWND, item_index: u32) -> Vec<u16> {
-    const LB_GETTEXTLEN: u32 = 0x018A;
-    const LB_GETTEXT: u32 = 0x0189;
     let length = unsafe {
         SendMessageW(
             listbox,
@@ -371,8 +370,7 @@ fn erase_below_last_item(listbox: HWND, device: HDC) {
     let count = unsafe { SendMessageW(listbox, LB_GETCOUNT, None, None) }.0;
     let top = unsafe { SendMessageW(listbox, LB_GETTOPINDEX, None, None) }.0;
     let height = unsafe { SendMessageW(listbox, LB_GETITEMHEIGHT, None, None) }.0;
-    let drawn = ((count - top).max(0) * height) as i32;
-    client.top = drawn.min(client.bottom);
+    client.top = ((count - top).max(0) * height) as i32;
     if client.top < client.bottom {
         unsafe { FillRect(device, &raw const client, GetSysColorBrush(COLOR_WINDOW)) };
     }
@@ -393,8 +391,6 @@ unsafe extern "system" fn key_list_procedure(
         return LRESULT(1);
     }
     if message == WM_LBUTTONDOWN {
-        const LB_GETCURSEL: u32 = 0x0188;
-        const LB_GETITEMRECT: u32 = 0x0198;
         let x = (lparam.0 & 0xFFFF) as i16 as i32;
         let y = ((lparam.0 >> 16) & 0xFFFF) as i16 as i32;
         let selected = unsafe { SendMessageW(listbox, LB_GETCURSEL, None, None) }.0;
@@ -428,7 +424,6 @@ unsafe extern "system" fn key_list_procedure(
 }
 
 fn listbox_add(dialog: HWND, text: &str) {
-    const LB_ADDSTRING: u32 = 0x0180;
     if let Ok(listbox) = unsafe { GetDlgItem(Some(dialog), IDC_CAPTURE_KEY_LIST) } {
         let wide = crate::text::wide(text);
         unsafe {
@@ -443,14 +438,12 @@ fn listbox_add(dialog: HWND, text: &str) {
 }
 
 fn listbox_remove(dialog: HWND, index: usize) {
-    const LB_DELETESTRING: u32 = 0x0182;
     if let Ok(listbox) = unsafe { GetDlgItem(Some(dialog), IDC_CAPTURE_KEY_LIST) } {
         unsafe { SendMessageW(listbox, LB_DELETESTRING, Some(WPARAM(index)), None) };
     }
 }
 
 fn listbox_clear(dialog: HWND) {
-    const LB_RESETCONTENT: u32 = 0x0184;
     if let Ok(listbox) = unsafe { GetDlgItem(Some(dialog), IDC_CAPTURE_KEY_LIST) } {
         unsafe { SendMessageW(listbox, LB_RESETCONTENT, None, None) };
     }
@@ -643,7 +636,6 @@ mod listbox_item_text_tests {
         CreateWindowExW, DestroyWindow, WINDOW_EX_STYLE, WINDOW_STYLE,
     };
 
-    const LB_ADDSTRING: u32 = 0x0180;
     const WS_POPUP: u32 = 0x8000_0000;
     const LBS_HASSTRINGS: u32 = 0x0040;
 
