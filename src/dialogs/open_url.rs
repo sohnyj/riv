@@ -22,7 +22,7 @@ pub fn show(window: HWND) -> Option<String> {
 mod dialog_tests {
     use super::*;
     use crate::dialogs::IDOK;
-    use crate::dialogs::text_input::EDIT_IDENTIFIER;
+    use crate::dialogs::resource::IDC_TEXT_INPUT;
     use windows::Win32::Foundation::{LPARAM, WPARAM};
     use windows::Win32::UI::WindowsAndMessaging::{GetDlgItem, SetDlgItemTextW, WM_COMMAND};
     use windows::core::w;
@@ -39,11 +39,11 @@ mod dialog_tests {
                 let Ok(dialog) = (unsafe { FindWindowW(None, w!("Open URL")) }) else {
                     continue;
                 };
-                if unsafe { GetDlgItem(Some(dialog), EDIT_IDENTIFIER) }.is_err() {
+                if unsafe { GetDlgItem(Some(dialog), IDC_TEXT_INPUT) }.is_err() {
                     continue;
                 }
                 unsafe {
-                    SetDlgItemTextW(dialog, EDIT_IDENTIFIER, w!("  http://127.0.0.1/test.png  "))
+                    SetDlgItemTextW(dialog, IDC_TEXT_INPUT, w!("  http://127.0.0.1/test.png  "))
                         .expect("set edit text");
                     PostMessageW(Some(dialog), WM_COMMAND, WPARAM(IDOK), LPARAM(0))
                         .expect("post IDOK");

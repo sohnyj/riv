@@ -1,5 +1,12 @@
 //! Dialog resource IDs; keep in sync with res/resource.h.
 
+use windows::core::PCWSTR;
+
+/// A numeric resource name is the identifier itself, not a pointer to one.
+pub fn template_name(identifier: u16) -> PCWSTR {
+    PCWSTR(identifier as usize as *const u16)
+}
+
 pub const IDD_OPTIONS: u16 = 100;
 pub const IDD_PAGE_WINDOW: u16 = 110;
 pub const IDD_PAGE_IMAGE: u16 = 120;
@@ -68,3 +75,36 @@ pub const IDC_ABOUT_TITLE: i32 = 1801;
 pub const IDC_ABOUT_VERSION: i32 = 1802;
 pub const IDC_ABOUT_BUILD: i32 = 1803;
 pub const IDC_ABOUT_LINK: i32 = 1804;
+
+#[cfg(test)]
+mod header_mirror_tests {
+    /// Reading a number one file has and the other lacks costs a compile error;
+    /// reading two different numbers costs a control that is missing at runtime.
+    #[test]
+    fn every_identifier_carries_the_same_number_in_both_files() {
+        let header: Vec<(&str, &str)> = include_str!("../../res/resource.h")
+            .lines()
+            .filter_map(|line| line.strip_prefix("#define ")?.split_once(' '))
+            .filter(|(name, _)| name.starts_with("IDD_") || name.starts_with("IDC_"))
+            .collect();
+        let declared: Vec<(&str, &str)> = include_str!("resource.rs")
+            .lines()
+            .filter_map(|line| {
+                let (name, typed) = line.strip_prefix("pub const ")?.split_once(": ")?;
+                Some((name, typed.split_once(" = ")?.1.strip_suffix(';')?))
+            })
+            .collect();
+        let header_only: Vec<_> = header
+            .iter()
+            .filter(|entry| !declared.contains(entry))
+            .collect();
+        let rust_only: Vec<_> = declared
+            .iter()
+            .filter(|entry| !header.contains(entry))
+            .collect();
+        assert!(
+            header_only.is_empty() && rust_only.is_empty(),
+            "resource.h only: {header_only:?}, resource.rs only: {rust_only:?}"
+        );
+    }
+}

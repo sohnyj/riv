@@ -6,18 +6,43 @@ pub mod resource;
 pub mod shortcut_capture;
 pub mod text_input;
 
-use windows::Win32::Foundation::HWND;
+use windows::Win32::Foundation::{HWND, LPARAM, POINT, RECT, WPARAM};
+use windows::Win32::Graphics::Gdi::MapWindowPoints;
+use windows::Win32::System::LibraryLoader::GetModuleHandleW;
 use windows::Win32::UI::Controls::{
     TASKDIALOG_BUTTON, TASKDIALOG_FLAGS, TASKDIALOGCONFIG, TDF_POSITION_RELATIVE_TO_WINDOW,
     TaskDialogIndirect,
 };
-use windows::Win32::UI::WindowsAndMessaging::{GetWindowLongPtrW, WINDOW_LONG_PTR_INDEX};
+use windows::Win32::UI::WindowsAndMessaging::{
+    DialogBoxParamW, GetWindowLongPtrW, GetWindowRect, WINDOW_LONG_PTR_INDEX,
+};
 use windows::core::PCWSTR;
 
 pub const IDOK: usize = 1;
 pub const IDCANCEL: usize = 2;
 /// DWLP_DLGPROC (8) + 8 on x64; windows-rs does not export it.
 pub const DWLP_USER: WINDOW_LONG_PTR_INDEX = WINDOW_LONG_PTR_INDEX(16);
+
+pub type DialogProcedure = unsafe extern "system" fn(HWND, u32, WPARAM, LPARAM) -> isize;
+
+/// Runs a dialog template from the executable's own resources; the DialogBox result.
+pub fn run_modal(
+    parent: HWND,
+    template: u16,
+    procedure: DialogProcedure,
+    state_pointer: isize,
+) -> isize {
+    let instance = unsafe { GetModuleHandleW(None) }.unwrap_or_default();
+    unsafe {
+        DialogBoxParamW(
+            Some(instance.into()),
+            resource::template_name(template),
+            Some(parent),
+            Some(procedure),
+            LPARAM(state_pointer),
+        )
+    }
+}
 
 /// Dialog state stored at DWLP_USER by WM_INITDIALOG.
 pub fn state_mut<State>(dialog: HWND) -> Option<&'static mut State> {
@@ -28,13 +53,13 @@ pub fn state_mut<State>(dialog: HWND) -> Option<&'static mut State> {
 /// Center a dialog within its owner window.
 pub fn center_on_owner(dialog: HWND) {
     use windows::Win32::UI::WindowsAndMessaging::{
-        GetParent, GetWindowRect, SWP_NOACTIVATE, SWP_NOSIZE, SWP_NOZORDER, SetWindowPos,
+        GetParent, SWP_NOACTIVATE, SWP_NOSIZE, SWP_NOZORDER, SetWindowPos,
     };
     let Ok(owner) = (unsafe { GetParent(dialog) }) else {
         return;
     };
-    let mut owner_bounds = windows::Win32::Foundation::RECT::default();
-    let mut dialog_bounds = windows::Win32::Foundation::RECT::default();
+    let mut owner_bounds = RECT::default();
+    let mut dialog_bounds = RECT::default();
     if unsafe { GetWindowRect(owner, &raw mut owner_bounds) }.is_err()
         || unsafe { GetWindowRect(dialog, &raw mut dialog_bounds) }.is_err()
     {
@@ -57,11 +82,36 @@ pub fn center_on_owner(dialog: HWND) {
     };
 }
 
-/// One-message task dialog titled after the action; `text` is the whole message.
-pub fn show_message(owner: Option<HWND>, title: &str, text: &str, button: &str) {
+/// Bounds of a child control in its parent's client coordinates.
+pub fn control_bounds(parent: HWND, control: HWND) -> Option<RECT> {
+    let mut bounds = RECT::default();
+    if unsafe { GetWindowRect(control, &raw mut bounds) }.is_err() {
+        return None;
+    }
+    let mut corners = [
+        POINT {
+            x: bounds.left,
+            y: bounds.top,
+        },
+        POINT {
+            x: bounds.right,
+            y: bounds.bottom,
+        },
+    ];
+    unsafe { MapWindowPoints(None, Some(parent), &mut corners) };
+    Some(RECT {
+        left: corners[0].x,
+        top: corners[0].y,
+        right: corners[1].x,
+        bottom: corners[1].y,
+    })
+}
+
+/// One-message task dialog titled after the action; the headline leads the message.
+pub fn show_message(owner: Option<HWND>, title: &str, headline: &str, detail: &str, button: &str) {
     let title = crate::text::wide(title);
-    // A main instruction would draw the first line larger and in color.
-    let text = crate::text::wide(text);
+    // A main instruction would draw the headline larger and in color.
+    let text = crate::text::wide(format!("{headline}\n\n{detail}"));
     // Labeled here, not by the system: the settings dialog writes its own buttons too.
     let button_text = crate::text::wide(button);
     let buttons = [TASKDIALOG_BUTTON {

@@ -468,30 +468,18 @@ impl Application {
         }
     }
 
-    /// What the delete confirmation says about the file, in the info panel's words.
+    /// The file facts the delete confirmation lists, taken from what the load already read.
     fn delete_details(&self, path: &Path) -> String {
-        let mut lines = vec![
-            path.file_name()
-                .map_or_else(String::new, |name| name.to_string_lossy().into_owned()),
-        ];
-        if let Some(image) = &self.displayed_image {
-            lines.push(format!("Format: {}", image.format_name));
-            if let Some(taken) = image.exif.as_ref().and_then(|exif| exif.date_taken) {
-                lines.push(format!(
-                    "Date taken: {}",
-                    overlay::format_local_datetime(taken)
-                ));
-            }
-            let megapixels = f64::from(image.width) * f64::from(image.height) / 1_000_000.0;
-            lines.push(format!(
-                "Resolution: {} x {} ({megapixels:.1} MP)",
-                image.width, image.height
-            ));
-        }
-        if let Some((file_size, _)) = self.image_core.current_item_metadata() {
-            lines.push(format!("Size: {}", overlay::binary_size_text(file_size)));
-        }
-        lines.join("\n")
+        let file_name = path
+            .file_name()
+            .map_or_else(String::new, |name| name.to_string_lossy().into_owned());
+        overlay::build_file_summary_text(
+            &file_name,
+            self.displayed_image.as_deref(),
+            self.image_core
+                .current_item_metadata()
+                .map(|(file_size, _)| file_size),
+        )
     }
 
     fn scaling_filter(&self) -> ScalingFilter {
@@ -2248,7 +2236,7 @@ fn process_is_elevated() -> bool {
 
 /// No window exists yet, so the app name titles the failure.
 fn fail_fast_dialog(reason: &str, detail: &str) {
-    dialogs::show_message(None, "riv", &format!("{reason}\n\n{detail}"), "Close");
+    dialogs::show_message(None, "riv", reason, detail, "Close");
 }
 
 fn application_from_window(window: HWND) -> Option<&'static mut Application> {
@@ -2811,7 +2799,7 @@ mod open_url_smoke_tests {
         unsafe {
             SetDlgItemTextW(
                 dialog,
-                dialogs::text_input::EDIT_IDENTIFIER,
+                dialogs::resource::IDC_TEXT_INPUT,
                 PCWSTR(url.as_ptr()),
             )
             .expect("set dialog text");

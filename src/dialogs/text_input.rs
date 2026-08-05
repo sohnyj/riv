@@ -1,19 +1,16 @@
 //! Shared single-edit input dialog; both templates live in riv.rc with the rest.
 
 use windows::Win32::Foundation::{HWND, LPARAM, WPARAM};
-use windows::Win32::System::LibraryLoader::GetModuleHandleW;
 use windows::Win32::UI::Controls::EM_SETSEL;
 use windows::Win32::UI::Input::KeyboardAndMouse::SetFocus;
 use windows::Win32::UI::WindowsAndMessaging::{
-    DialogBoxParamW, EndDialog, GetDlgItem, GetDlgItemTextW, SendMessageW, SetDlgItemTextW,
-    SetWindowLongPtrW, WM_COMMAND, WM_INITDIALOG,
+    EndDialog, GetDlgItem, GetDlgItemTextW, SendMessageW, SetDlgItemTextW, SetWindowLongPtrW,
+    WM_COMMAND, WM_INITDIALOG,
 };
 use windows::core::PCWSTR;
 
 use super::resource::IDC_TEXT_INPUT;
 use super::{DWLP_USER, IDCANCEL, IDOK};
-
-pub const EDIT_IDENTIFIER: i32 = IDC_TEXT_INPUT;
 
 /// One edit line with OK/Cancel; the template carries the title and the width.
 pub struct TextInputRequest<'a> {
@@ -40,16 +37,12 @@ pub fn show(window: HWND, request: &TextInputRequest) -> Option<String> {
         selection: request.selection,
         accepted_text: None,
     };
-    let instance = unsafe { GetModuleHandleW(None) }.unwrap_or_default();
-    let dialog_result = unsafe {
-        DialogBoxParamW(
-            Some(instance.into()),
-            PCWSTR(request.template as usize as *const u16),
-            Some(window),
-            Some(dialog_procedure),
-            LPARAM(&raw mut state as isize),
-        )
-    };
+    let dialog_result = super::run_modal(
+        window,
+        request.template,
+        dialog_procedure,
+        &raw mut state as isize,
+    );
     (dialog_result == IDOK as isize)
         .then(|| state.accepted_text.take())
         .flatten()
@@ -68,8 +61,8 @@ extern "system" fn dialog_procedure(
             let state = unsafe { &*(lparam.0 as *const TextInputState) };
             unsafe {
                 let _ =
-                    SetDlgItemTextW(dialog, EDIT_IDENTIFIER, PCWSTR(state.initial_text.as_ptr()));
-                if let Ok(edit) = GetDlgItem(Some(dialog), EDIT_IDENTIFIER) {
+                    SetDlgItemTextW(dialog, IDC_TEXT_INPUT, PCWSTR(state.initial_text.as_ptr()));
+                if let Ok(edit) = GetDlgItem(Some(dialog), IDC_TEXT_INPUT) {
                     if let Some((start, end)) = state.selection {
                         SendMessageW(
                             edit,
@@ -90,7 +83,7 @@ extern "system" fn dialog_procedure(
                     if let Some(state) = super::state_mut::<TextInputState>(dialog) {
                         let mut buffer = [0u16; 2048];
                         let length =
-                            unsafe { GetDlgItemTextW(dialog, EDIT_IDENTIFIER, &mut buffer) };
+                            unsafe { GetDlgItemTextW(dialog, IDC_TEXT_INPUT, &mut buffer) };
                         state.accepted_text =
                             Some(String::from_utf16_lossy(&buffer[..length as usize]));
                     }

@@ -378,7 +378,6 @@ pub fn build_info_text(
     color_mode: &str,
     display_description: &str,
 ) -> String {
-    let megapixels = f64::from(image.width) * f64::from(image.height) / 1_000_000.0;
     let color_profile = match &image.icc_profile {
         Some(icc_profile) => crate::image::decode::icc_profile_description(icc_profile)
             .unwrap_or_else(|| "Embedded".to_string()),
@@ -393,10 +392,7 @@ pub fn build_info_text(
     let mut file = vec![
         format!("Name: {file_name}"),
         format!("Format: {}", image.format_name),
-        format!(
-            "Resolution: {} x {} ({megapixels:.1} MP)",
-            image.width, image.height
-        ),
+        resolution_text(image),
         format!("Ratio: {}", format_aspect_ratio(image.width, image.height)),
         format!("Bit depth: {bit_depth}"),
         format!("Color profile: {color_profile}"),
@@ -566,10 +562,12 @@ pub fn build_error_text(
     };
     // Code 0 means "no code" (validation, curl, fallback decoders), not a real HRESULT.
     // A line ending in a code needs no period; system messages bring their own.
-    let reason = match (code == 0, reason.ends_with('.')) {
-        (true, false) => format!("{reason}."),
-        (true, true) => reason,
-        (false, _) => format!("{reason} (Error 0x{code:08X})"),
+    let reason = if code != 0 {
+        format!("{reason} (Error 0x{code:08X})")
+    } else if reason.ends_with('.') {
+        reason
+    } else {
+        format!("{reason}.")
     };
     // With no file name to head it, the reason stands alone.
     let mut text = if file_name.is_empty() {
@@ -601,7 +599,35 @@ pub fn build_download_text(file_name: &str, received_bytes: u64) -> String {
     )
 }
 
-pub(crate) fn binary_size_text(bytes: u64) -> String {
+/// The file facts the delete confirmation lists, in the info panel's words.
+pub fn build_file_summary_text(
+    file_name: &str,
+    image: Option<&DecodedImage>,
+    file_size: Option<u64>,
+) -> String {
+    let mut lines = vec![file_name.to_string()];
+    if let Some(image) = image {
+        lines.push(format!("Format: {}", image.format_name));
+        if let Some(taken) = image.exif.as_ref().and_then(|exif| exif.date_taken) {
+            lines.push(format!("Date taken: {}", format_local_datetime(taken)));
+        }
+        lines.push(resolution_text(image));
+    }
+    if let Some(file_size) = file_size {
+        lines.push(format!("Size: {}", binary_size_text(file_size)));
+    }
+    lines.join("\n")
+}
+
+fn resolution_text(image: &DecodedImage) -> String {
+    let megapixels = f64::from(image.width) * f64::from(image.height) / 1_000_000.0;
+    format!(
+        "Resolution: {} x {} ({megapixels:.1} MP)",
+        image.width, image.height
+    )
+}
+
+fn binary_size_text(bytes: u64) -> String {
     let units: [(&str, u64); 3] = [("GiB", 1 << 30), ("MiB", 1 << 20), ("KiB", 1 << 10)];
     units.iter().find(|(_, unit)| bytes >= *unit).map_or_else(
         || format!("{bytes} B"),
@@ -783,7 +809,7 @@ fn group_thousands(value: u64) -> String {
 }
 
 /// Fixed 24-hour local time; locale forms can pull fallback glyphs into the panel.
-pub(crate) fn format_local_datetime(time: SystemTime) -> String {
+fn format_local_datetime(time: SystemTime) -> String {
     let Ok(elapsed) = time.duration_since(UNIX_EPOCH) else {
         return String::new();
     };

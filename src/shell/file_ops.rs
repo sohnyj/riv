@@ -47,7 +47,6 @@ pub fn confirm_delete(window: HWND, details: &str, permanent: bool) -> DeleteCon
     // The question rides in the content: a main instruction would enlarge and color it.
     let content = crate::text::wide(format!("{question}\n\n{details}"));
     let verification = w!("Don't ask again");
-    // Labeled here, not by the system: the settings dialog writes its own buttons too.
     let buttons = [
         TASKDIALOG_BUTTON {
             nButtonID: IDYES.0,
@@ -160,7 +159,8 @@ pub fn show_rename_error(window: HWND, error: &std::io::Error) {
     crate::dialogs::show_message(
         Some(window),
         "Rename",
-        &format!("Cannot rename the file.\n\n{error}"),
+        "Cannot rename the file.",
+        &error.to_string(),
         "Close",
     );
 }

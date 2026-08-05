@@ -13,12 +13,12 @@ use windows::Win32::UI::Input::KeyboardAndMouse::{
     SetFocus, VK_CONTROL, VK_LWIN, VK_MENU, VK_RWIN, VK_SHIFT,
 };
 use windows::Win32::UI::WindowsAndMessaging::{
-    CS_DBLCLKS, CallWindowProcW, DLGC_WANTALLKEYS, DefWindowProcW, DialogBoxParamW, EndDialog,
-    GWLP_USERDATA, GWLP_WNDPROC, GetDlgItem, GetParent, GetWindowLongPtrW, RegisterClassExW,
-    SendMessageW, SetWindowLongPtrW, SetWindowTextW, WM_APP, WM_COMMAND, WM_DRAWITEM,
-    WM_GETDLGCODE, WM_INITDIALOG, WM_KEYDOWN, WM_KEYUP, WM_KILLFOCUS, WM_LBUTTONDBLCLK,
-    WM_LBUTTONDOWN, WM_MBUTTONDBLCLK, WM_MBUTTONDOWN, WM_MOUSEWHEEL, WM_PAINT, WM_SETFOCUS,
-    WM_SETFONT, WM_SYSKEYDOWN, WM_SYSKEYUP, WM_XBUTTONDBLCLK, WM_XBUTTONDOWN, WNDCLASSEXW, WNDPROC,
+    CS_DBLCLKS, CallWindowProcW, DLGC_WANTALLKEYS, DefWindowProcW, EndDialog, GWLP_USERDATA,
+    GWLP_WNDPROC, GetDlgItem, GetParent, GetWindowLongPtrW, RegisterClassExW, SendMessageW,
+    SetWindowLongPtrW, SetWindowTextW, WM_APP, WM_COMMAND, WM_DRAWITEM, WM_GETDLGCODE,
+    WM_INITDIALOG, WM_KEYDOWN, WM_KEYUP, WM_KILLFOCUS, WM_LBUTTONDBLCLK, WM_LBUTTONDOWN,
+    WM_MBUTTONDBLCLK, WM_MBUTTONDOWN, WM_MOUSEWHEEL, WM_PAINT, WM_SETFOCUS, WM_SETFONT,
+    WM_SYSKEYDOWN, WM_SYSKEYUP, WM_XBUTTONDBLCLK, WM_XBUTTONDOWN, WNDCLASSEXW, WNDPROC,
 };
 use windows::core::{PCWSTR, w};
 
@@ -49,7 +49,7 @@ pub fn capture_keyboard_sequences(
         taken,
         accepted: false,
     };
-    show_capture_dialog(
+    crate::dialogs::run_modal(
         parent,
         IDD_CAPTURE_KEYBOARD,
         keyboard_procedure,
@@ -69,7 +69,7 @@ pub fn capture_mouse_binding(
         taken,
         accepted: false,
     };
-    show_capture_dialog(
+    crate::dialogs::run_modal(
         parent,
         IDD_CAPTURE_MOUSE,
         mouse_procedure,
@@ -78,31 +78,12 @@ pub fn capture_mouse_binding(
     state.accepted.then(|| state.binding.into_iter().collect())
 }
 
-type DialogProcedure = unsafe extern "system" fn(HWND, u32, WPARAM, LPARAM) -> isize;
-
-fn show_capture_dialog(
-    parent: HWND,
-    template: u16,
-    procedure: DialogProcedure,
-    state_pointer: isize,
-) {
-    let instance = unsafe { GetModuleHandleW(None) }.unwrap_or_default();
-    unsafe {
-        DialogBoxParamW(
-            Some(instance.into()),
-            PCWSTR(template as usize as *const u16),
-            Some(parent),
-            Some(procedure),
-            LPARAM(state_pointer),
-        )
-    };
-}
-
 fn warn_conflict(dialog: HWND, encoding: &str, owner_label: &str) {
     crate::dialogs::show_message(
         Some(dialog),
         "Shortcut",
-        &format!("Shortcut already used.\n\n\"{encoding}\" is already bound to \"{owner_label}\""),
+        "Shortcut already used.",
+        &format!("\"{encoding}\" is already bound to \"{owner_label}\""),
         "OK",
     );
 }

@@ -22,11 +22,11 @@ use windows::Win32::UI::Controls::{
 };
 use windows::Win32::UI::Input::KeyboardAndMouse::{EnableWindow, VK_SPACE};
 use windows::Win32::UI::WindowsAndMessaging::{
-    CB_ADDSTRING, CB_GETCURSEL, CB_SETCURSEL, CreateDialogParamW, DestroyWindow, DialogBoxParamW,
-    EndDialog, GetClientRect, GetDlgItem, GetDlgItemInt, GetMessagePos, GetSystemMetrics,
-    GetWindowRect, MapDialogRect, SM_CXVSCROLL, SW_HIDE, SW_SHOW, SWP_NOACTIVATE, SendMessageW,
-    SetDlgItemTextW, SetWindowLongPtrW, SetWindowPos, ShowWindow, WM_APP, WM_COMMAND, WM_DESTROY,
-    WM_DRAWITEM, WM_INITDIALOG, WM_NOTIFY,
+    CB_ADDSTRING, CB_GETCURSEL, CB_SETCURSEL, CreateDialogParamW, DestroyWindow, EndDialog,
+    GetClientRect, GetDlgItem, GetDlgItemInt, GetMessagePos, GetSystemMetrics, GetWindowRect,
+    MapDialogRect, SM_CXVSCROLL, SW_HIDE, SW_SHOW, SWP_NOACTIVATE, SendMessageW, SetDlgItemTextW,
+    SetWindowLongPtrW, SetWindowPos, ShowWindow, WM_APP, WM_COMMAND, WM_DESTROY, WM_DRAWITEM,
+    WM_INITDIALOG, WM_NOTIFY,
 };
 use windows::core::PCWSTR;
 
@@ -176,16 +176,12 @@ pub fn show(parent: HWND, settings: &SettingsFile) {
         custom_colors: [COLORREF(0x00FF_FFFF); 16],
         about_fonts: about::AboutFonts::default(),
     };
-    let instance = unsafe { GetModuleHandleW(None) }.unwrap_or_default();
-    unsafe {
-        DialogBoxParamW(
-            Some(instance.into()),
-            PCWSTR(IDD_OPTIONS as usize as *const u16),
-            Some(parent),
-            Some(frame_procedure),
-            LPARAM(&raw mut state as isize),
-        )
-    };
+    super::run_modal(
+        parent,
+        IDD_OPTIONS,
+        frame_procedure,
+        &raw mut state as isize,
+    );
 }
 
 fn state_mut(dialog: HWND) -> Option<&'static mut OptionsState> {
@@ -368,7 +364,7 @@ fn initialize_frame(state: &mut OptionsState) {
         let page = unsafe {
             CreateDialogParamW(
                 Some(instance.into()),
-                PCWSTR(*template as usize as *const u16),
+                super::resource::template_name(*template),
                 Some(dialog),
                 Some(page_procedure),
                 LPARAM(state_pointer),
@@ -389,12 +385,8 @@ fn initialize_frame(state: &mut OptionsState) {
         state.pages[index] = page;
     }
 
-    fit_page_controls(
-        state.pages[3],
-        &[IDC_SHORTCUTS_LIST],
-        &[IDC_SHORTCUTS_CLEAR_ALL],
-    );
-    fit_page_controls(state.pages[4], &[IDC_ASSOC_TREE], &[IDC_ASSOC_SELECT_NONE]);
+    fit_page_controls(state.pages[3], IDC_SHORTCUTS_LIST, IDC_SHORTCUTS_CLEAR_ALL);
+    fit_page_controls(state.pages[4], IDC_ASSOC_TREE, IDC_ASSOC_SELECT_NONE);
 
     initialize_image_page(state);
     initialize_window_page(state);
@@ -408,7 +400,8 @@ fn initialize_frame(state: &mut OptionsState) {
 }
 
 /// Page templates are authored at 292 x 196; the tab's inner area runs a little wider.
-fn fit_page_controls(page: HWND, stretch: &[i32], follow_right_edge: &[i32]) {
+fn fit_page_controls(page: HWND, stretch: i32, follow_right_edge: i32) {
+    // Both measurements must be taken here: the page carries its final font and DPI now.
     let mut template = RECT {
         left: 0,
         top: 0,
@@ -423,54 +416,27 @@ fn fit_page_controls(page: HWND, stretch: &[i32], follow_right_edge: &[i32]) {
     }
     let widen = client.right - template.right;
     let heighten = client.bottom - template.bottom;
-    let place = |control: i32, grow: bool| {
+    let place = |control: i32, offset_x: i32, extra_width: i32, extra_height: i32| {
         let Ok(handle) = (unsafe { GetDlgItem(Some(page), control) }) else {
             return;
         };
-        let mut bounds = RECT::default();
-        if unsafe { GetWindowRect(handle, &raw mut bounds) }.is_err() {
+        let Some(bounds) = super::control_bounds(page, handle) else {
             return;
-        }
-        let mut corners = [
-            POINT {
-                x: bounds.left,
-                y: bounds.top,
-            },
-            POINT {
-                x: bounds.right,
-                y: bounds.bottom,
-            },
-        ];
-        unsafe { windows::Win32::Graphics::Gdi::MapWindowPoints(None, Some(page), &mut corners) };
-        let (x, y) = match grow {
-            true => (corners[0].x, corners[0].y),
-            false => (corners[0].x + widen, corners[0].y),
-        };
-        let (width, height) = match grow {
-            true => (
-                corners[1].x - corners[0].x + widen,
-                corners[1].y - corners[0].y + heighten,
-            ),
-            false => (corners[1].x - corners[0].x, corners[1].y - corners[0].y),
         };
         let _ = unsafe {
             SetWindowPos(
                 handle,
                 None,
-                x,
-                y,
-                width,
-                height,
+                bounds.left + offset_x,
+                bounds.top,
+                bounds.right - bounds.left + extra_width,
+                bounds.bottom - bounds.top + extra_height,
                 windows::Win32::UI::WindowsAndMessaging::SWP_NOZORDER | SWP_NOACTIVATE,
             )
         };
     };
-    for control in stretch {
-        place(*control, true);
-    }
-    for control in follow_right_edge {
-        place(*control, false);
-    }
+    place(stretch, 0, widen, heighten);
+    place(follow_right_edge, widen, 0, 0);
 }
 
 fn update_buttons(state: &OptionsState) {

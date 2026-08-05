@@ -62,10 +62,9 @@ pub fn handle_link(lparam: LPARAM) {
 
 /// Center the rows as one block in the stretched page; the .rc rows only fix spacing.
 fn layout_centered(page: HWND) {
-    use windows::Win32::Foundation::{POINT, RECT};
-    use windows::Win32::Graphics::Gdi::MapWindowPoints;
+    use windows::Win32::Foundation::RECT;
     use windows::Win32::UI::WindowsAndMessaging::{
-        GetClientRect, GetWindowRect, SWP_NOACTIVATE, SWP_NOZORDER, SetWindowPos,
+        GetClientRect, SWP_NOACTIVATE, SWP_NOZORDER, SetWindowPos,
     };
     let mut client = RECT::default();
     if unsafe { GetClientRect(page, &raw mut client) }.is_err() {
@@ -85,22 +84,10 @@ fn layout_centered(page: HWND) {
         let Ok(control) = (unsafe { GetDlgItem(Some(page), id) }) else {
             return;
         };
-        let mut bounds = RECT::default();
-        if unsafe { GetWindowRect(control, &raw mut bounds) }.is_err() {
+        let Some(bounds) = super::control_bounds(page, control) else {
             return;
-        }
-        let mut corners = [
-            POINT {
-                x: bounds.left,
-                y: bounds.top,
-            },
-            POINT {
-                x: bounds.right,
-                y: bounds.bottom,
-            },
-        ];
-        unsafe { MapWindowPoints(None, Some(page), &mut corners) };
-        placements.push((id, control, corners[0].y, corners[1].y - corners[0].y));
+        };
+        placements.push((id, control, bounds.top, bounds.bottom - bounds.top));
     }
 
     let block_top = placements[0].2;
