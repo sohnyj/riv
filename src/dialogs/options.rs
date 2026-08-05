@@ -13,12 +13,13 @@ use windows::Win32::UI::Controls::{
     ETDT_USETABTEXTURE, EnableThemeDialogTexture, HIMAGELIST, HTREEITEM, ILC_COLOR32, ILC_MASK,
     ImageList_Add, ImageList_Create, IsDlgButtonChecked, LVCF_TEXT, LVCF_WIDTH, LVCOLUMNW,
     LVIF_TEXT, LVITEMW, LVM_INSERTCOLUMNW, LVM_INSERTITEMW, LVM_SETEXTENDEDLISTVIEWSTYLE,
-    LVM_SETITEMTEXTW, LVS_EX_FULLROWSELECT, NM_CLICK, NM_DBLCLK, NM_RETURN, NMHDR, NMITEMACTIVATE,
-    NMTVKEYDOWN, TCIF_TEXT, TCITEMW, TCM_ADJUSTRECT, TCM_GETCURSEL, TCM_INSERTITEMW,
-    TCM_SETPADDING, TCN_SELCHANGE, TVGN_CARET, TVHITTESTINFO, TVHT_ONITEMSTATEICON, TVI_LAST,
-    TVI_ROOT, TVIF_PARAM, TVIF_STATE, TVIF_TEXT, TVINSERTSTRUCTW, TVIS_STATEIMAGEMASK, TVITEMEXW,
-    TVM_GETITEMW, TVM_GETNEXTITEM, TVM_HITTEST, TVM_INSERTITEMW, TVM_SETIMAGELIST, TVM_SETITEMW,
-    TVN_KEYDOWN, TVSIL_STATE, UDM_SETRANGE32,
+    LVM_SETITEMTEXTW, LVS_EX_DOUBLEBUFFER, LVS_EX_FULLROWSELECT, NM_CLICK, NM_DBLCLK, NM_RETURN,
+    NMHDR, NMITEMACTIVATE, NMTVKEYDOWN, TCIF_TEXT, TCITEMW, TCM_ADJUSTRECT, TCM_GETCURSEL,
+    TCM_INSERTITEMW, TCM_SETPADDING, TCN_SELCHANGE, TVGN_CARET, TVHITTESTINFO,
+    TVHT_ONITEMSTATEICON, TVI_LAST, TVI_ROOT, TVIF_PARAM, TVIF_STATE, TVIF_TEXT, TVINSERTSTRUCTW,
+    TVIS_STATEIMAGEMASK, TVITEMEXW, TVM_GETITEMW, TVM_GETNEXTITEM, TVM_HITTEST, TVM_INSERTITEMW,
+    TVM_SETEXTENDEDSTYLE, TVM_SETIMAGELIST, TVM_SETITEMW, TVN_KEYDOWN, TVS_EX_DOUBLEBUFFER,
+    TVSIL_STATE, UDM_SETRANGE32,
 };
 use windows::Win32::UI::Input::KeyboardAndMouse::{EnableWindow, VK_SPACE};
 use windows::Win32::UI::WindowsAndMessaging::{
@@ -210,18 +211,7 @@ unsafe extern "system" fn frame_procedure(
             {
                 let selected =
                     unsafe { SendMessageW(header.hwndFrom, TCM_GETCURSEL, None, None).0 };
-                for (index, page) in state.pages.iter().enumerate() {
-                    let _ = unsafe {
-                        ShowWindow(
-                            *page,
-                            if index as isize == selected {
-                                SW_SHOW
-                            } else {
-                                SW_HIDE
-                            },
-                        )
-                    };
-                }
+                show_page(state, selected);
             }
             0
         }
@@ -396,7 +386,20 @@ fn initialize_frame(state: &mut OptionsState) {
     state.about_fonts = about::initialize_page(state.pages[6]);
     sync_all_pages(state);
     update_buttons(state);
-    let _ = unsafe { ShowWindow(state.pages[0], SW_SHOW) };
+    show_page(state, 0);
+}
+
+/// The selected page goes up before the others go down, so the bare tab never shows.
+fn show_page(state: &OptionsState, selected: isize) {
+    let visible = usize::try_from(selected).ok();
+    if let Some(page) = visible.and_then(|index| state.pages.get(index)) {
+        let _ = unsafe { ShowWindow(*page, SW_SHOW) };
+    }
+    for (index, page) in state.pages.iter().enumerate() {
+        if Some(index) != visible {
+            let _ = unsafe { ShowWindow(*page, SW_HIDE) };
+        }
+    }
 }
 
 /// Page templates are authored at 292 x 194; the tab's inner area runs a little wider.
@@ -564,18 +567,17 @@ unsafe extern "system" fn page_procedure(
             };
             let draw = unsafe { &*(lparam.0 as *const DRAWITEMSTRUCT) };
             if draw.CtlID == IDC_WINDOW_BGCOLOR_BUTTON as u32 {
-                let brush = unsafe {
-                    CreateSolidBrush(rgb_to_colorref(state.transient_options.background_color))
-                };
-                unsafe {
-                    FillRect(draw.hDC, &raw const draw.rcItem, brush);
+                let color = rgb_to_colorref(state.transient_options.background_color);
+                super::draw_buffered(draw.hDC, draw.rcItem, |device| unsafe {
+                    let brush = CreateSolidBrush(color);
+                    FillRect(device, &raw const draw.rcItem, brush);
                     FrameRect(
-                        draw.hDC,
+                        device,
                         &raw const draw.rcItem,
                         GetSysColorBrush(windows::Win32::Graphics::Gdi::COLOR_BTNSHADOW),
                     );
                     let _ = DeleteObject(brush.into());
-                }
+                });
                 return 1;
             }
             0
@@ -880,12 +882,13 @@ fn initialize_shortcuts_page(state: &OptionsState) {
     let Ok(list) = (unsafe { GetDlgItem(Some(page), IDC_SHORTCUTS_LIST) }) else {
         return;
     };
+    let list_styles = LVS_EX_FULLROWSELECT | LVS_EX_DOUBLEBUFFER;
     unsafe {
         SendMessageW(
             list,
             LVM_SETEXTENDEDLISTVIEWSTYLE,
-            Some(WPARAM(LVS_EX_FULLROWSELECT as usize)),
-            Some(LPARAM(LVS_EX_FULLROWSELECT as isize)),
+            Some(WPARAM(list_styles as usize)),
+            Some(LPARAM(list_styles as isize)),
         )
     };
     let mut bounds = RECT::default();
@@ -1008,6 +1011,15 @@ fn initialize_association_page(state: &mut OptionsState) {
     let page = state.pages[4];
     let Ok(tree) = (unsafe { GetDlgItem(Some(page), IDC_ASSOC_TREE) }) else {
         return;
+    };
+    // Double buffering keeps an item from erasing before it repaints.
+    unsafe {
+        SendMessageW(
+            tree,
+            TVM_SETEXTENDEDSTYLE,
+            Some(WPARAM(TVS_EX_DOUBLEBUFFER as usize)),
+            Some(LPARAM(TVS_EX_DOUBLEBUFFER as isize)),
+        )
     };
     state.state_images = create_tristate_images();
     unsafe {

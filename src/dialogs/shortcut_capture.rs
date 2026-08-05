@@ -4,7 +4,7 @@ use windows::Win32::Foundation::{COLORREF, HWND, LPARAM, LRESULT, RECT, WPARAM};
 use windows::Win32::Graphics::Gdi::{
     BeginPaint, COLOR_GRAYTEXT, COLOR_HIGHLIGHT, COLOR_HIGHLIGHTTEXT, COLOR_WINDOW,
     COLOR_WINDOWTEXT, CreatePen, DT_LEFT, DT_SINGLELINE, DT_VCENTER, DeleteObject, DrawTextW,
-    EndPaint, FillRect, GetSysColor, GetSysColorBrush, HDC, HFONT, InvalidateRect, LineTo,
+    EndPaint, FillRect, GetSysColor, GetSysColorBrush, HBRUSH, HDC, HFONT, InvalidateRect, LineTo,
     MoveToEx, PAINTSTRUCT, PS_SOLID, SelectObject, SetBkMode, SetTextColor, TRANSPARENT,
 };
 use windows::Win32::System::LibraryLoader::GetModuleHandleW;
@@ -14,11 +14,12 @@ use windows::Win32::UI::Input::KeyboardAndMouse::{
 };
 use windows::Win32::UI::WindowsAndMessaging::{
     CS_DBLCLKS, CallWindowProcW, DLGC_WANTALLKEYS, DefWindowProcW, EndDialog, GWLP_USERDATA,
-    GWLP_WNDPROC, GetDlgItem, GetParent, GetWindowLongPtrW, RegisterClassExW, SendMessageW,
-    SetWindowLongPtrW, SetWindowTextW, WM_APP, WM_COMMAND, WM_DRAWITEM, WM_GETDLGCODE,
-    WM_INITDIALOG, WM_KEYDOWN, WM_KEYUP, WM_KILLFOCUS, WM_LBUTTONDBLCLK, WM_LBUTTONDOWN,
-    WM_MBUTTONDBLCLK, WM_MBUTTONDOWN, WM_MOUSEWHEEL, WM_PAINT, WM_SETFOCUS, WM_SETFONT,
-    WM_SYSKEYDOWN, WM_SYSKEYUP, WM_XBUTTONDBLCLK, WM_XBUTTONDOWN, WNDCLASSEXW, WNDPROC,
+    GWLP_WNDPROC, GetClientRect, GetDlgItem, GetParent, GetWindowLongPtrW, LB_GETCOUNT,
+    LB_GETITEMHEIGHT, LB_GETTOPINDEX, RegisterClassExW, SendMessageW, SetWindowLongPtrW,
+    SetWindowTextW, WM_APP, WM_COMMAND, WM_DRAWITEM, WM_ERASEBKGND, WM_GETDLGCODE, WM_INITDIALOG,
+    WM_KEYDOWN, WM_KEYUP, WM_KILLFOCUS, WM_LBUTTONDBLCLK, WM_LBUTTONDOWN, WM_MBUTTONDBLCLK,
+    WM_MBUTTONDOWN, WM_MOUSEWHEEL, WM_PAINT, WM_SETFOCUS, WM_SETFONT, WM_SYSKEYDOWN, WM_SYSKEYUP,
+    WM_XBUTTONDBLCLK, WM_XBUTTONDOWN, WNDCLASSEXW, WNDPROC,
 };
 use windows::core::{PCWSTR, w};
 
@@ -314,10 +315,16 @@ fn draw_field_text(device: HDC, rect: RECT, text: &mut [u16], color: COLORREF) {
 }
 
 fn draw_sequence_item(draw: &DRAWITEMSTRUCT) {
+    crate::dialogs::draw_buffered(draw.hDC, draw.rcItem, |device| {
+        paint_sequence_item(draw, device)
+    });
+}
+
+fn paint_sequence_item(draw: &DRAWITEMSTRUCT, device: HDC) {
     let selected = draw.itemState.0 & ODS_SELECTED.0 != 0;
     unsafe {
         FillRect(
-            draw.hDC,
+            device,
             &raw const draw.rcItem,
             GetSysColorBrush(if selected {
                 COLOR_HIGHLIGHT
@@ -337,7 +344,7 @@ fn draw_sequence_item(draw: &DRAWITEMSTRUCT) {
             COLOR_WINDOWTEXT
         })
     });
-    draw_field_text(draw.hDC, draw.rcItem, &mut text, color);
+    draw_field_text(device, draw.rcItem, &mut text, color);
     if selected {
         let zone = remove_icon_bounds(&draw.rcItem);
         let side = zone.bottom - zone.top;
@@ -345,14 +352,29 @@ fn draw_sequence_item(draw: &DRAWITEMSTRUCT) {
         let stroke = (side / 10).max(1);
         unsafe {
             let pen = CreatePen(PS_SOLID, stroke, REMOVE_ICON_RED);
-            let previous = SelectObject(draw.hDC, pen.into());
-            let _ = MoveToEx(draw.hDC, zone.left + inset, zone.top + inset, None);
-            let _ = LineTo(draw.hDC, zone.right - inset, zone.bottom - inset);
-            let _ = MoveToEx(draw.hDC, zone.right - inset, zone.top + inset, None);
-            let _ = LineTo(draw.hDC, zone.left + inset, zone.bottom - inset);
-            SelectObject(draw.hDC, previous);
+            let previous = SelectObject(device, pen.into());
+            let _ = MoveToEx(device, zone.left + inset, zone.top + inset, None);
+            let _ = LineTo(device, zone.right - inset, zone.bottom - inset);
+            let _ = MoveToEx(device, zone.right - inset, zone.top + inset, None);
+            let _ = LineTo(device, zone.left + inset, zone.bottom - inset);
+            SelectObject(device, previous);
             let _ = DeleteObject(pen.into());
         }
+    }
+}
+
+fn erase_below_last_item(listbox: HWND, device: HDC) {
+    let mut client = RECT::default();
+    if unsafe { GetClientRect(listbox, &raw mut client) }.is_err() {
+        return;
+    }
+    let count = unsafe { SendMessageW(listbox, LB_GETCOUNT, None, None) }.0;
+    let top = unsafe { SendMessageW(listbox, LB_GETTOPINDEX, None, None) }.0;
+    let height = unsafe { SendMessageW(listbox, LB_GETITEMHEIGHT, None, None) }.0;
+    let drawn = ((count - top).max(0) * height) as i32;
+    client.top = drawn.min(client.bottom);
+    if client.top < client.bottom {
+        unsafe { FillRect(device, &raw const client, GetSysColorBrush(COLOR_WINDOW)) };
     }
 }
 
@@ -365,6 +387,11 @@ unsafe extern "system" fn key_list_procedure(
     let original: WNDPROC = unsafe {
         std::mem::transmute(GetWindowLongPtrW(listbox, GWLP_USERDATA) as *const core::ffi::c_void)
     };
+    if message == WM_ERASEBKGND {
+        // Each row fills its own background, so only the space under the last one is left.
+        erase_below_last_item(listbox, HDC(wparam.0 as *mut _));
+        return LRESULT(1);
+    }
     if message == WM_LBUTTONDOWN {
         const LB_GETCURSEL: u32 = 0x0188;
         const LB_GETITEMRECT: u32 = 0x0198;
@@ -446,7 +473,8 @@ fn ensure_capture_classes() {
                 style,
                 lpfnWndProc: Some(procedure),
                 hInstance: instance.into(),
-                hbrBackground: unsafe { GetSysColorBrush(COLOR_WINDOW) },
+                // No class brush: the field fills what it repaints, and a system erase flashes.
+                hbrBackground: HBRUSH::default(),
                 lpszClassName: class_name,
                 ..Default::default()
             };
@@ -462,13 +490,10 @@ fn field_font(field: HWND) -> HFONT {
 
 fn paint_field(field: HWND, text: &str, hint: bool) {
     let mut paint = PAINTSTRUCT::default();
-    let device = unsafe { BeginPaint(field, &raw mut paint) };
-    unsafe {
-        FillRect(
-            device,
-            &raw const paint.rcPaint,
-            GetSysColorBrush(COLOR_WINDOW),
-        );
+    let target = unsafe { BeginPaint(field, &raw mut paint) };
+    let bounds = paint.rcPaint;
+    crate::dialogs::draw_buffered(target, bounds, |device| unsafe {
+        FillRect(device, &raw const bounds, GetSysColorBrush(COLOR_WINDOW));
         let font = field_font(field);
         if !font.is_invalid() {
             SelectObject(device, font.into());
@@ -479,9 +504,9 @@ fn paint_field(field: HWND, text: &str, hint: bool) {
             COLOR_WINDOWTEXT
         }));
         let mut wide: Vec<u16> = text.encode_utf16().collect();
-        draw_field_text(device, paint.rcPaint, &mut wide, color);
-        let _ = EndPaint(field, &raw const paint);
-    }
+        draw_field_text(device, bounds, &mut wide, color);
+    });
+    let _ = unsafe { EndPaint(field, &raw const paint) };
 }
 
 fn is_modifier_key(virtual_key: u16) -> bool {
@@ -519,7 +544,7 @@ unsafe extern "system" fn key_field_procedure(
         WM_KEYDOWN | WM_SYSKEYDOWN => {
             let virtual_key = wparam.0 as u16;
             if is_modifier_key(virtual_key) {
-                let _ = unsafe { InvalidateRect(Some(field), None, true) };
+                let _ = unsafe { InvalidateRect(Some(field), None, false) };
             } else {
                 let packed = ((current_modifiers() as usize) << 16) | virtual_key as usize;
                 if let Ok(parent) = unsafe { GetParent(field) } {
@@ -531,7 +556,7 @@ unsafe extern "system" fn key_field_procedure(
             LRESULT(0)
         }
         WM_KEYUP | WM_SYSKEYUP | WM_SETFOCUS | WM_KILLFOCUS => {
-            let _ = unsafe { InvalidateRect(Some(field), None, true) };
+            let _ = unsafe { InvalidateRect(Some(field), None, false) };
             LRESULT(0)
         }
         WM_LBUTTONDOWN => {
@@ -590,7 +615,7 @@ unsafe extern "system" fn mouse_field_procedure(
             notify(field, MouseBase::from_wheel_delta(delta))
         }
         WM_SETFOCUS | WM_KILLFOCUS => {
-            let _ = unsafe { InvalidateRect(Some(field), None, true) };
+            let _ = unsafe { InvalidateRect(Some(field), None, false) };
             LRESULT(0)
         }
         WM_PAINT => {

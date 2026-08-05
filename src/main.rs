@@ -2040,6 +2040,8 @@ fn main() -> Result<()> {
     let pending_device = PendingDevice::start();
 
     window::menu_theme::enable_dark_menus();
+    // Per-thread state the dialogs paint through; without it every paint rebuilds it.
+    dialogs::begin_buffered_painting();
 
     let argument_path = std::env::args_os().nth(1).map(std::path::PathBuf::from);
 
@@ -2066,6 +2068,7 @@ fn main() -> Result<()> {
     let window = create_main_window(argument_path.as_deref(), pending_device)?;
 
     run_message_loop(window);
+    dialogs::end_buffered_painting();
     Ok(())
 }
 
