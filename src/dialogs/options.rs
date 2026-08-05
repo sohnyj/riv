@@ -9,23 +9,24 @@ use windows::Win32::Graphics::Gdi::{
 use windows::Win32::System::LibraryLoader::GetModuleHandleW;
 use windows::Win32::UI::Controls::Dialogs::{CC_FULLOPEN, CC_RGBINIT, CHOOSECOLORW, ChooseColorW};
 use windows::Win32::UI::Controls::{
-    BST_CHECKED, BST_UNCHECKED, CheckDlgButton, CheckRadioButton, DRAWITEMSTRUCT, HIMAGELIST,
-    HTREEITEM, ILC_COLOR32, ILC_MASK, ImageList_Add, ImageList_Create, IsDlgButtonChecked,
-    LVCF_TEXT, LVCF_WIDTH, LVCOLUMNW, LVIF_TEXT, LVITEMW, LVM_INSERTCOLUMNW, LVM_INSERTITEMW,
-    LVM_SETEXTENDEDLISTVIEWSTYLE, LVM_SETITEMTEXTW, LVS_EX_FULLROWSELECT, NM_CLICK, NM_DBLCLK,
-    NM_RETURN, NMHDR, NMITEMACTIVATE, NMTVKEYDOWN, TCIF_TEXT, TCITEMW, TCM_ADJUSTRECT,
-    TCM_GETCURSEL, TCM_INSERTITEMW, TCN_SELCHANGE, TVGN_CARET, TVHITTESTINFO, TVHT_ONITEMSTATEICON,
-    TVI_LAST, TVI_ROOT, TVIF_PARAM, TVIF_STATE, TVIF_TEXT, TVINSERTSTRUCTW, TVIS_STATEIMAGEMASK,
-    TVITEMEXW, TVM_GETITEMW, TVM_GETNEXTITEM, TVM_HITTEST, TVM_INSERTITEMW, TVM_SETIMAGELIST,
-    TVM_SETITEMW, TVN_KEYDOWN, TVSIL_STATE, UDM_SETRANGE32,
+    BST_CHECKED, BST_UNCHECKED, CheckDlgButton, CheckRadioButton, DRAWITEMSTRUCT, ETDT_ENABLE,
+    ETDT_USETABTEXTURE, EnableThemeDialogTexture, HIMAGELIST, HTREEITEM, ILC_COLOR32, ILC_MASK,
+    ImageList_Add, ImageList_Create, IsDlgButtonChecked, LVCF_TEXT, LVCF_WIDTH, LVCOLUMNW,
+    LVIF_TEXT, LVITEMW, LVM_INSERTCOLUMNW, LVM_INSERTITEMW, LVM_SETEXTENDEDLISTVIEWSTYLE,
+    LVM_SETITEMTEXTW, LVS_EX_FULLROWSELECT, NM_CLICK, NM_DBLCLK, NM_RETURN, NMHDR, NMITEMACTIVATE,
+    NMTVKEYDOWN, TCIF_TEXT, TCITEMW, TCM_ADJUSTRECT, TCM_GETCURSEL, TCM_INSERTITEMW,
+    TCM_SETPADDING, TCN_SELCHANGE, TVGN_CARET, TVHITTESTINFO, TVHT_ONITEMSTATEICON, TVI_LAST,
+    TVI_ROOT, TVIF_PARAM, TVIF_STATE, TVIF_TEXT, TVINSERTSTRUCTW, TVIS_STATEIMAGEMASK, TVITEMEXW,
+    TVM_GETITEMW, TVM_GETNEXTITEM, TVM_HITTEST, TVM_INSERTITEMW, TVM_SETIMAGELIST, TVM_SETITEMW,
+    TVN_KEYDOWN, TVSIL_STATE, UDM_SETRANGE32,
 };
 use windows::Win32::UI::Input::KeyboardAndMouse::{EnableWindow, VK_SPACE};
 use windows::Win32::UI::WindowsAndMessaging::{
     CB_ADDSTRING, CB_GETCURSEL, CB_SETCURSEL, CreateDialogParamW, DestroyWindow, DialogBoxParamW,
     EndDialog, GetClientRect, GetDlgItem, GetDlgItemInt, GetMessagePos, GetSystemMetrics,
-    GetWindowRect, SM_CXVSCROLL, SW_HIDE, SW_SHOW, SendMessageW, SetDlgItemTextW,
-    SetWindowLongPtrW, SetWindowPos, ShowWindow, WM_APP, WM_COMMAND, WM_DESTROY, WM_DRAWITEM,
-    WM_INITDIALOG, WM_NOTIFY,
+    GetWindowRect, MapDialogRect, SM_CXVSCROLL, SW_HIDE, SW_SHOW, SWP_NOACTIVATE, SendMessageW,
+    SetDlgItemTextW, SetWindowLongPtrW, SetWindowPos, ShowWindow, WM_APP, WM_COMMAND, WM_DESTROY,
+    WM_DRAWITEM, WM_INITDIALOG, WM_NOTIFY,
 };
 use windows::core::PCWSTR;
 
@@ -314,6 +315,20 @@ fn initialize_frame(state: &mut OptionsState) {
         };
     }
 
+    // Labels sit tight against the tab edges at the default padding.
+    let mut padding = RECT {
+        left: 0,
+        top: 0,
+        right: 8,
+        bottom: 0,
+    };
+    if unsafe { MapDialogRect(dialog, &raw mut padding) }.is_ok() {
+        let sizes = ((padding.bottom as isize) << 16) | padding.right as isize;
+        unsafe {
+            SendMessageW(tab, TCM_SETPADDING, Some(WPARAM(0)), Some(LPARAM(sizes)));
+        }
+    }
+
     let mut display_area = RECT::default();
     let _ = unsafe { GetWindowRect(tab, &raw mut display_area) };
     unsafe {
@@ -374,6 +389,13 @@ fn initialize_frame(state: &mut OptionsState) {
         state.pages[index] = page;
     }
 
+    fit_page_controls(
+        state.pages[3],
+        &[IDC_SHORTCUTS_LIST],
+        &[IDC_SHORTCUTS_CLEAR_ALL],
+    );
+    fit_page_controls(state.pages[4], &[IDC_ASSOC_TREE], &[IDC_ASSOC_SELECT_NONE]);
+
     initialize_image_page(state);
     initialize_window_page(state);
     initialize_miscellaneous_page(state);
@@ -383,6 +405,72 @@ fn initialize_frame(state: &mut OptionsState) {
     sync_all_pages(state);
     update_buttons(state);
     let _ = unsafe { ShowWindow(state.pages[0], SW_SHOW) };
+}
+
+/// Page templates are authored at 292 x 196; the tab's inner area runs a little wider.
+fn fit_page_controls(page: HWND, stretch: &[i32], follow_right_edge: &[i32]) {
+    let mut template = RECT {
+        left: 0,
+        top: 0,
+        right: 292,
+        bottom: 196,
+    };
+    let mut client = RECT::default();
+    if unsafe { MapDialogRect(page, &raw mut template) }.is_err()
+        || unsafe { GetClientRect(page, &raw mut client) }.is_err()
+    {
+        return;
+    }
+    let widen = client.right - template.right;
+    let heighten = client.bottom - template.bottom;
+    let place = |control: i32, grow: bool| {
+        let Ok(handle) = (unsafe { GetDlgItem(Some(page), control) }) else {
+            return;
+        };
+        let mut bounds = RECT::default();
+        if unsafe { GetWindowRect(handle, &raw mut bounds) }.is_err() {
+            return;
+        }
+        let mut corners = [
+            POINT {
+                x: bounds.left,
+                y: bounds.top,
+            },
+            POINT {
+                x: bounds.right,
+                y: bounds.bottom,
+            },
+        ];
+        unsafe { windows::Win32::Graphics::Gdi::MapWindowPoints(None, Some(page), &mut corners) };
+        let (x, y) = match grow {
+            true => (corners[0].x, corners[0].y),
+            false => (corners[0].x + widen, corners[0].y),
+        };
+        let (width, height) = match grow {
+            true => (
+                corners[1].x - corners[0].x + widen,
+                corners[1].y - corners[0].y + heighten,
+            ),
+            false => (corners[1].x - corners[0].x, corners[1].y - corners[0].y),
+        };
+        let _ = unsafe {
+            SetWindowPos(
+                handle,
+                None,
+                x,
+                y,
+                width,
+                height,
+                windows::Win32::UI::WindowsAndMessaging::SWP_NOZORDER | SWP_NOACTIVATE,
+            )
+        };
+    };
+    for control in stretch {
+        place(*control, true);
+    }
+    for control in follow_right_edge {
+        place(*control, false);
+    }
 }
 
 fn update_buttons(state: &OptionsState) {
@@ -448,6 +536,8 @@ unsafe extern "system" fn page_procedure(
     match message {
         WM_INITDIALOG => {
             unsafe { SetWindowLongPtrW(page, DWLP_USER, lparam.0) };
+            // The tab texture is the page background a property sheet gives its pages.
+            let _ = unsafe { EnableThemeDialogTexture(page, ETDT_ENABLE | ETDT_USETABTEXTURE) };
             1
         }
         WM_COMMAND => {

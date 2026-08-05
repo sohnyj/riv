@@ -8,8 +8,7 @@ pub fn show(window: HWND) -> Option<String> {
     text_input::show(
         window,
         &TextInputRequest {
-            title: "Open URL",
-            width: 300,
+            template: crate::dialogs::resource::IDD_OPEN_URL,
             initial_text: "",
             selection: None,
         },
@@ -25,7 +24,7 @@ mod dialog_tests {
     use crate::dialogs::IDOK;
     use crate::dialogs::text_input::EDIT_IDENTIFIER;
     use windows::Win32::Foundation::{LPARAM, WPARAM};
-    use windows::Win32::UI::WindowsAndMessaging::{SetDlgItemTextW, WM_COMMAND};
+    use windows::Win32::UI::WindowsAndMessaging::{GetDlgItem, SetDlgItemTextW, WM_COMMAND};
     use windows::core::w;
 
     #[test]
@@ -36,9 +35,13 @@ mod dialog_tests {
             // 15s to ride out a cold wine start; the E2E smoke test waits as long.
             for _ in 0..300 {
                 std::thread::sleep(std::time::Duration::from_millis(50));
+                // The window answers to its title before the template builds its controls.
                 let Ok(dialog) = (unsafe { FindWindowW(None, w!("Open URL")) }) else {
                     continue;
                 };
+                if unsafe { GetDlgItem(Some(dialog), EDIT_IDENTIFIER) }.is_err() {
+                    continue;
+                }
                 unsafe {
                     SetDlgItemTextW(dialog, EDIT_IDENTIFIER, w!("  http://127.0.0.1/test.png  "))
                         .expect("set edit text");

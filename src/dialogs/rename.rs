@@ -12,8 +12,7 @@ pub fn show(window: HWND, current_name: &str) -> Option<String> {
     text_input::show(
         window,
         &TextInputRequest {
-            title: "Rename",
-            width: 220,
+            template: crate::dialogs::resource::IDD_RENAME,
             initial_text: current_name,
             selection: Some((0, stem_length)),
         },

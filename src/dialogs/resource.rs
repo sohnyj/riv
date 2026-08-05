@@ -10,6 +10,11 @@ pub const IDD_PAGE_STARTMENU: u16 = 190;
 pub const IDD_PAGE_ABOUT: u16 = 200;
 pub const IDD_CAPTURE_KEYBOARD: u16 = 160;
 pub const IDD_CAPTURE_MOUSE: u16 = 170;
+pub const IDD_RENAME: u16 = 180;
+pub const IDD_OPEN_URL: u16 = 185;
+
+/// The single edit field both text input dialogs carry.
+pub const IDC_TEXT_INPUT: i32 = 100;
 
 pub const IDC_OPTIONS_TAB: i32 = 1001;
 pub const IDC_APPLY: i32 = 1002;

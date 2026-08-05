@@ -2711,8 +2711,8 @@ mod open_url_smoke_tests {
 
     use windows::Win32::Foundation::{HWND, LPARAM, WPARAM};
     use windows::Win32::UI::WindowsAndMessaging::{
-        FindWindowW, GetWindowTextW, PostMessageW, SetDlgItemTextW, WM_CLOSE, WM_COMMAND,
-        WM_KEYDOWN,
+        FindWindowW, GetDlgItem, GetWindowTextW, PostMessageW, SetDlgItemTextW, WM_CLOSE,
+        WM_COMMAND, WM_KEYDOWN,
     };
     use windows::core::{HSTRING, PCWSTR, w};
 
@@ -2796,8 +2796,17 @@ mod open_url_smoke_tests {
         // One keypress only: each opens a modal dialog, and stacking them deadlocks.
         let key = WPARAM(usize::from(u16::from(b'U')));
         let _ = unsafe { PostMessageW(Some(window), WM_KEYDOWN, key, LPARAM(0)) };
-        let dialog = wait_for(|| unsafe { FindWindowW(None, w!("Open URL")) }.ok(), 15)
-            .expect("Open URL dialog");
+        // The window answers to its title before the template builds its controls.
+        let dialog = wait_for(
+            || {
+                let dialog = unsafe { FindWindowW(None, w!("Open URL")) }.ok()?;
+                unsafe { GetDlgItem(Some(dialog), dialogs::resource::IDC_TEXT_INPUT) }
+                    .is_ok()
+                    .then_some(dialog)
+            },
+            15,
+        )
+        .expect("Open URL dialog");
         let url = HSTRING::from(format!("http://127.0.0.1:{port}/test.png"));
         unsafe {
             SetDlgItemTextW(
