@@ -14,7 +14,7 @@ use windows::Win32::UI::WindowsAndMessaging::{
 };
 use windows::core::{HSTRING, Result};
 
-use crate::actions::{Action, ActivationGate};
+use crate::actions::{Action, ActionRequirement, SatisfiedRequirements};
 
 /// What one menu level is meant to hold, whatever the display measures.
 const MENU_LEVEL_CAPACITY: usize = 25;
@@ -31,11 +31,7 @@ pub enum MenuSelection {
 }
 
 pub struct MenuState {
-    pub has_image: bool,
-    pub has_file_on_disk: bool,
-    pub has_containing_file: bool,
-    pub has_navigation_targets: bool,
-    pub has_animation: bool,
+    pub requirements: SatisfiedRequirements,
     pub file_info_shown: bool,
     pub loop_enabled: bool,
     pub open_url_available: bool,
@@ -98,15 +94,13 @@ impl MenuBuilder {
         }
     }
 
-    fn gate_satisfied(&self, gate: ActivationGate) -> bool {
-        match gate {
-            ActivationGate::Window => true,
-            ActivationGate::Image => self.state_snapshot.has_image,
-            ActivationGate::FileOnDisk => self.state_snapshot.has_file_on_disk,
-            ActivationGate::ContainingFile => self.state_snapshot.has_containing_file,
-            ActivationGate::Animation => self.state_snapshot.has_animation,
-            ActivationGate::NavigationTargets => self.state_snapshot.has_navigation_targets,
-        }
+    fn requirement_satisfied(&self, requirement: ActionRequirement) -> bool {
+        self.state_snapshot.requirements.satisfied(requirement)
+    }
+
+    /// Menu only: a shortcut still opens the dialog, so the load can say why it refuses.
+    fn menu_only_disabled(&self, action: Action) -> bool {
+        action == Action::OpenUrl && !self.state_snapshot.open_url_available
     }
 
     fn append_action(&mut self, menu: HMENU, action: Action) -> Result<()> {
@@ -137,11 +131,7 @@ impl MenuBuilder {
         self.entries.push(MenuSelection::Action(action));
         let identifier = self.entries.len();
         let mut flags = MF_STRING;
-        let clear_without_recents =
-            action == Action::ClearRecents && self.state_snapshot.recent_names.is_empty();
-        let open_url_without_curl =
-            action == Action::OpenUrl && !self.state_snapshot.open_url_available;
-        if !self.gate_satisfied(action.gate()) || clear_without_recents || open_url_without_curl {
+        if !self.requirement_satisfied(action.requirement()) || self.menu_only_disabled(action) {
             flags |= MF_GRAYED | MF_DISABLED;
         }
         let checked = match action {
@@ -237,7 +227,7 @@ impl MenuBuilder {
             menu,
             open_with,
             "Open with",
-            self.state_snapshot.has_file_on_disk,
+            self.requirement_satisfied(ActionRequirement::FileOnDisk),
         )?;
         self.append_separator(menu)?;
 
@@ -256,7 +246,7 @@ impl MenuBuilder {
             menu,
             playlist,
             &playlist_label,
-            self.gate_satisfied(Action::Playlist.gate()),
+            self.requirement_satisfied(Action::Playlist.requirement()),
         )?;
         self.append_action(menu, Action::Loop)?;
         self.append_separator(menu)?;
@@ -280,7 +270,7 @@ impl MenuBuilder {
             menu,
             playback,
             "Playback",
-            self.state_snapshot.has_animation,
+            self.requirement_satisfied(ActionRequirement::Animation),
         )?;
         self.append_separator(menu)?;
 
@@ -436,11 +426,13 @@ mod menu_structure_tests {
 
     fn state() -> MenuState {
         MenuState {
-            has_image: true,
-            has_file_on_disk: true,
-            has_containing_file: true,
-            has_navigation_targets: false,
-            has_animation: true,
+            // No listing to jump to and no recents, matching the empty lists below.
+            requirements: SatisfiedRequirements::evaluate(|requirement| {
+                !matches!(
+                    requirement,
+                    ActionRequirement::NavigationTargets | ActionRequirement::RecentFiles
+                )
+            }),
             file_info_shown: false,
             loop_enabled: true,
             open_url_available: true,
@@ -476,7 +468,9 @@ mod menu_structure_tests {
     fn open_with_follows_the_on_disk_file() {
         assert!(!submenu_is_grayed(state(), "Open with")); // a plain file can hand off
         let mut without_file = state();
-        without_file.has_file_on_disk = false;
+        without_file
+            .requirements
+            .set(ActionRequirement::FileOnDisk, false);
         assert!(submenu_is_grayed(without_file, "Open with")); // URL or archive member cannot
     }
 
@@ -484,8 +478,28 @@ mod menu_structure_tests {
     fn playback_follows_the_animation() {
         assert!(!submenu_is_grayed(state(), "Playback"));
         let mut still = state();
-        still.has_animation = false;
+        still.requirements.set(ActionRequirement::Animation, false);
         assert!(submenu_is_grayed(still, "Playback"));
+    }
+
+    #[test]
+    fn clear_recents_follows_the_recent_files() {
+        let grayed = |state: MenuState| {
+            let mut builder = MenuBuilder::new(state);
+            let menu = builder.build().expect("menu builds");
+            let recent = submenu_by_label(menu, "Open recent");
+            let position = position_of_label(recent, "Clear recents").expect("item present");
+            let grayed = is_grayed(recent, position);
+            let _ = unsafe { DestroyMenu(menu) };
+            grayed
+        };
+        assert!(grayed(state())); // nothing to clear
+        let mut with_recents = state();
+        with_recents
+            .requirements
+            .set(ActionRequirement::RecentFiles, true);
+        with_recents.recent_names = vec!["a.png".to_string()];
+        assert!(!grayed(with_recents));
     }
 
     fn submenu_by_label(menu: HMENU, label: &str) -> HMENU {
@@ -547,8 +561,13 @@ mod menu_structure_tests {
     #[test]
     fn ampersands_in_names_render_literally() {
         let mut with_names = state();
-        with_names.has_navigation_targets = true;
+        with_names
+            .requirements
+            .set(ActionRequirement::NavigationTargets, true);
         with_names.playlist_names = vec!["a&b.png".to_string()];
+        with_names
+            .requirements
+            .set(ActionRequirement::RecentFiles, true);
         with_names.recent_names = vec!["c&d.png".to_string()];
         with_names.open_with_items = vec!["E & F".to_string()];
         let mut builder = MenuBuilder::new(with_names);
@@ -570,7 +589,9 @@ mod menu_structure_tests {
     fn playlist_follows_the_folder_listing() {
         assert!(submenu_is_grayed(state(), "Playlist")); // no listing to jump to
         let mut with_folder = state();
-        with_folder.has_navigation_targets = true;
+        with_folder
+            .requirements
+            .set(ActionRequirement::NavigationTargets, true);
         with_folder.playlist_names = vec!["a.png".to_string()];
         assert!(!submenu_is_grayed(with_folder, "Playlist"));
     }
@@ -578,7 +599,9 @@ mod menu_structure_tests {
     #[test]
     fn playlist_lists_the_window_and_collapses_the_rest() {
         let mut with_folder = state();
-        with_folder.has_navigation_targets = true;
+        with_folder
+            .requirements
+            .set(ActionRequirement::NavigationTargets, true);
         with_folder.playlist_names = (0..20).map(|index| format!("{index:03}.png")).collect();
         with_folder.playlist_first_index = 38;
         with_folder.playlist_current_slot = Some(12);

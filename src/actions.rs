@@ -1,8 +1,8 @@
 //! Action definitions; every input path converges on one dispatcher.
 
-/// Enablement gate shared by menu items and the dispatcher.
+/// What an action needs before it can act; the menu and the dispatcher share it.
 #[derive(Clone, Copy, PartialEq, Eq)]
-pub enum ActivationGate {
+pub enum ActionRequirement {
     Window,
     Image,
     /// Image whose backing file can take file operations (not an archive member).
@@ -12,6 +12,41 @@ pub enum ActivationGate {
     Animation,
     /// Somewhere to go besides the anchor itself (single-entry folders stay inert).
     NavigationTargets,
+    /// At least one recent file, so there is something to clear.
+    RecentFiles,
+}
+
+impl ActionRequirement {
+    /// Declaration order is the index a snapshot stores each answer at.
+    pub const ALL: [Self; 7] = [
+        Self::Window,
+        Self::Image,
+        Self::FileOnDisk,
+        Self::ContainingFile,
+        Self::Animation,
+        Self::NavigationTargets,
+        Self::RecentFiles,
+    ];
+}
+
+/// The requirements a menu found satisfied as it opened; the builder reads this, never live state.
+#[derive(Clone, Copy, Default)]
+pub struct SatisfiedRequirements([bool; ActionRequirement::ALL.len()]);
+
+impl SatisfiedRequirements {
+    /// Answers every requirement once, at the moment the snapshot is taken.
+    pub fn evaluate(satisfied: impl Fn(ActionRequirement) -> bool) -> Self {
+        Self(ActionRequirement::ALL.map(satisfied))
+    }
+
+    pub fn satisfied(self, requirement: ActionRequirement) -> bool {
+        self.0[requirement as usize]
+    }
+
+    #[cfg(test)]
+    pub fn set(&mut self, requirement: ActionRequirement, satisfied: bool) {
+        self.0[requirement as usize] = satisfied;
+    }
 }
 
 /// Variant and table order track the context menu, flattened.
@@ -61,214 +96,224 @@ pub enum Action {
     Exit,
 }
 
-/// (action, name, label, gate); the name is the binding and dispatch key.
-const ACTION_TABLE: &[(Action, &str, &str, ActivationGate)] = &[
-    (Action::Open, "open", "Open...", ActivationGate::Window),
+/// (action, name, label, requirement); the name is the binding and dispatch key.
+const ACTION_TABLE: &[(Action, &str, &str, ActionRequirement)] = &[
+    (Action::Open, "open", "Open...", ActionRequirement::Window),
     (
         Action::OpenUrl,
         "openurl",
         "Open URL...",
-        ActivationGate::Window,
+        ActionRequirement::Window,
     ),
     (
         Action::PasteUrl,
         "pasteurl",
         "Paste URL",
-        ActivationGate::Window,
+        ActionRequirement::Window,
     ),
     (
         Action::ClearRecents,
         "clearrecents",
         "Clear recents",
-        ActivationGate::Window,
+        ActionRequirement::RecentFiles,
     ),
     (
         Action::OtherApplication,
         "otherapplication",
         "Other application...",
-        ActivationGate::FileOnDisk,
+        ActionRequirement::FileOnDisk,
     ),
     (
         Action::Playlist,
         "playlist",
         "Playlist",
-        ActivationGate::NavigationTargets,
+        ActionRequirement::NavigationTargets,
     ),
     (
         Action::Loop,
         "loop",
         "Loop",
-        ActivationGate::NavigationTargets,
+        ActionRequirement::NavigationTargets,
     ),
     (
         Action::FirstFile,
         "firstfile",
         "First file",
-        ActivationGate::NavigationTargets,
+        ActionRequirement::NavigationTargets,
     ),
     (
         Action::PreviousFile,
         "previousfile",
         "Previous",
-        ActivationGate::NavigationTargets,
+        ActionRequirement::NavigationTargets,
     ),
     (
         Action::NextFile,
         "nextfile",
         "Next",
-        ActivationGate::NavigationTargets,
+        ActionRequirement::NavigationTargets,
     ),
     (
         Action::LastFile,
         "lastfile",
         "Last file",
-        ActivationGate::NavigationTargets,
+        ActionRequirement::NavigationTargets,
     ),
-    (Action::Pause, "pause", "Pause", ActivationGate::Animation),
+    (
+        Action::Pause,
+        "pause",
+        "Pause",
+        ActionRequirement::Animation,
+    ),
     (
         Action::PreviousFrame,
         "previousframe",
         "Previous frame",
-        ActivationGate::Animation,
+        ActionRequirement::Animation,
     ),
     (
         Action::NextFrame,
         "nextframe",
         "Next frame",
-        ActivationGate::Animation,
+        ActionRequirement::Animation,
     ),
     (
         Action::DecreaseSpeed,
         "decreasespeed",
         "Decrease speed",
-        ActivationGate::Animation,
+        ActionRequirement::Animation,
     ),
     (
         Action::IncreaseSpeed,
         "increasespeed",
         "Increase speed",
-        ActivationGate::Animation,
+        ActionRequirement::Animation,
     ),
     (
         Action::ResetSpeed,
         "resetspeed",
         "Reset speed",
-        ActivationGate::Animation,
+        ActionRequirement::Animation,
     ),
     (
         Action::ShowFileInfo,
         "showfileinfo",
         "Show file info",
-        ActivationGate::Image,
+        ActionRequirement::Image,
     ),
-    (Action::Reload, "reload", "Reload", ActivationGate::Image),
+    (Action::Reload, "reload", "Reload", ActionRequirement::Image),
     (
         Action::ToggleFitMode,
         "togglefitmode",
         "Toggle fit mode",
-        ActivationGate::Image,
+        ActionRequirement::Image,
     ),
     (
         Action::PreserveZoom,
         "preservezoom",
         "Preserve zoom",
-        ActivationGate::Image,
+        ActionRequirement::Image,
     ),
-    (Action::ZoomIn, "zoomin", "Zoom in", ActivationGate::Image),
+    (
+        Action::ZoomIn,
+        "zoomin",
+        "Zoom in",
+        ActionRequirement::Image,
+    ),
     (
         Action::ZoomOut,
         "zoomout",
         "Zoom out",
-        ActivationGate::Image,
+        ActionRequirement::Image,
     ),
     (
         Action::ToggleZoom,
         "togglezoom",
         "Toggle zoom",
-        ActivationGate::Image,
+        ActionRequirement::Image,
     ),
-    (Action::PanUp, "panup", "Pan up", ActivationGate::Image),
+    (Action::PanUp, "panup", "Pan up", ActionRequirement::Image),
     (
         Action::PanDown,
         "pandown",
         "Pan down",
-        ActivationGate::Image,
+        ActionRequirement::Image,
     ),
     (
         Action::PanLeft,
         "panleft",
         "Pan left",
-        ActivationGate::Image,
+        ActionRequirement::Image,
     ),
     (
         Action::PanRight,
         "panright",
         "Pan right",
-        ActivationGate::Image,
+        ActionRequirement::Image,
     ),
     (
         Action::RotateLeft,
         "rotateleft",
         "Rotate left",
-        ActivationGate::Image,
+        ActionRequirement::Image,
     ),
     (
         Action::RotateRight,
         "rotateright",
         "Rotate right",
-        ActivationGate::Image,
+        ActionRequirement::Image,
     ),
-    (Action::Mirror, "mirror", "Mirror", ActivationGate::Image),
-    (Action::Flip, "flip", "Flip", ActivationGate::Image),
+    (Action::Mirror, "mirror", "Mirror", ActionRequirement::Image),
+    (Action::Flip, "flip", "Flip", ActionRequirement::Image),
     (
         Action::ShowInExplorer,
         "showinexplorer",
         "Show in Explorer",
-        ActivationGate::ContainingFile,
+        ActionRequirement::ContainingFile,
     ),
     (
         Action::Rename,
         "rename",
         "Rename...",
-        ActivationGate::FileOnDisk,
+        ActionRequirement::FileOnDisk,
     ),
     (
         Action::Delete,
         "delete",
         "Delete",
-        ActivationGate::FileOnDisk,
+        ActionRequirement::FileOnDisk,
     ),
     (
         Action::DeletePermanently,
         "deletepermanently",
         "Delete permanently",
-        ActivationGate::FileOnDisk,
+        ActionRequirement::FileOnDisk,
     ),
     (
         Action::ToggleSlideshow,
         "toggleslideshow",
         "Toggle slideshow",
-        ActivationGate::NavigationTargets,
+        ActionRequirement::NavigationTargets,
     ),
     (
         Action::Settings,
         "settings",
         "Settings",
-        ActivationGate::Window,
+        ActionRequirement::Window,
     ),
     (
         Action::AlwaysOnTop,
         "alwaysontop",
         "Always on top",
-        ActivationGate::Window,
+        ActionRequirement::Window,
     ),
     (
         Action::Fullscreen,
         "fullscreen",
         "Enter fullscreen",
-        ActivationGate::Window,
+        ActionRequirement::Window,
     ),
-    (Action::Exit, "exit", "Exit", ActivationGate::Window),
+    (Action::Exit, "exit", "Exit", ActionRequirement::Window),
 ];
 
 const RECENT_NAMES: [&str; crate::settings::RECENT_FILES_LIMIT] = [
@@ -292,7 +337,7 @@ impl Action {
     }
 
     /// The table row; Recent is dynamic and answers before any caller reaches here.
-    fn entry(self) -> &'static (Self, &'static str, &'static str, ActivationGate) {
+    fn entry(self) -> &'static (Self, &'static str, &'static str, ActionRequirement) {
         ACTION_TABLE
             .iter()
             .find(|(action, _, _, _)| *action == self)
@@ -313,9 +358,9 @@ impl Action {
         self.entry().2
     }
 
-    pub fn gate(self) -> ActivationGate {
+    pub fn requirement(self) -> ActionRequirement {
         if matches!(self, Self::Recent(_)) {
-            return ActivationGate::Window;
+            return ActionRequirement::Window;
         }
         self.entry().3
     }

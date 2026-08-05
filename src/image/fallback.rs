@@ -509,7 +509,7 @@ fn probe_heif_primary_image(
     let handle = heif_primary_handle(context, data).ok()?;
     let width = unsafe { heif_image_handle_get_width(handle) };
     let height = unsafe { heif_image_handle_get_height(handle) };
-    // The same gate the decode takes, so the budget matches the storage it will produce.
+    // The same check the decode makes, so the budget matches the storage it will produce.
     let (_, storage) = heif_pixel_target(heif_hdr_encoding(handle));
     unsafe { heif_image_handle_release(handle) };
     (width > 0 && height > 0).then_some((width as u32, height as u32, storage))

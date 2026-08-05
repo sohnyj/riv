@@ -94,7 +94,7 @@ fn path_segment(url: &str) -> Option<&str> {
     Some(segments.rsplit('/').next().unwrap_or(segments))
 }
 
-/// Fetches a URL to memory; the protocol gate doubles as argument-injection defense.
+/// Fetches a URL to memory; the protocol check doubles as argument-injection defense.
 pub fn download(
     url: &str,
     cancellation: &AtomicBool,

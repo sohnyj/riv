@@ -836,7 +836,7 @@ fn probe_webp_weight(input: &DecodeInput<'_>) -> Option<u64> {
     Some(decoded_weight(dimension(24)?, dimension(27)?, 4, 1))
 }
 
-/// Extension-only descriptor lookup, so the UI-thread gates do no I/O.
+/// Extension-only descriptor lookup, so the UI-thread checks do no I/O.
 fn descriptor_for_path_extension(path: &Path) -> Option<&'static FormatDescriptor> {
     descriptor_for_extension(&crate::text::lowercase_extension(path)?)
 }

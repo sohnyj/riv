@@ -581,7 +581,7 @@ impl ImageCore {
         Some((index + 1, self.entries.len()))
     }
 
-    /// A NavigationTargets-gated action can act: somewhere to go besides the anchor itself.
+    /// An action requiring navigation targets can act: somewhere to go besides the anchor.
     pub fn has_navigation_targets(&self) -> bool {
         match self.entries.len() {
             0 => false,

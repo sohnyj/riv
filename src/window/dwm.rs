@@ -22,7 +22,7 @@ fn set_attribute<T>(
     };
 }
 
-/// Draws the title bar in dark or light mode; the caller gates on the value changing.
+/// Draws the title bar in dark or light mode; the caller calls only when the value changed.
 pub fn apply_title_bar_theme(window: HWND, dark: bool) {
     let dark: i32 = i32::from(dark);
     set_attribute(window, DWMWA_USE_IMMERSIVE_DARK_MODE, &dark);

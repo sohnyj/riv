@@ -18,7 +18,7 @@ use std::path::Path;
 use std::rc::Rc;
 use std::sync::Arc;
 
-use actions::{Action, ActivationGate};
+use actions::{Action, ActionRequirement, SatisfiedRequirements};
 use bindings::{Bindings, MODIFIER_CONTROL, MouseBase, current_modifiers};
 use dialogs::options::WM_APP_OPTIONS_APPLIED;
 use image::animation::Animation;
@@ -790,7 +790,7 @@ impl Application {
         showing
     }
 
-    /// The one place the slideshow timer is set, so the focus gate holds for every caller.
+    /// The one place the slideshow timer is set, so the focus requirement holds for every caller.
     fn schedule_slideshow_timer(&self, window: HWND, milliseconds: u32) {
         if !self.window_active {
             return;
@@ -1186,18 +1186,21 @@ impl Application {
             .filter(|list| list.extension == extension)
     }
 
-    fn gate_satisfied(&self, gate: ActivationGate) -> bool {
-        match gate {
-            ActivationGate::Window => true,
-            ActivationGate::Image => self.image_core.current.is_some(),
-            ActivationGate::FileOnDisk => self.image_core.current_file().is_some(),
-            ActivationGate::ContainingFile => self.image_core.current_containing_file().is_some(),
-            ActivationGate::Animation => self
+    fn requirement_satisfied(&self, requirement: ActionRequirement) -> bool {
+        match requirement {
+            ActionRequirement::Window => true,
+            ActionRequirement::Image => self.image_core.current.is_some(),
+            ActionRequirement::FileOnDisk => self.image_core.current_file().is_some(),
+            ActionRequirement::ContainingFile => {
+                self.image_core.current_containing_file().is_some()
+            }
+            ActionRequirement::Animation => self
                 .image_core
                 .current
                 .as_ref()
                 .is_some_and(|current| current.image.frames.len() > 1),
-            ActivationGate::NavigationTargets => self.image_core.has_navigation_targets(),
+            ActionRequirement::NavigationTargets => self.image_core.has_navigation_targets(),
+            ActionRequirement::RecentFiles => !self.settings.recent_files().is_empty(),
         }
     }
 
@@ -1424,7 +1427,7 @@ fn paste_open_url(application: &mut Application, window: HWND) {
 
 /// The single dispatch point; every input path converges here.
 fn dispatch_action(application: &mut Application, window: HWND, action: Action) {
-    if !application.gate_satisfied(action.gate()) {
+    if !application.requirement_satisfied(action.requirement()) {
         return;
     }
     match action {
@@ -1613,7 +1616,7 @@ fn dispatch_action(application: &mut Application, window: HWND, action: Action) 
         }
         Action::PasteUrl => paste_open_url(application, window),
         Action::ShowInExplorer => {
-            // The ContainingFile gate keeps URL items out of here.
+            // The ContainingFile requirement keeps URL items out of here.
             if let Some(file) = application.image_core.current_containing_file() {
                 file_ops::show_in_explorer(file);
             }
@@ -1670,7 +1673,7 @@ fn dispatch_action(application: &mut Application, window: HWND, action: Action) 
 }
 
 fn delete_current_file(application: &mut Application, window: HWND, permanent: bool) {
-    // The FileOnDisk gate keeps archive members out of here.
+    // The FileOnDisk requirement keeps archive members out of here.
     let Some(path) = application.image_core.current_file().map(Path::to_path_buf) else {
         return;
     };
@@ -1801,10 +1804,9 @@ fn show_menu(application: &mut Application, window: HWND, x: i32, y: i32, target
         .image_core
         .playlist_window(context_menu::playlist_capacity(window));
     let state = MenuState {
-        has_image: application.gate_satisfied(ActivationGate::Image),
-        has_file_on_disk: application.gate_satisfied(ActivationGate::FileOnDisk),
-        has_containing_file: application.gate_satisfied(ActivationGate::ContainingFile),
-        has_navigation_targets: application.gate_satisfied(ActivationGate::NavigationTargets),
+        requirements: SatisfiedRequirements::evaluate(|requirement| {
+            application.requirement_satisfied(requirement)
+        }),
         file_info_shown: application.show_file_info,
         loop_enabled: application.settings.options.loop_within_folder,
         open_url_available: curl::available(),
@@ -1812,7 +1814,6 @@ fn show_menu(application: &mut Application, window: HWND, x: i32, y: i32, target
         playlist_first_index: playlist.first_index,
         playlist_current_slot: playlist.current_slot,
         playlist_hidden_after: playlist.hidden_after,
-        has_animation: application.gate_satisfied(ActivationGate::Animation),
         animation_paused: application
             .animation
             .as_ref()
@@ -1917,7 +1918,7 @@ fn handle_wheel(application: &mut Application, window: HWND, wheel_delta: i16) {
     let Some(action) = application.bindings.lookup_mouse(modifiers, base) else {
         return;
     };
-    if !application.gate_satisfied(action.gate()) {
+    if !application.requirement_satisfied(action.requirement()) {
         return;
     }
     // The wheel sets its own distance; the action still owns the axis and the sign.
