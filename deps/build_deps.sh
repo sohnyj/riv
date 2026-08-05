@@ -46,12 +46,16 @@ configure_and_install libwebp \
     -DWEBP_BUILD_WEBPINFO=OFF \
     -DWEBP_BUILD_WEBPMUX=OFF
 
-# libde265 (HEVC for the HEIF fallback)
+# libde265 (HEVC for the HEIF fallback); its -Wall means -Weverything to clang-cl
 clone libde265 https://github.com/strukturag/libde265.git master
-configure_and_install libde265 \
-    -DENABLE_SDL=OFF \
-    -DENABLE_DECODER=OFF \
-    -DENABLE_ENCODER=OFF
+(
+    export CFLAGS="-Wno-everything"
+    export CXXFLAGS="-Wno-everything"
+    configure_and_install libde265 \
+        -DENABLE_SDL=OFF \
+        -DENABLE_DECODER=OFF \
+        -DENABLE_ENCODER=OFF
+)
 
 # libheif (HEIF runtime fallback)
 clone libheif https://github.com/strukturag/libheif.git master
@@ -84,16 +88,21 @@ configure_and_install libdeflate \
     -DLIBDEFLATE_BUILD_GZIP=OFF \
     -DLIBDEFLATE_BUILD_TESTS=OFF
 
+# OpenEXR; its CMake adds a /MP that clang-cl ignores and reports once per file
 clone openexr https://github.com/AcademySoftwareFoundation/openexr.git release
-configure_and_install openexr \
-    -DBUILD_TESTING=OFF \
-    -DOPENEXR_BUILD_EXAMPLES=OFF \
-    -DOPENEXR_BUILD_TOOLS=OFF \
-    -DOPENEXR_INSTALL_PKG_CONFIG=ON \
-    -DOPENEXR_INSTALL_TOOLS=OFF \
-    -DOPENEXR_FORCE_INTERNAL_IMATH=OFF \
-    -DOPENEXR_FORCE_INTERNAL_DEFLATE=OFF \
-    -DOPENEXR_ENABLE_THREADING=ON
+(
+    export CFLAGS="-Wno-unused-command-line-argument"
+    export CXXFLAGS="-Wno-unused-command-line-argument"
+    configure_and_install openexr \
+        -DBUILD_TESTING=OFF \
+        -DOPENEXR_BUILD_EXAMPLES=OFF \
+        -DOPENEXR_BUILD_TOOLS=OFF \
+        -DOPENEXR_INSTALL_PKG_CONFIG=ON \
+        -DOPENEXR_INSTALL_TOOLS=OFF \
+        -DOPENEXR_FORCE_INTERNAL_IMATH=OFF \
+        -DOPENEXR_FORCE_INTERNAL_DEFLATE=OFF \
+        -DOPENEXR_ENABLE_THREADING=ON
+)
 
 # EXR shim: expose the C++ RgbaInputFile through extern "C"
 cmake -S shim -B build/shim -G Ninja \
