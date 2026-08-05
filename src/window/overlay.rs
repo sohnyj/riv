@@ -599,6 +599,14 @@ fn trim_number(value: f64, decimals: usize) -> String {
     }
 }
 
+/// Reasons reach the overlay from Rust, Win32 and the C shims, so it makes the sentence.
+fn capitalized(text: &str) -> String {
+    let mut characters = text.chars();
+    characters.next().map_or_else(String::new, |first| {
+        first.to_uppercase().collect::<String>() + characters.as_str()
+    })
+}
+
 pub fn build_error_text(
     file_name: &str,
     message: &str,
@@ -608,7 +616,7 @@ pub fn build_error_text(
     let reason = if message.is_empty() {
         "Decode failed".to_string()
     } else {
-        message.trim().to_string()
+        capitalized(message.trim())
     };
     // Code 0 is "no code", not an HRESULT; a line that ends in one needs no period.
     let reason = if code != 0 {
@@ -1166,6 +1174,12 @@ mod error_text_tests {
             coded,
             "Cannot open a.png\nNo image at this URL (Error 0x88982F50)"
         );
+    }
+
+    #[test]
+    fn a_lowercase_reason_becomes_a_sentence() {
+        let text = build_error_text("a.exr", "invalid data window", 0, &[]);
+        assert_eq!(text, "Cannot open a.exr\nInvalid data window.");
     }
 
     #[test]
