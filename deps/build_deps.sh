@@ -54,7 +54,10 @@ clone libde265 https://github.com/strukturag/libde265.git master
     configure_and_install libde265 \
         -DENABLE_SDL=OFF \
         -DENABLE_DECODER=OFF \
-        -DENABLE_ENCODER=OFF
+        -DENABLE_ENCODER=OFF \
+        -DENABLE_SIMD=ON \
+        -DENABLE_AVX2=ON \
+        -DENABLE_AVX512=ON
 )
 
 # libheif (HEIF runtime fallback)
