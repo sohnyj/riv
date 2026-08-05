@@ -66,9 +66,27 @@ struct MenuBuilder {
     playlist_menu: HMENU,
 }
 
-/// Win32 menus read "&" as a mnemonic prefix; double it to render literally.
-fn escape_mnemonics(label: &str) -> String {
+/// Win32 menus read "&" as an access key prefix; double it to render literally.
+fn escape_ampersands(label: &str) -> String {
     label.replace('&', "&&")
+}
+
+/// Exit alone takes an access key, so its first letter no longer selects it.
+fn access_key(action: Action) -> Option<char> {
+    match action {
+        Action::Exit => Some('x'),
+        _ => None,
+    }
+}
+
+/// Prefixes the access key with "&" in an escaped label, leaving the shortcut column alone.
+fn mark_access_key(mut escaped: String, access_key: Option<char>) -> String {
+    let position =
+        access_key.and_then(|key| escaped.split('\t').next().and_then(|label| label.find(key)));
+    if let Some(index) = position {
+        escaped.insert(index, '&');
+    }
+    escaped
 }
 
 impl MenuBuilder {
@@ -101,8 +119,9 @@ impl MenuBuilder {
         flags: MENU_ITEM_FLAGS,
         identifier: usize,
         text: &str,
+        access_key: Option<char>,
     ) -> Result<()> {
-        let escaped = escape_mnemonics(text);
+        let escaped = mark_access_key(escape_ampersands(text), access_key);
         unsafe { AppendMenuW(menu, flags, identifier, &HSTRING::from(escaped.as_str())) }
     }
 
@@ -138,13 +157,13 @@ impl MenuBuilder {
             flags |= MF_CHECKED;
         }
         let text = self.menu_text(action, label);
-        Self::append_text(menu, flags, identifier, &text)
+        Self::append_text(menu, flags, identifier, &text, access_key(action))
     }
 
     fn append_open_with_entry(&mut self, menu: HMENU, index: usize, label: &str) -> Result<()> {
         self.entries.push(MenuSelection::OpenWithEntry(index));
         let identifier = self.entries.len();
-        Self::append_text(menu, MF_STRING, identifier, label)
+        Self::append_text(menu, MF_STRING, identifier, label, None)
     }
 
     /// A disabled line counting the names hidden on that side; zero appends nothing.
@@ -153,7 +172,7 @@ impl MenuBuilder {
             return Ok(());
         }
         let label = format!("... {hidden} more");
-        Self::append_text(menu, MF_STRING | MF_GRAYED | MF_DISABLED, 0, &label)
+        Self::append_text(menu, MF_STRING | MF_GRAYED | MF_DISABLED, 0, &label, None)
     }
 
     fn append_playlist_entry(&mut self, menu: HMENU, slot: usize, label: &str) -> Result<()> {
@@ -165,7 +184,7 @@ impl MenuBuilder {
         if self.state_snapshot.playlist_current_slot == Some(slot) {
             flags |= MF_CHECKED;
         }
-        Self::append_text(menu, flags, identifier, label)
+        Self::append_text(menu, flags, identifier, label, None)
     }
 
     fn append_separator(&self, menu: HMENU) -> Result<()> {
@@ -183,7 +202,7 @@ impl MenuBuilder {
         if !enabled {
             flags |= MF_GRAYED | MF_DISABLED;
         }
-        Self::append_text(menu, flags, submenu.0 as usize, label)
+        Self::append_text(menu, flags, submenu.0 as usize, label, None)
     }
 
     fn build(&mut self) -> Result<HMENU> {
@@ -315,7 +334,7 @@ impl MenuBuilder {
         self.append_action_labeled(window, Action::Fullscreen, fullscreen_label)?;
         self.append_submenu(menu, window, "Window", true)?;
         self.append_separator(menu)?;
-        self.append_action(menu, Action::Quit)?;
+        self.append_action(menu, Action::Exit)?;
         Ok(menu)
     }
 }
@@ -671,7 +690,7 @@ mod menu_structure_tests {
             "Tools",
             "Window",
             "", // separator
-            "Exit",
+            "E&xit",
         ];
         assert_eq!(labels, expected);
     }

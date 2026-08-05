@@ -1441,7 +1441,7 @@ fn dispatch_action(application: &mut Application, window: HWND, action: Action) 
     }
     let zoom_step = 1.0 + application.settings.options.zoom_step_percent as f32 / 100.0;
     match action {
-        Action::Quit => {
+        Action::Exit => {
             let _ = unsafe { PostMessageW(Some(window), WM_CLOSE, WPARAM(0), LPARAM(0)) };
         }
         Action::FirstFile => {

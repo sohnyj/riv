@@ -58,7 +58,7 @@ pub enum Action {
     Options,
     AlwaysOnTop,
     Fullscreen,
-    Quit,
+    Exit,
 }
 
 /// (action, name, label, gate); the name is the binding and dispatch key.
@@ -268,7 +268,7 @@ const ACTION_TABLE: &[(Action, &str, &str, ActivationGate)] = &[
         "Enter fullscreen",
         ActivationGate::Window,
     ),
-    (Action::Quit, "exit", "Exit", ActivationGate::Window),
+    (Action::Exit, "exit", "Exit", ActivationGate::Window),
 ];
 
 const RECENT_NAMES: [&str; crate::settings::RECENT_FILES_LIMIT] = [

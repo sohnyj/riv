@@ -130,13 +130,13 @@ const DEFAULT_KEYBOARD: &[(&str, &[&str])] = &[
     ("flip", &["Shift+F"]),
     ("showinexplorer", &["Ctrl+E"]),
     ("rename", &["R", "F2"]),
-    ("delete", &["Delete"]),
+    ("delete", &["Delete", "Ctrl+D"]),
     ("deletepermanently", &["Shift+Delete"]),
     ("toggleslideshow", &["S"]),
     ("settings", &["Ctrl+,"]),
     ("alwaysontop", &["T"]),
     ("fullscreen", &["F", "F11"]),
-    ("exit", &["Ctrl+W", "Esc"]),
+    ("exit", &["Ctrl+W"]),
 ];
 
 const DEFAULT_MOUSE: &[(&str, &[&str])] = &[
