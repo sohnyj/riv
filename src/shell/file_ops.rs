@@ -156,7 +156,7 @@ pub fn rename_file(path: &Path, new_name: &str) -> std::io::Result<PathBuf> {
 }
 
 pub fn show_rename_error(window: HWND, error: &std::io::Error) {
-    crate::dialogs::show_message(
+    crate::dialogs::message::show_message(
         Some(window),
         "Rename",
         "Cannot rename the file.",

@@ -18,7 +18,7 @@ use super::decode::{
 };
 use crate::archive::reader as archive_reader;
 use crate::network::curl;
-use crate::window::post_boxed;
+use crate::window::message::post_boxed;
 
 pub const WM_APP_DECODE_COMPLETE: u32 = WM_APP + 1;
 pub const WM_APP_DOWNLOAD_PROGRESS: u32 = WM_APP + 7;

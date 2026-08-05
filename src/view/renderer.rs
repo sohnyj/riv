@@ -909,7 +909,7 @@ impl Renderer {
 
     /// UNORM16 scene the quantize pass reads, as the D2D target.
     fn create_scene_target(&mut self) -> Result<()> {
-        let scene_texture = crate::view::create_render_texture(
+        let scene_texture = crate::view::texture::create_render_texture(
             &self.d3d_device,
             self.backbuffer_size,
             DXGI_FORMAT_R16G16B16A16_UNORM,
@@ -948,7 +948,7 @@ impl Renderer {
         if self.quantize_pass.is_some() {
             // The pass dithers and quantizes the scene into the backbuffer.
             self.backbuffer_render_target_view =
-                crate::view::create_render_target_view(&self.d3d_device, &buffer)?;
+                crate::view::texture::create_render_target_view(&self.d3d_device, &buffer)?;
             return self.create_scene_target();
         }
         let properties = Self::target_bitmap_properties(self.backbuffer_format);
@@ -973,8 +973,10 @@ impl Renderer {
                 if quantizing {
                     // The pass writes each presentation buffer; D2D draws the shared scene.
                     slot.d2d_target = None;
-                    slot.render_target_view =
-                        crate::view::create_render_target_view(&self.d3d_device, &slot.texture)?;
+                    slot.render_target_view = crate::view::texture::create_render_target_view(
+                        &self.d3d_device,
+                        &slot.texture,
+                    )?;
                 } else {
                     // D2D draws each presentation buffer directly; render retargets per frame.
                     slot.render_target_view = None;

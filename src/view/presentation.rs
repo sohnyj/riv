@@ -192,7 +192,7 @@ impl CompositionPresenter {
         self.next_buffer_index = 0;
         for _ in 0..count {
             // Shareable but not displayable: composition only, never independent flip.
-            let texture = crate::view::create_render_texture(
+            let texture = crate::view::texture::create_render_texture(
                 d3d_device,
                 size,
                 format,

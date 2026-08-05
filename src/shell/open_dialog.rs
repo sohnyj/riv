@@ -20,7 +20,7 @@ pub fn show(window: HWND, initial_directory: Option<&str>) -> Vec<PathBuf> {
 
 /// A filter per format in the file association order, then the two catch-alls and where they begin.
 fn filters(archives: bool) -> (Vec<(String, String)>, usize) {
-    let formats = image::sorted_format_groups(archives);
+    let formats = image::formats::sorted_format_groups(archives);
     let mut filters = Vec::with_capacity(formats.len() + 2);
     for (name, extensions) in formats {
         let pattern = extensions

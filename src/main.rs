@@ -2041,7 +2041,7 @@ fn main() -> Result<()> {
 
     window::menu_theme::enable_dark_menus();
     // Per-thread state the dialogs paint through; without it every paint rebuilds it.
-    dialogs::begin_buffered_painting();
+    dialogs::paint::begin_buffered_painting();
 
     let argument_path = std::env::args_os().nth(1).map(std::path::PathBuf::from);
 
@@ -2068,7 +2068,7 @@ fn main() -> Result<()> {
     let window = create_main_window(argument_path.as_deref(), pending_device)?;
 
     run_message_loop(window);
-    dialogs::end_buffered_painting();
+    dialogs::paint::end_buffered_painting();
     Ok(())
 }
 
@@ -2141,8 +2141,8 @@ fn wait_for_frame_slot(slot_handle: HANDLE) -> bool {
 
 fn create_main_window(initial_path: Option<&Path>, pending_device: PendingDevice) -> Result<HWND> {
     let instance = unsafe { GetModuleHandleW(None)? };
-    let (default_x, default_y) =
-        window::work_area_centered_origin(640, 480).unwrap_or((CW_USEDEFAULT, CW_USEDEFAULT));
+    let (default_x, default_y) = window::geometry::work_area_centered_origin(640, 480)
+        .unwrap_or((CW_USEDEFAULT, CW_USEDEFAULT));
     let window = unsafe {
         CreateWindowExW(
             Default::default(),
@@ -2239,7 +2239,7 @@ fn process_is_elevated() -> bool {
 
 /// No window exists yet, so the app name titles the failure.
 fn fail_fast_dialog(reason: &str, detail: &str) {
-    dialogs::show_message(None, "riv", reason, detail, "Close");
+    dialogs::message::show_message(None, "riv", reason, detail, "Close");
 }
 
 fn application_from_window(window: HWND) -> Option<&'static mut Application> {
@@ -2258,7 +2258,7 @@ extern "system" fn window_procedure(
             // Without this the window shrinks until only the caption and its buttons are left.
             let (client_width, client_height) = MINIMUM_CLIENT_SIZE;
             if let Some((width, height)) =
-                window::window_size_for_client(window, client_width, client_height)
+                window::geometry::window_size_for_client(window, client_width, client_height)
             {
                 let information = unsafe { &mut *(lparam.0 as *mut MINMAXINFO) };
                 information.ptMinTrackSize.x = width;

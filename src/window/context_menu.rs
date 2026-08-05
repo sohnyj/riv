@@ -387,7 +387,7 @@ pub fn playlist_capacity(window: HWND) -> usize {
     if !unsafe { GetMonitorInfoW(monitor, &raw mut monitor_info) }.as_bool() {
         return UNMEASURED_CAPACITY;
     }
-    let dpi = super::dpi_for_window(window);
+    let dpi = super::geometry::dpi_for_window(window);
     // The work area already excludes the taskbar.
     let work_height = monitor_info.rcWork.bottom - monitor_info.rcWork.top;
     capacity_for_height(work_height - title_bar_height(dpi), menu_row_height(dpi))

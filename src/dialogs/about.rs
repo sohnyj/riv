@@ -84,7 +84,7 @@ fn layout_centered(page: HWND) {
         let Ok(control) = (unsafe { GetDlgItem(Some(page), id) }) else {
             return;
         };
-        let Some(bounds) = super::control_bounds(page, control) else {
+        let Some(bounds) = super::geometry::control_bounds(page, control) else {
             return;
         };
         placements.push((id, control, bounds.top, bounds.bottom - bounds.top));

@@ -30,7 +30,7 @@ use crate::dialogs::resource::{
     IDC_CAPTURE_MOUSE_FIELD, IDD_CAPTURE_KEYBOARD, IDD_CAPTURE_MOUSE,
 };
 
-use super::{DWLP_USER, IDCANCEL, IDOK, state_mut};
+use super::modal::{DWLP_USER, IDCANCEL, IDOK, state_mut};
 
 const WM_RIV_KEY_CAPTURED: u32 = WM_APP + 0x40;
 const WM_RIV_MOUSE_CAPTURED: u32 = WM_APP + 0x41;
@@ -51,7 +51,7 @@ pub fn capture_keyboard_sequences(
         taken,
         accepted: false,
     };
-    crate::dialogs::run_modal(
+    crate::dialogs::modal::run_modal(
         parent,
         IDD_CAPTURE_KEYBOARD,
         keyboard_procedure,
@@ -71,7 +71,7 @@ pub fn capture_mouse_binding(
         taken,
         accepted: false,
     };
-    crate::dialogs::run_modal(
+    crate::dialogs::modal::run_modal(
         parent,
         IDD_CAPTURE_MOUSE,
         mouse_procedure,
@@ -81,7 +81,7 @@ pub fn capture_mouse_binding(
 }
 
 fn warn_conflict(dialog: HWND, encoding: &str, owner_label: &str) {
-    crate::dialogs::show_message(
+    crate::dialogs::message::show_message(
         Some(dialog),
         "Shortcut",
         "Shortcut already used.",
@@ -105,7 +105,7 @@ unsafe extern "system" fn keyboard_procedure(
     match message {
         WM_INITDIALOG => {
             unsafe { SetWindowLongPtrW(dialog, DWLP_USER, lparam.0) };
-            crate::dialogs::center_on_owner(dialog);
+            crate::dialogs::geometry::center_on_owner(dialog);
             let state = unsafe { &*(lparam.0 as *const KeyboardCaptureState) };
             for sequence in &state.sequences {
                 listbox_add(dialog, sequence);
@@ -204,7 +204,7 @@ unsafe extern "system" fn mouse_procedure(
     match message {
         WM_INITDIALOG => {
             unsafe { SetWindowLongPtrW(dialog, DWLP_USER, lparam.0) };
-            crate::dialogs::center_on_owner(dialog);
+            crate::dialogs::geometry::center_on_owner(dialog);
             let state = unsafe { &*(lparam.0 as *const MouseCaptureState) };
             set_mouse_field_text(dialog, state.binding.as_deref());
             1
@@ -314,7 +314,7 @@ fn draw_field_text(device: HDC, rect: RECT, text: &mut [u16], color: COLORREF) {
 }
 
 fn draw_sequence_item(draw: &DRAWITEMSTRUCT) {
-    crate::dialogs::draw_buffered(draw.hDC, draw.rcItem, |device| {
+    crate::dialogs::paint::draw_buffered(draw.hDC, draw.rcItem, |device| {
         paint_sequence_item(draw, device)
     });
 }
@@ -485,7 +485,7 @@ fn paint_field(field: HWND, text: &str, hint: bool) {
     let mut paint = PAINTSTRUCT::default();
     let target = unsafe { BeginPaint(field, &raw mut paint) };
     let bounds = paint.rcPaint;
-    crate::dialogs::draw_buffered(target, bounds, |device| unsafe {
+    crate::dialogs::paint::draw_buffered(target, bounds, |device| unsafe {
         FillRect(device, &raw const bounds, GetSysColorBrush(COLOR_WINDOW));
         let font = field_font(field);
         if !font.is_invalid() {

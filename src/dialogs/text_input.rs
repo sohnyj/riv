@@ -9,8 +9,8 @@ use windows::Win32::UI::WindowsAndMessaging::{
 };
 use windows::core::PCWSTR;
 
+use super::modal::{DWLP_USER, IDCANCEL, IDOK};
 use super::resource::IDC_TEXT_INPUT;
-use super::{DWLP_USER, IDCANCEL, IDOK};
 
 /// One edit line with OK/Cancel; the template carries the title and the width.
 pub struct TextInputRequest<'a> {
@@ -37,7 +37,7 @@ pub fn show(window: HWND, request: &TextInputRequest) -> Option<String> {
         selection: request.selection,
         accepted_text: None,
     };
-    let dialog_result = super::run_modal(
+    let dialog_result = super::modal::run_modal(
         window,
         request.template,
         dialog_procedure,
@@ -57,7 +57,7 @@ extern "system" fn dialog_procedure(
     match message {
         WM_INITDIALOG => {
             unsafe { SetWindowLongPtrW(dialog, DWLP_USER, lparam.0) };
-            crate::dialogs::center_on_owner(dialog);
+            crate::dialogs::geometry::center_on_owner(dialog);
             let state = unsafe { &*(lparam.0 as *const TextInputState) };
             unsafe {
                 let _ =
@@ -80,7 +80,7 @@ extern "system" fn dialog_procedure(
             let command = wparam.0 & 0xFFFF;
             match command {
                 IDOK => {
-                    if let Some(state) = super::state_mut::<TextInputState>(dialog) {
+                    if let Some(state) = super::modal::state_mut::<TextInputState>(dialog) {
                         let mut buffer = [0u16; 2048];
                         let length =
                             unsafe { GetDlgItemTextW(dialog, IDC_TEXT_INPUT, &mut buffer) };

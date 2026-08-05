@@ -119,7 +119,11 @@ impl IDropTarget_Impl for DropTarget_Impl {
     ) -> Result<()> {
         let paths = dropped_paths(data_object.as_ref());
         if !paths.is_empty() {
-            crate::window::post_boxed(self.window.0 as isize, WM_APP_DROP_PATHS, Box::new(paths));
+            crate::window::message::post_boxed(
+                self.window.0 as isize,
+                WM_APP_DROP_PATHS,
+                Box::new(paths),
+            );
             unsafe { *effect = DROPEFFECT_COPY };
         } else {
             unsafe { *effect = DROPEFFECT_NONE };

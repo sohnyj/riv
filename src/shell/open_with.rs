@@ -32,7 +32,7 @@ pub fn enumerate_in_background(window: HWND, extension: String) {
     std::thread::spawn(move || {
         let initialized = unsafe { CoInitializeEx(None, COINIT_MULTITHREADED) }.is_ok();
         let list = Box::new(enumerate(&extension));
-        crate::window::post_boxed(window_handle, WM_APP_OPEN_WITH_LIST, list);
+        crate::window::message::post_boxed(window_handle, WM_APP_OPEN_WITH_LIST, list);
         if initialized {
             unsafe { windows::Win32::System::Com::CoUninitialize() };
         }

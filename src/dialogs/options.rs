@@ -50,7 +50,7 @@ pub struct AppliedOptions {
     pub mouse: Vec<(String, Vec<String>)>,
 }
 
-use super::{DWLP_USER, IDCANCEL, IDOK};
+use super::modal::{DWLP_USER, IDCANCEL, IDOK};
 
 const BN_CLICKED: usize = 0;
 const CBN_SELCHANGE: usize = 1;
@@ -181,7 +181,7 @@ pub fn show(parent: HWND, settings: &SettingsFile) {
         custom_colors: [COLORREF(0x00FF_FFFF); 16],
         about_fonts: about::AboutFonts::default(),
     };
-    super::run_modal(
+    super::modal::run_modal(
         parent,
         IDD_OPTIONS,
         frame_procedure,
@@ -190,7 +190,7 @@ pub fn show(parent: HWND, settings: &SettingsFile) {
 }
 
 fn state_mut(dialog: HWND) -> Option<&'static mut OptionsState> {
-    super::state_mut(dialog)
+    super::modal::state_mut(dialog)
 }
 
 unsafe extern "system" fn frame_procedure(
@@ -273,7 +273,7 @@ unsafe extern "system" fn frame_procedure(
 
 fn initialize_frame(state: &mut OptionsState) {
     let dialog = state.dialog;
-    super::center_on_owner(dialog);
+    super::geometry::center_on_owner(dialog);
     let Ok(tab) = (unsafe { GetDlgItem(Some(dialog), IDC_OPTIONS_TAB) }) else {
         return;
     };
@@ -446,7 +446,7 @@ fn fit_page_controls(page: HWND, stretch: i32, follow_right_edge: i32) {
         let Ok(handle) = (unsafe { GetDlgItem(Some(page), control) }) else {
             return;
         };
-        let Some(bounds) = super::control_bounds(page, handle) else {
+        let Some(bounds) = super::geometry::control_bounds(page, handle) else {
             return;
         };
         let _ = unsafe {
@@ -591,7 +591,7 @@ unsafe extern "system" fn page_procedure(
             let draw = unsafe { &*(lparam.0 as *const DRAWITEMSTRUCT) };
             if draw.CtlID == IDC_WINDOW_BGCOLOR_BUTTON as u32 {
                 let color = rgb_to_colorref(state.transient_options.background_color);
-                super::draw_buffered(draw.hDC, draw.rcItem, |device| unsafe {
+                super::paint::draw_buffered(draw.hDC, draw.rcItem, |device| unsafe {
                     let brush = CreateSolidBrush(color);
                     FillRect(device, &raw const draw.rcItem, brush);
                     FrameRect(
@@ -1086,7 +1086,8 @@ fn initialize_association_page(state: &mut OptionsState) {
         )
     };
 
-    for (name, extension_list) in image::sorted_format_groups(archive_reader::available()) {
+    for (name, extension_list) in image::formats::sorted_format_groups(archive_reader::available())
+    {
         if extension_list.len() == 1 {
             let extension = format!(".{}", extension_list[0]);
             let checked = state.saved_associations.contains(&extension);
