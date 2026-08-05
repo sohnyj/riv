@@ -20,11 +20,15 @@ use windows::Win32::Graphics::Dxgi::Common::{
 use windows::Win32::Graphics::Dxgi::IDXGIDevice;
 use windows::Win32::System::LibraryLoader::{GetProcAddress, LoadLibraryW};
 use windows::Win32::System::Threading::WaitForSingleObjectEx;
+use windows::Win32::UI::WindowsAndMessaging::{WINDOW_EX_STYLE, WS_EX_NOREDIRECTIONBITMAP};
 use windows::core::{GUID, HRESULT, IUnknown, Interface, Result, s, w};
 
 /// The presentation factory refuses devices created without this flag.
 pub const REQUIRED_DEVICE_FLAG: D3D11_CREATE_DEVICE_FLAG =
     D3D11_CREATE_DEVICE_PREVENT_INTERNAL_THREADING_OPTIMIZATIONS;
+
+/// Composed content is all the client shows, so the window needs no surface of its own.
+pub const REQUIRED_WINDOW_STYLE: WINDOW_EX_STYLE = WS_EX_NOREDIRECTIONBITMAP;
 
 /// One presentation buffer with its render bindings; the event signals availability.
 pub struct BufferSlot {

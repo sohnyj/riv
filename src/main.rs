@@ -132,7 +132,7 @@ struct Application {
     bindings: Bindings,
     preserve_zoom: bool,
     always_on_top: bool,
-    fullscreen_restore: Option<WINDOWPLACEMENT>,
+    fullscreen_restore: Option<WindowRestore>,
     sdr_white_boost: f32,
     pan_drag_position: Option<(i32, i32)>,
     pan_cursor: HCURSOR,
@@ -189,6 +189,71 @@ impl StatusText {
         match self {
             StatusText::Timed(text) | StatusText::Sticky(text) => text,
         }
+    }
+}
+
+/// Where a window was: a snapped window's placement holds its pre-snap rect, not this one.
+#[derive(Clone, Copy)]
+struct WindowRestore {
+    placement: WINDOWPLACEMENT,
+    bounds: RECT,
+}
+
+impl WindowRestore {
+    /// Reads both, since snapping moves the rect the window occupies but not its placement.
+    fn capture(window: HWND) -> Self {
+        let mut placement = WINDOWPLACEMENT {
+            length: size_of::<WINDOWPLACEMENT>() as u32,
+            ..Default::default()
+        };
+        let _ = unsafe { GetWindowPlacement(window, &raw mut placement) };
+        let mut bounds = RECT::default();
+        let _ = unsafe { GetWindowRect(window, &raw mut bounds) };
+        Self { placement, bounds }
+    }
+
+    fn maximized(self) -> bool {
+        self.placement.showCmd == SW_SHOWMAXIMIZED.0 as u32
+    }
+
+    /// Maximized keeps its restore rect in the placement; anything else in the rect it held.
+    fn saved_bounds(self) -> RECT {
+        if self.maximized() {
+            self.placement.rcNormalPosition
+        } else {
+            self.bounds
+        }
+    }
+
+    /// Puts the window back where it was, frame change included.
+    fn put_back(self, window: HWND) {
+        if self.maximized() {
+            let _ = unsafe { SetWindowPlacement(window, &raw const self.placement) };
+            let _ = unsafe {
+                SetWindowPos(
+                    window,
+                    None,
+                    0,
+                    0,
+                    0,
+                    0,
+                    SWP_FRAMECHANGED | SWP_NOMOVE | SWP_NOSIZE | SWP_NOZORDER | SWP_NOACTIVATE,
+                )
+            };
+            return;
+        }
+        let bounds = self.bounds;
+        let _ = unsafe {
+            SetWindowPos(
+                window,
+                None,
+                bounds.left,
+                bounds.top,
+                bounds.right - bounds.left,
+                bounds.bottom - bounds.top,
+                SWP_FRAMECHANGED | SWP_NOZORDER | SWP_NOACTIVATE,
+            )
+        };
     }
 }
 
@@ -518,43 +583,50 @@ impl Application {
             return;
         };
         self.show_maximized = maximized;
-        let placement = WINDOWPLACEMENT {
-            length: size_of::<WINDOWPLACEMENT>() as u32,
-            showCmd: SW_HIDE.0 as u32,
-            rcNormalPosition: RECT {
-                left: x,
-                top: y,
-                right: x + width,
-                bottom: y + height,
-            },
-            ..Default::default()
+        if maximized {
+            // The restore rect a placement carries is in workspace coordinates, as it was saved.
+            let placement = WINDOWPLACEMENT {
+                length: size_of::<WINDOWPLACEMENT>() as u32,
+                showCmd: SW_HIDE.0 as u32,
+                rcNormalPosition: RECT {
+                    left: x,
+                    top: y,
+                    right: x + width,
+                    bottom: y + height,
+                },
+                ..Default::default()
+            };
+            let _ = unsafe { SetWindowPlacement(window, &raw const placement) };
+            return;
+        }
+        // A plain or snapped rect was saved in screen coordinates, so it goes back that way.
+        let _ = unsafe {
+            SetWindowPos(
+                window,
+                None,
+                x,
+                y,
+                width,
+                height,
+                SWP_NOZORDER | SWP_NOACTIVATE,
+            )
         };
-        let _ = unsafe { SetWindowPlacement(window, &raw const placement) };
     }
 
     /// Exit persistence: geometry (when enabled), then the merged save.
     fn save_on_exit(&mut self, window: HWND) {
         if self.settings.options.remember_window_size_and_position {
-            let mut placement = WINDOWPLACEMENT {
-                length: size_of::<WINDOWPLACEMENT>() as u32,
-                ..Default::default()
-            };
-            let captured = if let Some(saved) = &self.fullscreen_restore {
-                placement = *saved;
-                true
-            } else {
-                unsafe { GetWindowPlacement(window, &raw mut placement) }.is_ok()
-            };
-            if captured {
-                let bounds = placement.rcNormalPosition;
-                self.settings.set_window_geometry(
-                    bounds.left,
-                    bounds.top,
-                    bounds.right - bounds.left,
-                    bounds.bottom - bounds.top,
-                    placement.showCmd == SW_SHOWMAXIMIZED.0 as u32,
-                );
-            }
+            let restore = self
+                .fullscreen_restore
+                .unwrap_or_else(|| WindowRestore::capture(window));
+            let bounds = restore.saved_bounds();
+            self.settings.set_window_geometry(
+                bounds.left,
+                bounds.top,
+                bounds.right - bounds.left,
+                bounds.bottom - bounds.top,
+                restore.maximized(),
+            );
         }
         let _ = self.settings.save_merging_recents();
     }
@@ -970,12 +1042,6 @@ impl Application {
                     error.store_codec_names,
                 )
             });
-        // The pill borrows the top edge: the info panel yields while one shows.
-        let info_text = if self.show_file_info && self.status_text.is_none() {
-            self.cached_info_text(frame)
-        } else {
-            None
-        };
         let download_text = self
             .download_progress
             .as_ref()
@@ -983,10 +1049,16 @@ impl Application {
             .map(|(location, received_bytes)| {
                 overlay::build_download_text(&location.display_name(), *received_bytes)
             });
+        let centered_message = error_text.is_some() || download_text.is_some();
+        // One overlay at a time: the panel yields to the pill and to a centered message.
+        let info_text = if self.show_file_info && self.status_text.is_none() && !centered_message {
+            self.cached_info_text(frame)
+        } else {
+            None
+        };
         let brightness = 0.299 * background.r + 0.587 * background.g + 0.114 * background.b;
         // The wordmark marks a truly empty window, never a load in flight.
-        let show_wordmark = error_text.is_none()
-            && download_text.is_none()
+        let show_wordmark = !centered_message
             && self.displayed_image.is_none()
             && self.image_core.current.is_none()
             && !self.image_core.has_pending_display()
@@ -1728,26 +1800,12 @@ fn rename_current_file(application: &mut Application, window: HWND) {
 
 fn toggle_fullscreen(application: &mut Application, window: HWND) {
     unsafe {
-        if let Some(placement) = application.fullscreen_restore.take() {
+        if let Some(restore) = application.fullscreen_restore.take() {
             let style = GetWindowLongPtrW(window, GWL_STYLE) as u32;
             SetWindowLongPtrW(window, GWL_STYLE, (style | WS_OVERLAPPEDWINDOW.0) as isize);
-            let _ = SetWindowPlacement(window, &raw const placement);
-            let _ = SetWindowPos(
-                window,
-                None,
-                0,
-                0,
-                0,
-                0,
-                SWP_FRAMECHANGED | SWP_NOMOVE | SWP_NOSIZE | SWP_NOZORDER | SWP_NOACTIVATE,
-            );
+            restore.put_back(window);
         } else {
-            let mut placement = WINDOWPLACEMENT {
-                length: size_of::<WINDOWPLACEMENT>() as u32,
-                ..Default::default()
-            };
-            let _ = GetWindowPlacement(window, &raw mut placement);
-            application.fullscreen_restore = Some(placement);
+            application.fullscreen_restore = Some(WindowRestore::capture(window));
 
             let monitor = MonitorFromWindow(window, MONITOR_DEFAULTTONEAREST);
             let mut monitor_info = MONITORINFO {
@@ -2107,7 +2165,7 @@ fn create_main_window(initial_path: Option<&Path>, pending_device: PendingDevice
         .unwrap_or((CW_USEDEFAULT, CW_USEDEFAULT));
     let window = unsafe {
         CreateWindowExW(
-            Default::default(),
+            view::presentation::REQUIRED_WINDOW_STYLE,
             w!("riv"),
             w!("riv"),
             WS_OVERLAPPEDWINDOW,
