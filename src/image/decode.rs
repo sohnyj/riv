@@ -1077,11 +1077,11 @@ fn enforce_device_limit(
     let bytes_per_pixel = decoded.storage.bytes_per_pixel();
     // u64 stride: a native EXR/HEIF width near u32::MAX would overflow width*bpp.
     let stride = u32::try_from(u64::from(width) * u64::from(bytes_per_pixel))
-        .map_err(|_| uncoded_error("image stride exceeds the addressable range"))?;
+        .map_err(|_| uncoded_error("Image stride exceeds the addressable range"))?;
     let frame = decoded
         .frames
         .first_mut()
-        .ok_or_else(|| uncoded_error("image has no frames"))?;
+        .ok_or_else(|| uncoded_error("Image has no frames"))?;
     let (pixels, scaled_width, scaled_height) = with_wic_factory(|factory| {
         let bitmap = unsafe {
             factory.CreateBitmapFromMemory(width, height, pixel_format, stride, &frame.pixels)?
@@ -2478,7 +2478,7 @@ fn pixels_to_premultiplied_bgra(
         }
         other => {
             return Err(uncoded_error(format!(
-                "unsupported PNG color type after normalization: {other:?}"
+                "Unsupported PNG color type after normalization: {other:?}"
             )));
         }
     }

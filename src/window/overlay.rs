@@ -565,15 +565,17 @@ pub fn build_error_text(
         message.trim().to_string()
     };
     // Code 0 means "no code" (validation, curl, fallback decoders), not a real HRESULT.
-    let reason = if code == 0 {
+    // A line ending in a code needs no period; system messages bring their own.
+    let reason = match (code == 0, reason.ends_with('.')) {
+        (true, false) => format!("{reason}."),
+        (true, true) => reason,
+        (false, _) => format!("{reason} (Error 0x{code:08X})"),
+    };
+    // With no file name to head it, the reason stands alone.
+    let mut text = if file_name.is_empty() {
         reason
     } else {
-        format!("{reason} (Error 0x{code:08X})")
-    };
-    let mut text = if file_name.is_empty() {
-        format!("Error occurred opening\n{reason}")
-    } else {
-        format!("Error occurred opening\n{file_name}\n{reason}")
+        format!("Cannot open {file_name}\n{reason}")
     };
     if !store_codec_names.is_empty() {
         let codec_names = store_codec_names
@@ -599,7 +601,7 @@ pub fn build_download_text(file_name: &str, received_bytes: u64) -> String {
     )
 }
 
-fn binary_size_text(bytes: u64) -> String {
+pub(crate) fn binary_size_text(bytes: u64) -> String {
     let units: [(&str, u64); 3] = [("GiB", 1 << 30), ("MiB", 1 << 20), ("KiB", 1 << 10)];
     units.iter().find(|(_, unit)| bytes >= *unit).map_or_else(
         || format!("{bytes} B"),
@@ -781,7 +783,7 @@ fn group_thousands(value: u64) -> String {
 }
 
 /// Fixed 24-hour local time; locale forms can pull fallback glyphs into the panel.
-fn format_local_datetime(time: SystemTime) -> String {
+pub(crate) fn format_local_datetime(time: SystemTime) -> String {
     let Ok(elapsed) = time.duration_since(UNIX_EPOCH) else {
         return String::new();
     };
@@ -1110,21 +1112,18 @@ mod error_text_tests {
 
     #[test]
     fn an_empty_name_drops_its_line() {
-        let text = build_error_text("", "no URL in the clipboard", 0, &[]);
-        assert_eq!(text, "Error occurred opening\nno URL in the clipboard");
+        let text = build_error_text("", "No URL in the clipboard", 0, &[]);
+        assert_eq!(text, "No URL in the clipboard.");
     }
 
     #[test]
     fn code_zero_drops_the_error_suffix() {
-        let uncoded = build_error_text("a.png", "unsupported URL protocol", 0, &[]);
-        assert_eq!(
-            uncoded,
-            "Error occurred opening\na.png\nunsupported URL protocol"
-        );
-        let coded = build_error_text("a.png", "no image at this URL", 0x88982F50u32 as i32, &[]);
+        let uncoded = build_error_text("a.png", "Unsupported URL protocol", 0, &[]);
+        assert_eq!(uncoded, "Cannot open a.png\nUnsupported URL protocol.");
+        let coded = build_error_text("a.png", "No image at this URL", 0x88982F50u32 as i32, &[]);
         assert_eq!(
             coded,
-            "Error occurred opening\na.png\nno image at this URL (Error 0x88982F50)"
+            "Cannot open a.png\nNo image at this URL (Error 0x88982F50)"
         );
     }
 

@@ -101,9 +101,9 @@ fn show_capture_dialog(
 fn warn_conflict(dialog: HWND, encoding: &str, owner_label: &str) {
     crate::dialogs::show_message(
         Some(dialog),
-        "Shortcut already used",
-        &format!("\"{encoding}\" is already bound to \"{owner_label}\""),
-        Default::default(),
+        "Shortcut",
+        &format!("Shortcut already used.\n\n\"{encoding}\" is already bound to \"{owner_label}\""),
+        "OK",
     );
 }
 

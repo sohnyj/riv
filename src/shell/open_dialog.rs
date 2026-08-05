@@ -38,7 +38,7 @@ fn filters(archives: bool) -> (Vec<(String, String)>, usize) {
         .collect::<Vec<_>>()
         .join(";");
     filters.push(("Supported files".to_string(), all_patterns));
-    filters.push(("All files (*)".to_string(), "*.*".to_string()));
+    filters.push(("All files".to_string(), "*.*".to_string()));
     (filters, supported_position)
 }
 
@@ -105,7 +105,7 @@ mod filter_tests {
         assert_eq!(names[2], "Archive (*.zip;*.7z;*.rar;*.tar)");
         assert!(names.contains(&"HEIF (*.heic;*.heif;*.hif)"));
         assert_eq!(names[supported], "Supported files");
-        assert_eq!(names[supported + 1], "All files (*)");
+        assert_eq!(names[supported + 1], "All files");
         // The name drops the patterns, the filter itself keeps every one of them.
         let all_patterns = &filters[supported].1;
         assert!(all_patterns.contains("*.apng"));

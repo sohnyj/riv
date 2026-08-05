@@ -101,7 +101,7 @@ pub fn download(
     progress: &mut dyn FnMut(u64),
 ) -> Result<Vec<u8>, NetworkError> {
     if !is_supported_protocol(url) {
-        return Err(NetworkError::new("unsupported URL protocol"));
+        return Err(NetworkError::new("Unsupported URL protocol"));
     }
     let executable = executable_path()
         .ok_or_else(|| NetworkError::new("URL support is unavailable on this Windows"))?;
@@ -152,14 +152,14 @@ pub fn download(
             Err(error) => {
                 return Err(abort(
                     child,
-                    NetworkError::new(format!("download read failed: {error}")),
+                    NetworkError::new(format!("Download read failed: {error}")),
                 ));
             }
         };
         if data.len() as u64 + read_bytes as u64 > MAXIMUM_DOWNLOAD_BYTES {
             return Err(abort(
                 child,
-                NetworkError::new("download exceeds the 1 GiB limit"),
+                NetworkError::new("Download exceeds the 1 GiB limit"),
             ));
         }
         data.extend_from_slice(&block[..read_bytes]);
@@ -178,7 +178,7 @@ pub fn download(
             .lines()
             .map(str::trim)
             .find(|line| !line.is_empty())
-            .unwrap_or("download failed")
+            .unwrap_or("Download failed")
             .to_string();
         return Err(NetworkError {
             message,

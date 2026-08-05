@@ -80,7 +80,7 @@ pub fn enumerate(archive_path: &Path) -> Result<Vec<MemberInfo>, ArchiveError> {
     let mut members = Vec::new();
     while let Some(entry) = reader.next_header()? {
         if unsafe { (reader.api.entry_is_metadata_encrypted)(entry) } != 0 {
-            return Err(ArchiveError::new("archive metadata is encrypted"));
+            return Err(ArchiveError::new("Archive metadata is encrypted"));
         }
         if unsafe { (reader.api.entry_filetype)(entry) } & FILETYPE_MASK != FILETYPE_REGULAR
             || unsafe { (reader.api.entry_is_data_encrypted)(entry) } != 0
@@ -120,16 +120,16 @@ pub fn read_member(
             continue; // next_header skips the unread data
         }
         if unsafe { (reader.api.entry_is_data_encrypted)(entry) } != 0 {
-            return Err(ArchiveError::new("archive member is encrypted"));
+            return Err(ArchiveError::new("Archive member is encrypted"));
         }
         let declared_size = unsafe { (reader.api.entry_size_is_set)(entry) != 0 }
             .then(|| unsafe { (reader.api.entry_size)(entry) }.max(0) as u64);
         if declared_size.is_some_and(|size| size > MAXIMUM_MEMBER_BYTES) {
-            return Err(ArchiveError::new("archive member exceeds the 1 GiB limit"));
+            return Err(ArchiveError::new("Archive member exceeds the 1 GiB limit"));
         }
         return reader.read_entry_data(declared_size, cancellation);
     }
-    Err(ArchiveError::new("member no longer exists in the archive"))
+    Err(ArchiveError::new("Member no longer exists in the archive"))
 }
 
 fn entry_name(api: &Api, entry: *mut ArchiveEntry) -> Option<String> {
@@ -155,10 +155,10 @@ struct Reader<'api> {
 impl Reader<'_> {
     fn open(archive_path: &Path) -> Result<Self, ArchiveError> {
         let api = libarchive::api()
-            .ok_or_else(|| ArchiveError::new("archive support is unavailable on this Windows"))?;
+            .ok_or_else(|| ArchiveError::new("Archive support is unavailable on this Windows"))?;
         let handle = unsafe { (api.read_new)() };
         if handle.is_null() {
-            return Err(ArchiveError::new("archive reader allocation failed"));
+            return Err(ArchiveError::new("Archive reader allocation failed"));
         }
         let reader = Self { api, handle };
         let supports = [
@@ -170,14 +170,14 @@ impl Reader<'_> {
         ];
         for support in supports {
             if unsafe { support(handle) } != ARCHIVE_OK {
-                return Err(reader.error("archive format registration failed"));
+                return Err(reader.error("Archive format registration failed"));
             }
         }
         let wide_path = crate::text::wide(archive_path);
         if unsafe { (api.read_open_filename_w)(handle, wide_path.as_ptr(), OPEN_BLOCK_BYTES) }
             != ARCHIVE_OK
         {
-            return Err(reader.error("archive could not be opened"));
+            return Err(reader.error("Archive could not be opened"));
         }
         Ok(reader)
     }
@@ -187,7 +187,7 @@ impl Reader<'_> {
         match unsafe { (self.api.read_next_header)(self.handle, &raw mut entry) } {
             ARCHIVE_OK => Ok(Some(entry)),
             ARCHIVE_EOF => Ok(None),
-            _ => Err(self.error("archive header read failed")),
+            _ => Err(self.error("Archive header read failed")),
         }
     }
 
@@ -213,10 +213,10 @@ impl Reader<'_> {
                 return Ok(data);
             }
             if read_bytes < 0 {
-                return Err(self.error("archive member extraction failed"));
+                return Err(self.error("Archive member extraction failed"));
             }
             if data.len() as u64 + read_bytes as u64 > MAXIMUM_MEMBER_BYTES {
-                return Err(ArchiveError::new("archive member exceeds the 1 GiB limit"));
+                return Err(ArchiveError::new("Archive member exceeds the 1 GiB limit"));
             }
             data.extend_from_slice(&block[..read_bytes as usize]);
         }

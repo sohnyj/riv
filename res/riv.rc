@@ -99,7 +99,7 @@ END
 
 IDD_CAPTURE_KEYBOARD DIALOGEX 0, 0, 220, 120
 STYLE DS_MODALFRAME | WS_POPUP | WS_CAPTION | WS_SYSMENU
-CAPTION "Modify Shortcuts"
+CAPTION "Modify shortcuts"
 FONT 9, "Segoe UI"
 BEGIN
     LTEXT "Press a key combination to add it:", -1, 7, 9, 200, 8
@@ -112,7 +112,7 @@ END
 
 IDD_CAPTURE_MOUSE DIALOGEX 0, 0, 220, 72
 STYLE DS_MODALFRAME | WS_POPUP | WS_CAPTION | WS_SYSMENU
-CAPTION "Modify Shortcuts"
+CAPTION "Modify shortcuts"
 FONT 9, "Segoe UI"
 BEGIN
     LTEXT "Click in the field below to record a binding. Wheel, double-click and held modifiers are captured; right-click is reserved.", -1, 7, 9, 206, 17

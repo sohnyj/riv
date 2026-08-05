@@ -8,14 +8,14 @@ use windows::Win32::Foundation::HWND;
 use windows::Win32::Storage::FileSystem::{MOVE_FILE_FLAGS, MoveFileExW};
 use windows::Win32::System::Com::{CLSCTX_INPROC_SERVER, CoCreateInstance};
 use windows::Win32::UI::Controls::{
-    TASKDIALOG_BUTTON, TASKDIALOGCONFIG, TDCBF_CANCEL_BUTTON, TDCBF_CLOSE_BUTTON,
-    TDF_ALLOW_DIALOG_CANCELLATION, TDF_POSITION_RELATIVE_TO_WINDOW, TaskDialogIndirect,
+    TASKDIALOG_BUTTON, TASKDIALOGCONFIG, TDF_ALLOW_DIALOG_CANCELLATION,
+    TDF_POSITION_RELATIVE_TO_WINDOW, TaskDialogIndirect,
 };
 use windows::Win32::UI::Shell::{
     FOF_ALLOWUNDO, FOF_NOCONFIRMATION, FOF_SILENT, FileOperation, IFileOperation, IShellItem,
     SHCreateItemFromParsingName, ShellExecuteW,
 };
-use windows::Win32::UI::WindowsAndMessaging::{IDCANCEL, IDYES, SW_SHOWNORMAL};
+use windows::Win32::UI::WindowsAndMessaging::{IDCANCEL, IDNO, IDYES, SW_SHOWNORMAL};
 use windows::core::{HSTRING, PCWSTR, Result, w};
 
 pub fn show_in_explorer(path: &Path) {
@@ -37,32 +37,35 @@ pub struct DeleteConfirmation {
     pub do_not_ask_again: bool,
 }
 
-pub fn confirm_delete(window: HWND, path: &Path, permanent: bool) -> DeleteConfirmation {
-    let file_name = path
-        .file_name()
-        .map_or_else(String::new, |name| name.to_string_lossy().into_owned());
-    let instruction = crate::text::wide(if permanent {
+/// `details` carries the file facts, one per line, the first being the name.
+pub fn confirm_delete(window: HWND, details: &str, permanent: bool) -> DeleteConfirmation {
+    let question = if permanent {
         "Permanently delete this file?"
     } else {
         "Move this file to the Recycle Bin?"
-    });
-    let content = crate::text::wide(&file_name);
-    let delete_label = crate::text::wide("Delete");
-    let delete_button = TASKDIALOG_BUTTON {
-        nButtonID: IDYES.0,
-        pszButtonText: PCWSTR(delete_label.as_ptr()),
     };
+    // The question rides in the content: a main instruction would enlarge and color it.
+    let content = crate::text::wide(format!("{question}\n\n{details}"));
     let verification = w!("Don't ask again");
+    // Labeled here, not by the system: the settings dialog writes its own buttons too.
+    let buttons = [
+        TASKDIALOG_BUTTON {
+            nButtonID: IDYES.0,
+            pszButtonText: w!("Yes"),
+        },
+        TASKDIALOG_BUTTON {
+            nButtonID: IDNO.0,
+            pszButtonText: w!("No"),
+        },
+    ];
     let mut configuration = TASKDIALOGCONFIG {
         cbSize: size_of::<TASKDIALOGCONFIG>() as u32,
         hwndParent: window,
         dwFlags: TDF_ALLOW_DIALOG_CANCELLATION | TDF_POSITION_RELATIVE_TO_WINDOW,
-        dwCommonButtons: TDCBF_CANCEL_BUTTON,
-        pszWindowTitle: w!("riv"),
-        pszMainInstruction: PCWSTR(instruction.as_ptr()),
+        pszWindowTitle: w!("Delete"),
         pszContent: PCWSTR(content.as_ptr()),
-        cButtons: 1,
-        pButtons: &raw const delete_button,
+        cButtons: buttons.len() as u32,
+        pButtons: buttons.as_ptr(),
         nDefaultButton: IDYES.0,
         ..Default::default()
     };
@@ -130,7 +133,7 @@ pub fn rename_file(path: &Path, new_name: &str) -> std::io::Result<PathBuf> {
     if new_name_is_invalid(new_name) {
         return Err(std::io::Error::new(
             std::io::ErrorKind::InvalidInput,
-            "The new name is not a valid file name",
+            "The new name is not a valid file name.",
         ));
     }
     let destination = path.with_file_name(new_name);
@@ -156,9 +159,9 @@ pub fn rename_file(path: &Path, new_name: &str) -> std::io::Result<PathBuf> {
 pub fn show_rename_error(window: HWND, error: &std::io::Error) {
     crate::dialogs::show_message(
         Some(window),
-        "Cannot rename the file",
-        &error.to_string(),
-        TDCBF_CLOSE_BUTTON,
+        "Rename",
+        &format!("Cannot rename the file.\n\n{error}"),
+        "Close",
     );
 }
 

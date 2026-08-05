@@ -8,11 +8,11 @@ pub mod text_input;
 
 use windows::Win32::Foundation::HWND;
 use windows::Win32::UI::Controls::{
-    TASKDIALOG_COMMON_BUTTON_FLAGS, TASKDIALOG_FLAGS, TASKDIALOGCONFIG,
-    TDF_POSITION_RELATIVE_TO_WINDOW, TaskDialogIndirect,
+    TASKDIALOG_BUTTON, TASKDIALOG_FLAGS, TASKDIALOGCONFIG, TDF_POSITION_RELATIVE_TO_WINDOW,
+    TaskDialogIndirect,
 };
 use windows::Win32::UI::WindowsAndMessaging::{GetWindowLongPtrW, WINDOW_LONG_PTR_INDEX};
-use windows::core::{PCWSTR, w};
+use windows::core::PCWSTR;
 
 pub const IDOK: usize = 1;
 pub const IDCANCEL: usize = 2;
@@ -57,15 +57,17 @@ pub fn center_on_owner(dialog: HWND) {
     };
 }
 
-/// One-message task dialog under the application title.
-pub fn show_message(
-    owner: Option<HWND>,
-    instruction: &str,
-    content: &str,
-    buttons: TASKDIALOG_COMMON_BUTTON_FLAGS,
-) {
-    let instruction = crate::text::wide(instruction);
-    let content = crate::text::wide(content);
+/// One-message task dialog titled after the action; `text` is the whole message.
+pub fn show_message(owner: Option<HWND>, title: &str, text: &str, button: &str) {
+    let title = crate::text::wide(title);
+    // A main instruction would draw the first line larger and in color.
+    let text = crate::text::wide(text);
+    // Labeled here, not by the system: the settings dialog writes its own buttons too.
+    let button_text = crate::text::wide(button);
+    let buttons = [TASKDIALOG_BUTTON {
+        nButtonID: IDOK as i32,
+        pszButtonText: PCWSTR(button_text.as_ptr()),
+    }];
     // Without the flag a task dialog centers on the monitor, owner or not.
     let placement = match owner {
         Some(_) => TDF_POSITION_RELATIVE_TO_WINDOW,
@@ -75,10 +77,10 @@ pub fn show_message(
         cbSize: size_of::<TASKDIALOGCONFIG>() as u32,
         dwFlags: placement,
         hwndParent: owner.unwrap_or_default(),
-        pszWindowTitle: w!("riv"),
-        pszMainInstruction: PCWSTR(instruction.as_ptr()),
-        pszContent: PCWSTR(content.as_ptr()),
-        dwCommonButtons: buttons,
+        pszWindowTitle: PCWSTR(title.as_ptr()),
+        pszContent: PCWSTR(text.as_ptr()),
+        cButtons: buttons.len() as u32,
+        pButtons: buttons.as_ptr(),
         ..Default::default()
     };
     let _ = unsafe { TaskDialogIndirect(&raw const configuration, None, None, None) };

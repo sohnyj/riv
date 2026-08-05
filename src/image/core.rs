@@ -453,7 +453,7 @@ fn enumerate_archive(
         .collect();
     if entries.is_empty() {
         return Err(decode::uncoded_error(
-            "archive contains no supported images",
+            "Archive contains no supported images",
         ));
     }
     sort_entries(&mut entries, options);
@@ -827,15 +827,15 @@ impl ImageCore {
         self.listing_scope = None;
         self.pending_scan = None;
         let failure = if url.is_empty() {
-            Some("no URL in the clipboard") // only the paste path can deliver an empty URL
+            Some("No URL in the clipboard") // only the paste path can deliver an empty URL
         } else if !curl::is_supported_protocol(url) {
-            Some("unsupported URL protocol")
+            Some("Unsupported URL protocol")
         } else if !curl::available() {
             Some("URL support is unavailable on this Windows")
         } else if curl::extension_lowercase(url)
             .is_some_and(|extension| archive_reader::is_archive_extension(&extension))
         {
-            Some("archives are not supported from a URL")
+            Some("Archives are not supported from a URL")
         } else {
             None
         };
@@ -880,7 +880,7 @@ impl ImageCore {
                 None => {
                     self.load_error = Some((
                         location.clone(),
-                        decode::uncoded_error("member no longer exists in the archive"),
+                        decode::uncoded_error("Member no longer exists in the archive"),
                     ));
                     return false;
                 }
@@ -2093,7 +2093,7 @@ fn run_probe_job(job: &DecodeJob, window: isize) {
 fn url_decode_error(error: DecodeError) -> DecodeError {
     if error.is_unrecognized_format() {
         return DecodeError {
-            message: "no image at this URL".to_string(),
+            message: "No image at this URL".to_string(),
             ..error
         };
     }
@@ -2488,7 +2488,7 @@ mod url_session_state_tests {
             ItemLocation::Url("ftp://a.com/b.png".to_string()),
             DecodeError {
                 code: 0,
-                message: "download failed".to_string(),
+                message: "Download failed".to_string(),
                 store_codec_names: &[],
             },
         ));
@@ -2508,7 +2508,7 @@ mod url_session_state_tests {
             message: "component not found".to_string(),
             store_codec_names,
         };
-        assert_eq!(url_decode_error(error(&[])).message, "no image at this URL");
+        assert_eq!(url_decode_error(error(&[])).message, "No image at this URL");
         // A failure that names a Store codec keeps its install hint.
         let store_hinted = url_decode_error(error(&["avif"]));
         assert_eq!(store_hinted.message, "component not found");

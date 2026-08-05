@@ -468,6 +468,32 @@ impl Application {
         }
     }
 
+    /// What the delete confirmation says about the file, in the info panel's words.
+    fn delete_details(&self, path: &Path) -> String {
+        let mut lines = vec![
+            path.file_name()
+                .map_or_else(String::new, |name| name.to_string_lossy().into_owned()),
+        ];
+        if let Some(image) = &self.displayed_image {
+            lines.push(format!("Format: {}", image.format_name));
+            if let Some(taken) = image.exif.as_ref().and_then(|exif| exif.date_taken) {
+                lines.push(format!(
+                    "Date taken: {}",
+                    overlay::format_local_datetime(taken)
+                ));
+            }
+            let megapixels = f64::from(image.width) * f64::from(image.height) / 1_000_000.0;
+            lines.push(format!(
+                "Resolution: {} x {} ({megapixels:.1} MP)",
+                image.width, image.height
+            ));
+        }
+        if let Some((file_size, _)) = self.image_core.current_item_metadata() {
+            lines.push(format!("Size: {}", overlay::binary_size_text(file_size)));
+        }
+        lines.join("\n")
+    }
+
     fn scaling_filter(&self) -> ScalingFilter {
         ScalingFilter::from_setting(self.settings.options.scaling_filter)
     }
@@ -852,7 +878,7 @@ impl Application {
                 .set_navigation_direction(self.settings.options.slideshow_backward());
             self.slideshow_item_shown_at = Some(std::time::Instant::now());
             self.keep_system_awake(true);
-            self.show_status_text(window, "Slideshow: Start".to_string());
+            self.show_status_text(window, "Slideshow: On".to_string());
             self.request_render(window);
         }
     }
@@ -886,7 +912,7 @@ impl Application {
         if self.slideshow_item_shown_at.take().is_some() {
             let _ = unsafe { KillTimer(Some(window), SLIDESHOW_TIMER) };
             self.keep_system_awake(false);
-            self.show_status_text(window, "Slideshow: Stop".to_string());
+            self.show_status_text(window, "Slideshow: Off".to_string());
             self.request_render(window);
         }
     }
@@ -1686,7 +1712,8 @@ fn delete_current_file(application: &mut Application, window: HWND, permanent: b
         return;
     };
     if permanent || application.settings.options.ask_delete {
-        let confirmation = file_ops::confirm_delete(window, &path, permanent);
+        let details = application.delete_details(&path);
+        let confirmation = file_ops::confirm_delete(window, &details, permanent);
         if !confirmation.confirmed {
             return;
         }
@@ -2008,16 +2035,15 @@ fn main() -> Result<()> {
 
     if process_is_elevated() {
         fail_fast_dialog(
-            "riv does not run elevated",
-            "Start riv from a normal user session instead.",
+            "Running as administrator is blocked.",
+            "Start from a normal user session.",
         );
         return Ok(());
     }
     if !settings::save_directory_is_writable() {
         fail_fast_dialog(
-            "Settings cannot be saved here",
-            "riv stores riv.json next to the executable, but this folder is not writable. \
-             Move riv to a writable folder and run it again.",
+            "Settings cannot be saved here.",
+            "This folder is not writable. Move the executable to a writable folder.",
         );
         return Ok(());
     }
@@ -2220,9 +2246,9 @@ fn process_is_elevated() -> bool {
     elevated
 }
 
-fn fail_fast_dialog(instruction: &str, content: &str) {
-    use windows::Win32::UI::Controls::TDCBF_CLOSE_BUTTON;
-    dialogs::show_message(None, instruction, content, TDCBF_CLOSE_BUTTON);
+/// No window exists yet, so the app name titles the failure.
+fn fail_fast_dialog(reason: &str, detail: &str) {
+    dialogs::show_message(None, "riv", &format!("{reason}\n\n{detail}"), "Close");
 }
 
 fn application_from_window(window: HWND) -> Option<&'static mut Application> {
