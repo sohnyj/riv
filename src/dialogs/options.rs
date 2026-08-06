@@ -152,6 +152,13 @@ impl OptionsState {
     }
 }
 
+/// Sorted, because `is_dirty` compares this against the equally sorted desired set.
+fn registered_associations() -> Vec<String> {
+    let mut associations = file_association::registered_extensions();
+    associations.sort();
+    associations
+}
+
 /// The defaults never move, and `update_buttons` compares against them on every keystroke.
 fn default_shortcut_rows() -> &'static [ShortcutRow] {
     static ROWS: OnceLock<Vec<ShortcutRow>> = OnceLock::new();
@@ -183,8 +190,7 @@ pub fn show(parent: HWND, settings: &SettingsFile) {
             mouse: bindings::resolved_mouse_encodings(settings.mouse_bindings(), action.name()),
         })
         .collect();
-    let mut saved_associations = file_association::registered_extensions();
-    saved_associations.sort();
+    let saved_associations = registered_associations();
     let start_menu_present = start_menu::shortcut_exists();
     let mut state = OptionsState {
         parent,
@@ -486,10 +492,11 @@ fn apply(state: &mut OptionsState) {
     if !state.is_dirty() {
         return;
     }
+    // Each saved set is re-probed, so a write that failed keeps Apply enabled instead of lying.
     let desired = state.desired_associations();
     if desired != state.saved_associations {
         file_association::set_file_associations(&desired);
-        state.saved_associations = desired;
+        state.saved_associations = registered_associations();
     }
     if state.start_menu_desired != state.start_menu_saved {
         if state.start_menu_desired {
@@ -497,7 +504,6 @@ fn apply(state: &mut OptionsState) {
         } else {
             start_menu::remove_shortcut();
         }
-        // Re-probe so a failed create keeps Apply enabled instead of lying.
         state.start_menu_saved = start_menu::shortcut_exists();
     }
     let payload = AppliedOptions {
