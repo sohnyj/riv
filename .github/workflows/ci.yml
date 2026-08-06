@@ -23,7 +23,7 @@ jobs:
       # The MSVC STL in the xwin splat requires a recent clang (STL1000),
       # newer than the runner default, so install from apt.llvm.org. The
       # versioned LLVM directory carries the unversioned tool names
-      # (clang-cl, lld-link, llvm-rc, llvm-lib, llvm-mt).
+      # (clang, clang-cl, lld-link, llvm-rc, llvm-lib, llvm-mt).
       - name: Install the LLVM cross toolchain
         run: |
           wget -qO "$RUNNER_TEMP/llvm.sh" https://apt.llvm.org/llvm.sh
