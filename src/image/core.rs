@@ -1725,16 +1725,16 @@ fn preload_priorities(
     priorities
 }
 
-/// ASCII case-insensitive path equality; approximates Windows filesystem behavior.
+/// ASCII case-insensitive path equality over the stored bytes; a lossy conversion folds distinct names together.
 fn paths_equal(a: &Path, b: &Path) -> bool {
     a.as_os_str()
-        .to_string_lossy()
-        .eq_ignore_ascii_case(&b.as_os_str().to_string_lossy())
+        .as_encoded_bytes()
+        .eq_ignore_ascii_case(b.as_os_str().as_encoded_bytes())
 }
 
-/// Hash matching paths_equal's folding, fed per byte so no key string is allocated.
+/// Folds the same bytes paths_equal compares, so Eq and Hash stay in step.
 fn hash_path_identity<H: Hasher>(path: &Path, state: &mut H) {
-    for byte in path.as_os_str().to_string_lossy().bytes() {
+    for byte in path.as_os_str().as_encoded_bytes() {
         state.write_u8(byte.to_ascii_lowercase());
     }
     // A terminator, so adjacent hashed fields cannot blur together.
@@ -2416,6 +2416,24 @@ mod item_location_tests {
             Some(&"decoded")
         );
         assert_eq!(members.get(&member("C:\\A.CBZ", "art/01.PNG")), None);
+    }
+
+    /// Names Windows allows but Unicode does not; the file system tells them apart, so riv does too.
+    #[test]
+    fn names_with_a_lone_surrogate_stay_apart() {
+        use std::ffi::OsString;
+        use std::os::windows::ffi::OsStringExt;
+
+        let name = |code_unit: u16| {
+            ItemLocation::File(PathBuf::from(OsString::from_wide(&[
+                0x0061, code_unit, 0x002E, 0x0070, 0x006E, 0x0067,
+            ])))
+        };
+        assert!(name(0xD800) != name(0xD801));
+        let mut cache = HashMap::new();
+        cache.insert(name(0xD800), "decoded");
+        assert_eq!(cache.get(&name(0xD801)), None);
+        assert_eq!(cache.get(&name(0xD800)), Some(&"decoded"));
     }
 
     #[test]
