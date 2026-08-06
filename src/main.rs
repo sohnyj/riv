@@ -1024,18 +1024,14 @@ impl Application {
         background: D2D1_COLOR_F,
         frame: Option<FrameDecision>,
     ) -> OverlayContent {
-        let error_text = self
-            .image_core
-            .load_error
-            .as_ref()
-            .map(|(location, error)| {
-                overlay::build_error_text(
-                    &location.display_name(),
-                    &error.message,
-                    error.code,
-                    error.store_codec_names,
-                )
-            });
+        let error_text = self.image_core.load_failure().map(|(location, error)| {
+            overlay::build_error_text(
+                &location.display_name(),
+                &error.message,
+                error.code,
+                error.store_codec_names,
+            )
+        });
         let download_text = self
             .download_progress
             .as_ref()
@@ -1052,11 +1048,8 @@ impl Application {
         };
         let brightness = 0.299 * background.r + 0.587 * background.g + 0.114 * background.b;
         // The wordmark marks a truly empty window, never a load in flight.
-        let show_wordmark = !centered_message
-            && self.displayed_image.is_none()
-            && self.image_core.current.is_none()
-            && !self.image_core.has_pending_display()
-            && !self.image_core.listing_scan_pending();
+        let show_wordmark =
+            !centered_message && self.displayed_image.is_none() && self.image_core.holds_no_item();
         OverlayContent {
             error_text,
             download_text,
@@ -1468,7 +1461,6 @@ fn open_external(
     load: impl FnOnce(&mut ImageCore) -> LoadOutcome,
 ) {
     application.stop_slideshow(window);
-    application.freeze_animation_for_load(window);
     application.dismiss_status_text(window);
     let outcome = load(&mut application.image_core);
     application.apply_load_outcome(window, outcome);

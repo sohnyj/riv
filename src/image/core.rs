@@ -401,8 +401,8 @@ pub struct ImageCore {
     options: CoreOptions,
     listing_scope: Option<ListingScope>,
     entries: Vec<ListingEntry>,
-    /// Item awaiting display; replacing it invalidates the previous load.
-    pending_display: Option<ItemLocation>,
+    /// The view's own slot: replacing it invalidates whatever the last request left.
+    request: ViewRequest,
     in_flight: HashMap<ItemLocation, Arc<AtomicBool>>,
     /// Separate from in_flight so a probe never reads as a decode already running.
     probes_in_flight: HashMap<ItemLocation, Arc<AtomicBool>>,
@@ -410,7 +410,6 @@ pub struct ImageCore {
     upload_device_generation: Option<u64>,
     cache: HashMap<ItemLocation, CacheEntry>,
     pub current: Option<CurrentImage>,
-    pub load_error: Option<(ItemLocation, DecodeError)>,
     /// Preload polarity: the deeper reach aims along the navigation direction.
     navigating_backward: bool,
     /// Consecutive steps against the polarity; the second one flips it.
@@ -427,6 +426,37 @@ pub struct ImageCore {
 struct PendingScan {
     scope: ListingScope,
     purpose: ScanPurpose,
+}
+
+/// The request that owns the view: nothing, one being decoded, or one that ended in an error.
+enum ViewRequest {
+    Idle,
+    Pending(ItemLocation),
+    Failed(ItemLocation, DecodeError),
+}
+
+impl ViewRequest {
+    /// The item the request is about; the position baseline follows it.
+    fn location(&self) -> Option<&ItemLocation> {
+        match self {
+            Self::Idle => None,
+            Self::Pending(location) | Self::Failed(location, _) => Some(location),
+        }
+    }
+
+    fn pending(&self) -> Option<&ItemLocation> {
+        match self {
+            Self::Pending(location) => Some(location),
+            _ => None,
+        }
+    }
+
+    fn failure(&self) -> Option<(&ItemLocation, &DecodeError)> {
+        match self {
+            Self::Failed(location, error) => Some((location, error)),
+            _ => None,
+        }
+    }
 }
 
 /// What an arriving listing does to the view.
@@ -510,13 +540,12 @@ impl ImageCore {
             options,
             listing_scope: None,
             entries: Vec::new(),
-            pending_display: None,
+            request: ViewRequest::Idle,
             in_flight: HashMap::new(),
             probes_in_flight: HashMap::new(),
             upload_device_generation: None,
             cache: HashMap::new(),
             current: None,
-            load_error: None,
             navigating_backward: false,
             opposite_steps: 0,
             releaser: ImageReleaser::new(),
@@ -643,7 +672,7 @@ impl ImageCore {
 
     /// True while this item is the one the view waits on.
     pub fn is_pending(&self, location: &ItemLocation) -> bool {
-        self.pending_display.as_ref() == Some(location)
+        self.request.pending() == Some(location)
     }
 
     /// None when there is no anchor to reload, like the navigation entry points.
@@ -821,9 +850,8 @@ impl ImageCore {
                 if pending.purpose == ScanPurpose::Refresh {
                     return ListingInstall::Discarded;
                 }
-                self.pending_display = None;
-                self.load_error =
-                    Some((ItemLocation::File(scan.scope.path().to_path_buf()), error));
+                self.request =
+                    ViewRequest::Failed(ItemLocation::File(scan.scope.path().to_path_buf()), error);
                 return ListingInstall::Opened {
                     outcome: LoadOutcome::Failed,
                 };
@@ -856,6 +884,16 @@ impl ImageCore {
         self.pending_scan.is_some()
     }
 
+    /// The failed request the view reports, if the last one ended that way.
+    pub fn load_failure(&self) -> Option<(&ItemLocation, &DecodeError)> {
+        self.request.failure()
+    }
+
+    /// Nothing shown, nothing awaited, no scan running: the session holds no item at all.
+    pub fn holds_no_item(&self) -> bool {
+        self.current.is_none() && !self.has_pending_display() && !self.listing_scan_pending()
+    }
+
     /// Opens a remote image as a standalone item (no listing, no navigation).
     pub fn load_url(&mut self, url: &str) -> LoadOutcome {
         // Even a failed attempt leaves the single-item state; no listing survives.
@@ -877,8 +915,7 @@ impl ImageCore {
         };
         let location = ItemLocation::Url(url.to_string());
         if let Some(message) = failure {
-            self.pending_display = None;
-            self.load_error = Some((location, decode::uncoded_error(message)));
+            self.request = ViewRequest::Failed(location, decode::uncoded_error(message));
             // A refused URL still leaves the single-item state; the listing is gone.
             self.refresh_preload();
             return LoadOutcome::Failed;
@@ -892,9 +929,8 @@ impl ImageCore {
         if !same_anchor {
             self.missing_anchor = None;
         }
-        // This request owns the view from here: an earlier wait and error stop deciding what shows.
-        self.pending_display = None;
-        self.load_error = None;
+        // This request owns the view from here; what the last one left stops deciding what shows.
+        self.request = ViewRequest::Idle;
         let metadata = match location {
             ItemLocation::File(path) => match std::fs::metadata(path) {
                 Ok(file) => ItemMetadata {
@@ -902,14 +938,14 @@ impl ImageCore {
                     modified: file.modified().ok(),
                 },
                 Err(error) => {
-                    self.load_error = Some((
+                    self.request = ViewRequest::Failed(
                         location.clone(),
                         DecodeError {
                             code: error.raw_os_error().unwrap_or(0),
                             message: error.to_string(),
                             store_codec_names: &[],
                         },
-                    ));
+                    );
                     // The wait this request dropped may still hold a decode; the sweep ends it.
                     self.refresh_preload();
                     return LoadOutcome::Failed;
@@ -919,10 +955,10 @@ impl ImageCore {
             ItemLocation::ArchiveMember { .. } => match self.position_of(location) {
                 Some(index) => self.entries[index].metadata(),
                 None => {
-                    self.load_error = Some((
+                    self.request = ViewRequest::Failed(
                         location.clone(),
                         decode::uncoded_error("Member no longer exists in the archive"),
-                    ));
+                    );
                     self.refresh_preload();
                     return LoadOutcome::Failed;
                 }
@@ -956,7 +992,7 @@ impl ImageCore {
             }
             preview_shown = true;
         }
-        self.pending_display = Some(location.clone());
+        self.request = ViewRequest::Pending(location.clone());
         if let Some(cancellation) = self.in_flight.get(location) {
             // Already queued as a preload: revoke any cancellation and promote.
             cancellation.store(false, Ordering::Relaxed);
@@ -1013,7 +1049,7 @@ impl ImageCore {
 
     /// A pending two-stage item is showing its preview and waits for the deferred full decode.
     pub fn full_decode_pending(&self) -> bool {
-        self.pending_display.as_ref().is_some_and(|pending| {
+        self.request.pending().is_some_and(|pending| {
             !self.in_flight.contains_key(pending)
                 && self.cache.get(pending).is_some_and(|entry| entry.preview)
         })
@@ -1021,7 +1057,7 @@ impl ImageCore {
 
     /// Submits the deferred full decode for the pending preview; a no-op when none waits.
     pub fn start_pending_full_decode(&mut self) {
-        let Some(location) = self.pending_display.clone() else {
+        let Some(location) = self.request.pending().cloned() else {
             return;
         };
         if self.in_flight.contains_key(&location) {
@@ -1063,8 +1099,7 @@ impl ImageCore {
 
     /// Empty-window state for when a delete leaves nothing to show.
     pub fn clear_current_item(&mut self) {
-        self.pending_display = None;
-        self.load_error = None;
+        self.request = ViewRequest::Idle;
         if let Some(previous) = self.current.take() {
             self.releaser.release(previous.image);
         }
@@ -1133,7 +1168,7 @@ impl ImageCore {
     pub fn open_failed_missing(&self, path: &Path) -> bool {
         const ERROR_FILE_NOT_FOUND: i32 = 2;
         const ERROR_PATH_NOT_FOUND: i32 = 3;
-        let Some((location, error)) = &self.load_error else {
+        let Some((location, error)) = self.request.failure() else {
             return false;
         };
         if !matches!(error.code, ERROR_FILE_NOT_FOUND | ERROR_PATH_NOT_FOUND) {
@@ -1147,11 +1182,11 @@ impl ImageCore {
 
     /// True while a remote image download owns the pending slot.
     pub fn url_download_pending(&self) -> bool {
-        matches!(self.pending_display, Some(ItemLocation::Url(_)))
+        matches!(self.request.pending(), Some(ItemLocation::Url(_)))
     }
 
-    pub fn has_pending_display(&self) -> bool {
-        self.pending_display.is_some()
+    fn has_pending_display(&self) -> bool {
+        self.request.pending().is_some()
     }
 
     /// The current item's path when it is a local file (not an archive member or URL).
@@ -1170,9 +1205,8 @@ impl ImageCore {
 
     /// The position baseline: the in-flight load, else the errored item, else the display.
     pub fn navigation_anchor(&self) -> Option<&ItemLocation> {
-        self.pending_display
-            .as_ref()
-            .or_else(|| self.load_error.as_ref().map(|(location, _)| location))
+        self.request
+            .location()
             .or_else(|| self.current.as_ref().map(|current| &current.location))
     }
 
@@ -1221,7 +1255,6 @@ impl ImageCore {
                     texture: completion.texture,
                     metadata: completion.metadata,
                 });
-                self.load_error = None;
                 return Some(LoadOutcome::Shown);
             }
             return None;
@@ -1289,8 +1322,7 @@ impl ImageCore {
                         texture: completion.texture,
                         metadata: completion.metadata,
                     });
-                    self.pending_display = None;
-                    self.load_error = None;
+                    self.request = ViewRequest::Idle;
                     // Preload starts once this image is on screen.
                     Some(LoadOutcome::Shown)
                 } else {
@@ -1300,8 +1332,7 @@ impl ImageCore {
             }
             Err(error) => {
                 if is_pending {
-                    self.pending_display = None;
-                    self.load_error = Some((completion.location, error));
+                    self.request = ViewRequest::Failed(completion.location, error);
                     self.refresh_preload();
                     Some(LoadOutcome::Failed)
                 } else {
@@ -1372,7 +1403,7 @@ impl ImageCore {
     /// Speculation waits for the display; the cancel and evict sweeps do not.
     pub fn refresh_preload(&mut self) {
         // A pending upgrade of what is already on screen (RAW, animation) still speculates.
-        let awaiting_first_view = self.pending_display.as_ref().is_some_and(|pending| {
+        let awaiting_first_view = self.request.pending().is_some_and(|pending| {
             self.current
                 .as_ref()
                 .is_none_or(|current| current.location != *pending)
@@ -2166,7 +2197,10 @@ fn core_with_files(count: usize, anchor: Option<usize>) -> ImageCore {
             weight: DecodedWeight::Unknown,
         })
         .collect();
-    core.pending_display = anchor.map(|index| core.entries[index].location.clone());
+    core.request = match anchor {
+        Some(index) => ViewRequest::Pending(core.entries[index].location.clone()),
+        None => ViewRequest::Idle,
+    };
     core
 }
 
@@ -2536,17 +2570,17 @@ mod url_session_state_tests {
 
         // A single entry that is the anchor itself leaves nowhere to go.
         folder_state(&mut core, "C:\\pictures\\a.png");
-        core.load_error = Some((
+        core.request = ViewRequest::Failed(
             ItemLocation::File(PathBuf::from("C:\\pictures\\a.png")),
             decode_error("broken"),
-        ));
+        );
         assert!(!core.has_navigation_targets());
 
         // An unlisted anchor can still reach the one listed entry.
-        core.load_error = Some((
+        core.request = ViewRequest::Failed(
             ItemLocation::File(PathBuf::from("C:\\pictures\\note.txt")),
             decode_error("no decoder"),
-        ));
+        );
         assert!(core.has_navigation_targets());
 
         core.entries.push(ListingEntry {
@@ -2558,10 +2592,10 @@ mod url_session_state_tests {
             format_name: "PNG",
             weight: DecodedWeight::Unknown,
         });
-        core.load_error = Some((
+        core.request = ViewRequest::Failed(
             ItemLocation::File(PathBuf::from("C:\\pictures\\a.png")),
             decode_error("broken"),
-        ));
+        );
         assert!(core.has_navigation_targets());
     }
 
@@ -2572,7 +2606,7 @@ mod url_session_state_tests {
         assert_eq!(core.load_url("ftp://a.com/b.png"), LoadOutcome::Failed);
         assert!(core.entries.is_empty());
         assert!(core.listing_scope.is_none());
-        let (location, error) = core.load_error.as_ref().expect("error recorded");
+        let (location, error) = core.load_failure().expect("error recorded");
         assert!(matches!(location, ItemLocation::Url(_)));
         assert!(error.message.contains("protocol"));
     }
@@ -2584,7 +2618,7 @@ mod url_session_state_tests {
         assert_eq!(core.load_url(""), LoadOutcome::Failed);
         assert!(core.entries.is_empty());
         assert!(core.listing_scope.is_none());
-        let (_, error) = core.load_error.as_ref().expect("error recorded");
+        let (_, error) = core.load_failure().expect("error recorded");
         assert!(error.message.contains("clipboard"));
     }
 
@@ -2593,7 +2627,7 @@ mod url_session_state_tests {
         for text in ["see https://a/b.png look", "seehttps://a/b.pnglook"] {
             let mut core = core();
             assert_eq!(core.load_url(text), LoadOutcome::Failed);
-            let (_, error) = core.load_error.as_ref().expect("error recorded");
+            let (_, error) = core.load_failure().expect("error recorded");
             assert!(error.message.contains("protocol"));
         }
     }
@@ -2602,19 +2636,19 @@ mod url_session_state_tests {
     fn reload_retries_the_errored_url_not_the_previous_file() {
         let mut core = core();
         folder_state(&mut core, "C:\\pictures\\a.png");
-        core.load_error = Some((
+        core.request = ViewRequest::Failed(
             ItemLocation::Url("ftp://a.com/b.png".to_string()),
             DecodeError {
                 code: 0,
                 message: "Download failed".to_string(),
                 store_codec_names: &[],
             },
-        ));
+        );
         assert_eq!(core.reload_current(), Some(LoadOutcome::Failed));
         // Routed back through load_url: single-item state, validation re-ran.
         assert!(core.entries.is_empty());
         assert!(core.listing_scope.is_none());
-        let (_, error) = core.load_error.as_ref().expect("error recorded");
+        let (_, error) = core.load_failure().expect("error recorded");
         assert!(error.message.contains("protocol"));
     }
 
@@ -2639,9 +2673,9 @@ mod url_session_state_tests {
         let file = directory.join("a.png");
         let mut core = core();
         assert_eq!(core.load_url("ftp://a.com/b.png"), LoadOutcome::Failed);
-        assert!(core.load_error.is_some());
+        assert!(core.load_failure().is_some());
         core.load_path(&file);
-        assert!(core.load_error.is_none()); // the pending load owns the view now
+        assert!(core.load_failure().is_none()); // the pending load owns the view now
         let _ = std::fs::remove_dir_all(&directory);
     }
 
@@ -2794,7 +2828,7 @@ mod listing_scan_tests {
                 outcome: LoadOutcome::Failed
             }
         ));
-        assert!(core.load_error.is_some());
+        assert!(core.load_failure().is_some());
         assert!(!core.listing_scan_pending());
     }
 
@@ -2838,13 +2872,13 @@ mod listing_scan_tests {
         core.rescan_folder(&directory);
         let middle = directory.join("b.png");
         // Anchored without a decode: a worker holding the file open would race the removal.
-        core.pending_display = Some(ItemLocation::File(middle.clone()));
+        core.request = ViewRequest::Pending(ItemLocation::File(middle.clone()));
         std::fs::remove_file(&middle).expect("fixture removal");
         assert_eq!(core.reload_current(), Some(LoadOutcome::Failed)); // nothing left to decode
         let scan = ScannedListing::of(ListingScope::Directory(directory.clone()), &core.options);
         core.install_listing_scan(scan);
         assert_eq!(core.entries.len(), 2); // the listing dropped it
-        assert!(core.load_error.is_some()); // and the error stays on screen
+        assert!(core.load_failure().is_some()); // and the error stays on screen
         fn target(core: &ImageCore, command: NavigationCommand) -> Option<PathBuf> {
             core.navigation_target(command)
                 .and_then(|location| location.as_file().map(Path::to_path_buf))
@@ -2979,7 +3013,7 @@ mod deleted_item_tests {
             None
         );
         assert!(core.entries.is_empty());
-        assert!(core.current.is_none() && core.pending_display.is_none());
+        assert!(core.current.is_none() && !core.has_pending_display());
     }
 }
 
