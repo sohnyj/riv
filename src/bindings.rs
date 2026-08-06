@@ -173,7 +173,7 @@ const DEFAULT_KEYBOARD: &[(&str, &[&str])] = &[
     ("showinexplorer", &["Ctrl+E"]),
     ("rename", &["R", "F2"]),
     ("delete", &["Delete", "Ctrl+D"]),
-    ("deletepermanently", &["Shift+Delete"]),
+    ("deletepermanently", &["Shift+Delete", "Ctrl+Shift+D"]),
     ("toggleslideshow", &["S"]),
     ("settings", &["Ctrl+,"]),
     ("alwaysontop", &["T"]),
