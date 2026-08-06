@@ -78,6 +78,16 @@ impl Hash for ItemLocation {
     }
 }
 
+impl ListingEntry {
+    /// The listing's own record of the file, in the shape a load and the cache compare.
+    fn metadata(&self) -> ItemMetadata {
+        ItemMetadata {
+            file_size: self.file_size,
+            modified: Some(self.modified),
+        }
+    }
+}
+
 impl ItemLocation {
     /// Leaf name for titles and messages (member basename inside archives).
     pub fn display_name(&self) -> String {
@@ -287,9 +297,8 @@ pub enum DecodeStage {
 
 pub struct DecodeCompletion {
     pub location: ItemLocation,
-    pub file_size: u64,
-    /// Echoed from the submit stat or the listing; None for URLs.
-    pub modified: Option<SystemTime>,
+    /// Echoed from the submit stat or the listing, never re-read by the worker.
+    pub metadata: ItemMetadata,
     pub stage: DecodeStage,
     pub result: Result<Arc<DecodedImage>, DecodeError>,
     /// Worker-side upload for still frames; None falls back to the UI-thread upload.
@@ -325,8 +334,7 @@ pub struct CurrentImage {
 
 #[derive(Clone)]
 struct CacheEntry {
-    file_size: u64,
-    modified: Option<SystemTime>,
+    metadata: ItemMetadata,
     /// Preview stand-in (RAW, sub-resolution, animation first frame) until the full decode is paid for.
     preview: bool,
     image: Arc<DecodedImage>,
@@ -336,8 +344,7 @@ struct CacheEntry {
 impl CacheEntry {
     /// A textured entry keeps no pixels: the texture is the only copy.
     fn new(
-        file_size: u64,
-        modified: Option<SystemTime>,
+        metadata: ItemMetadata,
         preview: bool,
         image: Arc<DecodedImage>,
         texture: Option<UploadedTexture>,
@@ -348,8 +355,7 @@ impl CacheEntry {
             image
         };
         Self {
-            file_size,
-            modified,
+            metadata,
             preview,
             image,
             texture,
@@ -357,8 +363,8 @@ impl CacheEntry {
     }
 
     /// Cached pixels stand for a file of this size and modification time, nothing else.
-    fn matches(&self, file_size: u64, modified: Option<SystemTime>) -> bool {
-        self.file_size == file_size && self.modified == modified
+    fn matches(&self, metadata: ItemMetadata) -> bool {
+        self.metadata == metadata
     }
 }
 
@@ -793,8 +799,7 @@ impl ImageCore {
         }
         for entry in entries {
             if let Some(previous) = probed.get(&entry.location)
-                && previous.file_size == entry.file_size
-                && previous.modified == entry.modified
+                && previous.metadata() == entry.metadata()
             {
                 entry.weight = previous.weight;
             }
@@ -890,9 +895,12 @@ impl ImageCore {
         // This request owns the view from here: an earlier wait and error stop deciding what shows.
         self.pending_display = None;
         self.load_error = None;
-        let (file_size, modified) = match location {
+        let metadata = match location {
             ItemLocation::File(path) => match std::fs::metadata(path) {
-                Ok(metadata) => (metadata.len(), metadata.modified().ok()),
+                Ok(file) => ItemMetadata {
+                    file_size: file.len(),
+                    modified: file.modified().ok(),
+                },
                 Err(error) => {
                     self.load_error = Some((
                         location.clone(),
@@ -909,10 +917,7 @@ impl ImageCore {
             },
             // Member sizes are fixed by the listing; a vanished member fails here.
             ItemLocation::ArchiveMember { .. } => match self.position_of(location) {
-                Some(index) => (
-                    self.entries[index].file_size,
-                    Some(self.entries[index].modified),
-                ),
+                Some(index) => self.entries[index].metadata(),
                 None => {
                     self.load_error = Some((
                         location.clone(),
@@ -923,15 +928,18 @@ impl ImageCore {
                 }
             },
             // A cached remote item stays valid until an explicit reload.
-            ItemLocation::Url(_) => (
-                self.cache.get(location).map_or(0, |entry| entry.file_size),
-                None,
-            ),
+            ItemLocation::Url(_) => ItemMetadata {
+                file_size: self
+                    .cache
+                    .get(location)
+                    .map_or(0, |entry| entry.metadata.file_size),
+                modified: None,
+            },
         };
         let cached = self
             .cache
             .get(location)
-            .filter(|entry| entry.matches(file_size, modified))
+            .filter(|entry| entry.matches(metadata))
             .cloned();
         let mut preview_shown = false;
         if let Some(entry) = cached {
@@ -940,10 +948,7 @@ impl ImageCore {
                 location: location.clone(),
                 image: entry.image,
                 texture: entry.texture,
-                metadata: ItemMetadata {
-                    file_size,
-                    modified: entry.modified,
-                },
+                metadata,
             });
             if !preview {
                 // Preload starts once this image is on screen.
@@ -957,7 +962,7 @@ impl ImageCore {
             cancellation.store(false, Ordering::Relaxed);
             self.pool.promote(location);
         } else {
-            self.submit_pending_decode(location.clone(), file_size, modified, preview_shown);
+            self.submit_pending_decode(location.clone(), metadata, preview_shown);
         }
         // The deferral timer owns the pending full decode; this call is for the sweeps.
         self.refresh_preload();
@@ -972,8 +977,7 @@ impl ImageCore {
     fn submit_decode(
         &mut self,
         location: ItemLocation,
-        file_size: u64,
-        modified: Option<SystemTime>,
+        metadata: ItemMetadata,
         kind: JobKind,
         awaited: bool,
     ) {
@@ -981,35 +985,29 @@ impl ImageCore {
         self.in_flight
             .insert(location.clone(), cancellation.clone());
         self.pool
-            .submit(location, file_size, modified, cancellation, kind, awaited);
+            .submit(location, metadata, cancellation, kind, awaited);
     }
 
     /// A discarded arrival resubmits what the waiting item still needs.
-    fn resubmit_pending_decode(
-        &mut self,
-        location: ItemLocation,
-        file_size: u64,
-        modified: Option<SystemTime>,
-    ) {
+    fn resubmit_pending_decode(&mut self, location: ItemLocation, metadata: ItemMetadata) {
         let preview_cached = self
             .cache
             .get(&location)
-            .is_some_and(|entry| entry.preview && entry.matches(file_size, modified));
-        self.submit_pending_decode(location, file_size, modified, preview_cached);
+            .is_some_and(|entry| entry.preview && entry.matches(metadata));
+        self.submit_pending_decode(location, metadata, preview_cached);
     }
 
     /// Submits what a pending item still needs; a cached two-stage preview waits on the timer.
     fn submit_pending_decode(
         &mut self,
         location: ItemLocation,
-        file_size: u64,
-        modified: Option<SystemTime>,
+        metadata: ItemMetadata,
         preview_cached: bool,
     ) {
         if !preview_cached {
-            self.submit_decode(location, file_size, modified, JobKind::Preview, true);
+            self.submit_decode(location, metadata, JobKind::Preview, true);
         } else if !is_deferred_two_stage(&location) {
-            self.submit_decode(location, file_size, modified, JobKind::Full, true);
+            self.submit_decode(location, metadata, JobKind::Full, true);
         }
     }
 
@@ -1029,15 +1027,15 @@ impl ImageCore {
         if self.in_flight.contains_key(&location) {
             return;
         }
-        let Some((file_size, modified)) = self
+        let Some(metadata) = self
             .cache
             .get(&location)
             .filter(|entry| entry.preview)
-            .map(|entry| (entry.file_size, entry.modified))
+            .map(|entry| entry.metadata)
         else {
             return;
         };
-        self.submit_decode(location, file_size, modified, JobKind::Full, true);
+        self.submit_decode(location, metadata, JobKind::Full, true);
     }
 
     pub fn navigate(&mut self, command: NavigationCommand) -> Option<LoadOutcome> {
@@ -1221,10 +1219,7 @@ impl ImageCore {
                     location: completion.location,
                     image,
                     texture: completion.texture,
-                    metadata: ItemMetadata {
-                        file_size: completion.file_size,
-                        modified: completion.modified,
-                    },
+                    metadata: completion.metadata,
                 });
                 self.load_error = None;
                 return Some(LoadOutcome::Shown);
@@ -1242,11 +1237,7 @@ impl ImageCore {
                 self.record_arrived_weight(&completion.location, image);
             }
             if is_pending {
-                self.resubmit_pending_decode(
-                    completion.location,
-                    completion.file_size,
-                    completion.modified,
-                );
+                self.resubmit_pending_decode(completion.location, completion.metadata);
             }
             return None;
         }
@@ -1257,8 +1248,7 @@ impl ImageCore {
             self.cache_image(
                 completion.location.clone(),
                 CacheEntry::new(
-                    completion.file_size,
-                    completion.modified,
+                    completion.metadata,
                     true,
                     image.clone(),
                     completion.texture.clone(),
@@ -1276,11 +1266,7 @@ impl ImageCore {
         {
             // Navigation can return to an item while its decode is cancelling.
             if is_pending {
-                self.resubmit_pending_decode(
-                    completion.location,
-                    completion.file_size,
-                    completion.modified,
-                );
+                self.resubmit_pending_decode(completion.location, completion.metadata);
             }
             return None;
         }
@@ -1290,8 +1276,7 @@ impl ImageCore {
                 self.cache_image(
                     completion.location.clone(),
                     CacheEntry::new(
-                        completion.file_size,
-                        completion.modified,
+                        completion.metadata,
                         false,
                         image.clone(),
                         completion.texture.clone(),
@@ -1302,10 +1287,7 @@ impl ImageCore {
                         location: completion.location,
                         image,
                         texture: completion.texture,
-                        metadata: ItemMetadata {
-                            file_size: completion.file_size,
-                            modified: completion.modified,
-                        },
+                        metadata: completion.metadata,
                     });
                     self.pending_display = None;
                     self.load_error = None;
@@ -1448,9 +1430,10 @@ impl ImageCore {
                 match entry.weight {
                     DecodedWeight::Known(weight)
                         if !self.in_flight.contains_key(&entry.location)
-                            && !self.cache.get(&entry.location).is_some_and(|cached| {
-                                cached.matches(entry.file_size, Some(entry.modified))
-                            }) =>
+                            && !self
+                                .cache
+                                .get(&entry.location)
+                                .is_some_and(|cached| cached.matches(entry.metadata())) =>
                     {
                         Some((index, weight))
                     }
@@ -1471,12 +1454,8 @@ impl ImageCore {
             } else {
                 JobKind::Full
             };
-            let (location, file_size, modified) = (
-                entry.location.clone(),
-                entry.file_size,
-                Some(entry.modified),
-            );
-            self.submit_decode(location, file_size, modified, kind, false);
+            let (location, metadata) = (entry.location.clone(), entry.metadata());
+            self.submit_decode(location, metadata, kind, false);
         }
     }
 
@@ -1485,8 +1464,13 @@ impl ImageCore {
         let cancellation = Arc::new(AtomicBool::new(false));
         self.probes_in_flight
             .insert(location.clone(), cancellation.clone());
-        self.pool
-            .submit(location, 0, None, cancellation, JobKind::Probe, false);
+        self.pool.submit(
+            location,
+            ItemMetadata::default(),
+            cancellation,
+            JobKind::Probe,
+            false,
+        );
     }
 
     /// Records an arrived probe; a stale location misses the listing lookup.
@@ -1883,9 +1867,8 @@ enum JobKind {
 
 struct DecodeJob {
     location: ItemLocation,
-    file_size: u64,
     /// Carried from the submit stat or the listing; the worker echoes it, never stats.
-    modified: Option<SystemTime>,
+    metadata: ItemMetadata,
     cancellation: Arc<AtomicBool>,
     kind: JobKind,
     /// Preloaded on a guess, so an animation stops at its first frame.
@@ -1927,8 +1910,7 @@ impl DecodePool {
     fn submit(
         &self,
         location: ItemLocation,
-        file_size: u64,
-        modified: Option<SystemTime>,
+        metadata: ItemMetadata,
         cancellation: Arc<AtomicBool>,
         kind: JobKind,
         awaited: bool,
@@ -1936,8 +1918,7 @@ impl DecodePool {
         let mut queue = self.shared.queue.lock().expect("decode queue poisoned");
         let job = DecodeJob {
             location,
-            file_size,
-            modified,
+            metadata,
             cancellation,
             kind,
             speculative: !awaited, // only a preload goes to the back of the queue
@@ -2026,8 +2007,7 @@ fn worker_loop(shared: &PoolShared, window: isize) {
             run_probe_job(&job, window);
             continue;
         }
-        let mut file_size = job.file_size;
-        let modified = job.modified;
+        let mut metadata = job.metadata;
         let result = match &job.location {
             ItemLocation::File(path) => {
                 let post_preview = |image: DecodedImage, last: bool| {
@@ -2036,8 +2016,7 @@ fn worker_loop(shared: &PoolShared, window: isize) {
                         WM_APP_DECODE_COMPLETE,
                         Box::new(DecodeCompletion {
                             location: job.location.clone(),
-                            file_size: job.file_size,
-                            modified,
+                            metadata: job.metadata,
                             stage: if last {
                                 DecodeStage::PreviewFinal
                             } else {
@@ -2093,7 +2072,7 @@ fn worker_loop(shared: &PoolShared, window: isize) {
                 };
                 match curl::download(url, &job.cancellation, &mut report) {
                     Ok(data) => {
-                        file_size = data.len() as u64; // the remote size becomes known here
+                        metadata.file_size = data.len() as u64; // the remote size becomes known here
                         let extension = curl::extension_lowercase(url);
                         decode::decode_bytes(&data, extension.as_deref(), &job.cancellation)
                             .map_err(url_decode_error)
@@ -2118,8 +2097,7 @@ fn worker_loop(shared: &PoolShared, window: isize) {
             WM_APP_DECODE_COMPLETE,
             Box::new(DecodeCompletion {
                 location: job.location,
-                file_size,
-                modified,
+                metadata,
                 stage: DecodeStage::Final,
                 result,
                 texture,
