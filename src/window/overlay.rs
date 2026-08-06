@@ -19,6 +19,7 @@ use windows::core::{Result, w};
 use windows_numerics::Vector2;
 
 use crate::image::color;
+use crate::image::core::ItemMetadata;
 use crate::image::decode::{DecodedImage, PixelStorage};
 use crate::view::renderer::ToneMapInfo;
 
@@ -419,8 +420,7 @@ pub fn build_info_text(
     file_name: &str,
     location_text: &str,
     image: &DecodedImage,
-    file_size: u64,
-    modified: Option<SystemTime>,
+    metadata: ItemMetadata,
     output_label: &str,
     scaling_description: &str,
     dither_description: &str,
@@ -447,9 +447,9 @@ pub fn build_info_text(
         format!("Bit depth: {bit_depth}"),
         format!("Color profile: {color_profile}"),
         format!("Path: {location_text}"),
-        format!("Size: {}", format_file_size(file_size)),
+        format!("Size: {}", format_file_size(metadata.file_size)),
     ];
-    if let Some(modified) = modified {
+    if let Some(modified) = metadata.modified {
         file.push(format!(
             "Date modified: {}",
             format_local_datetime(modified)
@@ -660,22 +660,21 @@ pub fn build_download_text(file_name: &str, received_bytes: u64) -> String {
 pub fn build_file_summary_text(
     file_name: &str,
     image: Option<&DecodedImage>,
-    file_size: Option<u64>,
-    modified: Option<SystemTime>,
+    metadata: Option<ItemMetadata>,
 ) -> String {
     let mut lines = vec![file_name.to_string()];
     if let Some(image) = image {
         lines.push(format!("Format: {}", image.format_name));
         lines.push(resolution_text(image));
     }
-    if let Some(file_size) = file_size {
-        lines.push(format!("Size: {}", binary_size_text(file_size)));
+    if let Some(metadata) = metadata {
+        lines.push(format!("Size: {}", binary_size_text(metadata.file_size)));
     }
     // Date taken identifies the photograph; the file's own time stands in when there is none.
     let taken = image.and_then(|image| image.exif.as_ref()?.date_taken);
     if let Some(taken) = taken {
         lines.push(format!("Date taken: {}", format_local_datetime(taken)));
-    } else if let Some(modified) = modified {
+    } else if let Some(modified) = metadata.and_then(|metadata| metadata.modified) {
         lines.push(format!(
             "Date modified: {}",
             format_local_datetime(modified)
@@ -937,8 +936,10 @@ mod info_text_tests {
             "a.png",
             "C:\\a.png",
             &image,
-            100,
-            None,
+            ItemMetadata {
+                file_size: 100,
+                ..ItemMetadata::default()
+            },
             "8-bit sRGB",
             "Bilinear",
             "None",
@@ -956,8 +957,10 @@ mod info_text_tests {
             "a.png",
             "C:\\a.png",
             &image,
-            100,
-            None,
+            ItemMetadata {
+                file_size: 100,
+                ..ItemMetadata::default()
+            },
             "8-bit sRGB",
             "Bilinear",
             "None",
@@ -971,8 +974,10 @@ mod info_text_tests {
             "a.png",
             "C:\\a.png",
             &image,
-            100,
-            None,
+            ItemMetadata {
+                file_size: 100,
+                ..ItemMetadata::default()
+            },
             "8-bit sRGB",
             "Bilinear",
             "None",
@@ -999,8 +1004,10 @@ mod info_text_tests {
             "a.exr",
             "C:\\a.exr",
             &image,
-            100,
-            None,
+            ItemMetadata {
+                file_size: 100,
+                ..ItemMetadata::default()
+            },
             "HDR10",
             "Bilinear",
             "None",
@@ -1031,8 +1038,10 @@ mod info_text_tests {
             "a.exr",
             "C:\\a.exr",
             &image,
-            100,
-            None,
+            ItemMetadata {
+                file_size: 100,
+                ..ItemMetadata::default()
+            },
             "8-bit sRGB",
             "Bilinear",
             "None",

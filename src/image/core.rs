@@ -309,12 +309,18 @@ pub struct ProbeCompletion {
     weight: Option<u64>,
 }
 
+/// The file facts a load reads once and everything downstream reuses; URL items have no time.
+#[derive(Clone, Copy, Default, PartialEq, Eq)]
+pub struct ItemMetadata {
+    pub file_size: u64,
+    pub modified: Option<SystemTime>,
+}
+
 pub struct CurrentImage {
     pub location: ItemLocation,
     pub image: Arc<DecodedImage>,
     pub texture: Option<UploadedTexture>,
-    file_size: u64,
-    modified: Option<SystemTime>,
+    metadata: ItemMetadata,
 }
 
 #[derive(Clone)]
@@ -480,7 +486,15 @@ fn enumerate_archive(
 pub enum ListingInstall {
     Discarded,
     Installed,
-    Opened { displayed: bool },
+    Opened { outcome: LoadOutcome },
+}
+
+/// How a load ended: on screen, refused with an error the view shows, or nothing to show yet.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub enum LoadOutcome {
+    Shown,
+    Failed,
+    Pending,
 }
 
 impl ImageCore {
@@ -616,10 +630,9 @@ impl ImageCore {
         }
     }
 
-    /// (file size, modified) of the current item, carried from its load; None for URL times.
-    pub fn current_item_metadata(&self) -> Option<(u64, Option<SystemTime>)> {
-        let current = self.current.as_ref()?;
-        Some((current.file_size, current.modified))
+    /// What the current item's load already read; None once nothing is shown.
+    pub fn current_item_metadata(&self) -> Option<ItemMetadata> {
+        Some(self.current.as_ref()?.metadata)
     }
 
     /// True while this item is the one the view waits on.
@@ -627,17 +640,16 @@ impl ImageCore {
         self.pending_display.as_ref() == Some(location)
     }
 
-    pub fn reload_current(&mut self) -> bool {
+    /// None when there is no anchor to reload, like the navigation entry points.
+    pub fn reload_current(&mut self) -> Option<LoadOutcome> {
         // Reload retries the position baseline, so an errored item reloads itself.
-        let Some(location) = self.navigation_anchor().cloned() else {
-            return false;
-        };
+        let location = self.navigation_anchor().cloned()?;
         if let Some(entry) = self.cache.remove(&location) {
             self.releaser.release(entry.image);
         }
         if let ItemLocation::Url(url) = &location {
             // Back through load_url so validation errors reproduce on retry.
-            return self.load_url(url);
+            return Some(self.load_url(url));
         }
         if let ItemLocation::File(path) = &location
             && location
@@ -651,24 +663,24 @@ impl ImageCore {
                 scope,
                 purpose: ScanPurpose::OpenFirstEntry,
             });
-            return false;
+            return Some(LoadOutcome::Pending);
         }
         // A reload re-decodes the item and re-collects the listing it sits in.
-        let displayed = self.load_item(&location);
+        let outcome = self.load_item(&location);
         self.submit_refresh_scan();
-        displayed
+        Some(outcome)
     }
 
-    pub fn load_path(&mut self, path: &Path) -> bool {
+    pub fn load_path(&mut self, path: &Path) -> LoadOutcome {
         let Ok(path) = std::path::absolute(path) else {
-            return false;
+            return LoadOutcome::Pending;
         };
         if path.is_dir() {
             self.submit_scan(PendingScan {
                 scope: ListingScope::Directory(path),
                 purpose: ScanPurpose::OpenFirstEntry,
             });
-            return false;
+            return LoadOutcome::Pending;
         }
         let extension = crate::text::lowercase_extension(&path);
         if extension
@@ -679,7 +691,7 @@ impl ImageCore {
                 scope: ListingScope::Archive(path),
                 purpose: ScanPurpose::OpenFirstEntry,
             });
-            return false;
+            return LoadOutcome::Pending;
         }
         let directory = path.parent().map(Path::to_path_buf);
         if let Some(directory) = directory
@@ -807,7 +819,9 @@ impl ImageCore {
                 self.pending_display = None;
                 self.load_error =
                     Some((ItemLocation::File(scan.scope.path().to_path_buf()), error));
-                return ListingInstall::Opened { displayed: false };
+                return ListingInstall::Opened {
+                    outcome: LoadOutcome::Failed,
+                };
             }
         };
         // The worker sorted under an options snapshot; a change since then re-sorts here.
@@ -825,7 +839,7 @@ impl ImageCore {
                 return ListingInstall::Installed;
             };
             return ListingInstall::Opened {
-                displayed: self.load_item(&first),
+                outcome: self.load_item(&first),
             };
         }
         self.refresh_preload();
@@ -838,7 +852,7 @@ impl ImageCore {
     }
 
     /// Opens a remote image as a standalone item (no listing, no navigation).
-    pub fn load_url(&mut self, url: &str) -> bool {
+    pub fn load_url(&mut self, url: &str) -> LoadOutcome {
         // Even a failed attempt leaves the single-item state; no listing survives.
         self.entries = Vec::new();
         self.listing_scope = None;
@@ -862,12 +876,12 @@ impl ImageCore {
             self.load_error = Some((location, decode::uncoded_error(message)));
             // A refused URL still leaves the single-item state; the listing is gone.
             self.refresh_preload();
-            return false;
+            return LoadOutcome::Failed;
         }
         self.load_item(&location)
     }
 
-    fn load_item(&mut self, location: &ItemLocation) -> bool {
+    fn load_item(&mut self, location: &ItemLocation) -> LoadOutcome {
         // Another item becoming the anchor drops the place the last one left.
         let same_anchor = self.navigation_anchor() == Some(location);
         if !same_anchor {
@@ -885,7 +899,7 @@ impl ImageCore {
                             store_codec_names: &[],
                         },
                     ));
-                    return false;
+                    return LoadOutcome::Failed;
                 }
             },
             // Member sizes are fixed by the listing; a vanished member fails here.
@@ -899,7 +913,7 @@ impl ImageCore {
                         location.clone(),
                         decode::uncoded_error("Member no longer exists in the archive"),
                     ));
-                    return false;
+                    return LoadOutcome::Failed;
                 }
             },
             // A cached remote item stays valid until an explicit reload.
@@ -920,14 +934,16 @@ impl ImageCore {
                 location: location.clone(),
                 image: entry.image,
                 texture: entry.texture,
-                file_size,
-                modified: entry.modified,
+                metadata: ItemMetadata {
+                    file_size,
+                    modified: entry.modified,
+                },
             });
             self.load_error = None;
             if !preview {
                 self.pending_display = None;
                 // Preload starts once this image is on screen.
-                return true;
+                return LoadOutcome::Shown;
             }
             preview_shown = true;
         }
@@ -943,7 +959,11 @@ impl ImageCore {
         }
         // The deferral timer owns the pending full decode; this call is for the sweeps.
         self.refresh_preload();
-        preview_shown
+        if preview_shown {
+            LoadOutcome::Shown
+        } else {
+            LoadOutcome::Pending
+        }
     }
 
     /// Registers the job in flight and hands it to the pool under a fresh cancellation.
@@ -1018,7 +1038,7 @@ impl ImageCore {
         self.submit_decode(location, file_size, modified, JobKind::Full, true);
     }
 
-    pub fn navigate(&mut self, command: NavigationCommand) -> Option<bool> {
+    pub fn navigate(&mut self, command: NavigationCommand) -> Option<LoadOutcome> {
         let anchor = self.navigation_anchor();
         let target = self.navigation_target(command)?;
         if anchor.is_some_and(|anchor| anchor == &target) {
@@ -1029,7 +1049,7 @@ impl ImageCore {
     }
 
     /// Jumps to a listing entry; the index maps the open menu's snapshot, so no rescan first.
-    pub fn navigate_to_entry(&mut self, index: usize) -> Option<bool> {
+    pub fn navigate_to_entry(&mut self, index: usize) -> Option<LoadOutcome> {
         let target = self.entries.get(index)?.location.clone();
         if self
             .navigation_anchor()
@@ -1190,7 +1210,8 @@ impl ImageCore {
         Some(self.entries[index].location.clone())
     }
 
-    pub fn on_decode_complete(&mut self, completion: DecodeCompletion) -> bool {
+    /// None when the arrival changes nothing on screen: a stale item, or a redo already queued.
+    pub fn on_decode_complete(&mut self, completion: DecodeCompletion) -> Option<LoadOutcome> {
         let is_pending = self.is_pending(&completion.location);
         if matches!(completion.stage, DecodeStage::Preview) {
             if is_pending && let Ok(image) = completion.result {
@@ -1198,13 +1219,15 @@ impl ImageCore {
                     location: completion.location,
                     image,
                     texture: completion.texture,
-                    file_size: completion.file_size,
-                    modified: completion.modified,
+                    metadata: ItemMetadata {
+                        file_size: completion.file_size,
+                        modified: completion.modified,
+                    },
                 });
                 self.load_error = None;
-                return true;
+                return Some(LoadOutcome::Shown);
             }
-            return false;
+            return None;
         }
         self.in_flight.remove(&completion.location);
         // A retired generation never wraps and carries no pixels; redo like a cancelled decode.
@@ -1223,7 +1246,7 @@ impl ImageCore {
                     completion.modified,
                 );
             }
-            return false;
+            return None;
         }
         // Preview stages always post Ok; an Err would fall through to Final's failure paths.
         if matches!(completion.stage, DecodeStage::PreviewFinal)
@@ -1241,10 +1264,10 @@ impl ImageCore {
             );
             if is_pending {
                 // Waited on: show it, then go get the full decode it stands in for.
-                return self.load_item(&completion.location);
+                return Some(self.load_item(&completion.location));
             }
             self.evict_cache();
-            return false;
+            return None;
         }
         if let Err(error) = &completion.result
             && error.is_cancelled()
@@ -1257,7 +1280,7 @@ impl ImageCore {
                     completion.modified,
                 );
             }
-            return false;
+            return None;
         }
         match completion.result {
             Ok(image) => {
@@ -1277,16 +1300,18 @@ impl ImageCore {
                         location: completion.location,
                         image,
                         texture: completion.texture,
-                        file_size: completion.file_size,
-                        modified: completion.modified,
+                        metadata: ItemMetadata {
+                            file_size: completion.file_size,
+                            modified: completion.modified,
+                        },
                     });
                     self.pending_display = None;
                     self.load_error = None;
                     // Preload starts once this image is on screen.
-                    true
+                    Some(LoadOutcome::Shown)
                 } else {
                     self.evict_cache();
-                    false
+                    None
                 }
             }
             Err(error) => {
@@ -1294,8 +1319,10 @@ impl ImageCore {
                     self.pending_display = None;
                     self.load_error = Some((completion.location, error));
                     self.refresh_preload();
+                    Some(LoadOutcome::Failed)
+                } else {
+                    None
                 }
-                is_pending
             }
         }
     }
@@ -2562,7 +2589,7 @@ mod url_session_state_tests {
     fn a_rejected_url_still_clears_the_listing() {
         let mut core = core();
         folder_state(&mut core, "C:\\pictures\\a.png");
-        assert!(!core.load_url("ftp://a.com/b.png"));
+        assert_eq!(core.load_url("ftp://a.com/b.png"), LoadOutcome::Failed);
         assert!(core.entries.is_empty());
         assert!(core.listing_scope.is_none());
         let (location, error) = core.load_error.as_ref().expect("error recorded");
@@ -2574,7 +2601,7 @@ mod url_session_state_tests {
     fn an_empty_paste_reports_no_url() {
         let mut core = core();
         folder_state(&mut core, "C:\\pictures\\a.png");
-        assert!(!core.load_url(""));
+        assert_eq!(core.load_url(""), LoadOutcome::Failed);
         assert!(core.entries.is_empty());
         assert!(core.listing_scope.is_none());
         let (_, error) = core.load_error.as_ref().expect("error recorded");
@@ -2585,7 +2612,7 @@ mod url_session_state_tests {
     fn prose_around_a_url_is_rejected_not_parsed() {
         for text in ["see https://a/b.png look", "seehttps://a/b.pnglook"] {
             let mut core = core();
-            assert!(!core.load_url(text));
+            assert_eq!(core.load_url(text), LoadOutcome::Failed);
             let (_, error) = core.load_error.as_ref().expect("error recorded");
             assert!(error.message.contains("protocol"));
         }
@@ -2603,7 +2630,7 @@ mod url_session_state_tests {
                 store_codec_names: &[],
             },
         ));
-        assert!(!core.reload_current());
+        assert_eq!(core.reload_current(), Some(LoadOutcome::Failed));
         // Routed back through load_url: single-item state, validation re-ran.
         assert!(core.entries.is_empty());
         assert!(core.listing_scope.is_none());
@@ -2631,7 +2658,7 @@ mod url_session_state_tests {
         let directory = fixture_directory("riv-error-supersede", &["a.png"]);
         let file = directory.join("a.png");
         let mut core = core();
-        assert!(!core.load_url("ftp://a.com/b.png"));
+        assert_eq!(core.load_url("ftp://a.com/b.png"), LoadOutcome::Failed);
         assert!(core.load_error.is_some());
         core.load_path(&file);
         assert!(core.load_error.is_none()); // the pending load owns the view now
@@ -2643,7 +2670,7 @@ mod url_session_state_tests {
         let directory = fixture_directory("riv-url-session-state", &["a.png"]);
         let file = directory.join("a.png");
         let mut core = core();
-        assert!(!core.load_url("ftp://a.com/b.png"));
+        assert_eq!(core.load_url("ftp://a.com/b.png"), LoadOutcome::Failed);
         core.load_path(&file);
         // The scan is asynchronous: no listing until its arrival installs one.
         assert!(core.listing_scan_pending());
@@ -2752,7 +2779,7 @@ mod listing_scan_tests {
     fn an_archive_open_loads_its_first_member_on_arrival() {
         let archive = std::env::temp_dir().join("riv-archive-open.zip");
         let mut core = core();
-        assert!(!core.load_path(&archive));
+        assert_eq!(core.load_path(&archive), LoadOutcome::Pending);
         assert!(core.listing_scan_pending());
         let resolved = std::path::absolute(&archive).expect("absolute");
         let scan = ScannedListing {
@@ -2773,7 +2800,7 @@ mod listing_scan_tests {
     fn a_failed_archive_enumerate_surfaces_as_the_error() {
         let archive = std::env::temp_dir().join("riv-archive-error.zip");
         let mut core = core();
-        assert!(!core.load_path(&archive));
+        assert_eq!(core.load_path(&archive), LoadOutcome::Pending);
         let resolved = std::path::absolute(&archive).expect("absolute");
         let scan = ScannedListing {
             scope: ListingScope::Archive(resolved),
@@ -2783,7 +2810,9 @@ mod listing_scan_tests {
         };
         assert!(matches!(
             core.install_listing_scan(scan),
-            ListingInstall::Opened { displayed: false }
+            ListingInstall::Opened {
+                outcome: LoadOutcome::Failed
+            }
         ));
         assert!(core.load_error.is_some());
         assert!(!core.listing_scan_pending());
@@ -2815,7 +2844,7 @@ mod listing_scan_tests {
         // Anchored without a decode: a worker holding the file open would race the removal.
         core.pending_display = Some(ItemLocation::File(middle.clone()));
         std::fs::remove_file(&middle).expect("fixture removal");
-        assert!(!core.reload_current()); // nothing left to decode
+        assert_eq!(core.reload_current(), Some(LoadOutcome::Failed)); // nothing left to decode
         let scan = ScannedListing::of(ListingScope::Directory(directory.clone()), &core.options);
         core.install_listing_scan(scan);
         assert_eq!(core.entries.len(), 2); // the listing dropped it
@@ -2833,14 +2862,14 @@ mod listing_scan_tests {
         let expected = (Some(directory.join("c.png")), Some(directory.join("a.png")));
         assert_eq!(adjacent_entries(&core), expected);
         // A second reload of the same missing item keeps the place it left.
-        assert!(!core.reload_current());
+        assert_eq!(core.reload_current(), Some(LoadOutcome::Failed));
         let scan = ScannedListing::of(ListingScope::Directory(directory.clone()), &core.options);
         core.install_listing_scan(scan);
         assert_eq!(adjacent_entries(&core), expected);
         // A file added ahead of it shifts every index; the place follows the entry beside it.
         // The name starts with a digit so logical order puts it first on every implementation.
         std::fs::write(directory.join("0.png"), b"listing only").expect("fixture file");
-        assert!(!core.reload_current());
+        assert_eq!(core.reload_current(), Some(LoadOutcome::Failed));
         let scan = ScannedListing::of(ListingScope::Directory(directory.clone()), &core.options);
         core.install_listing_scan(scan);
         assert_eq!(core.entries.len(), 3);
@@ -2852,7 +2881,7 @@ mod listing_scan_tests {
     fn a_directory_open_loads_its_first_entry_on_arrival() {
         let directory = fixture_directory("riv-directory-open", &["a.png"]);
         let mut core = core();
-        assert!(!core.load_path(&directory));
+        assert_eq!(core.load_path(&directory), LoadOutcome::Pending);
         assert!(core.listing_scan_pending());
         let scan = ScannedListing::of(ListingScope::Directory(directory.clone()), &core.options);
         assert!(matches!(

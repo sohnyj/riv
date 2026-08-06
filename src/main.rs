@@ -26,8 +26,8 @@ use image::animation::Animation;
 use image::color::{self, DisplayLabels};
 use image::core::{
     CoreOptions, DecodeCompletion, DownloadProgress, ImageCore, ItemLocation, ListingInstall,
-    NavigationCommand, ProbeCompletion, ScannedListing, SortMode, WM_APP_DECODE_COMPLETE,
-    WM_APP_DOWNLOAD_PROGRESS, WM_APP_LISTING_READY, WM_APP_PROBE_COMPLETE,
+    LoadOutcome, NavigationCommand, ProbeCompletion, ScannedListing, SortMode,
+    WM_APP_DECODE_COMPLETE, WM_APP_DOWNLOAD_PROGRESS, WM_APP_LISTING_READY, WM_APP_PROBE_COMPLETE,
 };
 use image::decode::DecodedImage;
 use network::curl;
@@ -517,12 +517,10 @@ impl Application {
     /// The file facts the delete confirmation lists, taken from what the load already read.
     fn delete_details(&self, path: &Path) -> String {
         let file_name = text::file_name_text(path);
-        let (file_size, modified) = self.image_core.current_item_metadata().unzip();
         overlay::build_file_summary_text(
             &file_name,
             self.displayed_image.as_deref(),
-            file_size,
-            modified.flatten(),
+            self.image_core.current_item_metadata(),
         )
     }
 
@@ -741,13 +739,11 @@ impl Application {
     }
 
     /// Applies a load's outcome: the display, the error, or the in-flight freeze; then the title.
-    fn apply_load_outcome(&mut self, window: HWND, displayed: bool) {
-        if displayed {
-            self.apply_current_image(window);
-        } else if self.image_core.load_error.is_some() {
-            self.apply_load_error(window);
-        } else {
-            self.freeze_animation_for_load(window);
+    fn apply_load_outcome(&mut self, window: HWND, outcome: LoadOutcome) {
+        match outcome {
+            LoadOutcome::Shown => self.apply_current_image(window),
+            LoadOutcome::Failed => self.apply_load_error(window),
+            LoadOutcome::Pending => self.freeze_animation_for_load(window),
         }
         self.schedule_full_decode(window);
         self.update_window_title(window);
@@ -1084,8 +1080,8 @@ impl Application {
         let scaling_description = self.scaling_description(frame);
         let dither_description = frame.map_or("None", FrameDecision::dither_description);
         let tone_map = self.renderer.as_ref().map(Renderer::tone_map_info);
-        // Size and modified time were carried by the load; nothing re-stats here.
-        let (file_size, modified) = self.image_core.current_item_metadata().unwrap_or((0, None));
+        // The load carried these; nothing re-stats here.
+        let metadata = self.image_core.current_item_metadata()?;
         let current = self.image_core.current.as_ref()?;
         let image_id = Arc::as_ptr(&current.image) as usize;
         let reuse = self.info_text_cache.as_ref().is_some_and(|cache| {
@@ -1103,8 +1099,7 @@ impl Application {
                 &current.location.display_name(),
                 &current.location.display_text(),
                 &current.image,
-                file_size,
-                modified,
+                metadata,
                 output_label,
                 scaling_description,
                 dither_description,
@@ -1455,12 +1450,12 @@ fn execute_navigation(
 fn apply_navigation_result(
     application: &mut Application,
     window: HWND,
-    result: Option<bool>,
+    result: Option<LoadOutcome>,
 ) -> bool {
     match result {
-        Some(displayed) => {
+        Some(outcome) => {
             application.dismiss_status_text(window);
-            application.apply_load_outcome(window, displayed);
+            application.apply_load_outcome(window, outcome);
             true
         }
         None => false,
@@ -1470,13 +1465,13 @@ fn apply_navigation_result(
 fn open_external(
     application: &mut Application,
     window: HWND,
-    load: impl FnOnce(&mut ImageCore) -> bool,
+    load: impl FnOnce(&mut ImageCore) -> LoadOutcome,
 ) {
     application.stop_slideshow(window);
     application.freeze_animation_for_load(window);
     application.dismiss_status_text(window);
-    let displayed = load(&mut application.image_core);
-    application.apply_load_outcome(window, displayed);
+    let outcome = load(&mut application.image_core);
+    application.apply_load_outcome(window, outcome);
 }
 
 fn open_external_path(application: &mut Application, window: HWND, path: &Path) {
@@ -1519,8 +1514,9 @@ fn dispatch_action(application: &mut Application, window: HWND, action: Action) 
             show_menu(application, window, x, y, MenuTarget::Playlist);
         }
         Action::Reload => {
-            let displayed = application.image_core.reload_current();
-            application.apply_load_outcome(window, displayed);
+            if let Some(outcome) = application.image_core.reload_current() {
+                application.apply_load_outcome(window, outcome);
+            }
         }
         Action::ZoomIn => application.zoom_by(window, application.zoom_step()),
         Action::ZoomOut => application.zoom_by(window, 1.0 / application.zoom_step()),
@@ -1771,8 +1767,9 @@ fn delete_current_file(application: &mut Application, window: HWND, permanent: b
             None => application.clear_displayed_image(window),
         },
         Err(_) => {
-            let displayed = application.image_core.reload_current();
-            application.apply_load_outcome(window, displayed);
+            if let Some(outcome) = application.image_core.reload_current() {
+                application.apply_load_outcome(window, outcome);
+            }
         }
     }
 }
@@ -2337,12 +2334,10 @@ extern "system" fn window_procedure(
         WM_APP_DECODE_COMPLETE => {
             let completion = unsafe { Box::from_raw(lparam.0 as *mut DecodeCompletion) };
             if let Some(application) = application_from_window(window) {
-                if application.image_core.on_decode_complete(*completion) {
-                    let displayed = application.image_core.load_error.is_none();
-                    application.apply_load_outcome(window, displayed);
-                } else {
-                    // A discarded arrival can leave a shown preview needing the timer.
-                    application.schedule_full_decode(window);
+                match application.image_core.on_decode_complete(*completion) {
+                    Some(outcome) => application.apply_load_outcome(window, outcome),
+                    // An arrival with nothing to apply can leave a shown preview needing the timer.
+                    None => application.schedule_full_decode(window),
                 }
             }
             LRESULT(0)
@@ -2371,8 +2366,8 @@ extern "system" fn window_procedure(
                         application.update_window_title(window);
                         application.request_render(window);
                     }
-                    ListingInstall::Opened { displayed } => {
-                        application.apply_load_outcome(window, displayed);
+                    ListingInstall::Opened { outcome } => {
+                        application.apply_load_outcome(window, outcome);
                     }
                 }
             }
