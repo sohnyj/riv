@@ -49,13 +49,13 @@ Formats that need a codec extension from the Microsoft Store:
 
 Decoded by built-in codecs:
 
-| Format | Decoder |
-|---|---|
-| HEIC / HEIF | libheif + libde265 |
-| SVG / SVGZ | resvg |
-| EXR | OpenEXR |
-| APNG | png |
-| Animated WebP | libwebp |
+| Format | Decoder | Notes |
+|---|---|---|
+| HEIC / HEIF | libheif + libde265 | |
+| SVG / SVGZ | resvg | Vector only |
+| EXR | OpenEXR | |
+| APNG | png | |
+| Animated WebP | libwebp | |
 
 Decoded by Windows Imaging Component codecs:
 
