@@ -79,16 +79,24 @@ The build cross-compiles from Linux (tested on WSL) to `x86_64-pc-windows-msvc`.
 
 Prerequisites:
 
-- Rust with the `x86_64-pc-windows-msvc` target
-- LLVM 21+: clang-cl, lld-link, llvm-lib, llvm-rc, llvm-mt
+- Rust with the `x86_64-pc-windows-msvc` target.
+- LLVM 22: `clang, clang-cl, lld-link, llvm-lib, llvm-rc, llvm-mt`.
+  Older releases can fail on the MSVC STL in the xwin splat.
 - A Windows CRT + SDK splat from [xwin](https://github.com/Jake-Shadle/xwin)
-  in `~/.xwin` (override the location with `XWIN_ROOT`)
-- CMake and Ninja, for static codec dependencies
+  in `~/.xwin` (override the location with `XWIN_ROOT`).
+- `CMake` and `Ninja`, for static codec dependencies.
+- `Wine`, for the tests and for compiling the HLSL shaders.
 
 On Ubuntu 26.04, everything but Rust and xwin comes from apt:
 
 ```sh
-sudo apt-get install clang-21 lld-21 llvm-21 cmake ninja-build git
+sudo apt-get install clang-22 lld-22 llvm-22 cmake ninja-build wine git
+```
+
+Only the versioned directory carries the unversioned tool names:
+
+```sh
+export PATH="/usr/lib/llvm-22/bin:$PATH"
 ```
 
 Rust and xwin:
