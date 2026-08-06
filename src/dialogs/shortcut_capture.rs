@@ -20,7 +20,8 @@ use windows::Win32::UI::WindowsAndMessaging::{
     SetWindowLongPtrW, SetWindowTextW, WM_APP, WM_COMMAND, WM_DRAWITEM, WM_ERASEBKGND,
     WM_GETDLGCODE, WM_INITDIALOG, WM_KEYDOWN, WM_KEYUP, WM_KILLFOCUS, WM_LBUTTONDBLCLK,
     WM_LBUTTONDOWN, WM_MBUTTONDBLCLK, WM_MBUTTONDOWN, WM_MOUSEWHEEL, WM_PAINT, WM_SETFOCUS,
-    WM_SETFONT, WM_SYSKEYDOWN, WM_SYSKEYUP, WM_XBUTTONDBLCLK, WM_XBUTTONDOWN, WNDCLASSEXW, WNDPROC,
+    WM_SETFONT, WM_SYSCHAR, WM_SYSKEYDOWN, WM_SYSKEYUP, WM_XBUTTONDBLCLK, WM_XBUTTONDOWN,
+    WNDCLASSEXW, WNDPROC,
 };
 use windows::core::{PCWSTR, w};
 
@@ -548,6 +549,8 @@ unsafe extern "system" fn key_field_procedure(
             }
             LRESULT(0)
         }
+        // Translation runs in the loop, so an Alt combination reaches here after being captured.
+        WM_SYSCHAR => LRESULT(0),
         WM_KEYUP | WM_SYSKEYUP | WM_SETFOCUS | WM_KILLFOCUS => {
             let _ = unsafe { InvalidateRect(Some(field), None, false) };
             LRESULT(0)
