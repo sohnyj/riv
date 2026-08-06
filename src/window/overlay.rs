@@ -440,7 +440,7 @@ pub fn build_info_text(
 
     // File: the file's own identity, always present so navigation stays steady.
     let mut file = vec![
-        format!("Name: {file_name}"),
+        file_name.to_string(),
         format!("Format: {}", image.format_name),
         resolution_text(image),
         format!("Ratio: {}", format_aspect_ratio(image.width, image.height)),
@@ -656,22 +656,30 @@ pub fn build_download_text(file_name: &str, received_bytes: u64) -> String {
     )
 }
 
-/// The file facts the delete confirmation lists, in the info panel's words.
+/// The file facts the delete confirmation lists, in its own shorter wording.
 pub fn build_file_summary_text(
     file_name: &str,
     image: Option<&DecodedImage>,
     file_size: Option<u64>,
+    modified: Option<SystemTime>,
 ) -> String {
     let mut lines = vec![file_name.to_string()];
     if let Some(image) = image {
         lines.push(format!("Format: {}", image.format_name));
-        if let Some(taken) = image.exif.as_ref().and_then(|exif| exif.date_taken) {
-            lines.push(format!("Date taken: {}", format_local_datetime(taken)));
-        }
         lines.push(resolution_text(image));
     }
     if let Some(file_size) = file_size {
         lines.push(format!("Size: {}", binary_size_text(file_size)));
+    }
+    // Date taken identifies the photograph; the file's own time stands in when there is none.
+    let taken = image.and_then(|image| image.exif.as_ref()?.date_taken);
+    if let Some(taken) = taken {
+        lines.push(format!("Date taken: {}", format_local_datetime(taken)));
+    } else if let Some(modified) = modified {
+        lines.push(format!(
+            "Date modified: {}",
+            format_local_datetime(modified)
+        ));
     }
     lines.join("\n")
 }

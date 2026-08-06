@@ -516,15 +516,13 @@ impl Application {
 
     /// The file facts the delete confirmation lists, taken from what the load already read.
     fn delete_details(&self, path: &Path) -> String {
-        let file_name = path
-            .file_name()
-            .map_or_else(String::new, |name| name.to_string_lossy().into_owned());
+        let file_name = text::file_name_text(path);
+        let (file_size, modified) = self.image_core.current_item_metadata().unzip();
         overlay::build_file_summary_text(
             &file_name,
             self.displayed_image.as_deref(),
-            self.image_core
-                .current_item_metadata()
-                .map(|(file_size, _)| file_size),
+            file_size,
+            modified.flatten(),
         )
     }
 
@@ -1783,9 +1781,7 @@ fn rename_current_file(application: &mut Application, window: HWND) {
     let Some(path) = application.image_core.current_file().map(Path::to_path_buf) else {
         return;
     };
-    let current_name = path
-        .file_name()
-        .map_or_else(String::new, |name| name.to_string_lossy().into_owned());
+    let current_name = text::file_name_text(&path);
     let Some(new_name) = dialogs::rename::show(window, &current_name) else {
         return;
     };

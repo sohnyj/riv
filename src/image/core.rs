@@ -82,9 +82,7 @@ impl ItemLocation {
     /// Leaf name for titles and messages (member basename inside archives).
     pub fn display_name(&self) -> String {
         match self {
-            Self::File(path) => path
-                .file_name()
-                .map_or_else(String::new, |name| name.to_string_lossy().into_owned()),
+            Self::File(path) => crate::text::file_name_text(path),
             Self::ArchiveMember { member, .. } => member
                 .rsplit(['/', '\\'])
                 .next()

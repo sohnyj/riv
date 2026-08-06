@@ -13,6 +13,12 @@ pub fn wide(text: impl AsRef<OsStr>) -> Vec<u16> {
         .collect()
 }
 
+/// Leaf name as titles and messages spell it; empty when the path ends in a root.
+pub fn file_name_text(path: &std::path::Path) -> String {
+    path.file_name()
+        .map_or_else(String::new, |name| name.to_string_lossy().into_owned())
+}
+
 /// Extension without the dot, folded so lists match regardless of how a file spells it.
 pub fn lowercase_extension(path: &std::path::Path) -> Option<String> {
     Some(path.extension()?.to_string_lossy().to_lowercase())
