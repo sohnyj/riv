@@ -887,6 +887,9 @@ impl ImageCore {
         if !same_anchor {
             self.missing_anchor = None;
         }
+        // This request owns the view from here: an earlier wait and error stop deciding what shows.
+        self.pending_display = None;
+        self.load_error = None;
         let (file_size, modified) = match location {
             ItemLocation::File(path) => match std::fs::metadata(path) {
                 Ok(metadata) => (metadata.len(), metadata.modified().ok()),
@@ -899,6 +902,8 @@ impl ImageCore {
                             store_codec_names: &[],
                         },
                     ));
+                    // The wait this request dropped may still hold a decode; the sweep ends it.
+                    self.refresh_preload();
                     return LoadOutcome::Failed;
                 }
             },
@@ -913,6 +918,7 @@ impl ImageCore {
                         location.clone(),
                         decode::uncoded_error("Member no longer exists in the archive"),
                     ));
+                    self.refresh_preload();
                     return LoadOutcome::Failed;
                 }
             },
@@ -939,17 +945,13 @@ impl ImageCore {
                     modified: entry.modified,
                 },
             });
-            self.load_error = None;
             if !preview {
-                self.pending_display = None;
                 // Preload starts once this image is on screen.
                 return LoadOutcome::Shown;
             }
             preview_shown = true;
         }
         self.pending_display = Some(location.clone());
-        // The new load owns the view; a leftover error would mask its progress.
-        self.load_error = None;
         if let Some(cancellation) = self.in_flight.get(location) {
             // Already queued as a preload: revoke any cancellation and promote.
             cancellation.store(false, Ordering::Relaxed);
@@ -2816,6 +2818,22 @@ mod listing_scan_tests {
         ));
         assert!(core.load_error.is_some());
         assert!(!core.listing_scan_pending());
+    }
+
+    /// A request that fails on the spot still takes the view from whatever was loading.
+    #[test]
+    fn a_failed_load_drops_the_previous_wait() {
+        let directory = fixture_directory("riv-failed-load-wait", &["a.png"]);
+        let mut core = core();
+        core.rescan_folder(&directory);
+        core.load_path(&directory.join("a.png"));
+        assert!(core.has_pending_display());
+        let missing = directory.join("missing.png");
+        assert_eq!(core.load_path(&missing), LoadOutcome::Failed);
+        assert!(!core.has_pending_display());
+        // The errored item is the position baseline, so the next move starts from it.
+        assert!(core.navigation_anchor() == Some(&ItemLocation::File(missing)));
+        let _ = std::fs::remove_dir_all(&directory);
     }
 
     #[test]
