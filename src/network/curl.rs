@@ -263,7 +263,7 @@ mod url_tests {
     use super::*;
 
     #[test]
-    fn only_http_and_https_pass_the_gate() {
+    fn only_http_and_https_are_accepted() {
         assert!(is_supported_protocol("http://a/b.png"));
         assert!(is_supported_protocol("HTTPS://a/b.png"));
         assert!(!is_supported_protocol("ftp://a/b.png"));

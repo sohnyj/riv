@@ -60,11 +60,11 @@ Decoded by built-in codecs:
 
 | Format | Decoder | Notes |
 |---|---|---|
-| HEIC / HEIF | libheif + libde265 | |
+| HEIC / HEIF | libheif + libde265 | HDR |
+| EXR | OpenEXR | HDR |
+| PNG | png | Animated only |
+| WebP | libwebp | Animated only |
 | SVG / SVGZ | resvg | Vector only |
-| EXR | OpenEXR | |
-| APNG | png | |
-| Animated WebP | libwebp | |
 
 Decoded by Windows Imaging Component codecs:
 
@@ -80,7 +80,7 @@ zip, 7z, rar, tar, and cbz / cbr / cb7 / cbt.
 
 ## Requirements
 
-- Windows 11 23H2 or later, x86-64
+- Windows 11 23H2 or later, x86-64-v3 (AVX2)
 - Direct3D 12 capable GPU
 
 ## Building
@@ -129,7 +129,7 @@ Inspired by [qView](https://github.com/jurplel/qView).
 
 [mpv](https://github.com/mpv-player/mpv) and
 [libplacebo](https://code.videolan.org/videolan/libplacebo) served as references
-for context menu, dither, aspect ratio table.
+for the context menu, dithering, and the aspect ratio table.
 
 Ultra HDR test images come from
 [Mishaal Rahman's samples](https://github.com/MishaalRahmanGH/Ultra_HDR_Samples),
