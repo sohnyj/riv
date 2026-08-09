@@ -3,7 +3,7 @@
 use windows::Win32::Graphics::Direct3D11::{
     D3D11_BIND_RENDER_TARGET, D3D11_BIND_SHADER_RESOURCE, D3D11_RESOURCE_MISC_FLAG,
     D3D11_TEXTURE2D_DESC, D3D11_USAGE_DEFAULT, ID3D11Device, ID3D11RenderTargetView,
-    ID3D11Texture2D,
+    ID3D11ShaderResourceView, ID3D11Texture2D,
 };
 use windows::Win32::Graphics::Dxgi::Common::{DXGI_FORMAT, DXGI_SAMPLE_DESC};
 
@@ -41,5 +41,15 @@ pub fn create_render_target_view(
 ) -> windows::core::Result<Option<ID3D11RenderTargetView>> {
     let mut view = None;
     unsafe { device.CreateRenderTargetView(texture, None, Some(&raw mut view))? };
+    Ok(view)
+}
+
+/// Shader-resource view over a texture, unwrapped from the out parameter.
+pub fn create_shader_resource_view(
+    device: &ID3D11Device,
+    texture: &ID3D11Texture2D,
+) -> windows::core::Result<Option<ID3D11ShaderResourceView>> {
+    let mut view = None;
+    unsafe { device.CreateShaderResourceView(texture, None, Some(&raw mut view))? };
     Ok(view)
 }

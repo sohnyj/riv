@@ -470,29 +470,20 @@ pub fn build_info_text(
         metrics.push(format!("Frames: {}", image.frames.len()));
     }
     // HDR output only; Off states the forced fallback (the base rendition shows).
-    if let Some(gain_map) = &image.ultra_hdr
-        && let Some(tone_map) = &tone_map
-        && tone_map.hdr_display
+    if image.gain_map.is_some()
+        && tone_map
+            .as_ref()
+            .is_some_and(|tone_map| tone_map.hdr_display)
     {
-        if ultra_hdr_applied {
-            metrics.push("Ultra HDR: On".to_string());
-            metrics.push(format!(
-                "Content peak: {:.0} nits",
-                gain_map.capacity_peak_nits()
-            ));
-            metrics.push(format!(
-                "Display peak: {:.0} nits",
-                tone_map.display_peak_nits
-            ));
-            metrics.push(format!(
-                "Display full: {:.0} nits",
-                tone_map.display_full_frame_nits
-            ));
-        } else {
-            metrics.push("Ultra HDR: Off".to_string());
-        }
+        let state = if ultra_hdr_applied { "On" } else { "Off" };
+        metrics.push(format!("Ultra HDR: {state}"));
     }
-    if let Some(peak) = image.peak_luminance_nits {
+    // An applied gain rendition reports its declared peak like any FP16 source.
+    let gain_peak = image
+        .gain_map
+        .filter(|_| ultra_hdr_applied)
+        .map(|gain_map| gain_map.capacity_peak_nits());
+    if let Some(peak) = image.peak_luminance_nits.or(gain_peak) {
         metrics.push(format!("Content peak: {peak:.0} nits"));
         if let Some(tone_map) = tone_map {
             if tone_map.hdr_display {
@@ -950,7 +941,7 @@ mod info_text_tests {
                 delay_milliseconds: 0,
             }],
             frames_truncated: false,
-            ultra_hdr: None,
+            gain_map: None,
             gain_map_plane: None,
         }
     }

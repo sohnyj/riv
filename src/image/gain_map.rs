@@ -1,6 +1,9 @@
 //! Finding an Ultra HDR gain map: the MPF secondary JPEG and its hdrgm XMP.
 
+use std::io::{Read, Seek, SeekFrom};
 use std::ops::Range;
+
+use crate::image::icc::read_u16_be;
 
 /// Gain map parameters from the hdrgm XMP packet, one value per color plane.
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -56,7 +59,7 @@ pub fn find_ultra_hdr(file: &[u8]) -> Option<UltraHdr> {
             continue;
         };
         if let Some(metadata) = hdrgm_metadata(candidate)
-            && coherent(&metadata)
+            && usable(&metadata)
         {
             return Some(UltraHdr {
                 gain_map_range: range,
@@ -68,7 +71,7 @@ pub fn find_ultra_hdr(file: &[u8]) -> Option<UltraHdr> {
 }
 
 /// A parameter set the formula can act on; anything else fails closed.
-fn coherent(metadata: &GainMapMetadata) -> bool {
+fn usable(metadata: &GainMapMetadata) -> bool {
     let finite = |values: &[f32; 3]| values.iter().all(|value| value.is_finite());
     let ordered = metadata
         .gain_map_minimum
@@ -91,11 +94,62 @@ fn coherent(metadata: &GainMapMetadata) -> bool {
         && !metadata.base_rendition_is_hdr
 }
 
-/// Big-endian u16 at the offset, when in bounds.
-fn read_u16_be(bytes: &[u8], offset: usize) -> Option<u16> {
-    Some(u16::from_be_bytes(
-        bytes.get(offset..offset + 2)?.try_into().ok()?,
-    ))
+/// True when a header scan up to the scan data finds the MPF segment; a few KB at most.
+pub fn jpeg_carries_mpf(mut reader: impl Read + Seek) -> bool {
+    let mut start = [0u8; 2];
+    if reader.read_exact(&mut start).is_err() || start != [0xFF, START_OF_IMAGE] {
+        return false;
+    }
+    loop {
+        let mut marker = [0u8; 2];
+        if reader.read_exact(&mut marker).is_err() {
+            return false;
+        }
+        // Fill bytes: any run of 0xFF collapses onto the marker that follows.
+        while marker == [0xFF, 0xFF] {
+            marker[1] = match read_byte(&mut reader) {
+                Some(byte) => byte,
+                None => return false,
+            };
+        }
+        if marker[0] != 0xFF {
+            return false;
+        }
+        let kind = marker[1];
+        if kind == START_OF_IMAGE || kind == 0x01 || (0xD0..=0xD7).contains(&kind) {
+            continue;
+        }
+        if kind == END_OF_IMAGE || kind == START_OF_SCAN {
+            return false;
+        }
+        let mut length = [0u8; 2];
+        if reader.read_exact(&mut length).is_err() {
+            return false;
+        }
+        let mut remaining = i64::from(u16::from_be_bytes(length)) - 2;
+        if remaining < 0 {
+            return false;
+        }
+        if kind == APPLICATION_2 && remaining >= MPF_IDENTIFIER.len() as i64 {
+            let mut identifier = [0u8; 4];
+            if reader.read_exact(&mut identifier).is_err() {
+                return false;
+            }
+            if identifier[..] == *MPF_IDENTIFIER {
+                return true;
+            }
+            remaining -= identifier.len() as i64;
+        }
+        if reader.seek(SeekFrom::Current(remaining)).is_err() {
+            return false;
+        }
+    }
+}
+
+fn read_byte(reader: &mut impl Read) -> Option<u8> {
+    let mut byte = [0u8; 1];
+    reader.read_exact(&mut byte).ok()?;
+    Some(byte[0])
 }
 
 const START_OF_IMAGE: u8 = 0xD8;
@@ -339,29 +393,23 @@ fn scalar(values: &[&str]) -> Option<f32> {
 /// Reads hdrgm properties; a present-but-unreadable value rejects the packet.
 fn parse_hdrgm(xml: &str) -> Option<GainMapMetadata> {
     let prefix = hdrgm_prefix(xml)?;
+    // An absent optional property means its default; a present one must read.
+    let plane_or = |name: &str, default: [f32; 3]| match property_values(xml, prefix, name) {
+        Some(values) => per_plane(&values),
+        None => Some(default),
+    };
+    let scalar_or = |name: &str, default: f32| match property_values(xml, prefix, name) {
+        Some(values) => scalar(&values),
+        None => Some(default),
+    };
     property_values(xml, prefix, "Version")?;
     let gain_map_maximum = per_plane(&property_values(xml, prefix, "GainMapMax")?)?;
     let hdr_capacity_maximum = scalar(&property_values(xml, prefix, "HDRCapacityMax")?)?;
-    let gain_map_minimum = match property_values(xml, prefix, "GainMapMin") {
-        Some(values) => per_plane(&values)?,
-        None => [0.0; 3],
-    };
-    let gamma = match property_values(xml, prefix, "Gamma") {
-        Some(values) => per_plane(&values)?,
-        None => [1.0; 3],
-    };
-    let offset_sdr = match property_values(xml, prefix, "OffsetSDR") {
-        Some(values) => per_plane(&values)?,
-        None => [1.0 / 64.0; 3],
-    };
-    let offset_hdr = match property_values(xml, prefix, "OffsetHDR") {
-        Some(values) => per_plane(&values)?,
-        None => [1.0 / 64.0; 3],
-    };
-    let hdr_capacity_minimum = match property_values(xml, prefix, "HDRCapacityMin") {
-        Some(values) => scalar(&values)?,
-        None => 0.0,
-    };
+    let gain_map_minimum = plane_or("GainMapMin", [0.0; 3])?;
+    let gamma = plane_or("Gamma", [1.0; 3])?;
+    let offset_sdr = plane_or("OffsetSDR", [1.0 / 64.0; 3])?;
+    let offset_hdr = plane_or("OffsetHDR", [1.0 / 64.0; 3])?;
+    let hdr_capacity_minimum = scalar_or("HDRCapacityMin", 0.0)?;
     let base_rendition_is_hdr = match property_values(xml, prefix, "BaseRenditionIsHDR") {
         Some(values) => match values.as_slice() {
             [one] => one.eq_ignore_ascii_case("true"),
@@ -473,7 +521,7 @@ mod tests {
         assert_eq!(metadata.hdr_capacity_minimum, 0.5);
         assert!(metadata.base_rendition_is_hdr);
         // The HDR-base layout parses but stays out of scope, so the find rejects it.
-        assert!(!coherent(&metadata));
+        assert!(!usable(&metadata));
     }
 
     #[test]
@@ -494,7 +542,7 @@ mod tests {
         let empty_span = "hdrgm:Version=\"1.0\" hdrgm:GainMapMax=\"4.709\" \
              hdrgm:HDRCapacityMin=\"2.0\" hdrgm:HDRCapacityMax=\"2.0\"";
         let metadata = parse_hdrgm(&xmp_packet(empty_span)).expect("metadata");
-        assert!(!coherent(&metadata));
+        assert!(!usable(&metadata));
     }
 
     #[test]
@@ -513,6 +561,17 @@ mod tests {
     fn plain_jpeg_has_no_gain_map() {
         assert_eq!(find_ultra_hdr(&jpeg_with_segments(&[])), None);
         assert_eq!(find_ultra_hdr(b"not a jpeg"), None);
+    }
+
+    #[test]
+    fn mpf_probe_matches_the_full_parse() {
+        use std::io::Cursor;
+        let file = ultra_hdr_file(&gain_map_jpeg(REQUIRED));
+        assert!(jpeg_carries_mpf(Cursor::new(&file)));
+        assert!(!jpeg_carries_mpf(Cursor::new(&jpeg_with_segments(&[]))));
+        assert!(!jpeg_carries_mpf(Cursor::new(b"not a jpeg" as &[u8])));
+        let other_application_2 = jpeg_with_segments(&[(APPLICATION_2, b"ICC\0data".to_vec())]);
+        assert!(!jpeg_carries_mpf(Cursor::new(&other_application_2)));
     }
 
     #[test]

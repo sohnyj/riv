@@ -434,10 +434,6 @@ impl Application {
         // A label-only change (wire depth, gamut) still owes the panel a repaint.
         let labels_changed = labels != self.display_labels;
         self.display_labels = labels;
-        self.display_headroom = capabilities.gain_map_headroom();
-        if let Some(renderer) = &mut self.renderer {
-            renderer.set_display_headroom(self.display_headroom);
-        }
         if self.reconfigure_display_output(&capabilities, display_profile, false) {
             self.request_render(window);
             return;
@@ -459,6 +455,10 @@ impl Application {
             .is_some_and(|renderer| renderer.set_tone_map_target(target_nits, full_frame_nits))
         {
             stale = true;
+        }
+        self.display_headroom = capabilities.gain_map_headroom();
+        if let Some(renderer) = &mut self.renderer {
+            renderer.set_display_headroom(self.display_headroom);
         }
         if stale {
             self.request_render(window);
@@ -1162,14 +1162,10 @@ impl Application {
         let matrix = self.view_transform.matrix(viewport, image);
         let interpolation = self.interpolation_mode();
         let background = self.background_color();
-        // The gain rendition settles first, so the decision and the panel see it.
-        if let Some(renderer) = &mut self.renderer {
-            renderer.refresh_gain_bake();
-        }
         // Decide first: the panel reports this frame, not the last one.
         let decision = self
             .renderer
-            .as_ref()
+            .as_mut()
             .map(|renderer| renderer.decide_frame(matrix, interpolation));
         let content = self.overlay_content(background, decision);
         let clear_color = color::output_color(background, self.output_color_target());

@@ -2,13 +2,11 @@
 
 use std::cell::Cell;
 
-use windows::Win32::Graphics::Direct3D::D3D11_PRIMITIVE_TOPOLOGY_TRIANGLELIST;
 use windows::Win32::Graphics::Direct3D11::{
     D3D11_BIND_CONSTANT_BUFFER, D3D11_BIND_SHADER_RESOURCE, D3D11_BUFFER_DESC,
-    D3D11_CPU_ACCESS_WRITE, D3D11_MAP_WRITE_DISCARD, D3D11_SUBRESOURCE_DATA, D3D11_TEXTURE2D_DESC,
-    D3D11_USAGE_DYNAMIC, D3D11_USAGE_IMMUTABLE, D3D11_VIEWPORT, ID3D11Buffer, ID3D11Device,
-    ID3D11DeviceContext, ID3D11PixelShader, ID3D11RenderTargetView, ID3D11ShaderResourceView,
-    ID3D11VertexShader,
+    D3D11_CPU_ACCESS_WRITE, D3D11_SUBRESOURCE_DATA, D3D11_TEXTURE2D_DESC, D3D11_USAGE_DYNAMIC,
+    D3D11_USAGE_IMMUTABLE, ID3D11Buffer, ID3D11Device, ID3D11DeviceContext, ID3D11PixelShader,
+    ID3D11RenderTargetView, ID3D11ShaderResourceView, ID3D11VertexShader,
 };
 use windows::Win32::Graphics::Dxgi::Common::{DXGI_FORMAT_R32_FLOAT, DXGI_SAMPLE_DESC};
 use windows::core::Result;
@@ -16,7 +14,8 @@ use windows::core::Result;
 use crate::view::dither::{BLUE_NOISE_SIZE, BLUE_NOISE_TEXELS, DitherMode};
 
 /// DXBC compiled by the build script; the viewer never runs a shader compiler.
-const VERTEX_SHADER: &[u8] = include_bytes!(concat!(env!("OUT_DIR"), "/fullscreen_triangle.dxbc"));
+pub(crate) const VERTEX_SHADER: &[u8] =
+    include_bytes!(concat!(env!("OUT_DIR"), "/fullscreen_triangle.dxbc"));
 const COPY_SHADER: &[u8] = include_bytes!(concat!(env!("OUT_DIR"), "/copy.dxbc"));
 const ORDERED_SHADER: &[u8] = include_bytes!(concat!(env!("OUT_DIR"), "/ordered.dxbc"));
 const FRUIT_SHADER: &[u8] = include_bytes!(concat!(env!("OUT_DIR"), "/fruit.dxbc"));
@@ -119,22 +118,7 @@ impl QuantizePass {
             quantization_steps: quantization_steps as f32,
             padding: [0.0; 3],
         };
-        unsafe {
-            let mut mapped = Default::default();
-            context.Map(
-                &self.constant_buffer,
-                0,
-                D3D11_MAP_WRITE_DISCARD,
-                0,
-                Some(&raw mut mapped),
-            )?;
-            std::ptr::copy_nonoverlapping(
-                (&raw const constants).cast::<u8>(),
-                mapped.pData.cast::<u8>(),
-                size_of::<QuantizationConstants>(),
-            );
-            context.Unmap(&self.constant_buffer, 0);
-        }
+        crate::view::pass::write_constants(context, &self.constant_buffer, &constants)?;
         self.written_steps.set(Some(quantization_steps));
         Ok(())
     }
@@ -156,33 +140,14 @@ impl QuantizePass {
             DitherMode::Fruit if dithered => &self.fruit_shader,
             _ => &self.copy_shader,
         };
-        let viewport = D3D11_VIEWPORT {
-            TopLeftX: 0.0,
-            TopLeftY: 0.0,
-            Width: target_size.0 as f32,
-            Height: target_size.1 as f32,
-            MinDepth: 0.0,
-            MaxDepth: 1.0,
-        };
-        unsafe {
-            // D2D leaves undefined pipeline state behind; reset to opaque overwrite.
-            context.OMSetBlendState(None, None, u32::MAX);
-            context.OMSetDepthStencilState(None, 0);
-            context.RSSetState(None);
-            context.OMSetRenderTargets(Some(&[Some(target.clone())]), None);
-            context.RSSetViewports(Some(&[viewport]));
-            context.IASetPrimitiveTopology(D3D11_PRIMITIVE_TOPOLOGY_TRIANGLELIST);
-            context.VSSetShader(&self.vertex_shader, None);
-            context.PSSetShader(pixel_shader, None);
-            context.PSSetConstantBuffers(0, Some(&[Some(self.constant_buffer.clone())]));
-            context.PSSetShaderResources(
-                0,
-                Some(&[Some(scene.clone()), Some(self.blue_noise_view.clone())]),
-            );
-            context.Draw(3, 0);
-            // Unbind so D2D can retake the scene texture as a target next frame.
-            context.PSSetShaderResources(0, Some(&[None, None]));
-            context.OMSetRenderTargets(None, None);
-        }
+        crate::view::pass::draw_fullscreen(
+            context,
+            &self.vertex_shader,
+            pixel_shader,
+            &self.constant_buffer,
+            &[Some(scene.clone()), Some(self.blue_noise_view.clone())],
+            target,
+            target_size,
+        );
     }
 }

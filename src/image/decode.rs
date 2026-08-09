@@ -86,8 +86,8 @@ pub struct DecodedImage {
     pub frames: Vec<Frame>,
     /// The animation would expand past the byte limit; only the first frame is kept.
     pub frames_truncated: bool,
-    /// Present when the JPEG carries an Ultra HDR gain map; the renderer does not apply it yet.
-    pub ultra_hdr: Option<crate::image::gain_map::GainMapMetadata>,
+    /// Ultra HDR gain map parameters, when the file carries one.
+    pub gain_map: Option<crate::image::gain_map::GainMapMetadata>,
     /// The decoded gain map pixels; released with the frames once a texture holds them.
     pub gain_map_plane: Option<crate::image::gain_map::GainMapPlane>,
 }
@@ -184,7 +184,7 @@ impl DecodedImage {
                 })
                 .collect(),
             frames_truncated: self.frames_truncated,
-            ultra_hdr: self.ultra_hdr,
+            gain_map: self.gain_map,
             gain_map_plane: None,
         }
     }
@@ -266,6 +266,8 @@ pub struct FormatDescriptor {
     semantics: FrameSemantics,
     adapter: Adapter,
     store_codec_names: &'static [&'static str],
+    /// The container can carry an Ultra HDR gain map worth probing for.
+    carries_gain_map: bool,
 }
 
 /// Extensions, file filters, and association groups all derive from this registry.
@@ -277,6 +279,7 @@ static REGISTRY: &[FormatDescriptor] = &[
         semantics: FrameSemantics::Single,
         adapter: Adapter::Wic,
         store_codec_names: &[],
+        carries_gain_map: false,
     },
     FormatDescriptor {
         name: "APNG",
@@ -285,6 +288,7 @@ static REGISTRY: &[FormatDescriptor] = &[
         semantics: FrameSemantics::Animation,
         adapter: Adapter::Apng,
         store_codec_names: &[],
+        carries_gain_map: false,
     },
     FormatDescriptor {
         name: "SVG",
@@ -293,6 +297,7 @@ static REGISTRY: &[FormatDescriptor] = &[
         semantics: FrameSemantics::Single,
         adapter: Adapter::Svg,
         store_codec_names: &[],
+        carries_gain_map: false,
     },
     FormatDescriptor {
         name: "JPEG",
@@ -301,6 +306,7 @@ static REGISTRY: &[FormatDescriptor] = &[
         semantics: FrameSemantics::Single,
         adapter: Adapter::Wic,
         store_codec_names: &[],
+        carries_gain_map: true,
     },
     FormatDescriptor {
         name: "GIF",
@@ -309,6 +315,7 @@ static REGISTRY: &[FormatDescriptor] = &[
         semantics: FrameSemantics::Animation,
         adapter: Adapter::Wic,
         store_codec_names: &[],
+        carries_gain_map: false,
     },
     FormatDescriptor {
         name: "WebP",
@@ -317,6 +324,7 @@ static REGISTRY: &[FormatDescriptor] = &[
         semantics: FrameSemantics::Single,
         adapter: Adapter::Wic,
         store_codec_names: &["WebP Image Extensions"],
+        carries_gain_map: false,
     },
     FormatDescriptor {
         name: "BMP",
@@ -326,6 +334,7 @@ static REGISTRY: &[FormatDescriptor] = &[
         semantics: FrameSemantics::Single,
         adapter: Adapter::Wic,
         store_codec_names: &[],
+        carries_gain_map: false,
     },
     FormatDescriptor {
         name: "ICO",
@@ -334,6 +343,7 @@ static REGISTRY: &[FormatDescriptor] = &[
         semantics: FrameSemantics::SizeVariants,
         adapter: Adapter::Wic,
         store_codec_names: &[],
+        carries_gain_map: false,
     },
     FormatDescriptor {
         name: "TIFF",
@@ -342,6 +352,7 @@ static REGISTRY: &[FormatDescriptor] = &[
         semantics: FrameSemantics::Single,
         adapter: Adapter::Wic,
         store_codec_names: &[],
+        carries_gain_map: false,
     },
     FormatDescriptor {
         name: "DDS",
@@ -350,6 +361,7 @@ static REGISTRY: &[FormatDescriptor] = &[
         semantics: FrameSemantics::Single,
         adapter: Adapter::Wic,
         store_codec_names: &[],
+        carries_gain_map: false,
     },
     FormatDescriptor {
         name: "HEIF",
@@ -364,6 +376,7 @@ static REGISTRY: &[FormatDescriptor] = &[
         semantics: FrameSemantics::Single,
         adapter: Adapter::HeifWithWicPreferred,
         store_codec_names: &[],
+        carries_gain_map: false,
     },
     FormatDescriptor {
         name: "EXR",
@@ -372,6 +385,7 @@ static REGISTRY: &[FormatDescriptor] = &[
         semantics: FrameSemantics::Single,
         adapter: Adapter::Exr,
         store_codec_names: &[],
+        carries_gain_map: false,
     },
     FormatDescriptor {
         name: "AVIF",
@@ -380,6 +394,7 @@ static REGISTRY: &[FormatDescriptor] = &[
         semantics: FrameSemantics::Single,
         adapter: Adapter::Wic,
         store_codec_names: &["HEIF Image Extension", "AV1 Video Extension"],
+        carries_gain_map: false,
     },
     FormatDescriptor {
         name: "JPEG XL",
@@ -391,6 +406,7 @@ static REGISTRY: &[FormatDescriptor] = &[
         semantics: FrameSemantics::Single,
         adapter: Adapter::Wic,
         store_codec_names: &["JPEG XL Image Extension"],
+        carries_gain_map: false,
     },
     FormatDescriptor {
         name: "JPEG XR",
@@ -399,6 +415,7 @@ static REGISTRY: &[FormatDescriptor] = &[
         semantics: FrameSemantics::Single,
         adapter: Adapter::WicSubresolutionTwoStage,
         store_codec_names: &[],
+        carries_gain_map: false,
     },
     FormatDescriptor {
         name: "RAW",
@@ -410,6 +427,7 @@ static REGISTRY: &[FormatDescriptor] = &[
         semantics: FrameSemantics::Single,
         adapter: Adapter::WicRawTwoStage,
         store_codec_names: &["Raw Image Extension"],
+        carries_gain_map: false,
     },
 ];
 
@@ -465,6 +483,7 @@ static ANIMATED_WEBP: FormatDescriptor = FormatDescriptor {
     semantics: FrameSemantics::Animation,
     adapter: Adapter::WebPAnimation,
     store_codec_names: &[],
+    carries_gain_map: false,
 };
 
 /// The names refine_by_content can reclassify; keep the two in step.
@@ -615,34 +634,44 @@ fn is_missing_codec_error(code: i32) -> bool {
         || code == MF_E_TOPO_CODEC_NOT_FOUND.0
 }
 
-/// Attaches the Ultra HDR gain map of a decoded JPEG: parameters plus decoded plane.
-/// Any failure leaves both absent, so a damaged gain map reads as a plain JPEG.
+/// Attaches the gain map, or leaves both fields absent so damage reads as a plain file.
 fn attach_gain_map(
     mut decoded: DecodedImage,
     input: &DecodeInput<'_>,
-    format_name: &str,
     cancellation: &AtomicBool,
 ) -> DecodedImage {
-    if format_name != "JPEG" {
-        return decoded;
-    }
-    let Ok(bytes) = input.read_all() else {
-        return decoded;
-    };
-    let Some(found) = crate::image::gain_map::find_ultra_hdr(&bytes) else {
-        return decoded;
-    };
-    let Some(gain_map_bytes) = bytes.get(found.gain_map_range.clone()) else {
-        return decoded;
-    };
-    let plane = decode_gain_map_plane(gain_map_bytes, cancellation);
-    if let Some(plane) = plane
-        && plane.fits_within(decoded.width, decoded.height)
+    if let Some((metadata, plane)) =
+        find_and_decode_gain_map(input, cancellation, decoded.width, decoded.height)
     {
-        decoded.ultra_hdr = Some(found.metadata);
+        decoded.gain_map = Some(metadata);
         decoded.gain_map_plane = Some(plane);
     }
     decoded
+}
+
+/// The parsed parameters and decoded plane, when the file carries a usable gain map.
+fn find_and_decode_gain_map(
+    input: &DecodeInput<'_>,
+    cancellation: &AtomicBool,
+    base_width: u32,
+    base_height: u32,
+) -> Option<(
+    crate::image::gain_map::GainMapMetadata,
+    crate::image::gain_map::GainMapPlane,
+)> {
+    // A header probe spares the files without one the whole-file read below.
+    if let DecodeInput::File(path) = input {
+        let file = File::open(path).ok()?;
+        if !crate::image::gain_map::jpeg_carries_mpf(BufReader::new(file)) {
+            return None;
+        }
+    }
+    let bytes = input.read_all().ok()?;
+    let found = crate::image::gain_map::find_ultra_hdr(&bytes)?;
+    let plane = decode_gain_map_plane(bytes.get(found.gain_map_range.clone())?, cancellation)?;
+    plane
+        .fits_within(base_width, base_height)
+        .then_some((found.metadata, plane))
 }
 
 /// Decodes the gain map JPEG to BGRA, the storage every base frame already uses.
@@ -684,8 +713,15 @@ fn decode_input(
     let adapter = descriptor.map_or(&Adapter::Wic, |descriptor| &descriptor.adapter);
     match adapter {
         Adapter::Wic | Adapter::WicRawTwoStage | Adapter::WicSubresolutionTwoStage => {
+            let carries_gain_map = descriptor.is_some_and(|descriptor| descriptor.carries_gain_map);
             decode_with_wic(input, format_name, semantics, cancellation)
-                .map(|decoded| attach_gain_map(decoded, input, format_name, cancellation))
+                .map(|decoded| {
+                    if carries_gain_map {
+                        attach_gain_map(decoded, input, cancellation)
+                    } else {
+                        decoded
+                    }
+                })
                 .map_err(|mut error| {
                     if is_missing_codec_error(error.code)
                         && let Some(descriptor) = descriptor
@@ -967,7 +1003,7 @@ fn decode_raw_preview(path: &Path, cancellation: &AtomicBool) -> Option<DecodedI
                 delay_milliseconds: 0,
             }],
             frames_truncated: false,
-            ultra_hdr: None,
+            gain_map: None,
             gain_map_plane: None,
         })
     })
@@ -1308,7 +1344,7 @@ fn decode_frame_source(
             delay_milliseconds: 0,
         }],
         frames_truncated: false,
-        ultra_hdr: None,
+        gain_map: None,
         gain_map_plane: None,
     })
 }
@@ -1483,21 +1519,13 @@ pub fn upload_still_texture(
         BindFlags: D3D11_BIND_SHADER_RESOURCE.0 as u32,
         ..image.texture_description()
     };
-    let data = D3D11_SUBRESOURCE_DATA {
-        pSysMem: frame.pixels.as_ptr().cast(),
-        SysMemPitch: image.row_pitch(),
-        ..Default::default()
-    };
-    let mut texture = None;
-    unsafe {
-        upload_device.device.CreateTexture2D(
-            &raw const description,
-            Some(&raw const data),
-            Some(&raw mut texture),
-        )
-    }
-    .ok()?;
-    texture.map(|texture| UploadedTexture {
+    let texture = upload_immutable_texture(
+        upload_device,
+        &description,
+        &frame.pixels,
+        image.row_pitch(),
+    )?;
+    Some(UploadedTexture {
         texture,
         gain_map: image
             .gain_map_plane
@@ -1529,15 +1557,25 @@ fn upload_gain_map_texture(
         BindFlags: D3D11_BIND_SHADER_RESOURCE.0 as u32,
         ..Default::default()
     };
+    upload_immutable_texture(upload_device, &description, &plane.pixels, plane.width * 4)
+}
+
+/// One immutable shader-resource texture from tightly packed pixels.
+fn upload_immutable_texture(
+    upload_device: &UploadDevice,
+    description: &D3D11_TEXTURE2D_DESC,
+    pixels: &[u8],
+    row_pitch: u32,
+) -> Option<ID3D11Texture2D> {
     let data = D3D11_SUBRESOURCE_DATA {
-        pSysMem: plane.pixels.as_ptr().cast(),
-        SysMemPitch: plane.width * 4,
+        pSysMem: pixels.as_ptr().cast(),
+        SysMemPitch: row_pitch,
         ..Default::default()
     };
     let mut texture = None;
     unsafe {
         upload_device.device.CreateTexture2D(
-            &raw const description,
+            &raw const *description,
             Some(&raw const data),
             Some(&raw mut texture),
         )
@@ -1975,7 +2013,7 @@ fn decode_animation(
         source_primaries: None,
         frames,
         frames_truncated,
-        ultra_hdr: None,
+        gain_map: None,
         gain_map_plane: None,
     })
 }
@@ -2319,7 +2357,7 @@ fn decode_apng<Input: BufRead + Seek>(
         source_primaries: None,
         frames,
         frames_truncated,
-        ultra_hdr: None,
+        gain_map: None,
         gain_map_plane: None,
     })
 }
@@ -2433,7 +2471,7 @@ fn decode_svg(data: &[u8], format_name: &'static str) -> Result<DecodedImage, De
             delay_milliseconds: 0,
         }],
         frames_truncated: false,
-        ultra_hdr: None,
+        gain_map: None,
         gain_map_plane: None,
     })
 }
@@ -3250,7 +3288,7 @@ mod gain_map_decode_tests {
             &cancellation,
         )
         .unwrap_or_else(|error| panic!("decode: {}", error.message));
-        let metadata = decoded.ultra_hdr.expect("gain map parameters");
+        let metadata = decoded.gain_map.expect("gain map parameters");
         assert!(metadata.hdr_capacity_maximum > 0.0);
         let plane = decoded.gain_map_plane.as_ref().expect("gain plane");
         assert!(plane.fits_within(decoded.width, decoded.height));
@@ -3275,7 +3313,7 @@ mod gain_map_decode_tests {
             &cancellation,
         )
         .unwrap_or_else(|error| panic!("decode: {}", error.message));
-        assert!(decoded.ultra_hdr.is_none());
+        assert!(decoded.gain_map.is_none());
         assert!(decoded.gain_map_plane.is_none());
         assert_eq!(decoded.pixel_bytes(), decoded.frame_byte_length());
     }
