@@ -310,7 +310,7 @@ const ACTION_TABLE: &[(Action, &str, &str, ActionRequirement)] = &[
     (
         Action::Fullscreen,
         "fullscreen",
-        "Enter fullscreen",
+        "Toggle fullscreen",
         ActionRequirement::Window,
     ),
     (Action::Exit, "exit", "Exit", ActionRequirement::Window),
