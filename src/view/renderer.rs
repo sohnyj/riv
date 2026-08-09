@@ -657,9 +657,7 @@ impl Renderer {
     ) -> Result<Self> {
         let output_mode = mode.clone();
         let is_sdr_wide_gamut = mode.is_sdr_wide_gamut();
-        let OutputMode {
-            hdr: is_hdr_output, ..
-        } = mode;
+        let is_hdr_output = mode.hdr;
         let display_profile = mode.display_profile;
         let tone_map_target_nits = target.peak_nits;
         let full_frame_nits = target.full_frame_nits;
@@ -1069,9 +1067,7 @@ impl Renderer {
     ) -> Result<()> {
         let is_sdr_wide_gamut = mode.is_sdr_wide_gamut();
         let output_mode = mode.clone();
-        let OutputMode {
-            hdr: is_hdr_output, ..
-        } = mode;
+        let is_hdr_output = mode.hdr;
         let display_profile = mode.display_profile;
         // Adopt the target state first so a partial failure cannot retry every WM_MOVE.
         self.output_mode = output_mode;
@@ -1232,9 +1228,7 @@ impl Renderer {
                 })
             }
         };
-        let weight = state
-            .metadata
-            .weight(display_headroom.max(f32::MIN_POSITIVE).log2());
+        let weight = state.metadata.weight(display_headroom);
         pass.bake(
             &self.d3d_context,
             crate::view::gain::BakeInputs {

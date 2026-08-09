@@ -40,8 +40,7 @@ const KEY_DETECT_FORMAT_BY_CONTENT: &str = "detectformatbycontent";
 const KEY_REMEMBER_RECENTS: &str = "rememberrecents";
 const KEY_SKIP_HIDDEN: &str = "skiphidden";
 
-/// Combo rows in stored order, for the settings whose values have no type of their own.
-/// The index is read back by `Application::window_title`.
+/// Combo rows in stored order; the index is read back by `Application::window_title`.
 pub const TITLE_BAR_TEXT_CHOICES: [&str; 4] = [
     "App name",
     "File name",

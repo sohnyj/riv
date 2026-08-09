@@ -1410,7 +1410,6 @@ fn client_size(window: HWND) -> (u32, u32) {
     )
 }
 
-/// Signed coordinates packed into a mouse-message LPARAM (GET_X_LPARAM / GET_Y_LPARAM).
 /// Cursor offset from the client center while over the client area.
 fn cursor_from_center(window: HWND) -> Option<(f32, f32)> {
     let mut point = POINT::default();
@@ -2619,7 +2618,7 @@ extern "system" fn window_procedure(
         }
         WM_XBUTTONDOWN => {
             if let Some(application) = application_from_window(window) {
-                let base = MouseBase::from_xbutton_flags((wparam.0 >> 16) as u16);
+                let base = MouseBase::from_xbutton_flags(high_word(wparam.0) as u16);
                 if let Some(action) = application.bindings.lookup_mouse(current_modifiers(), base) {
                     dispatch_action(application, window, action);
                 }

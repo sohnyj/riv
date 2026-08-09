@@ -22,7 +22,7 @@ pub fn tag_offset(icc: &[u8], signature: &[u8; 4]) -> Option<usize> {
 }
 
 /// Big-endian u16 at the offset, when in bounds.
-pub fn read_u16_be(bytes: &[u8], offset: usize) -> Option<u16> {
+fn read_u16_be(bytes: &[u8], offset: usize) -> Option<u16> {
     Some(u16::from_be_bytes(
         bytes.get(offset..offset + 2)?.try_into().ok()?,
     ))

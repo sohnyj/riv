@@ -1,10 +1,9 @@
 //! Gain application pass: base x 2^(boost x W) baked into a linear FP16 texture.
 
 use windows::Win32::Graphics::Direct3D11::{
-    D3D11_BIND_CONSTANT_BUFFER, D3D11_BUFFER_DESC, D3D11_CPU_ACCESS_WRITE,
-    D3D11_FILTER_MIN_MAG_MIP_LINEAR, D3D11_SAMPLER_DESC, D3D11_TEXTURE_ADDRESS_CLAMP,
-    D3D11_USAGE_DYNAMIC, ID3D11Buffer, ID3D11Device, ID3D11DeviceContext, ID3D11PixelShader,
-    ID3D11RenderTargetView, ID3D11SamplerState, ID3D11ShaderResourceView, ID3D11VertexShader,
+    D3D11_FILTER_MIN_MAG_MIP_LINEAR, D3D11_SAMPLER_DESC, D3D11_TEXTURE_ADDRESS_CLAMP, ID3D11Buffer,
+    ID3D11Device, ID3D11DeviceContext, ID3D11PixelShader, ID3D11RenderTargetView,
+    ID3D11SamplerState, ID3D11ShaderResourceView, ID3D11VertexShader,
 };
 use windows::core::Result;
 
@@ -49,13 +48,6 @@ pub struct GainMapPass {
 
 impl GainMapPass {
     pub fn new(device: &ID3D11Device) -> Result<Self> {
-        let buffer_description = D3D11_BUFFER_DESC {
-            ByteWidth: size_of::<GainConstants>() as u32,
-            Usage: D3D11_USAGE_DYNAMIC,
-            BindFlags: D3D11_BIND_CONSTANT_BUFFER.0 as u32,
-            CPUAccessFlags: D3D11_CPU_ACCESS_WRITE.0 as u32,
-            ..Default::default()
-        };
         let sampler_description = D3D11_SAMPLER_DESC {
             Filter: D3D11_FILTER_MIN_MAG_MIP_LINEAR,
             AddressU: D3D11_TEXTURE_ADDRESS_CLAMP,
@@ -63,28 +55,16 @@ impl GainMapPass {
             AddressW: D3D11_TEXTURE_ADDRESS_CLAMP,
             ..Default::default()
         };
-        let mut vertex_shader = None;
         let mut pixel_shader = None;
-        let mut constant_buffer = None;
         let mut sampler = None;
         unsafe {
-            device.CreateVertexShader(
-                crate::view::quantize::VERTEX_SHADER,
-                None,
-                Some(&raw mut vertex_shader),
-            )?;
             device.CreatePixelShader(GAIN_APPLY_SHADER, None, Some(&raw mut pixel_shader))?;
-            device.CreateBuffer(
-                &raw const buffer_description,
-                None,
-                Some(&raw mut constant_buffer),
-            )?;
             device.CreateSamplerState(&raw const sampler_description, Some(&raw mut sampler))?;
         }
         Ok(Self {
-            vertex_shader: vertex_shader.expect("CreateVertexShader succeeded without shader"),
+            vertex_shader: crate::view::pass::create_vertex_shader(device)?,
             pixel_shader: pixel_shader.expect("CreatePixelShader succeeded without shader"),
-            constant_buffer: constant_buffer.expect("CreateBuffer succeeded without buffer"),
+            constant_buffer: crate::view::pass::create_constant_buffer::<GainConstants>(device)?,
             sampler: sampler.expect("CreateSamplerState succeeded without sampler"),
         })
     }

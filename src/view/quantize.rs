@@ -3,8 +3,7 @@
 use std::cell::Cell;
 
 use windows::Win32::Graphics::Direct3D11::{
-    D3D11_BIND_CONSTANT_BUFFER, D3D11_BIND_SHADER_RESOURCE, D3D11_BUFFER_DESC,
-    D3D11_CPU_ACCESS_WRITE, D3D11_SUBRESOURCE_DATA, D3D11_TEXTURE2D_DESC, D3D11_USAGE_DYNAMIC,
+    D3D11_BIND_SHADER_RESOURCE, D3D11_SUBRESOURCE_DATA, D3D11_TEXTURE2D_DESC,
     D3D11_USAGE_IMMUTABLE, ID3D11Buffer, ID3D11Device, ID3D11DeviceContext, ID3D11PixelShader,
     ID3D11RenderTargetView, ID3D11ShaderResourceView, ID3D11VertexShader,
 };
@@ -14,8 +13,6 @@ use windows::core::Result;
 use crate::view::dither::{BLUE_NOISE_SIZE, BLUE_NOISE_TEXELS, DitherMode};
 
 /// DXBC compiled by the build script; the viewer never runs a shader compiler.
-pub(crate) const VERTEX_SHADER: &[u8] =
-    include_bytes!(concat!(env!("OUT_DIR"), "/fullscreen_triangle.dxbc"));
 const COPY_SHADER: &[u8] = include_bytes!(concat!(env!("OUT_DIR"), "/copy.dxbc"));
 const ORDERED_SHADER: &[u8] = include_bytes!(concat!(env!("OUT_DIR"), "/ordered.dxbc"));
 const FRUIT_SHADER: &[u8] = include_bytes!(concat!(env!("OUT_DIR"), "/fruit.dxbc"));
@@ -39,13 +36,6 @@ pub struct QuantizePass {
 
 impl QuantizePass {
     pub fn new(device: &ID3D11Device) -> Result<Self> {
-        let buffer_description = D3D11_BUFFER_DESC {
-            ByteWidth: size_of::<QuantizationConstants>() as u32,
-            Usage: D3D11_USAGE_DYNAMIC,
-            BindFlags: D3D11_BIND_CONSTANT_BUFFER.0 as u32,
-            CPUAccessFlags: D3D11_CPU_ACCESS_WRITE.0 as u32,
-            ..Default::default()
-        };
         let noise_description = D3D11_TEXTURE2D_DESC {
             Width: BLUE_NOISE_SIZE,
             Height: BLUE_NOISE_SIZE,
@@ -65,23 +55,15 @@ impl QuantizePass {
             SysMemPitch: BLUE_NOISE_SIZE * 4,
             ..Default::default()
         };
-        let mut vertex_shader = None;
         let mut copy_shader = None;
         let mut ordered_shader = None;
         let mut fruit_shader = None;
-        let mut constant_buffer = None;
         let mut noise_texture = None;
         let mut blue_noise_view = None;
         unsafe {
-            device.CreateVertexShader(VERTEX_SHADER, None, Some(&raw mut vertex_shader))?;
             device.CreatePixelShader(COPY_SHADER, None, Some(&raw mut copy_shader))?;
             device.CreatePixelShader(ORDERED_SHADER, None, Some(&raw mut ordered_shader))?;
             device.CreatePixelShader(FRUIT_SHADER, None, Some(&raw mut fruit_shader))?;
-            device.CreateBuffer(
-                &raw const buffer_description,
-                None,
-                Some(&raw mut constant_buffer),
-            )?;
             device.CreateTexture2D(
                 &raw const noise_description,
                 Some(&raw const noise_data),
@@ -95,11 +77,13 @@ impl QuantizePass {
             )?;
         }
         Ok(Self {
-            vertex_shader: vertex_shader.expect("CreateVertexShader succeeded without shader"),
+            vertex_shader: crate::view::pass::create_vertex_shader(device)?,
             copy_shader: copy_shader.expect("CreatePixelShader succeeded without shader"),
             ordered_shader: ordered_shader.expect("CreatePixelShader succeeded without shader"),
             fruit_shader: fruit_shader.expect("CreatePixelShader succeeded without shader"),
-            constant_buffer: constant_buffer.expect("CreateBuffer succeeded without buffer"),
+            constant_buffer: crate::view::pass::create_constant_buffer::<QuantizationConstants>(
+                device,
+            )?,
             written_steps: Cell::new(None),
             blue_noise_view: blue_noise_view
                 .expect("CreateShaderResourceView succeeded without view"),

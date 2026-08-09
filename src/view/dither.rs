@@ -36,7 +36,7 @@ impl DitherMode {
 
 #[cfg(test)]
 mod blue_noise_tests {
-    use super::{BLUE_NOISE_SIZE, BLUE_NOISE_TEXELS};
+    use super::*;
 
     #[test]
     fn the_built_matrix_is_a_permutation_of_all_ranks() {

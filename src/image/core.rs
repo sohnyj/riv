@@ -2896,8 +2896,7 @@ mod listing_scan_tests {
         let scan = ScannedListing::of(ListingScope::Directory(directory.clone()), &core.options);
         core.install_listing_scan(scan);
         assert_eq!(adjacent_entries(&core), expected);
-        // A file added ahead of it shifts every index; the place follows the entry beside it.
-        // The name starts with a digit so logical order puts it first on every implementation.
+        // A digit-led name sorts first on every implementation, shifting every index; the place follows the entry beside it.
         std::fs::write(directory.join("0.png"), b"listing only").expect("fixture file");
         assert_eq!(core.reload_current(), Some(LoadOutcome::Failed));
         let scan = ScannedListing::of(ListingScope::Directory(directory.clone()), &core.options);
@@ -2985,7 +2984,7 @@ mod deleted_item_tests {
     use super::*;
 
     #[test]
-    fn a_deleted_item_hands_the_place_to_its_neighbor() {
+    fn a_deleted_item_hands_the_place_to_its_successor() {
         let file = |index: usize| {
             ItemLocation::File(PathBuf::from(format!("C:\\pictures\\{index:03}.png")))
         };

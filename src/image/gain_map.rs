@@ -1,9 +1,7 @@
 //! Finding an Ultra HDR gain map: the MPF secondary JPEG and its hdrgm XMP.
 
-use std::io::{Read, Seek, SeekFrom};
+use std::io::{Cursor, Read, Seek, SeekFrom};
 use std::ops::Range;
-
-use crate::image::icc::read_u16_be;
 
 /// Gain map parameters from the hdrgm XMP packet, one value per color plane.
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -20,9 +18,10 @@ pub struct GainMapMetadata {
 
 impl GainMapMetadata {
     /// Weight W: how much of the gain the display headroom admits, clamped to [0, 1].
-    pub fn weight(&self, display_headroom_log2: f32) -> f32 {
+    pub fn weight(&self, display_headroom: f32) -> f32 {
+        let headroom_log2 = display_headroom.max(f32::MIN_POSITIVE).log2();
         let span = self.hdr_capacity_maximum - self.hdr_capacity_minimum;
-        ((display_headroom_log2 - self.hdr_capacity_minimum) / span).clamp(0.0, 1.0)
+        ((headroom_log2 - self.hdr_capacity_minimum) / span).clamp(0.0, 1.0)
     }
 
     /// The full rendition's peak in nits: SDR reference white times the capacity cap.
@@ -96,41 +95,12 @@ fn usable(metadata: &GainMapMetadata) -> bool {
 
 /// True when a header scan up to the scan data finds the MPF segment; a few KB at most.
 pub fn jpeg_carries_mpf(mut reader: impl Read + Seek) -> bool {
-    let mut start = [0u8; 2];
-    if reader.read_exact(&mut start).is_err() || start != [0xFF, START_OF_IMAGE] {
+    if !reads_start_of_image(&mut reader) {
         return false;
     }
-    loop {
-        let mut marker = [0u8; 2];
-        if reader.read_exact(&mut marker).is_err() {
-            return false;
-        }
-        // Fill bytes: any run of 0xFF collapses onto the marker that follows.
-        while marker == [0xFF, 0xFF] {
-            marker[1] = match read_byte(&mut reader) {
-                Some(byte) => byte,
-                None => return false,
-            };
-        }
-        if marker[0] != 0xFF {
-            return false;
-        }
-        let kind = marker[1];
-        if kind == START_OF_IMAGE || kind == 0x01 || (0xD0..=0xD7).contains(&kind) {
-            continue;
-        }
-        if kind == END_OF_IMAGE || kind == START_OF_SCAN {
-            return false;
-        }
-        let mut length = [0u8; 2];
-        if reader.read_exact(&mut length).is_err() {
-            return false;
-        }
-        let mut remaining = i64::from(u16::from_be_bytes(length)) - 2;
-        if remaining < 0 {
-            return false;
-        }
-        if kind == APPLICATION_2 && remaining >= MPF_IDENTIFIER.len() as i64 {
+    while let Some((kind, length)) = next_segment(&mut reader) {
+        let mut remaining = length;
+        if kind == APPLICATION_2 && remaining >= MPF_IDENTIFIER.len() {
             let mut identifier = [0u8; 4];
             if reader.read_exact(&mut identifier).is_err() {
                 return false;
@@ -138,11 +108,46 @@ pub fn jpeg_carries_mpf(mut reader: impl Read + Seek) -> bool {
             if identifier[..] == *MPF_IDENTIFIER {
                 return true;
             }
-            remaining -= identifier.len() as i64;
+            remaining -= identifier.len();
         }
-        if reader.seek(SeekFrom::Current(remaining)).is_err() {
+        if reader.seek(SeekFrom::Current(remaining as i64)).is_err() {
             return false;
         }
+    }
+    false
+}
+
+fn reads_start_of_image(reader: &mut impl Read) -> bool {
+    let mut start = [0u8; 2];
+    reader.read_exact(&mut start).is_ok() && start == [0xFF, START_OF_IMAGE]
+}
+
+/// Next segment's marker and payload length, with the reader left at the payload.
+fn next_segment(reader: &mut impl Read) -> Option<(u8, usize)> {
+    loop {
+        let mut marker = [0u8; 2];
+        reader.read_exact(&mut marker).ok()?;
+        // Fill bytes: any run of 0xFF collapses onto the marker that follows.
+        while marker == [0xFF, 0xFF] {
+            marker[1] = read_byte(reader)?;
+        }
+        if marker[0] != 0xFF {
+            return None;
+        }
+        let kind = marker[1];
+        if kind == START_OF_IMAGE || kind == 0x01 || (0xD0..=0xD7).contains(&kind) {
+            continue;
+        }
+        if kind == END_OF_IMAGE || kind == START_OF_SCAN {
+            return None;
+        }
+        let mut length = [0u8; 2];
+        reader.read_exact(&mut length).ok()?;
+        let length = u16::from_be_bytes(length) as usize;
+        if length < 2 {
+            return None;
+        }
+        return Some((kind, length - 2));
     }
 }
 
@@ -161,40 +166,18 @@ const APPLICATION_2: u8 = 0xE2;
 /// Payload range of each marker segment before the scan data, in file order.
 fn segment_payloads(jpeg: &[u8]) -> Vec<(u8, Range<usize>)> {
     let mut payloads = Vec::new();
-    if jpeg.get(0..2) != Some(&[0xFF, START_OF_IMAGE]) {
+    let mut reader = Cursor::new(jpeg);
+    if !reads_start_of_image(&mut reader) {
         return payloads;
     }
-    let mut position = 2;
-    loop {
-        // Fill bytes: any run of 0xFF collapses onto the marker that follows.
-        while jpeg.get(position) == Some(&0xFF) && jpeg.get(position + 1) == Some(&0xFF) {
-            position += 1;
-        }
-        if jpeg.get(position) != Some(&0xFF) {
-            break;
-        }
-        let Some(&marker) = jpeg.get(position + 1) else {
-            break;
-        };
-        if marker == START_OF_IMAGE || marker == 0x01 || (0xD0..=0xD7).contains(&marker) {
-            position += 2;
-            continue;
-        }
-        if marker == END_OF_IMAGE || marker == START_OF_SCAN {
-            break;
-        }
-        let Some(length) = read_u16_be(jpeg, position + 2) else {
-            break;
-        };
-        if length < 2 {
-            break;
-        }
-        let payload = position + 4..position + 2 + length as usize;
+    while let Some((marker, length)) = next_segment(&mut reader) {
+        let start = reader.position() as usize;
+        let payload = start..start + length;
         if payload.end > jpeg.len() {
             break;
         }
-        payloads.push((marker, payload));
-        position += 2 + length as usize;
+        payloads.push((marker, payload.clone()));
+        reader.set_position(payload.end as u64);
     }
     payloads
 }
@@ -548,11 +531,11 @@ mod tests {
     #[test]
     fn weight_tracks_display_headroom() {
         let metadata = parse_hdrgm(&xmp_packet(REQUIRED)).expect("metadata");
-        assert_eq!(metadata.weight(-1.0), 0.0);
         assert_eq!(metadata.weight(0.0), 0.0);
-        assert!((metadata.weight(4.709 / 2.0) - 0.5).abs() < 1e-6);
-        assert!((metadata.weight(4.709) - 1.0).abs() < 1e-6);
-        assert_eq!(metadata.weight(10.0), 1.0);
+        assert_eq!(metadata.weight(1.0), 0.0);
+        assert!((metadata.weight((4.709f32 / 2.0).exp2()) - 0.5).abs() < 1e-6);
+        assert!((metadata.weight(4.709f32.exp2()) - 1.0).abs() < 1e-6);
+        assert_eq!(metadata.weight(1024.0), 1.0);
         let peak = metadata.capacity_peak_nits();
         assert!((peak - 80.0 * 4.709f32.exp2()).abs() < 0.5);
     }

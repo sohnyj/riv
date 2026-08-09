@@ -153,8 +153,7 @@ impl DisplayCapabilities {
         (target, full_frame)
     }
 
-    /// Display headroom over current SDR white for gain map weighting; None without a peak report.
-    /// Boosted areas are typically large (skies), so the sustained full-frame limit caps the peak.
+    /// Display headroom over current SDR white for gain map weighting, capped by the sustained full-frame limit; None without a peak report.
     pub fn gain_map_headroom(&self) -> Option<f32> {
         if !self.hdr {
             return None;
