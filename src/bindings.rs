@@ -140,6 +140,10 @@ pub struct Bindings {
     mouse: Vec<MouseBinding>,
 }
 
+/// How many bindings one action keeps. Reading drops the rest; capturing drops the oldest.
+pub const MAX_KEYBOARD_SEQUENCES: usize = 3;
+pub const MAX_MOUSE_ENCODINGS: usize = 1;
+
 const DEFAULT_KEYBOARD: &[(&str, &[&str])] = &[
     ("open", &["Ctrl+O"]),
     ("pasteurl", &["Ctrl+V"]),
@@ -195,22 +199,32 @@ impl Bindings {
         keyboard_overrides: Option<&Map<String, Value>>,
         mouse_overrides: Option<&Map<String, Value>>,
     ) -> Self {
-        let keyboard = collect_bindings(DEFAULT_KEYBOARD, keyboard_overrides, parse_key_sequence)
-            .into_iter()
-            .map(|((modifiers, virtual_key), action)| KeyBinding {
-                modifiers,
-                virtual_key,
-                action,
-            })
-            .collect();
-        let mouse = collect_bindings(DEFAULT_MOUSE, mouse_overrides, parse_mouse_encoding)
-            .into_iter()
-            .map(|((modifiers, base), action)| MouseBinding {
-                modifiers,
-                base,
-                action,
-            })
-            .collect();
+        let keyboard = collect_bindings(
+            DEFAULT_KEYBOARD,
+            keyboard_overrides,
+            MAX_KEYBOARD_SEQUENCES,
+            parse_key_sequence,
+        )
+        .into_iter()
+        .map(|((modifiers, virtual_key), action)| KeyBinding {
+            modifiers,
+            virtual_key,
+            action,
+        })
+        .collect();
+        let mouse = collect_bindings(
+            DEFAULT_MOUSE,
+            mouse_overrides,
+            MAX_MOUSE_ENCODINGS,
+            parse_mouse_encoding,
+        )
+        .into_iter()
+        .map(|((modifiers, base), action)| MouseBinding {
+            modifiers,
+            base,
+            action,
+        })
+        .collect();
         Self { keyboard, mouse }
     }
 
@@ -281,6 +295,7 @@ pub fn resolved_keyboard_sequences(
         overrides,
         action_name,
         default_keyboard_sequences(action_name),
+        MAX_KEYBOARD_SEQUENCES,
     )
     .iter()
     .filter_map(|sequence| {
@@ -312,25 +327,31 @@ pub fn resolved_mouse_encodings(
     action_name: &str,
 ) -> Vec<String> {
     // Parser round-trip discards unparseable riv.json strings.
-    override_or_default(overrides, action_name, default_mouse_encodings(action_name))
-        .iter()
-        .filter_map(|encoding| {
-            let (modifiers, base) = parse_mouse_encoding(encoding)?;
-            Some(format_mouse_encoding(modifiers, base))
-        })
-        .collect()
+    override_or_default(
+        overrides,
+        action_name,
+        default_mouse_encodings(action_name),
+        MAX_MOUSE_ENCODINGS,
+    )
+    .iter()
+    .filter_map(|encoding| {
+        let (modifiers, base) = parse_mouse_encoding(encoding)?;
+        Some(format_mouse_encoding(modifiers, base))
+    })
+    .collect()
 }
 
 /// Parsed bindings for one input kind: defaults (overridable) then override-only actions.
 fn collect_bindings<T>(
     defaults: &[(&str, &[&str])],
     overrides: Option<&Map<String, Value>>,
+    limit: usize,
     mut parse: impl FnMut(&str) -> Option<T>,
 ) -> Vec<(T, Action)> {
     let mut collected = Vec::new();
     for (name, default_sequences) in defaults {
         if let Some(action) = Action::from_name(name) {
-            for sequence in override_or_default(overrides, name, default_sequences) {
+            for sequence in override_or_default(overrides, name, default_sequences, limit) {
                 if let Some(parsed) = parse(&sequence) {
                     collected.push((parsed, action));
                 }
@@ -343,7 +364,7 @@ fn collect_bindings<T>(
                 continue;
             }
             if let Some(action) = Action::from_name(name) {
-                for sequence in string_list(sequences) {
+                for sequence in string_list(sequences).into_iter().take(limit) {
                     if let Some(parsed) = parse(&sequence) {
                         collected.push((parsed, action));
                     }
@@ -358,11 +379,14 @@ fn override_or_default(
     overrides: Option<&Map<String, Value>>,
     name: &str,
     defaults: &[&str],
+    limit: usize,
 ) -> Vec<String> {
-    match overrides.and_then(|map| map.get(name)) {
+    let mut resolved = match overrides.and_then(|map| map.get(name)) {
         Some(value) => string_list(value),
         None => defaults.iter().map(|text| (*text).to_string()).collect(),
-    }
+    };
+    resolved.truncate(limit);
+    resolved
 }
 
 fn string_list(value: &Value) -> Vec<String> {
@@ -483,6 +507,34 @@ mod normalization_tests {
         assert_eq!(
             resolved_mouse_encodings(Some(map), "fullscreen"),
             ["WheelButton"]
+        );
+    }
+
+    #[test]
+    fn a_hand_written_list_stops_at_the_limit() {
+        let overrides = serde_json::json!({
+            "nextfile": ["Right", "Ctrl+A", "Ctrl+B", "Ctrl+C"],
+            "fullscreen": ["WheelButton", "Ctrl+WheelUp"],
+        });
+        let map = overrides.as_object().expect("object");
+        assert_eq!(
+            resolved_keyboard_sequences(Some(map), "nextfile"),
+            ["Right", "Ctrl+A", "Ctrl+B"]
+        );
+        assert_eq!(
+            resolved_mouse_encodings(Some(map), "fullscreen"),
+            ["WheelButton"]
+        );
+        let bindings = Bindings::from_settings(Some(map), Some(map));
+        assert!(
+            bindings
+                .lookup_key(MODIFIER_CONTROL, u16::from(b'B'))
+                .is_some()
+        );
+        assert!(
+            bindings
+                .lookup_key(MODIFIER_CONTROL, u16::from(b'C'))
+                .is_none()
         );
     }
 }

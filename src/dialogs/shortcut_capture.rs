@@ -130,6 +130,11 @@ unsafe extern "system" fn keyboard_procedure(
                 && let Some(state) = state_mut::<KeyboardCaptureState>(dialog)
                 && !state.sequences.contains(&sequence)
             {
+                // The list is full at the limit, so the oldest leaves to make room.
+                if state.sequences.len() == bindings::MAX_KEYBOARD_SEQUENCES {
+                    state.sequences.remove(0);
+                    listbox_remove(dialog, 0);
+                }
                 listbox_add(dialog, &sequence);
                 state.sequences.push(sequence);
             }
