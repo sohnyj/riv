@@ -425,6 +425,7 @@ pub fn build_info_text(
     scaling_description: &str,
     dither_description: &str,
     tone_map: Option<ToneMapInfo>,
+    ultra_hdr_applied: bool,
     color_mode: &str,
     display_description: &str,
 ) -> String {
@@ -467,6 +468,29 @@ pub fn build_info_text(
     let mut metrics = Vec::new();
     if image.frames.len() > 1 {
         metrics.push(format!("Frames: {}", image.frames.len()));
+    }
+    // HDR output only; Off states the forced fallback (the base rendition shows).
+    if let Some(gain_map) = &image.ultra_hdr
+        && let Some(tone_map) = &tone_map
+        && tone_map.hdr_display
+    {
+        if ultra_hdr_applied {
+            metrics.push("Ultra HDR: On".to_string());
+            metrics.push(format!(
+                "Content peak: {:.0} nits",
+                gain_map.capacity_peak_nits()
+            ));
+            metrics.push(format!(
+                "Display peak: {:.0} nits",
+                tone_map.display_peak_nits
+            ));
+            metrics.push(format!(
+                "Display full: {:.0} nits",
+                tone_map.display_full_frame_nits
+            ));
+        } else {
+            metrics.push("Ultra HDR: Off".to_string());
+        }
     }
     if let Some(peak) = image.peak_luminance_nits {
         metrics.push(format!("Content peak: {peak:.0} nits"));
@@ -926,6 +950,8 @@ mod info_text_tests {
                 delay_milliseconds: 0,
             }],
             frames_truncated: false,
+            ultra_hdr: None,
+            gain_map_plane: None,
         }
     }
 
@@ -944,6 +970,7 @@ mod info_text_tests {
             "Bilinear",
             "None",
             None,
+            false,
             "SDR",
             "sRGB",
         );
@@ -965,6 +992,7 @@ mod info_text_tests {
             "Bilinear",
             "None",
             None,
+            false,
             "SDR",
             "sRGB",
         );
@@ -982,6 +1010,7 @@ mod info_text_tests {
             "Bilinear",
             "None",
             None,
+            false,
             "SDR",
             "sRGB",
         );
@@ -1012,6 +1041,7 @@ mod info_text_tests {
             "Bilinear",
             "None",
             Some(tone_map),
+            false,
             "SDR",
             "sRGB",
         );
@@ -1046,6 +1076,7 @@ mod info_text_tests {
             "Bilinear",
             "None",
             Some(tone_map),
+            false,
             "SDR",
             "sRGB",
         );

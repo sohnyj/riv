@@ -59,9 +59,12 @@ use std::thread;
 use crate::image::color::{SDR_REFERENCE_WHITE_NITS, nearest_gamut_label};
 use crate::image::decode::{
     DecodedImage, PixelStorage, UploadDevice, UploadedTexture, maximum_resource_bytes,
+    upload_still_texture,
 };
+use crate::image::gain_map::GainMapMetadata;
 use crate::image::icc;
 use crate::view::dither::DitherMode;
+use crate::view::gain::GainMapPass;
 use crate::view::presentation::{self, CompositionPresenter};
 use crate::view::quantize::QuantizePass;
 
@@ -169,6 +172,27 @@ pub struct ToneMapInfo {
     pub output_target_nits: f32,
 }
 
+/// The current image's gain map inputs and its baked rendition.
+struct GainMapState {
+    metadata: GainMapMetadata,
+    base_bitmap: ID2D1Bitmap1,
+    /// Slim copy of the decoded image: the wiring parameters for both renditions.
+    base_image: DecodedImage,
+    base_view: ID3D11ShaderResourceView,
+    gain_map_view: ID3D11ShaderResourceView,
+    baked: Option<BakedGainMap>,
+    /// The baked rendition is the adopted bitmap right now.
+    applied: bool,
+    /// An input moved (weight, boost, headroom); the next paint re-bakes.
+    stale: bool,
+}
+
+/// The bake target and its D2D wrap; the bitmap keeps the texture alive.
+struct BakedGainMap {
+    render_target_view: ID3D11RenderTargetView,
+    bitmap: ID2D1Bitmap1,
+}
+
 pub struct Renderer {
     /// The mode as built, so a caller can compare against a fresh display query.
     output_mode: OutputMode,
@@ -214,6 +238,13 @@ pub struct Renderer {
     image_pixel_size: (f32, f32),
     /// Set when the pump already waited for the next frame's present-queue room.
     frame_slot_held: bool,
+    /// Created on the first gain map bake; images without one never pay for it.
+    gain_pass: Option<GainMapPass>,
+    gain_state: Option<GainMapState>,
+    /// Display peak over current SDR white; None (failed peak query) keeps the base rendition.
+    display_headroom: Option<f32>,
+    /// SDR white over 80 nits, folded into the bake so its output is absolute.
+    sdr_white_boost: f32,
 }
 
 /// What `render` draws the frame with, decided before the overlay reports it.
@@ -371,6 +402,16 @@ fn image_bitmap_properties(storage: PixelStorage) -> D2D1_BITMAP_PROPERTIES1 {
 }
 
 /// Effect property payload for interface values: the raw pointer bytes.
+/// A shader-resource view over an uploaded texture, for the gain application pass.
+fn shader_resource_view(
+    device: &ID3D11Device,
+    texture: &ID3D11Texture2D,
+) -> Option<ID3D11ShaderResourceView> {
+    let mut view = None;
+    unsafe { device.CreateShaderResourceView(texture, None, Some(&raw mut view)) }.ok()?;
+    view
+}
+
 fn interface_property_bytes<T: Interface>(interface: &T) -> [u8; size_of::<usize>()] {
     (interface.as_raw() as usize).to_ne_bytes()
 }
@@ -777,6 +818,10 @@ impl Renderer {
             image_display_size: (0.0, 0.0),
             image_pixel_size: (0.0, 0.0),
             frame_slot_held: false,
+            gain_pass: None,
+            gain_state: None,
+            display_headroom: None,
+            sdr_white_boost: 1.0,
         };
         renderer.refresh_output_label();
         renderer.create_target()?;
@@ -1109,9 +1154,128 @@ impl Renderer {
     }
 
     pub fn set_sdr_white_boost(&mut self, boost: f32) {
-        if let Some(effect) = &self.mode_effects.white_level_effect {
-            let _ = set_white_level_input(effect, SDR_REFERENCE_WHITE_NITS * boost.max(0.01));
+        let boost = boost.max(0.01);
+        if (boost - self.sdr_white_boost).abs() > f32::EPSILON {
+            self.sdr_white_boost = boost;
+            if let Some(state) = &mut self.gain_state {
+                state.stale = true;
+            }
         }
+        if let Some(effect) = &self.mode_effects.white_level_effect {
+            let _ = set_white_level_input(effect, SDR_REFERENCE_WHITE_NITS * boost);
+        }
+    }
+
+    /// Display peak over current SDR white; None (failed peak query) keeps the base rendition.
+    pub fn set_display_headroom(&mut self, headroom: Option<f32>) {
+        if self.display_headroom != headroom {
+            self.display_headroom = headroom;
+            if let Some(state) = &mut self.gain_state {
+                state.stale = true;
+            }
+        }
+    }
+
+    /// True when the gain-applied rendition is the one on screen.
+    pub fn ultra_hdr_applied(&self) -> bool {
+        self.gain_state.as_ref().is_some_and(|state| state.applied)
+    }
+
+    /// Bakes or retires the gain rendition to match the display; called once per paint.
+    pub fn refresh_gain_bake(&mut self) {
+        let Some(mut state) = self.gain_state.take() else {
+            return;
+        };
+        let headroom = self.display_headroom.filter(|_| self.is_hdr_output());
+        match headroom {
+            Some(headroom) if state.stale || !state.applied => {
+                if self.bake_gain_map(&mut state, headroom).is_some() {
+                    let bitmap = state
+                        .baked
+                        .as_ref()
+                        .expect("baked rendition")
+                        .bitmap
+                        .clone();
+                    let wiring = Self::baked_wiring(&state);
+                    self.adopt_image_bitmap(bitmap, &wiring);
+                    state.applied = true;
+                    state.stale = false;
+                } else if state.applied {
+                    // The bake fell through; the base rendition stands.
+                    self.adopt_image_bitmap(state.base_bitmap.clone(), &state.base_image);
+                    state.applied = false;
+                }
+            }
+            Some(_) => {}
+            None => {
+                if state.applied {
+                    self.adopt_image_bitmap(state.base_bitmap.clone(), &state.base_image);
+                    state.applied = false;
+                }
+                // Headroom may come back; the first bake after that starts fresh.
+                state.stale = true;
+            }
+        }
+        self.gain_state = Some(state);
+    }
+
+    fn bake_gain_map(&mut self, state: &mut GainMapState, display_headroom: f32) -> Option<()> {
+        if self.gain_pass.is_none() {
+            self.gain_pass = GainMapPass::new(&self.d3d_device).ok();
+        }
+        let pass = self.gain_pass.as_ref()?;
+        let size = (state.base_image.pixel_width, state.base_image.pixel_height);
+        if state.baked.is_none() {
+            let texture = crate::view::texture::create_render_texture(
+                &self.d3d_device,
+                size,
+                DXGI_FORMAT_R16G16B16A16_FLOAT,
+                D3D11_RESOURCE_MISC_FLAG(0),
+            )
+            .ok()?;
+            let render_target_view =
+                crate::view::texture::create_render_target_view(&self.d3d_device, &texture)
+                    .ok()??;
+            let properties = image_bitmap_properties(PixelStorage::RgbaHalf);
+            let bitmap =
+                Self::bitmap_over_texture(&self.d2d_context, &texture, &properties).ok()?;
+            state.baked = Some(BakedGainMap {
+                render_target_view,
+                bitmap,
+            });
+        }
+        let baked = state.baked.as_ref()?;
+        let weight = state
+            .metadata
+            .weight(display_headroom.max(f32::MIN_POSITIVE).log2());
+        pass.bake(
+            &self.d3d_context,
+            crate::view::gain::BakeInputs {
+                base: &state.base_view,
+                gain_map: &state.gain_map_view,
+                target: &baked.render_target_view,
+                target_size: size,
+                metadata: &state.metadata,
+                weight,
+                sdr_white_boost: self.sdr_white_boost,
+            },
+        )
+        .ok()?;
+        Some(())
+    }
+
+    /// The baked rendition wires like a linear FP16 source in the base's primaries.
+    fn baked_wiring(state: &GainMapState) -> DecodedImage {
+        let mut wiring = state.base_image.without_pixels();
+        wiring.storage = PixelStorage::RgbaHalf;
+        wiring.source_primaries = state
+            .base_image
+            .icc_profile
+            .as_deref()
+            .and_then(icc::primaries);
+        wiring.icc_profile = None;
+        wiring.peak_luminance_nits = Some(state.metadata.capacity_peak_nits());
+        wiring
     }
 
     /// Updates the stored display luminances (overlay, next rewire); true when they changed.
@@ -1133,6 +1297,7 @@ impl Renderer {
         texture: Option<&UploadedTexture>,
         image: &DecodedImage,
     ) -> Result<()> {
+        self.gain_state = None;
         if let Some(uploaded) = texture
             && uploaded.generation == self.upload_device_generation
             && self.wrap_uploaded_texture(uploaded, image).is_ok()
@@ -1142,6 +1307,14 @@ impl Renderer {
         if frame_pixels.len() != image.frame_byte_length() {
             // A slimmed image has no pixels to upload; the caller recovers elsewhere.
             return Err(windows::core::Error::empty());
+        }
+        // The first display can precede the worker's upload device; an Ultra HDR
+        // image uploads here so its gain rendition does not wait for a revisit.
+        if image.ultra_hdr.is_some()
+            && let Some(uploaded) = upload_still_texture(&self.upload_device(), image)
+            && self.wrap_uploaded_texture(&uploaded, image).is_ok()
+        {
+            return Ok(());
         }
         let properties = image_bitmap_properties(image.storage);
         let bitmap = unsafe {
@@ -1166,8 +1339,32 @@ impl Renderer {
     ) -> Result<()> {
         let properties = image_bitmap_properties(image.storage);
         let bitmap = Self::bitmap_over_texture(&self.d2d_context, &uploaded.texture, &properties)?;
+        self.gain_state = self.create_gain_state(uploaded, image, bitmap.clone());
         self.adopt_image_bitmap(bitmap, image);
         Ok(())
+    }
+
+    /// Gain inputs for an Ultra HDR image whose base and gain map both have textures.
+    fn create_gain_state(
+        &self,
+        uploaded: &UploadedTexture,
+        image: &DecodedImage,
+        base_bitmap: ID2D1Bitmap1,
+    ) -> Option<GainMapState> {
+        let metadata = image.ultra_hdr?;
+        let gain_map_texture = uploaded.gain_map.as_ref()?;
+        let base_view = shader_resource_view(&self.d3d_device, &uploaded.texture)?;
+        let gain_map_view = shader_resource_view(&self.d3d_device, gain_map_texture)?;
+        Some(GainMapState {
+            metadata,
+            base_bitmap,
+            base_image: image.without_pixels(),
+            base_view,
+            gain_map_view,
+            baked: None,
+            applied: false,
+            stale: true,
+        })
     }
 
     /// Copies a worker texture back to CPU pixels; only this build's textures qualify.
@@ -1404,6 +1601,7 @@ impl Renderer {
     }
 
     pub fn clear_image(&mut self) {
+        self.gain_state = None;
         self.image = None;
         self.effect_output = None;
     }

@@ -134,6 +134,8 @@ struct Application {
     always_on_top: bool,
     fullscreen_restore: Option<WindowRestore>,
     sdr_white_boost: f32,
+    /// Display peak over SDR white for the gain map weight; None keeps the base rendition.
+    display_headroom: Option<f32>,
     pan_drag_position: Option<(i32, i32)>,
     pan_cursor: HCURSOR,
     arrow_cursor: HCURSOR,
@@ -265,6 +267,7 @@ struct InfoTextCache {
     scaling_description: &'static str,
     dither_description: &'static str,
     tone_map: Option<ToneMapInfo>,
+    ultra_hdr_applied: bool,
     display_labels: DisplayLabels,
     /// Shared with the overlay content, so showing it again costs no copy.
     text: Rc<str>,
@@ -358,6 +361,7 @@ impl Application {
             always_on_top: false,
             fullscreen_restore: None,
             sdr_white_boost: capabilities.sdr_white_boost_for(capabilities.hdr),
+            display_headroom: capabilities.gain_map_headroom(),
             pan_drag_position: None,
             pan_cursor: unsafe { LoadCursorW(None, IDC_SIZEALL)? },
             arrow_cursor: unsafe { LoadCursorW(None, IDC_ARROW)? },
@@ -389,6 +393,7 @@ impl Application {
         };
         if let Some(renderer) = &mut application.renderer {
             renderer.set_sdr_white_boost(application.sdr_white_boost);
+            renderer.set_display_headroom(application.display_headroom);
             renderer.set_dither_setting(DitherMode::from_setting(
                 application.settings.options.dither_mode,
             ));
@@ -429,6 +434,10 @@ impl Application {
         // A label-only change (wire depth, gamut) still owes the panel a repaint.
         let labels_changed = labels != self.display_labels;
         self.display_labels = labels;
+        self.display_headroom = capabilities.gain_map_headroom();
+        if let Some(renderer) = &mut self.renderer {
+            renderer.set_display_headroom(self.display_headroom);
+        }
         if self.reconfigure_display_output(&capabilities, display_profile, false) {
             self.request_render(window);
             return;
@@ -472,6 +481,7 @@ impl Application {
             return false;
         }
         self.sdr_white_boost = capabilities.sdr_white_boost_for(capabilities.hdr);
+        self.display_headroom = capabilities.gain_map_headroom();
         let (target_nits, full_frame_nits) = capabilities.tone_map_targets();
         let reconfigured = self.renderer.as_mut().is_some_and(|renderer| {
             renderer
@@ -963,6 +973,7 @@ impl Application {
             display_profile,
             ..
         } = color::display_color_info(self.display_watcher.as_ref(), window);
+        self.display_headroom = capabilities.gain_map_headroom();
         self.renderer = Some(create_renderer(
             window,
             &capabilities,
@@ -998,6 +1009,7 @@ impl Application {
             return Ok(());
         };
         renderer.set_sdr_white_boost(self.sdr_white_boost);
+        renderer.set_display_headroom(self.display_headroom);
         renderer.set_dither_setting(DitherMode::from_setting(self.settings.options.dither_mode));
         if let Some(image) = &self.displayed_image {
             let frame_index = self
@@ -1073,6 +1085,10 @@ impl Application {
         let scaling_description = self.scaling_description(frame);
         let dither_description = frame.map_or("None", FrameDecision::dither_description);
         let tone_map = self.renderer.as_ref().map(Renderer::tone_map_info);
+        let ultra_hdr_applied = self
+            .renderer
+            .as_ref()
+            .is_some_and(Renderer::ultra_hdr_applied);
         // The load carried these; nothing re-stats here.
         let metadata = self.image_core.current_item_metadata()?;
         let current = self.image_core.current.as_ref()?;
@@ -1084,6 +1100,7 @@ impl Application {
                 && cache.scaling_description == scaling_description
                 && cache.dither_description == dither_description
                 && cache.tone_map == tone_map
+                && cache.ultra_hdr_applied == ultra_hdr_applied
                 && cache.display_labels == self.display_labels
         });
         if !reuse {
@@ -1097,6 +1114,7 @@ impl Application {
                 scaling_description,
                 dither_description,
                 tone_map,
+                ultra_hdr_applied,
                 self.display_labels.color_mode,
                 &display_description,
             );
@@ -1108,6 +1126,7 @@ impl Application {
                 scaling_description,
                 dither_description,
                 tone_map,
+                ultra_hdr_applied,
                 display_labels: self.display_labels,
                 text: Rc::from(text),
             });
@@ -1143,6 +1162,10 @@ impl Application {
         let matrix = self.view_transform.matrix(viewport, image);
         let interpolation = self.interpolation_mode();
         let background = self.background_color();
+        // The gain rendition settles first, so the decision and the panel see it.
+        if let Some(renderer) = &mut self.renderer {
+            renderer.refresh_gain_bake();
+        }
         // Decide first: the panel reports this frame, not the last one.
         let decision = self
             .renderer

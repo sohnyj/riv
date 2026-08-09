@@ -13,6 +13,7 @@ A fast, precise, minimal image viewer for Windows.
 - Rendering
   - FP16 linear render pipeline, FP16 scRGB output
   - HDR passthrough on HDR displays, HDR tone-mapped on SDR displays
+  - Ultra HDR gain maps, adapted to display headroom
   - Output dither: Ordered or Fruit shader
   - Color management: Windows Advanced Color with WCG/HDR, PQ/HLG, embedded/display ICC profiles
 - Browsing
@@ -69,9 +70,10 @@ Decoded by Windows Imaging Component codecs:
 
 | Format | Notes |
 |---|---|
-| PNG, JPEG, GIF, BMP, ICO, TIFF | |
+| JPEG | Ultra HDR |
 | JPEG XR | HDR |
 | DDS | BC1-BC3 |
+| PNG, GIF, BMP, ICO, TIFF | |
 
 Archives browsable as image folders:
 zip, 7z, rar, tar, and cbz / cbr / cb7 / cbt.

@@ -196,6 +196,8 @@ fn compose_webp_frames(
         source_primaries: None,
         frames,
         frames_truncated,
+        ultra_hdr: None,
+        gain_map_plane: None,
     })
 }
 
@@ -358,6 +360,8 @@ fn decode_exr_with(
             delay_milliseconds: 0,
         }],
         frames_truncated: false,
+        ultra_hdr: None,
+        gain_map_plane: None,
     })
 }
 
@@ -622,6 +626,8 @@ fn decode_heif_primary_image(
             delay_milliseconds: 0,
         }],
         frames_truncated: false,
+        ultra_hdr: None,
+        gain_map_plane: None,
     })
 }
 

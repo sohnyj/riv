@@ -86,6 +86,10 @@ pub struct DecodedImage {
     pub frames: Vec<Frame>,
     /// The animation would expand past the byte limit; only the first frame is kept.
     pub frames_truncated: bool,
+    /// Present when the JPEG carries an Ultra HDR gain map; the renderer does not apply it yet.
+    pub ultra_hdr: Option<crate::image::gain_map::GainMapMetadata>,
+    /// The decoded gain map pixels; released with the frames once a texture holds them.
+    pub gain_map_plane: Option<crate::image::gain_map::GainMapPlane>,
 }
 
 #[derive(Clone)]
@@ -123,7 +127,12 @@ impl ExifInfo {
 
 impl DecodedImage {
     pub fn pixel_bytes(&self) -> usize {
-        self.frames.iter().map(|frame| frame.pixels.len()).sum()
+        let frames: usize = self.frames.iter().map(|frame| frame.pixels.len()).sum();
+        let plane = self
+            .gain_map_plane
+            .as_ref()
+            .map_or(0, |plane| plane.pixels.len());
+        frames + plane
     }
 
     /// Bytes per row of a frame; the D3D pitch and the buffer stride alike.
@@ -175,6 +184,8 @@ impl DecodedImage {
                 })
                 .collect(),
             frames_truncated: self.frames_truncated,
+            ultra_hdr: self.ultra_hdr,
+            gain_map_plane: None,
         }
     }
 }
@@ -604,6 +615,62 @@ fn is_missing_codec_error(code: i32) -> bool {
         || code == MF_E_TOPO_CODEC_NOT_FOUND.0
 }
 
+/// Attaches the Ultra HDR gain map of a decoded JPEG: parameters plus decoded plane.
+/// Any failure leaves both absent, so a damaged gain map reads as a plain JPEG.
+fn attach_gain_map(
+    mut decoded: DecodedImage,
+    input: &DecodeInput<'_>,
+    format_name: &str,
+    cancellation: &AtomicBool,
+) -> DecodedImage {
+    if format_name != "JPEG" {
+        return decoded;
+    }
+    let Ok(bytes) = input.read_all() else {
+        return decoded;
+    };
+    let Some(found) = crate::image::gain_map::find_ultra_hdr(&bytes) else {
+        return decoded;
+    };
+    let Some(gain_map_bytes) = bytes.get(found.gain_map_range.clone()) else {
+        return decoded;
+    };
+    let plane = decode_gain_map_plane(gain_map_bytes, cancellation);
+    if let Some(plane) = plane
+        && plane.fits_within(decoded.width, decoded.height)
+    {
+        decoded.ultra_hdr = Some(found.metadata);
+        decoded.gain_map_plane = Some(plane);
+    }
+    decoded
+}
+
+/// Decodes the gain map JPEG to BGRA, the storage every base frame already uses.
+fn decode_gain_map_plane(
+    gain_map_bytes: &[u8],
+    cancellation: &AtomicBool,
+) -> Option<crate::image::gain_map::GainMapPlane> {
+    with_wic_factory(|factory| {
+        let decoder = create_wic_decoder(
+            factory,
+            &DecodeInput::Memory {
+                data: gain_map_bytes,
+                extension: None,
+            },
+        )?;
+        let frame = unsafe { decoder.GetFrame(0)? };
+        let source = convert_to_pbgra(factory, &frame.cast()?)?;
+        let (width, height) = source_size(&source)?;
+        let pixels = copy_pixels(&source, width, height, 4, cancellation)?;
+        Ok(crate::image::gain_map::GainMapPlane {
+            width,
+            height,
+            pixels,
+        })
+    })
+    .ok()
+}
+
 fn decode_input(
     input: &DecodeInput<'_>,
     cancellation: &AtomicBool,
@@ -617,14 +684,16 @@ fn decode_input(
     let adapter = descriptor.map_or(&Adapter::Wic, |descriptor| &descriptor.adapter);
     match adapter {
         Adapter::Wic | Adapter::WicRawTwoStage | Adapter::WicSubresolutionTwoStage => {
-            decode_with_wic(input, format_name, semantics, cancellation).map_err(|mut error| {
-                if is_missing_codec_error(error.code)
-                    && let Some(descriptor) = descriptor
-                {
-                    error.store_codec_names = descriptor.store_codec_names;
-                }
-                error
-            })
+            decode_with_wic(input, format_name, semantics, cancellation)
+                .map(|decoded| attach_gain_map(decoded, input, format_name, cancellation))
+                .map_err(|mut error| {
+                    if is_missing_codec_error(error.code)
+                        && let Some(descriptor) = descriptor
+                    {
+                        error.store_codec_names = descriptor.store_codec_names;
+                    }
+                    error
+                })
         }
         Adapter::Apng => match input {
             DecodeInput::File(path) => {
@@ -898,6 +967,8 @@ fn decode_raw_preview(path: &Path, cancellation: &AtomicBool) -> Option<DecodedI
                 delay_milliseconds: 0,
             }],
             frames_truncated: false,
+            ultra_hdr: None,
+            gain_map_plane: None,
         })
     })
     .ok()?;
@@ -1237,6 +1308,8 @@ fn decode_frame_source(
             delay_milliseconds: 0,
         }],
         frames_truncated: false,
+        ultra_hdr: None,
+        gain_map_plane: None,
     })
 }
 
@@ -1380,6 +1453,8 @@ pub struct UploadDevice {
 #[derive(Clone)]
 pub struct UploadedTexture {
     pub texture: ID3D11Texture2D,
+    /// The Ultra HDR gain map uploaded beside the base, when the image carries one.
+    pub gain_map: Option<ID3D11Texture2D>,
     pub generation: u64,
 }
 
@@ -1424,8 +1499,51 @@ pub fn upload_still_texture(
     .ok()?;
     texture.map(|texture| UploadedTexture {
         texture,
+        gain_map: image
+            .gain_map_plane
+            .as_ref()
+            .and_then(|plane| upload_gain_map_texture(upload_device, plane)),
         generation: upload_device.generation,
     })
+}
+
+/// Uploads the gain map plane; None quietly keeps the base SDR rendition.
+fn upload_gain_map_texture(
+    upload_device: &UploadDevice,
+    plane: &crate::image::gain_map::GainMapPlane,
+) -> Option<ID3D11Texture2D> {
+    if plane.pixels.len() != plane.width as usize * plane.height as usize * 4 {
+        return None;
+    }
+    let description = D3D11_TEXTURE2D_DESC {
+        Width: plane.width,
+        Height: plane.height,
+        MipLevels: 1,
+        ArraySize: 1,
+        Format: DXGI_FORMAT_B8G8R8A8_UNORM,
+        SampleDesc: DXGI_SAMPLE_DESC {
+            Count: 1,
+            Quality: 0,
+        },
+        Usage: D3D11_USAGE_IMMUTABLE,
+        BindFlags: D3D11_BIND_SHADER_RESOURCE.0 as u32,
+        ..Default::default()
+    };
+    let data = D3D11_SUBRESOURCE_DATA {
+        pSysMem: plane.pixels.as_ptr().cast(),
+        SysMemPitch: plane.width * 4,
+        ..Default::default()
+    };
+    let mut texture = None;
+    unsafe {
+        upload_device.device.CreateTexture2D(
+            &raw const description,
+            Some(&raw const data),
+            Some(&raw mut texture),
+        )
+    }
+    .ok()?;
+    texture
 }
 
 /// Pixels per worker block; smaller buffers stay on one thread.
@@ -1857,6 +1975,8 @@ fn decode_animation(
         source_primaries: None,
         frames,
         frames_truncated,
+        ultra_hdr: None,
+        gain_map_plane: None,
     })
 }
 
@@ -2199,6 +2319,8 @@ fn decode_apng<Input: BufRead + Seek>(
         source_primaries: None,
         frames,
         frames_truncated,
+        ultra_hdr: None,
+        gain_map_plane: None,
     })
 }
 
@@ -2311,6 +2433,8 @@ fn decode_svg(data: &[u8], format_name: &'static str) -> Result<DecodedImage, De
             delay_milliseconds: 0,
         }],
         frames_truncated: false,
+        ultra_hdr: None,
+        gain_map_plane: None,
     })
 }
 
@@ -3103,5 +3227,56 @@ mod decoded_weight_tests {
         // A forged canvas is never capped: the weight blocks speculation instead.
         let frame_bytes = 60000u64 * 60000 * 4;
         assert_eq!(decoded_weight(60000, 60000, 4, 10), frame_bytes);
+    }
+}
+
+#[cfg(test)]
+mod gain_map_decode_tests {
+    use super::*;
+
+    /// WIC needs COM; the worker initializes it at thread start, tests do it here.
+    fn initialize_com() {
+        use windows::Win32::System::Com::{COINIT_MULTITHREADED, CoInitializeEx};
+        let _ = unsafe { CoInitializeEx(None, COINIT_MULTITHREADED) };
+    }
+
+    #[test]
+    #[ignore = "needs test/test_uhdr fixtures"]
+    fn an_ultra_hdr_jpeg_decodes_with_its_gain_plane() {
+        initialize_com();
+        let cancellation = AtomicBool::new(false);
+        let decoded = decode_file(
+            Path::new("test/test_uhdr/Originals/Ultra_HDR_Samples_Originals_01.jpg"),
+            &cancellation,
+        )
+        .unwrap_or_else(|error| panic!("decode: {}", error.message));
+        let metadata = decoded.ultra_hdr.expect("gain map parameters");
+        assert!(metadata.hdr_capacity_maximum > 0.0);
+        let plane = decoded.gain_map_plane.as_ref().expect("gain plane");
+        assert!(plane.fits_within(decoded.width, decoded.height));
+        assert_eq!(
+            plane.pixels.len(),
+            plane.width as usize * plane.height as usize * 4
+        );
+        // The plane joins the cache weight on top of the base frame bytes.
+        assert_eq!(
+            decoded.pixel_bytes(),
+            decoded.frame_byte_length() + plane.pixels.len()
+        );
+    }
+
+    #[test]
+    #[ignore = "needs test/test_uhdr fixtures"]
+    fn a_plain_jpeg_carries_no_gain_map() {
+        initialize_com();
+        let cancellation = AtomicBool::new(false);
+        let decoded = decode_file(
+            Path::new("test/test_uhdr/SDR Emulation/Ultra_HDR_Samples_Emulated_01_base.jpg"),
+            &cancellation,
+        )
+        .unwrap_or_else(|error| panic!("decode: {}", error.message));
+        assert!(decoded.ultra_hdr.is_none());
+        assert!(decoded.gain_map_plane.is_none());
+        assert_eq!(decoded.pixel_bytes(), decoded.frame_byte_length());
     }
 }

@@ -153,6 +153,20 @@ impl DisplayCapabilities {
         (target, full_frame)
     }
 
+    /// Display headroom over current SDR white for gain map weighting; None without a peak report.
+    /// Boosted areas are typically large (skies), so the sustained full-frame limit caps the peak.
+    pub fn gain_map_headroom(&self) -> Option<f32> {
+        if !self.hdr {
+            return None;
+        }
+        let peak = self.max_luminance?;
+        let ceiling = match self.max_full_frame_luminance {
+            Some(full_frame) => peak.min(full_frame),
+            None => peak,
+        };
+        Some(ceiling / (SDR_REFERENCE_WHITE_NITS * self.sdr_white_boost.max(0.01)))
+    }
+
     /// SDR white boost for the given output; 1.0 outside HDR (ACM output is display-referred).
     pub fn sdr_white_boost_for(&self, hdr_output: bool) -> f32 {
         if hdr_output {

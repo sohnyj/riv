@@ -4,7 +4,7 @@ use std::path::{Path, PathBuf};
 use std::process::Command;
 
 /// Pixel shaders; each includes ps_shared.hlsl for the bindings and dither math.
-const PIXEL_SHADERS: [&str; 3] = ["copy", "ordered", "fruit"];
+const PIXEL_SHADERS: [&str; 4] = ["copy", "ordered", "fruit", "gain_apply"];
 const VERTEX_SHADER: &str = "fullscreen_triangle";
 const SHADER_DIRECTORY: &str = "res/shaders";
 
