@@ -41,11 +41,19 @@ Formats that need a codec extension from the Microsoft Store:
 
 **Required extensions are free and need no sign-in.**
 
+Formats with an optional codec extension:
+
 | Format | Optional extension |
 |---|---|
 | HEIC / HEIF | HEIF Image Extension + HEVC Video Extensions (Microsoft Corporation) |
 
-**HEVC Video Extensions is paid.** Without it, the built-in decoder takes over.
+**HEVC Video Extensions is paid.**
+
+`HEVC Video Extensions from Device Manufacturer (Microsoft Corporation)` is the
+same codec for free, but it installs only on eligible devices.
+
+When either HEVC extension is installed, it takes precedence; otherwise the
+built-in decoder handles HEIC / HEIF. Neither is required.
 
 Decoded by built-in codecs:
 
@@ -116,6 +124,7 @@ cargo build --release
 ## Acknowledgments
 
 Inspired by [qView](https://github.com/jurplel/qView).
+
 [mpv](https://github.com/mpv-player/mpv) and
 [libplacebo](https://code.videolan.org/videolan/libplacebo) served as references
 for context menu, dither, aspect ratio table.
