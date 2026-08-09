@@ -13,7 +13,7 @@ A fast, precise, minimal image viewer for Windows.
 - Rendering
   - FP16 linear render pipeline, FP16 scRGB output
   - HDR passthrough on HDR displays, HDR tone-mapped on SDR displays
-  - Ultra HDR gain maps, adapted to display headroom
+  - Ultra HDR gain maps, adapted to the display's peak brightness
   - Output dither: Ordered or Fruit shader
   - Color management: Windows Advanced Color with WCG/HDR, PQ/HLG, embedded/display ICC profiles
 - Browsing
@@ -130,6 +130,10 @@ Inspired by [qView](https://github.com/jurplel/qView).
 [mpv](https://github.com/mpv-player/mpv) and
 [libplacebo](https://code.videolan.org/videolan/libplacebo) served as references
 for context menu, dither, aspect ratio table.
+
+Ultra HDR test images come from
+[Mishaal Rahman's samples](https://github.com/MishaalRahmanGH/Ultra_HDR_Samples),
+with SDR emulations by Dylan Raga (CC BY 4.0).
 
 ## License
 
