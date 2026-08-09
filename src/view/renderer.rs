@@ -823,7 +823,7 @@ impl Renderer {
         Ok(renderer)
     }
 
-    pub fn is_hdr_output(&self) -> bool {
+    fn is_hdr_output(&self) -> bool {
         self.output_mode.hdr
     }
 

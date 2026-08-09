@@ -360,8 +360,8 @@ impl Application {
             preserve_zoom: false,
             always_on_top: false,
             fullscreen_restore: None,
-            sdr_white_boost: capabilities.sdr_white_boost_for(capabilities.hdr),
-            display_headroom: capabilities.gain_map_headroom(),
+            sdr_white_boost: 1.0,
+            display_headroom: None,
             pan_drag_position: None,
             pan_cursor: unsafe { LoadCursorW(None, IDC_SIZEALL)? },
             arrow_cursor: unsafe { LoadCursorW(None, IDC_ARROW)? },
@@ -391,6 +391,7 @@ impl Application {
             open_with_lists: HashMap::new(),
             open_with_pending_extension: None,
         };
+        application.adopt_display_capabilities(&capabilities);
         if let Some(renderer) = &mut application.renderer {
             renderer.set_sdr_white_boost(application.sdr_white_boost);
             renderer.set_display_headroom(application.display_headroom);
@@ -423,6 +424,12 @@ impl Application {
         }
     }
 
+    /// Derives the two capability mirrors the renderer setters read; every display path adopts here.
+    fn adopt_display_capabilities(&mut self, capabilities: &color::DisplayCapabilities) {
+        self.sdr_white_boost = capabilities.sdr_white_boost_for(capabilities.hdr);
+        self.display_headroom = capabilities.gain_map_headroom();
+    }
+
     /// Reconfigure the output on a display mode change; else refresh boost and tone map target.
     fn refresh_display_state(&mut self, window: HWND) {
         let color::DisplayColorInfo {
@@ -439,12 +446,11 @@ impl Application {
             return;
         }
         let mut stale = labels_changed;
-        let is_hdr_output = self.renderer.as_ref().is_some_and(Renderer::is_hdr_output);
-        let boost = capabilities.sdr_white_boost_for(is_hdr_output);
-        if (boost - self.sdr_white_boost).abs() > f32::EPSILON {
-            self.sdr_white_boost = boost;
+        let previous_boost = self.sdr_white_boost;
+        self.adopt_display_capabilities(&capabilities);
+        if (previous_boost - self.sdr_white_boost).abs() > f32::EPSILON {
             if let Some(renderer) = &mut self.renderer {
-                renderer.set_sdr_white_boost(boost);
+                renderer.set_sdr_white_boost(self.sdr_white_boost);
             }
             stale = true;
         }
@@ -456,7 +462,6 @@ impl Application {
         {
             stale = true;
         }
-        self.display_headroom = capabilities.gain_map_headroom();
         if let Some(renderer) = &mut self.renderer {
             renderer.set_display_headroom(self.display_headroom);
         }
@@ -480,8 +485,7 @@ impl Application {
         if !mismatch && !force {
             return false;
         }
-        self.sdr_white_boost = capabilities.sdr_white_boost_for(capabilities.hdr);
-        self.display_headroom = capabilities.gain_map_headroom();
+        self.adopt_display_capabilities(capabilities);
         let (target_nits, full_frame_nits) = capabilities.tone_map_targets();
         let reconfigured = self.renderer.as_mut().is_some_and(|renderer| {
             renderer
@@ -973,7 +977,7 @@ impl Application {
             display_profile,
             ..
         } = color::display_color_info(self.display_watcher.as_ref(), window);
-        self.display_headroom = capabilities.gain_map_headroom();
+        self.adopt_display_capabilities(&capabilities);
         self.renderer = Some(create_renderer(
             window,
             &capabilities,
