@@ -148,44 +148,34 @@ The `windows*` crates are Copyright (c) Microsoft Corporation.
 | adler2 | 2.0.1 | 0BSD OR MIT OR Apache-2.0 |
 | arrayref | 0.3.9 | BSD-2-Clause |
 | arrayvec | 0.7.8 | MIT OR Apache-2.0 |
-| autocfg | 1.5.1 | Apache-2.0 OR MIT |
 | base64 | 0.23.1 | MIT OR Apache-2.0 |
 | bitflags | 2.13.1 | MIT OR Apache-2.0 |
 | bytemuck | 1.25.2 | Zlib OR Apache-2.0 OR MIT |
-| bytemuck_derive | 1.11.0 | Zlib OR Apache-2.0 OR MIT |
 | cfg-if | 1.0.4 | MIT OR Apache-2.0 |
 | crc32fast | 1.5.0 | MIT OR Apache-2.0 |
 | data-url | 0.3.2 | MIT OR Apache-2.0 |
-| euclid | 0.22.14 | MIT OR Apache-2.0 |
 | fdeflate | 0.3.7 | MIT OR Apache-2.0 |
 | flate2 | 1.1.9 | MIT OR Apache-2.0 |
 | float-cmp | 0.9.0 | MIT |
 | font-types | 0.12.2 | MIT OR Apache-2.0 |
-| fontconfig-parser | 0.5.8 | MIT |
 | fontdb | 0.24.0 | MIT |
 | harfrust | 0.12.0 | MIT |
 | imagesize | 0.15.0 | MIT |
 | itoa | 1.0.18 | MIT OR Apache-2.0 |
 | kurbo | 0.13.1 | Apache-2.0 OR MIT |
-| libc | 0.2.189 | MIT OR Apache-2.0 |
 | log | 0.4.33 | MIT OR Apache-2.0 |
 | memchr | 2.8.3 | Unlicense OR MIT |
 | memmap2 | 0.9.11 | MIT OR Apache-2.0 |
 | miniz_oxide | 0.8.9 | MIT OR Zlib OR Apache-2.0 |
-| num-traits | 0.2.19 | MIT OR Apache-2.0 |
 | once_cell | 1.21.4 | MIT OR Apache-2.0 |
 | pico-args | 0.5.0 | MIT |
 | png | 0.18.1 | MIT OR Apache-2.0 |
 | polycool | 0.4.0 | MIT OR Apache-2.0 |
-| proc-macro2 | 1.0.107 | MIT OR Apache-2.0 |
-| quote | 1.0.47 | MIT OR Apache-2.0 |
 | read-fonts | 0.41.0 | MIT OR Apache-2.0 |
 | resvg | 0.48.1 | Apache-2.0 OR MIT |
 | rgb | 0.8.53 | MIT |
 | roxmltree | 0.20.0, 0.21.1 | MIT OR Apache-2.0 |
-| serde | 1.0.229 | MIT OR Apache-2.0 |
 | serde_core | 1.0.229 | MIT OR Apache-2.0 |
-| serde_derive | 1.0.229 | MIT OR Apache-2.0 |
 | serde_json | 1.0.151 | MIT OR Apache-2.0 |
 | simd-adler32 | 0.3.10 | MIT |
 | simplecss | 0.2.2 | Apache-2.0 OR MIT |
@@ -195,23 +185,18 @@ The `windows*` crates are Copyright (c) Microsoft Corporation.
 | smallvec | 1.15.2 | MIT OR Apache-2.0 |
 | strict-num | 0.1.1 | MIT |
 | svgtypes | 0.16.1 | Apache-2.0 OR MIT |
-| syn | 2.0.119, 3.0.3 | MIT OR Apache-2.0 |
 | tiny-skia | 0.12.0 | BSD-3-Clause |
 | tiny-skia-path | 0.12.0 | BSD-3-Clause |
 | tinyvec | 1.12.0 | Zlib OR Apache-2.0 OR MIT |
 | tinyvec_macros | 0.1.1 | MIT OR Apache-2.0 OR Zlib |
 | unicode-bidi | 0.3.18 | MIT OR Apache-2.0 |
-| unicode-ident | 1.0.24 | (MIT OR Apache-2.0) AND Unicode-3.0 |
 | unicode-script | 0.5.8 | MIT OR Apache-2.0 |
 | unicode-vo | 0.1.0 | MIT/Apache-2.0 |
 | usvg | 0.48.1 | Apache-2.0 OR MIT |
-| version_check | 0.9.5 | MIT/Apache-2.0 |
 | windows | 0.62.2 | MIT OR Apache-2.0 |
 | windows-collections | 0.3.2 | MIT OR Apache-2.0 |
 | windows-core | 0.62.2 | MIT OR Apache-2.0 |
 | windows-future | 0.3.2 | MIT OR Apache-2.0 |
-| windows-implement | 0.60.2 | MIT OR Apache-2.0 |
-| windows-interface | 0.59.3 | MIT OR Apache-2.0 |
 | windows-link | 0.2.1 | MIT OR Apache-2.0 |
 | windows-numerics | 0.3.1 | MIT OR Apache-2.0 |
 | windows-registry | 0.6.1 | MIT OR Apache-2.0 |
@@ -348,52 +333,6 @@ the following restrictions:
     misrepresented as being the original software.
 
  3. This notice may not be removed or altered from any source distribution.
-```
-
-### Unicode License v3
-
-Applies to: unicode-ident (in addition to MIT)
-
-```
-UNICODE LICENSE V3
-
-COPYRIGHT AND PERMISSION NOTICE
-
-Copyright © 1991-2023 Unicode, Inc.
-
-NOTICE TO USER: Carefully read the following legal agreement. BY
-DOWNLOADING, INSTALLING, COPYING OR OTHERWISE USING DATA FILES, AND/OR
-SOFTWARE, YOU UNEQUIVOCALLY ACCEPT, AND AGREE TO BE BOUND BY, ALL OF THE
-TERMS AND CONDITIONS OF THIS AGREEMENT. IF YOU DO NOT AGREE, DO NOT
-DOWNLOAD, INSTALL, COPY, DISTRIBUTE OR USE THE DATA FILES OR SOFTWARE.
-
-Permission is hereby granted, free of charge, to any person obtaining a
-copy of data files and any associated documentation (the "Data Files") or
-software and any associated documentation (the "Software") to deal in the
-Data Files or Software without restriction, including without limitation
-the rights to use, copy, modify, merge, publish, distribute, and/or sell
-copies of the Data Files or Software, and to permit persons to whom the
-Data Files or Software are furnished to do so, provided that either (a)
-this copyright and permission notice appear with all copies of the Data
-Files or Software, or (b) this copyright and permission notice appear in
-associated Documentation.
-
-THE DATA FILES AND SOFTWARE ARE PROVIDED "AS IS", WITHOUT WARRANTY OF ANY
-KIND, EXPRESS OR IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF
-MERCHANTABILITY, FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT OF
-THIRD PARTY RIGHTS.
-
-IN NO EVENT SHALL THE COPYRIGHT HOLDER OR HOLDERS INCLUDED IN THIS NOTICE
-BE LIABLE FOR ANY CLAIM, OR ANY SPECIAL INDIRECT OR CONSEQUENTIAL DAMAGES,
-OR ANY DAMAGES WHATSOEVER RESULTING FROM LOSS OF USE, DATA OR PROFITS,
-WHETHER IN AN ACTION OF CONTRACT, NEGLIGENCE OR OTHER TORTIOUS ACTION,
-ARISING OUT OF OR IN CONNECTION WITH THE USE OR PERFORMANCE OF THE DATA
-FILES OR SOFTWARE.
-
-Except as contained in this notice, the name of a copyright holder shall
-not be used in advertising or otherwise to promote the sale, use or other
-dealings in these Data Files or Software without prior written
-authorization of the copyright holder.
 ```
 
 ### GNU Lesser General Public License v3
