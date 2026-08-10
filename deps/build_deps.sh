@@ -5,6 +5,7 @@ set -e
 cd "$(dirname "$0")"
 ROOT=$PWD
 PREFIX=$ROOT/prefix
+
 # cmake 4 rejects projects requiring <3.5; pin the compatibility floor.
 export CMAKE_POLICY_VERSION_MINIMUM=3.5
 
@@ -91,7 +92,7 @@ configure_and_install libdeflate \
     -DLIBDEFLATE_BUILD_GZIP=OFF \
     -DLIBDEFLATE_BUILD_TESTS=OFF
 
-# OpenEXR; its CMake adds a /MP that clang-cl ignores and reports once per file
+# OpenEXR: its CMake adds a /MP that clang-cl ignores and reports once per file
 clone openexr https://github.com/AcademySoftwareFoundation/openexr.git release
 (
     export CFLAGS="-Wno-unused-command-line-argument"

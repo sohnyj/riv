@@ -30,9 +30,8 @@ set(CMAKE_CXX_FLAGS_INIT "${XWIN_INCLUDE_FLAGS} /arch:AVX2 /EHsc")
 set(CMAKE_EXE_LINKER_FLAGS_INIT "${XWIN_LIBRARY_FLAGS}")
 set(CMAKE_SHARED_LINKER_FLAGS_INIT "${XWIN_LIBRARY_FLAGS}")
 
-# Keep try-compile linking executables: STATIC_LIBRARY lets check_library_exists
-# pass falsely and injects phantom pthreads/m link dependencies.
-
+# Do not set CMAKE_TRY_COMPILE_TARGET_TYPE to STATIC_LIBRARY: check_library_exists
+# passes falsely and injects phantom pthreads/m link dependencies.
 set(CMAKE_FIND_ROOT_PATH_MODE_PROGRAM NEVER)
 set(CMAKE_FIND_ROOT_PATH_MODE_LIBRARY ONLY)
 set(CMAKE_FIND_ROOT_PATH_MODE_INCLUDE ONLY)
