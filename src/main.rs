@@ -15,7 +15,7 @@ mod view;
 mod window;
 
 use std::collections::HashMap;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::rc::Rc;
 use std::sync::Arc;
 
@@ -1611,10 +1611,7 @@ fn dispatch_action(application: &mut Application, window: HWND, action: Action) 
                 .get(usize::from(index))
                 .map(|(_, path)| std::path::PathBuf::from(path));
             if let Some(path) = path {
-                open_external_path(application, window, &path);
-                if application.image_core.open_failed_missing(&path) {
-                    application.settings.remove_recent_file(&path);
-                }
+                open_recent_path(application, window, &path);
             }
         }
         Action::ClearRecents => {
@@ -1769,6 +1766,14 @@ fn dispatch_action(application: &mut Application, window: HWND, action: Action) 
     }
 }
 
+/// Opens a recent file, dropping it from the list when it turns out to be gone.
+fn open_recent_path(application: &mut Application, window: HWND, path: &Path) {
+    open_external_path(application, window, path);
+    if application.image_core.open_failed_missing(path) {
+        application.settings.remove_recent_file(path);
+    }
+}
+
 fn delete_current_file(application: &mut Application, window: HWND, permanent: bool) {
     // The FileOnDisk requirement keeps archive members out of here.
     let Some(path) = application.image_core.current_file().map(Path::to_path_buf) else {
@@ -1884,6 +1889,25 @@ fn show_menu(application: &mut Application, window: HWND, x: i32, y: i32, target
     let playlist = application
         .image_core
         .playlist_window(context_menu::playlist_capacity(window));
+    // The menu pumps messages, so what each label points at is kept beside the labels.
+    let playlist_locations = playlist.locations;
+    let playlist_first_index = playlist.first_index;
+    let recent_paths: Vec<String> = application
+        .settings
+        .recent_files()
+        .into_iter()
+        .map(|(_, path)| path)
+        .collect();
+    let open_with_target = application.image_core.current_file().map(Path::to_path_buf);
+    let open_with_executables: Vec<String> =
+        application
+            .current_open_with_list()
+            .map_or_else(Vec::new, |list| {
+                list.items
+                    .iter()
+                    .map(|item| item.executable_path.clone())
+                    .collect()
+            });
     let state = MenuState {
         requirements: SatisfiedRequirements::evaluate(|requirement| {
             application.requirement_satisfied(requirement)
@@ -1892,7 +1916,7 @@ fn show_menu(application: &mut Application, window: HWND, x: i32, y: i32, target
         loop_enabled: application.settings.options.loop_within_folder,
         open_url_available: curl::available(),
         playlist_names: playlist.names,
-        playlist_first_index: playlist.first_index,
+        playlist_first_index,
         playlist_current_slot: playlist.current_slot,
         playlist_hidden_after: playlist.hidden_after,
         animation_paused: application
@@ -1940,20 +1964,27 @@ fn show_menu(application: &mut Application, window: HWND, x: i32, y: i32, target
         && let Some(application) = application_from_window(window)
     {
         match selection {
+            // A recent opened from the menu is the one the label named, not today's first entry.
+            MenuSelection::Action(Action::Recent(index)) => {
+                if let Some(path) = recent_paths.get(usize::from(index)) {
+                    open_recent_path(application, window, &PathBuf::from(path));
+                }
+            }
             MenuSelection::Action(action) => {
                 dispatch_action(application, window, action);
             }
             MenuSelection::OpenWithEntry(index) => {
-                if let (Some(path), Some(list)) = (
-                    application.image_core.current_file(),
-                    application.current_open_with_list(),
-                ) && let Some(item) = list.items.get(index)
+                if let (Some(path), Some(executable)) =
+                    (open_with_target, open_with_executables.get(index))
                 {
-                    let _ = open_with::invoke(path, &item.executable_path);
+                    let _ = open_with::invoke(&path, executable);
                 }
             }
             MenuSelection::PlaylistEntry(index) => {
-                let result = application.image_core.navigate_to_entry(index);
+                let result = index
+                    .checked_sub(playlist_first_index)
+                    .and_then(|slot| playlist_locations.get(slot))
+                    .and_then(|location| application.image_core.navigate_to_location(location));
                 apply_navigation_result(application, window, result);
             }
         }

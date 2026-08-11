@@ -390,6 +390,8 @@ impl ImageReleaser {
 
 pub struct PlaylistWindow {
     pub names: Vec<String>,
+    /// What each name points at, so a caller can act on the item it labeled.
+    pub locations: Vec<ItemLocation>,
     /// Absolute index of the first shown name; doubles as the count hidden before it.
     pub first_index: usize,
     pub current_slot: Option<usize>,
@@ -653,6 +655,10 @@ impl ImageCore {
             names: self.entries[first_index..end]
                 .iter()
                 .map(|entry| entry.location.display_name())
+                .collect(),
+            locations: self.entries[first_index..end]
+                .iter()
+                .map(|entry| entry.location.clone())
                 .collect(),
             first_index,
             current_slot: match anchor {
@@ -1085,8 +1091,9 @@ impl ImageCore {
     }
 
     /// Jumps to a listing entry; the index maps the open menu's snapshot, so no rescan first.
-    pub fn navigate_to_entry(&mut self, index: usize) -> Option<LoadOutcome> {
-        let target = self.entries.get(index)?.location.clone();
+    /// Goes to an item the caller already identified, listed or not.
+    pub fn navigate_to_location(&mut self, target: &ItemLocation) -> Option<LoadOutcome> {
+        let target = target.clone();
         if self
             .navigation_anchor()
             .is_some_and(|anchor| anchor == &target)
