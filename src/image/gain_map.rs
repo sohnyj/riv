@@ -338,14 +338,19 @@ fn property_values<'xml>(xml: &'xml str, prefix: &str, name: &str) -> Option<Vec
         }
     }
     let element = &xml[xml.find(&format!("<{qualified}"))?..];
-    let body = &element[element.find('>')? + 1..element.find(&format!("</{qualified}"))?];
+    let body_open = element.find('>')? + 1;
+    let body_close = element.find(&format!("</{qualified}"))?;
+    // An invalid element can place the close tag before the opening '>'; get() fails closed.
+    let body = element.get(body_open..body_close)?;
     let mut items = Vec::new();
     let mut rest = body;
     while let Some(position) = rest.find("<rdf:li") {
         let item = &rest[position..];
-        let text = &item[item.find('>')? + 1..item.find("</rdf:li")?];
+        let item_open = item.find('>')? + 1;
+        let item_close = item.find("</rdf:li")?;
+        let text = item.get(item_open..item_close)?;
         items.push(text.trim());
-        rest = &item[item.find("</rdf:li")? + 8..];
+        rest = &item[item_close + 8..];
     }
     if items.is_empty() {
         items.push(body.trim());
@@ -538,6 +543,15 @@ mod tests {
         assert_eq!(metadata.weight(1024.0), 1.0);
         let peak = metadata.capacity_peak_nits();
         assert!((peak - 80.0 * 4.709f32.exp2()).abs() < 0.5);
+    }
+
+    #[test]
+    fn invalid_elements_fail_closed_instead_of_panicking() {
+        // Close tags placed before the opening '>' used to reverse the slice range.
+        let element = "<hdrgm:GainMapMax</hdrgm:GainMapMax bar >";
+        assert_eq!(property_values(element, "hdrgm", "GainMapMax"), None);
+        let list_item = "<hdrgm:GainMapMin><rdf:Seq><rdf:li</rdf:li ></rdf:Seq></hdrgm:GainMapMin>";
+        assert_eq!(property_values(list_item, "hdrgm", "GainMapMin"), None);
     }
 
     #[test]
