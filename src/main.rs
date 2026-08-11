@@ -2050,7 +2050,8 @@ fn handle_wheel(application: &mut Application, window: HWND, wheel_delta: i16) {
     }
     // The wheel sets its own distance; the action still owns the axis and the sign.
     if let Some((x, y)) = action.pan_direction() {
-        let distance = f32::from(wheel_delta.abs()) / WHEEL_PAN_DIVISOR;
+        // Widen before abs: i16::MIN.abs() overflows, and a wheel can deliver it.
+        let distance = f32::from(wheel_delta).abs() / WHEEL_PAN_DIVISOR;
         application.pan_by(window, x * distance, y * distance);
         return;
     }
