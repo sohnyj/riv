@@ -50,10 +50,14 @@ pub fn post_boxed<T>(window: isize, message: u32, payload: Box<T>) {
 /// The posted payload, or None when that pointer never went out with this message; `T` must match.
 pub unsafe fn take_boxed<T>(message: u32, lparam: LPARAM) -> Option<Box<T>> {
     let pointer = lparam.0 as usize;
-    if !was_sent(pointer, message) {
-        return None;
+    {
+        // One locked check-and-remove, so the pointer is reclaimed exactly once.
+        let mut payloads = SENT_PAYLOADS.lock().ok()?;
+        if payloads.get(&pointer) != Some(&message) {
+            return None;
+        }
+        payloads.remove(&pointer);
     }
-    forget(pointer);
     Some(unsafe { Box::from_raw(pointer as *mut T) })
 }
 
