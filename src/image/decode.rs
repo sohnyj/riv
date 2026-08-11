@@ -244,6 +244,115 @@ pub(crate) fn animation_budget_exceeded(frame_count: u64, canvas_bytes: usize) -
     frame_count * canvas_bytes as u64 > ANIMATION_FRAMES_BYTE_LIMIT
 }
 
+/// How a frame's pixels take the canvas: over what is there, or in place of it.
+#[derive(Clone, Copy, PartialEq)]
+pub enum FrameBlend {
+    Over,
+    Replace,
+}
+
+/// What the canvas keeps once the frame has been shown.
+#[derive(Clone, Copy, PartialEq)]
+pub enum FrameDisposal {
+    Keep,
+    Background,
+    Previous,
+}
+
+/// One frame as its container places it on the canvas.
+pub struct FrameRegion<'pixels> {
+    pub pixels: &'pixels [u8],
+    pub left: u32,
+    pub top: u32,
+    pub width: u32,
+    pub height: u32,
+    pub blend: FrameBlend,
+    pub disposal: FrameDisposal,
+    pub delay_milliseconds: u32,
+}
+
+/// The canvas an animation composes onto; GIF, APNG, and WebP share these rules.
+pub struct FrameCompositor {
+    canvas: Vec<u8>,
+    width: u32,
+    height: u32,
+    frames: Vec<Frame>,
+    truncated: bool,
+}
+
+impl FrameCompositor {
+    /// None when the canvas alone exceeds the frame budget or cannot be reserved.
+    pub fn new(width: u32, height: u32) -> Option<Self> {
+        let bytes = (width as usize)
+            .checked_mul(height as usize)?
+            .checked_mul(4)
+            .filter(|bytes| !animation_budget_exceeded(1, *bytes))?;
+        let mut canvas = Vec::new();
+        canvas.try_reserve_exact(bytes).ok()?;
+        canvas.resize(bytes, 0);
+        Some(Self {
+            canvas,
+            width,
+            height,
+            frames: Vec::new(),
+            truncated: false,
+        })
+    }
+
+    pub fn frames_so_far(&self) -> u64 {
+        self.frames.len() as u64
+    }
+
+    /// Whether `declared_frames` still fit the budget; a refusal marks the animation truncated.
+    pub fn accepts_another(&mut self, declared_frames: u64) -> bool {
+        if !self.frames.is_empty() && animation_budget_exceeded(declared_frames, self.canvas.len())
+        {
+            self.truncated = true;
+            return false;
+        }
+        true
+    }
+
+    /// Composes the region, keeps the result as a frame, then applies the disposal.
+    pub fn add_frame(&mut self, region: FrameRegion) {
+        let restored = (region.disposal == FrameDisposal::Previous).then(|| self.canvas.clone());
+        let compose = match region.blend {
+            FrameBlend::Over => blend_over,
+            FrameBlend::Replace => copy_rectangle,
+        };
+        compose(
+            &mut self.canvas,
+            self.width,
+            self.height,
+            region.pixels,
+            region.width,
+            region.height,
+            region.left,
+            region.top,
+        );
+        self.frames.push(Frame {
+            pixels: self.canvas.clone(),
+            delay_milliseconds: region.delay_milliseconds,
+        });
+        match (region.disposal, restored) {
+            (FrameDisposal::Background, _) => clear_rectangle(
+                &mut self.canvas,
+                self.width,
+                region.left,
+                region.top,
+                region.width,
+                region.height,
+            ),
+            (FrameDisposal::Previous, Some(previous)) => self.canvas = previous,
+            _ => {}
+        }
+    }
+
+    pub fn finish(self) -> (Vec<Frame>, bool) {
+        (self.frames, self.truncated)
+    }
+}
+
 /// 100 ns intervals from 1601-01-01 (FILETIME zero) to the UNIX epoch.
 pub const FILETIME_UNIX_EPOCH: u64 = 116_444_736_000_000_000;
 
@@ -1940,12 +2049,15 @@ fn decode_animation(
             .as_ref()
             .and_then(|reader| query_u32(reader, name))
     };
-    let mut canvas_width = container_query(w!("/logscrdesc/Width")).unwrap_or(0);
-    let mut canvas_height = container_query(w!("/logscrdesc/Height")).unwrap_or(0);
-
-    let mut canvas: Vec<u8> = Vec::new();
-    let mut frames = Vec::with_capacity(frame_count as usize);
-    let mut frames_truncated = false;
+    let canvas_width = container_query(w!("/logscrdesc/Width")).unwrap_or(0);
+    let canvas_height = container_query(w!("/logscrdesc/Height")).unwrap_or(0);
+    // A container without a logical screen leaves the first frame to set the canvas.
+    let (canvas_width, canvas_height) = if canvas_width == 0 || canvas_height == 0 {
+        source_size(&unsafe { decoder.GetFrame(0)? }.cast()?)?
+    } else {
+        (canvas_width, canvas_height)
+    };
+    let mut compositor = FrameCompositor::new(canvas_width, canvas_height).ok_or(E_OUTOFMEMORY)?;
     let mut icc_profile = None;
     // Reused across frames; the copy writes every byte it is given.
     let mut frame_pixels: Vec<u8> = Vec::new();
@@ -1954,8 +2066,7 @@ fn decode_animation(
             return Err(E_ABORT.into());
         }
         // The container's frame count is real, so the budget is known after frame one.
-        if !frames.is_empty() && animation_budget_exceeded(u64::from(frame_count), canvas.len()) {
-            frames_truncated = true;
+        if !compositor.accepts_another(u64::from(frame_count)) {
             break;
         }
         let frame = unsafe { decoder.GetFrame(index)? };
@@ -1965,20 +2076,6 @@ fn decode_animation(
         let metadata = frame_metadata(&frame);
         let source = convert_to_pbgra(factory, &frame.cast()?)?;
         let (frame_width, frame_height) = source_size(&source)?;
-        if canvas_width == 0 || canvas_height == 0 {
-            canvas_width = frame_width;
-            canvas_height = frame_height;
-        }
-        if canvas.is_empty() {
-            let canvas_bytes = canvas_width as usize * canvas_height as usize * 4;
-            // The logical screen is untrusted; refuse a canvas over the animation budget.
-            if animation_budget_exceeded(1, canvas_bytes)
-                || canvas.try_reserve_exact(canvas_bytes).is_err()
-            {
-                return Err(E_OUTOFMEMORY.into());
-            }
-            canvas.resize(canvas_bytes, 0);
-        }
         copy_pixels_into(
             &source,
             frame_width,
@@ -1987,36 +2084,23 @@ fn decode_animation(
             cancellation,
             &mut frame_pixels,
         )?;
-
-        let restore_previous = (metadata.disposal == 3).then(|| canvas.clone());
-        blend_over(
-            &mut canvas,
-            canvas_width,
-            canvas_height,
-            &frame_pixels,
-            frame_width,
-            frame_height,
-            metadata.left,
-            metadata.top,
-        );
-        frames.push(Frame {
-            pixels: canvas.clone(),
+        compositor.add_frame(FrameRegion {
+            pixels: &frame_pixels,
+            left: metadata.left,
+            top: metadata.top,
+            width: frame_width,
+            height: frame_height,
+            // GIF frames are placed sub-rectangles that always composite over the canvas.
+            blend: FrameBlend::Over,
+            disposal: match metadata.disposal {
+                2 => FrameDisposal::Background,
+                3 => FrameDisposal::Previous,
+                _ => FrameDisposal::Keep,
+            },
             delay_milliseconds: metadata.delay_milliseconds,
         });
-
-        match (metadata.disposal, restore_previous) {
-            (2, _) => clear_rectangle(
-                &mut canvas,
-                canvas_width,
-                metadata.left,
-                metadata.top,
-                frame_width,
-                frame_height,
-            ),
-            (3, Some(previous)) => canvas = previous,
-            _ => {}
-        }
     }
+    let (frames, frames_truncated) = compositor.finish();
     Ok(DecodedImage {
         width: canvas_width,
         height: canvas_height,
@@ -2038,7 +2122,7 @@ fn decode_animation(
 
 /// Premultiplied source-over blend, clipped to the canvas.
 #[expect(clippy::too_many_arguments)]
-pub fn blend_over(
+fn blend_over(
     canvas: &mut [u8],
     canvas_width: u32,
     canvas_height: u32,
@@ -2074,7 +2158,7 @@ pub fn blend_over(
     }
 }
 
-pub fn clear_rectangle(
+fn clear_rectangle(
     canvas: &mut [u8],
     canvas_width: u32,
     left: u32,
@@ -2264,12 +2348,8 @@ fn decode_apng<Input: BufRead + Seek>(
         let information = reader.info();
         (information.width, information.height)
     };
-    // Untrusted IHDR: refuse an over-budget canvas up front, which also bounds the frame buffer.
-    let Some(canvas_bytes) = (canvas_width as usize)
-        .checked_mul(canvas_height as usize)
-        .and_then(|pixels| pixels.checked_mul(4))
-        .filter(|bytes| !animation_budget_exceeded(1, *bytes))
-    else {
+    // Untrusted IHDR: the compositor refuses an over-budget canvas, which bounds the frame buffer.
+    let Some(mut compositor) = FrameCompositor::new(canvas_width, canvas_height) else {
         return Err(uncoded_error("APNG canvas is too large to decode"));
     };
     let icc_profile = reader
@@ -2293,14 +2373,6 @@ fn decode_apng<Input: BufRead + Seek>(
         reader.next_frame(&mut buffer).map_err(uncoded_error)?;
     }
 
-    let mut canvas: Vec<u8> = Vec::new();
-    if canvas.try_reserve_exact(canvas_bytes).is_err() {
-        return Err(uncoded_error("APNG canvas is too large to fit in memory"));
-    }
-    canvas.resize(canvas_bytes, 0);
-    // The png crate accepts acTL num_frames up to i32::MAX; cap the reservation.
-    let mut frames = Vec::with_capacity((animation_frame_count as usize).min(4096));
-    let mut frames_truncated = false;
     // Reused across frames; the conversion writes every byte it is given.
     let mut region_pixels: Vec<u8> = Vec::new();
     for index in 0..animation_frame_count {
@@ -2308,8 +2380,7 @@ fn decode_apng<Input: BufRead + Seek>(
             return Err(DecodeError::cancelled());
         }
         // acTL's declared count is untrusted, so the budget runs frame by frame.
-        if !frames.is_empty() && animation_budget_exceeded(frames.len() as u64 + 1, canvas.len()) {
-            frames_truncated = true;
+        if !compositor.accepts_another(compositor.frames_so_far() + 1) {
             break;
         }
         if !(index == 0 && (default_image_is_first_frame || !has_animation)) {
@@ -2330,54 +2401,31 @@ fn decode_apng<Input: BufRead + Seek>(
             &mut region_pixels,
         )?;
 
-        let restore_previous =
-            (frame_control.dispose_op == png::DisposeOp::Previous).then(|| canvas.clone());
-        if frame_control.blend_op == png::BlendOp::Source {
-            copy_rectangle(
-                &mut canvas,
-                canvas_width,
-                canvas_height,
-                &region_pixels,
-                frame_control.width,
-                frame_control.height,
-                frame_control.x_offset,
-                frame_control.y_offset,
-            );
-        } else {
-            blend_over(
-                &mut canvas,
-                canvas_width,
-                canvas_height,
-                &region_pixels,
-                frame_control.width,
-                frame_control.height,
-                frame_control.x_offset,
-                frame_control.y_offset,
-            );
-        }
         let delay_denominator = if frame_control.delay_den == 0 {
             100
         } else {
             u32::from(frame_control.delay_den)
         };
-        frames.push(Frame {
-            pixels: canvas.clone(),
+        compositor.add_frame(FrameRegion {
+            pixels: &region_pixels,
+            left: frame_control.x_offset,
+            top: frame_control.y_offset,
+            width: frame_control.width,
+            height: frame_control.height,
+            blend: match frame_control.blend_op {
+                png::BlendOp::Source => FrameBlend::Replace,
+                png::BlendOp::Over => FrameBlend::Over,
+            },
+            disposal: match frame_control.dispose_op {
+                png::DisposeOp::Background => FrameDisposal::Background,
+                png::DisposeOp::Previous => FrameDisposal::Previous,
+                png::DisposeOp::None => FrameDisposal::Keep,
+            },
             delay_milliseconds: (u32::from(frame_control.delay_num) * 1000 / delay_denominator)
                 .max(10),
         });
-        match (frame_control.dispose_op, restore_previous) {
-            (png::DisposeOp::Background, _) => clear_rectangle(
-                &mut canvas,
-                canvas_width,
-                frame_control.x_offset,
-                frame_control.y_offset,
-                frame_control.width,
-                frame_control.height,
-            ),
-            (png::DisposeOp::Previous, Some(previous)) => canvas = previous,
-            _ => {}
-        }
     }
+    let (mut frames, frames_truncated) = compositor.finish();
     if frames_truncated {
         frames.truncate(1);
     }
@@ -2456,7 +2504,7 @@ fn pixels_to_premultiplied_bgra_into(
 }
 
 #[expect(clippy::too_many_arguments)]
-pub fn copy_rectangle(
+fn copy_rectangle(
     canvas: &mut [u8],
     canvas_width: u32,
     canvas_height: u32,
@@ -2714,6 +2762,182 @@ mod compositor_tests {
         copy_rectangle(&mut canvas, 10, 10, &source, 1, 1, 15, 9);
         clear_rectangle(&mut canvas, 10, 15, 9, 1, 1);
         assert!(canvas.iter().all(|&byte| byte == 0), "nothing is visible");
+    }
+
+    /// One opaque pixel of the given blue, in the premultiplied BGRA the compositor takes.
+    fn blue_pixel(blue: u8) -> Vec<u8> {
+        vec![blue, 0, 0, 255]
+    }
+
+    fn region(pixels: &[u8], disposal: FrameDisposal) -> FrameRegion<'_> {
+        FrameRegion {
+            pixels,
+            left: 0,
+            top: 0,
+            width: 1,
+            height: 1,
+            blend: FrameBlend::Replace,
+            disposal,
+            delay_milliseconds: 40,
+        }
+    }
+
+    #[test]
+    fn keeping_the_canvas_carries_a_frame_into_the_next() {
+        let mut compositor = FrameCompositor::new(2, 1).expect("canvas");
+        compositor.add_frame(region(&blue_pixel(10), FrameDisposal::Keep));
+        compositor.add_frame(FrameRegion {
+            left: 1,
+            ..region(&blue_pixel(20), FrameDisposal::Keep)
+        });
+        let (frames, truncated) = compositor.finish();
+        assert!(!truncated);
+        assert_eq!(frames[0].pixels[0], 10);
+        // The second frame still shows the first, which nothing disposed of.
+        assert_eq!(frames[1].pixels[0], 10);
+        assert_eq!(frames[1].pixels[4], 20);
+    }
+
+    #[test]
+    fn disposing_to_the_background_clears_only_that_region() {
+        let mut compositor = FrameCompositor::new(2, 1).expect("canvas");
+        compositor.add_frame(FrameRegion {
+            left: 1,
+            ..region(&blue_pixel(20), FrameDisposal::Keep)
+        });
+        compositor.add_frame(region(&blue_pixel(10), FrameDisposal::Background));
+        compositor.add_frame(FrameRegion {
+            width: 0,
+            ..region(&[], FrameDisposal::Keep)
+        });
+        let (frames, _) = compositor.finish();
+        assert_eq!(frames[1].pixels[0], 10, "the frame is kept as it was shown");
+        assert_eq!(frames[2].pixels[0], 0, "its own region is cleared");
+        assert_eq!(frames[2].pixels[4], 20, "the rest of the canvas stands");
+    }
+
+    #[test]
+    fn disposing_to_previous_restores_what_the_frame_covered() {
+        let mut compositor = FrameCompositor::new(1, 1).expect("canvas");
+        compositor.add_frame(region(&blue_pixel(10), FrameDisposal::Keep));
+        compositor.add_frame(region(&blue_pixel(20), FrameDisposal::Previous));
+        compositor.add_frame(FrameRegion {
+            width: 0,
+            ..region(&[], FrameDisposal::Keep)
+        });
+        let (frames, _) = compositor.finish();
+        assert_eq!(frames[1].pixels[0], 20, "the frame is kept as it was shown");
+        assert_eq!(frames[2].pixels[0], 10, "the canvas goes back to before it");
+    }
+
+    #[test]
+    fn blending_over_keeps_what_a_transparent_frame_does_not_cover() {
+        let mut compositor = FrameCompositor::new(1, 1).expect("canvas");
+        compositor.add_frame(region(&blue_pixel(10), FrameDisposal::Keep));
+        compositor.add_frame(FrameRegion {
+            blend: FrameBlend::Over,
+            ..region(&[0, 0, 0, 0], FrameDisposal::Keep)
+        });
+        let (frames, _) = compositor.finish();
+        assert_eq!(frames[1].pixels[0], 10, "a clear frame leaves the canvas");
+    }
+
+    #[test]
+    fn frames_past_the_byte_budget_are_refused_and_marked() {
+        // One frame of this canvas is a quarter of the budget, so the fifth cannot join.
+        let side = 8192;
+        let mut compositor = FrameCompositor::new(side, side).expect("canvas");
+        for _ in 0..4 {
+            assert!(compositor.accepts_another(compositor.frames_so_far() + 1));
+            compositor.add_frame(region(&blue_pixel(10), FrameDisposal::Keep));
+        }
+        assert!(!compositor.accepts_another(compositor.frames_so_far() + 1));
+        let (frames, truncated) = compositor.finish();
+        assert_eq!(frames.len(), 4);
+        assert!(truncated);
+    }
+
+    #[test]
+    fn a_canvas_over_the_budget_is_refused() {
+        assert!(FrameCompositor::new(65535, 65535).is_none());
+    }
+
+    /// The disposal fixture's four frames: keep, background, previous, then an empty one.
+    #[test]
+    #[ignore = "needs test/ fixtures"]
+    fn the_apng_disposal_fixture_composes_as_its_frames_ask() {
+        let file = std::fs::File::open("test/disposal_apng.png").expect("fixture");
+        let decoded = decode_apng(
+            std::io::BufReader::new(file),
+            "PNG",
+            &AtomicBool::new(false),
+        )
+        .unwrap_or_else(|error| panic!("{}", error.message));
+        assert_eq!(decoded.frames.len(), 4);
+        let pixel = |frame: usize, x: usize, y: usize| {
+            let start = (y * decoded.width as usize + x) * 4;
+            decoded.frames[frame].pixels[start..start + 4].to_vec()
+        };
+        // The last frame keeps the square nothing disposed of, and neither of the other two.
+        assert_eq!(pixel(3, 8, 12)[2], 220, "the kept square stays");
+        assert_eq!(
+            pixel(3, 30, 12),
+            vec![0, 0, 0, 0],
+            "both disposals undid theirs"
+        );
+        assert_eq!(
+            pixel(1, 30, 12)[1],
+            180,
+            "the background frame showed its square"
+        );
+        assert_eq!(
+            pixel(2, 30, 12)[0],
+            230,
+            "the previous frame showed its square"
+        );
+        // Both disposals undid their frame, so the canvas is the opening one again.
+        assert_eq!(decoded.frames[3].pixels, decoded.frames[0].pixels);
+    }
+
+    /// The same four frames as the APNG fixture, read through WIC.
+    #[test]
+    #[ignore = "needs test/ fixtures and a WIC GIF decoder"]
+    fn the_gif_disposal_fixture_composes_as_its_frames_ask() {
+        // WIC needs COM; the worker initializes it at thread start, tests do it here.
+        let _ = unsafe {
+            windows::Win32::System::Com::CoInitializeEx(
+                None,
+                windows::Win32::System::Com::COINIT_MULTITHREADED,
+            )
+        };
+        let decoded = with_wic_factory(|factory| {
+            let decoder = create_wic_decoder(
+                factory,
+                &DecodeInput::File(Path::new("test/disposal_gif.gif")),
+            )?;
+            let frame_count = unsafe { decoder.GetFrameCount()? };
+            decode_animation(
+                factory,
+                &decoder,
+                frame_count,
+                "GIF",
+                &AtomicBool::new(false),
+            )
+        })
+        .expect("decode");
+        assert_eq!(decoded.frames.len(), 4);
+        let pixel = |frame: usize, x: usize, y: usize| {
+            let start = (y * decoded.width as usize + x) * 4;
+            decoded.frames[frame].pixels[start..start + 4].to_vec()
+        };
+        assert_eq!(pixel(3, 8, 12)[2], 220, "the kept square stays");
+        assert_eq!(
+            pixel(3, 30, 12),
+            vec![0, 0, 0, 0],
+            "both disposals undid theirs"
+        );
+        // Both disposals undid their frame, so the canvas is the opening one again.
+        assert_eq!(decoded.frames[3].pixels, decoded.frames[0].pixels);
     }
 }
 

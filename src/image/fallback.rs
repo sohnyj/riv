@@ -5,8 +5,8 @@ use std::path::Path;
 use std::sync::Arc;
 
 use crate::image::decode::{
-    DecodeError, DecodedImage, Frame, HdrEncoding, PixelStorage, animation_budget_exceeded,
-    blend_over, cicp_hdr_encoding, clear_rectangle, copy_rectangle, linearize_hdr_pixels,
+    DecodeError, DecodedImage, Frame, FrameBlend, FrameCompositor, FrameDisposal, FrameRegion,
+    HdrEncoding, PixelStorage, cicp_hdr_encoding, linearize_hdr_pixels,
     peak_luminance_from_half_pixels, peak_luminance_with_maximum_bits,
     premultiplied_bgra_from_rgba, uncoded_error,
 };
@@ -109,17 +109,15 @@ fn compose_webp_frames(
     if unsafe { WebPDemuxGetFrame(demuxer, 1, &raw mut iterator) } == 0 {
         return Err(uncoded_error("WebP has no frames"));
     }
-    let mut canvas = vec![0u8; canvas_width as usize * canvas_height as usize * 4];
-    let mut frames = Vec::with_capacity(iterator.frame_count.max(1) as usize);
-    let mut frames_truncated = false;
+    let Some(mut compositor) = FrameCompositor::new(canvas_width, canvas_height) else {
+        unsafe { WebPDemuxReleaseIterator(&raw mut iterator) };
+        return Err(uncoded_error("WebP canvas is too large to decode"));
+    };
     // Reused across frames; the decoder writes every byte it is given.
     let mut frame_pixels: Vec<u8> = Vec::new();
     loop {
         // The demuxer's frame count is real, so the budget is known after frame one.
-        if !frames.is_empty()
-            && animation_budget_exceeded(iterator.frame_count.max(1) as u64, canvas.len())
-        {
-            frames_truncated = true;
+        if !compositor.accepts_another(u64::from(iterator.frame_count.max(1) as u32)) {
             break;
         }
         let frame_width = iterator.width.max(0) as u32;
@@ -139,48 +137,33 @@ fn compose_webp_frames(
             return Err(uncoded_error("WebP frame decode failed"));
         }
         premultiply_bgra_in_place(&mut frame_pixels);
-        if iterator.blend_method == WEBP_MUX_NO_BLEND {
-            copy_rectangle(
-                &mut canvas,
-                canvas_width,
-                canvas_height,
-                &frame_pixels,
-                frame_width,
-                frame_height,
-                iterator.x_offset.max(0) as u32,
-                iterator.y_offset.max(0) as u32,
-            );
-        } else {
-            blend_over(
-                &mut canvas,
-                canvas_width,
-                canvas_height,
-                &frame_pixels,
-                frame_width,
-                frame_height,
-                iterator.x_offset.max(0) as u32,
-                iterator.y_offset.max(0) as u32,
-            );
-        }
         let duration = iterator.duration_milliseconds;
-        frames.push(Frame {
-            pixels: canvas.clone(),
+        compositor.add_frame(FrameRegion {
+            pixels: &frame_pixels,
+            left: iterator.x_offset.max(0) as u32,
+            top: iterator.y_offset.max(0) as u32,
+            width: frame_width,
+            height: frame_height,
+            blend: if iterator.blend_method == WEBP_MUX_NO_BLEND {
+                FrameBlend::Replace
+            } else {
+                FrameBlend::Over
+            },
+            // WebP disposes to the background or keeps; it has no restore-previous.
+            disposal: if iterator.dispose_method == WEBP_MUX_DISPOSE_BACKGROUND {
+                FrameDisposal::Background
+            } else {
+                FrameDisposal::Keep
+            },
             delay_milliseconds: if duration > 0 { duration as u32 } else { 100 },
         });
-        if iterator.dispose_method == WEBP_MUX_DISPOSE_BACKGROUND {
-            clear_rectangle(
-                &mut canvas,
-                canvas_width,
-                iterator.x_offset.max(0) as u32,
-                iterator.y_offset.max(0) as u32,
-                frame_width,
-                frame_height,
-            );
-        }
-        if frames.len() >= frame_limit || unsafe { WebPDemuxNextFrame(&raw mut iterator) } == 0 {
+        if compositor.frames_so_far() as usize >= frame_limit
+            || unsafe { WebPDemuxNextFrame(&raw mut iterator) } == 0
+        {
             break;
         }
     }
+    let (frames, frames_truncated) = compositor.finish();
     unsafe { WebPDemuxReleaseIterator(&raw mut iterator) };
     Ok(DecodedImage {
         width: canvas_width,
