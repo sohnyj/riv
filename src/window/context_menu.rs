@@ -26,7 +26,7 @@ const UNMEASURED_CAPACITY: usize = 9;
 pub enum MenuSelection {
     Action(Action),
     OpenWithEntry(usize),
-    /// Index into the folder listing snapshot the menu was built from.
+    /// Slot in the playlist window snapshot the menu was built from.
     PlaylistEntry(usize),
 }
 
@@ -169,9 +169,7 @@ impl MenuBuilder {
     }
 
     fn append_playlist_entry(&mut self, menu: HMENU, slot: usize, label: &str) -> Result<()> {
-        self.entries.push(MenuSelection::PlaylistEntry(
-            self.state_snapshot.playlist_first_index + slot,
-        ));
+        self.entries.push(MenuSelection::PlaylistEntry(slot));
         let identifier = self.entries.len();
         let mut flags = MF_STRING;
         if self.state_snapshot.playlist_current_slot == Some(slot) {
@@ -643,12 +641,12 @@ mod menu_structure_tests {
         // The current file carries the check marker, shifted past the leading overflow line.
         let current_flags = unsafe { GetMenuState(submenu, 13, MF_BYPOSITION) };
         assert!(MENU_ITEM_FLAGS(current_flags) & MF_CHECKED == MF_CHECKED);
-        // Selections map back to absolute listing indices.
+        // Selections carry the slot in the shown window.
         assert!(
             builder
                 .entries
                 .iter()
-                .any(|entry| matches!(entry, MenuSelection::PlaylistEntry(50)))
+                .any(|entry| matches!(entry, MenuSelection::PlaylistEntry(12)))
         );
         let _ = unsafe { DestroyMenu(menu) };
     }

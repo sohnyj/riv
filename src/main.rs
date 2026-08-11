@@ -1906,7 +1906,6 @@ fn show_menu(application: &mut Application, window: HWND, x: i32, y: i32, target
         .playlist_window(context_menu::playlist_capacity(window));
     // The menu pumps messages, so what each label points at is kept beside the labels.
     let playlist_locations = playlist.locations;
-    let playlist_first_index = playlist.first_index;
     let recent_paths: Vec<String> = application
         .settings
         .recent_files()
@@ -1930,8 +1929,11 @@ fn show_menu(application: &mut Application, window: HWND, x: i32, y: i32, target
         file_info_shown: application.show_file_info,
         loop_enabled: application.settings.options.loop_within_folder,
         open_url_available: curl::available(),
-        playlist_names: playlist.names,
-        playlist_first_index,
+        playlist_names: playlist_locations
+            .iter()
+            .map(ItemLocation::display_name)
+            .collect(),
+        playlist_first_index: playlist.first_index,
         playlist_current_slot: playlist.current_slot,
         playlist_hidden_after: playlist.hidden_after,
         animation_paused: application
@@ -1995,10 +1997,9 @@ fn show_menu(application: &mut Application, window: HWND, x: i32, y: i32, target
                     let _ = open_with::invoke(&path, executable);
                 }
             }
-            MenuSelection::PlaylistEntry(index) => {
-                let result = index
-                    .checked_sub(playlist_first_index)
-                    .and_then(|slot| playlist_locations.get(slot))
+            MenuSelection::PlaylistEntry(slot) => {
+                let result = playlist_locations
+                    .get(slot)
                     .and_then(|location| application.image_core.navigate_to_location(location));
                 apply_navigation_result(application, window, result);
             }

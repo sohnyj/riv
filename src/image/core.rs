@@ -389,8 +389,7 @@ impl ImageReleaser {
 }
 
 pub struct PlaylistWindow {
-    pub names: Vec<String>,
-    /// What each name points at, so a caller can act on the item it labeled.
+    /// What the menu shows and acts on; each label derives from its location.
     pub locations: Vec<ItemLocation>,
     /// Absolute index of the first shown name; doubles as the count hidden before it.
     pub first_index: usize,
@@ -652,10 +651,6 @@ impl ImageCore {
         let first_index = playlist_window_start(total, center, capacity);
         let end = (first_index + capacity).min(total);
         PlaylistWindow {
-            names: self.entries[first_index..end]
-                .iter()
-                .map(|entry| entry.location.display_name())
-                .collect(),
             locations: self.entries[first_index..end]
                 .iter()
                 .map(|entry| entry.location.clone())
@@ -3023,11 +3018,11 @@ mod playlist_window_tests {
     #[test]
     fn a_short_listing_shows_whole() {
         let window = core_with_files(5, Some(2)).playlist_window(25);
-        assert_eq!(window.names.len(), 5);
+        assert_eq!(window.locations.len(), 5);
         assert_eq!(window.first_index, 0);
         assert_eq!(window.current_slot, Some(2));
         assert_eq!(window.hidden_after, 0);
-        assert_eq!(window.names[0], "000.png");
+        assert_eq!(window.locations[0].display_name(), "000.png");
     }
 
     #[test]
@@ -3035,7 +3030,7 @@ mod playlist_window_tests {
         let window = core_with_files(100, Some(50)).playlist_window(25);
         assert_eq!(window.first_index, 38);
         assert_eq!(window.current_slot, Some(12));
-        assert_eq!(window.names.len(), 25);
+        assert_eq!(window.locations.len(), 25);
         assert_eq!(window.hidden_after, 37);
     }
 
