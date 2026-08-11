@@ -341,21 +341,24 @@ impl FrameCompositor {
             region.left,
             region.top,
         );
+        // Restoring swaps the snapshot back in, so the composed canvas moves into the frame.
+        let pixels = match restored {
+            Some(previous) => std::mem::replace(&mut self.canvas, previous),
+            None => self.canvas.clone(),
+        };
         self.frames.push(Frame {
-            pixels: self.canvas.clone(),
+            pixels,
             delay_milliseconds: region.delay_milliseconds,
         });
-        match (region.disposal, restored) {
-            (FrameDisposal::Background, _) => clear_rectangle(
+        if region.disposal == FrameDisposal::Background {
+            clear_rectangle(
                 &mut self.canvas,
                 self.width,
                 region.left,
                 region.top,
                 region.width,
                 region.height,
-            ),
-            (FrameDisposal::Previous, Some(previous)) => self.canvas = previous,
-            _ => {}
+            );
         }
     }
 
