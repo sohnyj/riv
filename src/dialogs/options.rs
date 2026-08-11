@@ -179,25 +179,43 @@ fn default_shortcut_rows() -> &'static [ShortcutRow] {
     })
 }
 
-pub fn show(parent: HWND, settings: &SettingsFile) {
-    let shortcuts: Vec<ShortcutRow> = Action::all_bindable()
-        .map(|action| ShortcutRow {
-            action,
-            keyboard: bindings::resolved_keyboard_sequences(
-                settings.keyboard_bindings(),
-                action.name(),
-            ),
-            mouse: bindings::resolved_mouse_encodings(settings.mouse_bindings(), action.name()),
-        })
-        .collect();
+/// What the dialog reads from the settings, taken before the modal loop starts.
+pub struct OptionsSnapshot {
+    options: Options,
+    shortcuts: Vec<ShortcutRow>,
+}
+
+impl OptionsSnapshot {
+    pub fn capture(settings: &SettingsFile) -> Self {
+        Self {
+            options: settings.options.clone(),
+            shortcuts: Action::all_bindable()
+                .map(|action| ShortcutRow {
+                    action,
+                    keyboard: bindings::resolved_keyboard_sequences(
+                        settings.keyboard_bindings(),
+                        action.name(),
+                    ),
+                    mouse: bindings::resolved_mouse_encodings(
+                        settings.mouse_bindings(),
+                        action.name(),
+                    ),
+                })
+                .collect(),
+        }
+    }
+}
+
+pub fn show(parent: HWND, snapshot: OptionsSnapshot) {
+    let OptionsSnapshot { options, shortcuts } = snapshot;
     let saved_associations = registered_associations();
     let start_menu_present = start_menu::shortcut_exists();
     let mut state = OptionsState {
         parent,
         dialog: HWND::default(),
         pages: [HWND::default(); 7],
-        saved_options: settings.options.clone(),
-        transient_options: settings.options.clone(),
+        saved_options: options.clone(),
+        transient_options: options,
         saved_shortcuts: shortcuts.clone(),
         transient_shortcuts: shortcuts,
         saved_associations,

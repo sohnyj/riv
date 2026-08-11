@@ -1677,18 +1677,21 @@ fn dispatch_action(application: &mut Application, window: HWND, action: Action) 
             for rest in paths.iter().skip(1) {
                 open_in_new_window(rest);
             }
-            if let Some(first) = paths.first() {
+            if let Some(first) = paths.first().cloned()
+                && let Some(application) = application_from_window(window)
+            {
                 if let Some(parent) = first.parent() {
                     application
                         .settings
                         .set_last_file_dialog_directory(&parent.to_string_lossy());
                 }
-                let first = first.clone();
                 open_external_path(application, window, &first);
             }
         }
         Action::OpenUrl => {
-            if let Some(url) = dialogs::open_url::show(window) {
+            if let Some(url) = dialogs::open_url::show(window)
+                && let Some(application) = application_from_window(window)
+            {
                 open_external_url(application, window, &url);
             }
         }
@@ -1706,8 +1709,8 @@ fn dispatch_action(application: &mut Application, window: HWND, action: Action) 
             rename_current_file(application, window);
         }
         Action::OtherApplication => {
-            if let Some(path) = application.image_core.current_file() {
-                let path = path.to_path_buf();
+            let path = application.image_core.current_file().map(Path::to_path_buf);
+            if let Some(path) = path {
                 open_with::show_open_with_dialog(window, &path);
             }
         }
@@ -1745,7 +1748,9 @@ fn dispatch_action(application: &mut Application, window: HWND, action: Action) 
             }
         }
         Action::Settings => {
-            dialogs::options::show(window, &application.settings);
+            // Captured first: the modal loop re-enters the window procedure with its own reference.
+            let snapshot = dialogs::options::OptionsSnapshot::capture(&application.settings);
+            dialogs::options::show(window, snapshot);
         }
     }
 }
@@ -1755,9 +1760,17 @@ fn delete_current_file(application: &mut Application, window: HWND, permanent: b
     let Some(path) = application.image_core.current_file().map(Path::to_path_buf) else {
         return;
     };
-    if permanent || application.settings.options.ask_delete {
+    let confirmation = if permanent || application.settings.options.ask_delete {
         let details = application.delete_details(&path);
-        let confirmation = file_ops::confirm_delete(window, &details, permanent);
+        Some(file_ops::confirm_delete(window, &details, permanent))
+    } else {
+        None
+    };
+    // The confirmation pumped messages, so re-fetch instead of reusing the reference across it.
+    let Some(application) = application_from_window(window) else {
+        return;
+    };
+    if let Some(confirmation) = confirmation {
         if !confirmation.confirmed {
             return;
         }
@@ -1794,6 +1807,10 @@ fn rename_current_file(application: &mut Application, window: HWND) {
     };
     let current_name = text::file_name_text(&path);
     let Some(new_name) = dialogs::rename::show(window, &current_name) else {
+        return;
+    };
+    // The dialog pumped messages, so re-fetch instead of reusing the reference across it.
+    let Some(application) = application_from_window(window) else {
         return;
     };
     match file_ops::rename_file(&path, &new_name) {
@@ -1984,6 +2001,10 @@ fn handle_wheel(application: &mut Application, window: HWND, wheel_delta: i16) {
     }
     let notches = application.accumulate_wheel_notches(wheel_delta);
     for _ in 0..notches.abs() {
+        // An action that opens a modal pumps messages, so each notch takes a fresh reference.
+        let Some(application) = application_from_window(window) else {
+            return;
+        };
         dispatch_action(application, window, action);
     }
 }
