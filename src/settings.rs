@@ -431,14 +431,13 @@ impl SettingsFile {
                 Value::Bool(default.skip_hidden),
             ),
         ];
-        let options_object = self
+        let Some(options_object) = self
             .document
             .as_object_mut()
-            .expect("settings document is object")
-            .entry("options")
-            .or_insert_with(|| Value::Object(Map::new()))
-            .as_object_mut()
-            .expect("options is object");
+            .and_then(|document| object_section(document, "options"))
+        else {
+            return;
+        };
         for (key, value, default_value) in entries {
             if value == default_value {
                 options_object.remove(key);
@@ -460,10 +459,9 @@ impl SettingsFile {
         keyboard: &[(String, Vec<String>)],
         mouse: &[(String, Vec<String>)],
     ) {
-        let document = self
-            .document
-            .as_object_mut()
-            .expect("settings document is object");
+        let Some(document) = self.document.as_object_mut() else {
+            return;
+        };
         for (section, resolved, defaults_of) in [
             (
                 "keyboardbindings",
@@ -476,11 +474,9 @@ impl SettingsFile {
                 crate::bindings::default_mouse_encodings as fn(&str) -> &'static [&'static str],
             ),
         ] {
-            let object = document
-                .entry(section)
-                .or_insert_with(|| Value::Object(Map::new()))
-                .as_object_mut()
-                .expect("bindings section is object");
+            let Some(object) = object_section(document, section) else {
+                continue;
+            };
             for (action_name, sequences) in resolved {
                 let defaults = defaults_of(action_name);
                 if defaults.len() == sequences.len()
@@ -663,6 +659,17 @@ fn settings_path() -> PathBuf {
         .join("riv.json")
 }
 
+/// The section as an object, replacing a stored value that is not one (the reader ignores those).
+fn object_section<'a>(
+    document: &'a mut Map<String, Value>,
+    section: &str,
+) -> Option<&'a mut Map<String, Value>> {
+    if !document.get(section).is_some_and(Value::is_object) {
+        document.insert(section.to_string(), Value::Object(Map::new()));
+    }
+    document.get_mut(section)?.as_object_mut()
+}
+
 fn read_document(path: &Path) -> Value {
     std::fs::read_to_string(path)
         .ok()
@@ -710,6 +717,17 @@ mod option_bounds_tests {
         assert_eq!(options.dither_mode, default.dither_mode);
         assert_eq!(options.sort_files_by, default.sort_files_by);
         assert_eq!(options.after_deletion, default.after_deletion);
+    }
+
+    #[test]
+    fn writing_replaces_sections_that_are_not_objects() {
+        // The reader already ignores these; the writer used to panic on them.
+        let mut document = serde_json::json!({ "options": 3, "keyboardbindings": "x" });
+        let sections = document.as_object_mut().expect("document is an object");
+        assert!(object_section(sections, "options").is_some());
+        assert!(object_section(sections, "keyboardbindings").is_some());
+        assert!(sections["options"].is_object());
+        assert!(sections["keyboardbindings"].is_object());
     }
 
     #[test]
