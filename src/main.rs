@@ -183,7 +183,7 @@ struct Application {
     drop_target: Option<IDropTarget>,
     /// One list per extension seen this session; handler registration is per extension.
     open_with_lists: HashMap<String, OpenWithList>,
-    /// Extension whose enumeration is running; at most one is in flight.
+    /// Extension whose enumeration is running; at most one runs at a time.
     open_with_pending_extension: Option<String>,
 }
 
@@ -674,7 +674,7 @@ impl Application {
         let _ = self.settings.save_merging_recents();
     }
 
-    /// The title follows the navigation anchor, so a load in flight already names its file.
+    /// The title follows the navigation anchor, so a running load already names its file.
     fn update_window_title(&mut self, window: HWND) {
         let title = if self.image_core.url_download_pending() {
             // A full URL makes a useless title; the centered overlay carries the progress.
@@ -785,7 +785,7 @@ impl Application {
         self.clear_displayed_image(window);
     }
 
-    /// Applies a load's outcome: the display, the error, or the in-flight freeze; then the title.
+    /// Applies a load's outcome: the display, the error, or the running freeze; then the title.
     fn apply_load_outcome(&mut self, window: HWND, outcome: LoadOutcome) {
         match outcome {
             LoadOutcome::Shown => self.apply_current_image(window),
@@ -830,7 +830,7 @@ impl Application {
         }
     }
 
-    /// Freeze a playing animation while a new load is in flight.
+    /// Freeze a playing animation while a new load runs.
     fn freeze_animation_for_load(&mut self, window: HWND) {
         if self.animation.is_some() {
             let _ = unsafe { KillTimer(Some(window), ANIMATION_TIMER) };
@@ -1096,7 +1096,7 @@ impl Application {
             None
         };
         let brightness = 0.299 * background.r + 0.587 * background.g + 0.114 * background.b;
-        // The wordmark marks a truly empty window, never a load in flight.
+        // The wordmark marks a truly empty window, never a load still running.
         let show_wordmark =
             !centered_message && self.displayed_image.is_none() && self.image_core.holds_no_item();
         OverlayContent {

@@ -405,9 +405,9 @@ pub struct ImageCore {
     entries: Vec<ListingEntry>,
     /// The view's own slot: replacing it invalidates whatever the last request left.
     request: ViewRequest,
-    in_flight: HashMap<ItemLocation, Arc<AtomicBool>>,
-    /// Separate from in_flight so a probe never reads as a decode already running.
-    probes_in_flight: HashMap<ItemLocation, Arc<AtomicBool>>,
+    submitted_decodes: HashMap<ItemLocation, Arc<AtomicBool>>,
+    /// Separate from submitted_decodes so a probe never reads as a decode already running.
+    submitted_probes: HashMap<ItemLocation, Arc<AtomicBool>>,
     /// The generation arrivals must carry; mirrored here so checks skip the pool lock.
     upload_device_generation: Option<u64>,
     cache: HashMap<ItemLocation, CacheEntry>,
@@ -417,7 +417,7 @@ pub struct ImageCore {
     /// Consecutive steps against the polarity; the second one flips it.
     opposite_steps: u32,
     releaser: ImageReleaser,
-    /// Listing scan in flight (folder or archive), awaiting its ScannedListing.
+    /// Listing scan submitted (folder or archive), awaiting its ScannedListing.
     pending_scan: Option<PendingScan>,
     /// Place a vanished anchor left behind; steps continue from there, not from the ends.
     missing_anchor: Option<MissingAnchor>,
@@ -543,8 +543,8 @@ impl ImageCore {
             listing_scope: None,
             entries: Vec::new(),
             request: ViewRequest::Idle,
-            in_flight: HashMap::new(),
-            probes_in_flight: HashMap::new(),
+            submitted_decodes: HashMap::new(),
+            submitted_probes: HashMap::new(),
             upload_device_generation: None,
             cache: HashMap::new(),
             current: None,
@@ -739,7 +739,7 @@ impl ImageCore {
         self.load_item(&ItemLocation::File(path))
     }
 
-    /// True when the listing or the scan in flight already covers this directory.
+    /// True when the listing or the submitted scan already covers this directory.
     fn directory_covered(&self, directory: &Path) -> bool {
         let covers = |scope: &ListingScope| matches!(scope, ListingScope::Directory(scanned) if paths_equal(scanned, directory));
         matches!(&self.listing_scope, Some(scope) if covers(scope))
@@ -761,7 +761,7 @@ impl ImageCore {
 
     /// Re-collects the current scope while the listing in hand stays usable until it lands.
     fn submit_refresh_scan(&mut self) {
-        // A scan already in flight is the newer listing; leave it to arrive.
+        // A scan already submitted is the newer listing; leave it to arrive.
         if self.listing_scan_pending() {
             return;
         }
@@ -878,7 +878,7 @@ impl ImageCore {
         ListingInstall::Installed
     }
 
-    /// True while a listing scan is in flight; the window is loading, not empty.
+    /// True while a listing scan is submitted; the window is loading, not empty.
     pub fn listing_scan_pending(&self) -> bool {
         self.pending_scan.is_some()
     }
@@ -990,7 +990,7 @@ impl ImageCore {
             preview_shown = true;
         }
         self.request = ViewRequest::Pending(location.clone());
-        if let Some(cancellation) = self.in_flight.get(location) {
+        if let Some(cancellation) = self.submitted_decodes.get(location) {
             // Already queued as a preload: revoke any cancellation and promote.
             cancellation.store(false, Ordering::Relaxed);
             self.pool.promote(location);
@@ -1006,7 +1006,7 @@ impl ImageCore {
         }
     }
 
-    /// Registers the job in flight and hands it to the pool under a fresh cancellation.
+    /// Registers the job as submitted and hands it to the pool under a fresh cancellation.
     fn submit_decode(
         &mut self,
         location: ItemLocation,
@@ -1015,7 +1015,7 @@ impl ImageCore {
         awaited: bool,
     ) {
         let cancellation = Arc::new(AtomicBool::new(false));
-        self.in_flight
+        self.submitted_decodes
             .insert(location.clone(), cancellation.clone());
         self.pool
             .submit(location, metadata, cancellation, kind, awaited);
@@ -1047,7 +1047,7 @@ impl ImageCore {
     /// A pending two-stage item is showing its preview and waits for the deferred full decode.
     pub fn full_decode_pending(&self) -> bool {
         self.request.pending().is_some_and(|pending| {
-            !self.in_flight.contains_key(pending)
+            !self.submitted_decodes.contains_key(pending)
                 && self.cache.get(pending).is_some_and(|entry| entry.preview)
         })
     }
@@ -1057,7 +1057,7 @@ impl ImageCore {
         let Some(location) = self.request.pending().cloned() else {
             return;
         };
-        if self.in_flight.contains_key(&location) {
+        if self.submitted_decodes.contains_key(&location) {
             return;
         }
         let Some(metadata) = self
@@ -1201,7 +1201,7 @@ impl ImageCore {
             .and_then(|current| current.location.containing_file())
     }
 
-    /// The position baseline: the in-flight load, else the errored item, else the display.
+    /// The position baseline: the running load, else the errored item, else the display.
     pub fn navigation_anchor(&self) -> Option<&ItemLocation> {
         self.request
             .location()
@@ -1257,7 +1257,7 @@ impl ImageCore {
             }
             return None;
         }
-        self.in_flight.remove(&completion.location);
+        self.submitted_decodes.remove(&completion.location);
         // A retired generation never wraps and carries no pixels; redo like a cancelled decode.
         if completion
             .texture
@@ -1444,7 +1444,7 @@ impl ImageCore {
                 continue;
             }
             awaiting_probes = true;
-            if !self.probes_in_flight.contains_key(&entry.location) {
+            if !self.submitted_probes.contains_key(&entry.location) {
                 let location = entry.location.clone();
                 self.submit_probe(location);
             }
@@ -1458,7 +1458,7 @@ impl ImageCore {
                 let entry = &self.entries[index];
                 match entry.weight {
                     DecodedWeight::Known(weight)
-                        if !self.in_flight.contains_key(&entry.location)
+                        if !self.submitted_decodes.contains_key(&entry.location)
                             && !self
                                 .cache
                                 .get(&entry.location)
@@ -1488,10 +1488,10 @@ impl ImageCore {
         }
     }
 
-    /// Registers the probe in flight; it reads only the header.
+    /// Registers the probe as submitted; it reads only the header.
     fn submit_probe(&mut self, location: ItemLocation) {
         let cancellation = Arc::new(AtomicBool::new(false));
-        self.probes_in_flight
+        self.submitted_probes
             .insert(location.clone(), cancellation.clone());
         self.pool.submit(
             location,
@@ -1504,7 +1504,7 @@ impl ImageCore {
 
     /// Records an arrived probe; a stale location misses the listing lookup.
     pub fn on_probe_complete(&mut self, completion: ProbeCompletion) {
-        self.probes_in_flight.remove(&completion.location);
+        self.submitted_probes.remove(&completion.location);
         if !completion.cancelled
             && let Some(index) = self.position_of(&completion.location)
         {
@@ -1514,7 +1514,7 @@ impl ImageCore {
             };
         }
         // The budget pass waits for the whole target set; sweep once it settles.
-        if self.probes_in_flight.is_empty() {
+        if self.submitted_probes.is_empty() {
             self.refresh_preload();
         }
     }
@@ -1545,7 +1545,7 @@ impl ImageCore {
             .map(|(location, entry)| self.cached_weight(location, entry))
             .sum();
         let submitted: u64 = self
-            .in_flight
+            .submitted_decodes
             .keys()
             .filter(|location| !self.cache.contains_key(location))
             .map(|location| self.listed_weight(location).unwrap_or(0))
@@ -1593,10 +1593,11 @@ impl ImageCore {
     /// Cancels queued or running decodes and probes outside the residency set.
     fn cancel_decodes_outside(&mut self, targets: &HashSet<ItemLocation>) {
         for location in self.pool.remove_queued_except(targets) {
-            self.in_flight.remove(&location);
-            self.probes_in_flight.remove(&location);
+            self.submitted_decodes.remove(&location);
+            self.submitted_probes.remove(&location);
         }
-        for (location, cancellation) in self.in_flight.iter().chain(&self.probes_in_flight) {
+        for (location, cancellation) in self.submitted_decodes.iter().chain(&self.submitted_probes)
+        {
             if !targets.contains(location) {
                 cancellation.store(true, Ordering::Relaxed);
             }
