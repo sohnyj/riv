@@ -362,8 +362,13 @@ impl FrameCompositor {
         }
     }
 
+    /// Over the budget the animation collapses to its first frame, the same for every format.
     pub fn finish(self) -> (Vec<Frame>, bool) {
-        (self.frames, self.truncated)
+        let mut frames = self.frames;
+        if self.truncated {
+            frames.truncate(1);
+        }
+        (frames, self.truncated)
     }
 }
 
@@ -2458,10 +2463,7 @@ fn decode_apng<Input: BufRead + Seek>(
                 .max(10),
         });
     }
-    let (mut frames, frames_truncated) = compositor.finish();
-    if frames_truncated {
-        frames.truncate(1);
-    }
+    let (frames, frames_truncated) = compositor.finish();
     Ok(DecodedImage {
         width: canvas_width,
         height: canvas_height,
@@ -2880,7 +2882,7 @@ mod compositor_tests {
     }
 
     #[test]
-    fn frames_past_the_byte_budget_are_refused_and_marked() {
+    fn frames_past_the_byte_budget_collapse_to_the_first() {
         // One frame of this canvas is a quarter of the budget, so the fifth cannot join.
         let side = 8192;
         let mut compositor = FrameCompositor::new(side, side).expect("canvas");
@@ -2890,7 +2892,7 @@ mod compositor_tests {
         }
         assert!(!compositor.accepts_one_more());
         let (frames, truncated) = compositor.finish();
-        assert_eq!(frames.len(), 4);
+        assert_eq!(frames.len(), 1);
         assert!(truncated);
     }
 
