@@ -2134,6 +2134,21 @@ fn decode_animation(
     })
 }
 
+/// The part of a `width` x `height` rectangle at (`left`, `top`) that lies on the canvas.
+fn visible_rectangle(
+    canvas_width: u32,
+    canvas_height: u32,
+    width: u32,
+    height: u32,
+    left: u32,
+    top: u32,
+) -> Option<(usize, usize)> {
+    let visible_width = width.min(canvas_width.saturating_sub(left)) as usize;
+    let visible_height = height.min(canvas_height.saturating_sub(top)) as usize;
+    // An off-canvas offset clips everything; the row start would still index past the end.
+    (visible_width > 0 && visible_height > 0).then_some((visible_width, visible_height))
+}
+
 /// Premultiplied source-over blend, clipped to the canvas.
 #[expect(clippy::too_many_arguments)]
 fn blend_over(
@@ -2146,12 +2161,16 @@ fn blend_over(
     left: u32,
     top: u32,
 ) {
-    let visible_width = source_width.min(canvas_width.saturating_sub(left)) as usize;
-    let visible_height = source_height.min(canvas_height.saturating_sub(top)) as usize;
-    if visible_width == 0 || visible_height == 0 {
-        // An off-canvas offset clips everything; the row start would still index past the end.
+    let Some((visible_width, visible_height)) = visible_rectangle(
+        canvas_width,
+        canvas_height,
+        source_width,
+        source_height,
+        left,
+        top,
+    ) else {
         return;
-    }
+    };
     for row in 0..visible_height {
         let source_start = row * source_width as usize * 4;
         let canvas_start = ((top as usize + row) * canvas_width as usize + left as usize) * 4;
@@ -2183,13 +2202,13 @@ fn clear_rectangle(
     if canvas_width == 0 {
         return; // a zero-width canvas has nothing to clear and would divide by zero
     }
-    let canvas_height = canvas.len() / (canvas_width as usize * 4);
-    let visible_width = width.min(canvas_width.saturating_sub(left)) as usize;
-    let visible_height = (height as usize).min(canvas_height.saturating_sub(top as usize));
-    if visible_width == 0 || visible_height == 0 {
-        // An off-canvas offset clips everything; the row start would still index past the end.
+    // The canvas came from FrameCompositor::new, whose dimensions both fit u32.
+    let canvas_height = (canvas.len() / (canvas_width as usize * 4)) as u32;
+    let Some((visible_width, visible_height)) =
+        visible_rectangle(canvas_width, canvas_height, width, height, left, top)
+    else {
         return;
-    }
+    };
     for row in 0..visible_height {
         let start = ((top as usize + row) * canvas_width as usize + left as usize) * 4;
         canvas[start..start + visible_width * 4].fill(0);
@@ -2528,12 +2547,16 @@ fn copy_rectangle(
     left: u32,
     top: u32,
 ) {
-    let visible_width = source_width.min(canvas_width.saturating_sub(left)) as usize;
-    let visible_height = source_height.min(canvas_height.saturating_sub(top)) as usize;
-    if visible_width == 0 || visible_height == 0 {
-        // An off-canvas offset clips everything; the row start would still index past the end.
+    let Some((visible_width, visible_height)) = visible_rectangle(
+        canvas_width,
+        canvas_height,
+        source_width,
+        source_height,
+        left,
+        top,
+    ) else {
         return;
-    }
+    };
     for row in 0..visible_height {
         let source_start = row * source_width as usize * 4;
         let canvas_start = ((top as usize + row) * canvas_width as usize + left as usize) * 4;
