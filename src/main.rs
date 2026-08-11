@@ -2412,7 +2412,11 @@ extern "system" fn window_procedure(
             LRESULT(0)
         }
         WM_APP_DECODE_COMPLETE => {
-            let completion = unsafe { Box::from_raw(lparam.0 as *mut DecodeCompletion) };
+            let Some(completion) =
+                (unsafe { window::message::take_boxed::<DecodeCompletion>(message, lparam) })
+            else {
+                return LRESULT(0);
+            };
             if let Some(application) = application_from_window(window) {
                 match application.image_core.on_decode_complete(*completion) {
                     Some(outcome) => application.apply_load_outcome(window, outcome),
@@ -2423,21 +2427,33 @@ extern "system" fn window_procedure(
             LRESULT(0)
         }
         WM_APP_DOWNLOAD_PROGRESS => {
-            let progress = unsafe { Box::from_raw(lparam.0 as *mut DownloadProgress) };
+            let Some(progress) =
+                (unsafe { window::message::take_boxed::<DownloadProgress>(message, lparam) })
+            else {
+                return LRESULT(0);
+            };
             if let Some(application) = application_from_window(window) {
                 application.apply_download_progress(window, *progress);
             }
             LRESULT(0)
         }
         WM_APP_PROBE_COMPLETE => {
-            let completion = unsafe { Box::from_raw(lparam.0 as *mut ProbeCompletion) };
+            let Some(completion) =
+                (unsafe { window::message::take_boxed::<ProbeCompletion>(message, lparam) })
+            else {
+                return LRESULT(0);
+            };
             if let Some(application) = application_from_window(window) {
                 application.image_core.on_probe_complete(*completion);
             }
             LRESULT(0)
         }
         WM_APP_LISTING_READY => {
-            let scan = unsafe { Box::from_raw(lparam.0 as *mut ScannedListing) };
+            let Some(scan) =
+                (unsafe { window::message::take_boxed::<ScannedListing>(message, lparam) })
+            else {
+                return LRESULT(0);
+            };
             if let Some(application) = application_from_window(window) {
                 match application.image_core.install_listing_scan(*scan) {
                     ListingInstall::Discarded => {}
@@ -2454,7 +2470,11 @@ extern "system" fn window_procedure(
             LRESULT(0)
         }
         WM_APP_DROP_PATHS => {
-            let paths = unsafe { Box::from_raw(lparam.0 as *mut Vec<std::path::PathBuf>) };
+            let Some(paths) =
+                (unsafe { window::message::take_boxed::<Vec<PathBuf>>(message, lparam) })
+            else {
+                return LRESULT(0);
+            };
             for rest in paths.iter().skip(1) {
                 open_in_new_window(rest);
             }
@@ -2466,7 +2486,13 @@ extern "system" fn window_procedure(
             LRESULT(0)
         }
         WM_APP_OPTIONS_APPLIED => {
-            let payload = unsafe { &*(lparam.0 as *const dialogs::options::AppliedOptions) };
+            let Some(payload) = (unsafe {
+                window::message::borrowed_payload::<dialogs::options::AppliedOptions>(
+                    message, lparam,
+                )
+            }) else {
+                return LRESULT(0);
+            };
             if let Some(application) = application_from_window(window) {
                 application.settings.set_options(&payload.options);
                 application
@@ -2556,7 +2582,11 @@ extern "system" fn window_procedure(
             LRESULT(0)
         }
         WM_APP_OPEN_WITH_LIST => {
-            let list = unsafe { Box::from_raw(lparam.0 as *mut OpenWithList) };
+            let Some(list) =
+                (unsafe { window::message::take_boxed::<OpenWithList>(message, lparam) })
+            else {
+                return LRESULT(0);
+            };
             if let Some(application) = application_from_window(window) {
                 application.open_with_pending_extension = None;
                 application

@@ -537,14 +537,7 @@ fn apply(state: &mut OptionsState) {
             .map(|row| (row.action.name().to_string(), row.mouse.clone()))
             .collect(),
     };
-    unsafe {
-        SendMessageW(
-            state.parent,
-            WM_APP_OPTIONS_APPLIED,
-            None,
-            Some(LPARAM(&raw const payload as isize)),
-        )
-    };
+    crate::window::message::send_borrowed(state.parent, WM_APP_OPTIONS_APPLIED, &payload);
     state.saved_options = state.transient_options.clone();
     state.saved_shortcuts = state.transient_shortcuts.clone();
     update_buttons(state);

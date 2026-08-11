@@ -1,11 +1,38 @@
 //! Sending work to the window's message queue, and reading what a message packs.
 
-use windows::Win32::Foundation::{HWND, LPARAM, WPARAM};
-use windows::Win32::UI::WindowsAndMessaging::PostMessageW;
+use std::collections::HashMap;
+use std::sync::{LazyLock, Mutex};
+
+use windows::Win32::Foundation::{HWND, LPARAM, LRESULT, WPARAM};
+use windows::Win32::UI::WindowsAndMessaging::{PostMessageW, SendMessageW};
+
+/// Payload pointers handed to the window, each with the message it went out with.
+static SENT_PAYLOADS: LazyLock<Mutex<HashMap<usize, u32>>> =
+    LazyLock::new(|| Mutex::new(HashMap::new()));
+
+fn remember(pointer: usize, message: u32) {
+    if let Ok(mut payloads) = SENT_PAYLOADS.lock() {
+        payloads.insert(pointer, message);
+    }
+}
+
+fn forget(pointer: usize) {
+    if let Ok(mut payloads) = SENT_PAYLOADS.lock() {
+        payloads.remove(&pointer);
+    }
+}
+
+/// Whether this pointer went out with this message.
+fn was_sent(pointer: usize, message: u32) -> bool {
+    SENT_PAYLOADS
+        .lock()
+        .is_ok_and(|payloads| payloads.get(&pointer) == Some(&message))
+}
 
 /// Posts an owned payload; reclaims it when the message cannot be delivered.
 pub fn post_boxed<T>(window: isize, message: u32, payload: Box<T>) {
     let pointer = Box::into_raw(payload);
+    remember(pointer as usize, message);
     let posted = unsafe {
         PostMessageW(
             Some(HWND(window as *mut core::ffi::c_void)),
@@ -15,8 +42,34 @@ pub fn post_boxed<T>(window: isize, message: u32, payload: Box<T>) {
         )
     };
     if posted.is_err() {
+        forget(pointer as usize);
         drop(unsafe { Box::from_raw(pointer) });
     }
+}
+
+/// The posted payload, or None when that pointer never went out with this message; `T` must match.
+pub unsafe fn take_boxed<T>(message: u32, lparam: LPARAM) -> Option<Box<T>> {
+    let pointer = lparam.0 as usize;
+    if !was_sent(pointer, message) {
+        return None;
+    }
+    forget(pointer);
+    Some(unsafe { Box::from_raw(pointer as *mut T) })
+}
+
+/// Sends a borrowed payload, readable by the handler for the length of the call.
+pub fn send_borrowed<T>(window: HWND, message: u32, payload: &T) -> LRESULT {
+    let pointer = std::ptr::from_ref(payload) as usize;
+    remember(pointer, message);
+    let result = unsafe { SendMessageW(window, message, None, Some(LPARAM(pointer as isize))) };
+    forget(pointer);
+    result
+}
+
+/// The sent payload, or None when that pointer never went out with this message; `T` must match.
+pub unsafe fn borrowed_payload<'payload, T>(message: u32, lparam: LPARAM) -> Option<&'payload T> {
+    let pointer = lparam.0 as usize;
+    was_sent(pointer, message).then(|| unsafe { &*(pointer as *const T) })
 }
 
 /// Low 16 bits of a packed message parameter.
@@ -40,4 +93,27 @@ pub fn point_from_packed(value: usize) -> (i32, i32) {
         i32::from(low_word(value) as u16 as i16),
         i32::from(high_word_signed(value)),
     )
+}
+
+#[cfg(test)]
+mod payload_tests {
+    use super::*;
+
+    #[test]
+    fn a_pointer_that_never_went_out_is_refused() {
+        // What a stray PostMessage from another process delivers; nothing may be read from it.
+        let stray = LPARAM(0x1234_5678);
+        assert!(unsafe { take_boxed::<u64>(0x8001, stray) }.is_none());
+        assert!(unsafe { borrowed_payload::<u64>(0x8001, stray) }.is_none());
+    }
+
+    #[test]
+    fn a_payload_belongs_to_the_message_it_went_out_with() {
+        let pointer = Box::into_raw(Box::new(7u64));
+        remember(pointer as usize, 0x8001);
+        let lparam = LPARAM(pointer as isize);
+        assert!(unsafe { take_boxed::<u64>(0x8002, lparam) }.is_none());
+        let taken = unsafe { take_boxed::<u64>(0x8001, lparam) };
+        assert_eq!(taken.as_deref(), Some(&7));
+    }
 }
