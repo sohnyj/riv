@@ -298,8 +298,8 @@ pub fn decode_exr_bytes(
     )
 }
 
-/// Size policy for EXR: past this the decode is refused instead of reserving for it.
-const MAXIMUM_EXR_PIXELS: usize = 1 << 30;
+/// Size policy for the bundled decoders: past this the decode is refused instead of reserving for it.
+const MAXIMUM_FALLBACK_PIXELS: usize = 1 << 30;
 
 /// The probe sizes the buffer the shim decodes into, so no pixels are copied across the boundary.
 fn decode_exr_with(
@@ -311,7 +311,7 @@ fn decode_exr_with(
         return Err(uncoded_error("EXR header is unreadable"));
     };
     let pixel_count = probed_width as usize * probed_height as usize;
-    if pixel_count > MAXIMUM_EXR_PIXELS {
+    if pixel_count > MAXIMUM_FALLBACK_PIXELS {
         return Err(uncoded_error("EXR has too many pixels to decode"));
     }
     // Fallible reservation: vec! aborts on OOM; a huge EXR should error, not crash.
@@ -592,7 +592,20 @@ fn decode_heif_primary_image(
         return Err(uncoded_error("HEIF image plane unavailable"));
     }
     let row_bytes = row_bytes as usize;
-    let mut pixels = vec![0u8; row_bytes * height as usize];
+    let pixel_count = width as usize * height as usize;
+    if pixel_count > MAXIMUM_FALLBACK_PIXELS {
+        unsafe { heif_image_release(image) };
+        return Err(uncoded_error("HEIF has too many pixels to decode"));
+    }
+    // The cap bounds pixel_count, so row_bytes * height cannot overflow usize here.
+    let total_bytes = row_bytes * height as usize;
+    // Fallible reservation: vec! aborts on OOM; a huge HEIF should error, not crash.
+    let mut pixels: Vec<u8> = Vec::new();
+    if pixels.try_reserve_exact(total_bytes).is_err() {
+        unsafe { heif_image_release(image) };
+        return Err(uncoded_error("HEIF is too large to fit in memory"));
+    }
+    pixels.resize(total_bytes, 0);
     for (row, output_row) in pixels.chunks_exact_mut(row_bytes).enumerate() {
         let row_pointer = unsafe { plane.add(row * stride as usize) };
         let row_pixels = unsafe { std::slice::from_raw_parts(row_pointer, row_bytes) };
