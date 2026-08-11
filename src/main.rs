@@ -1904,7 +1904,7 @@ fn show_menu(application: &mut Application, window: HWND, x: i32, y: i32, target
     let playlist = application
         .image_core
         .playlist_window(context_menu::playlist_capacity(window));
-    // The menu pumps messages, so what each label points at is kept beside the labels.
+    // The menu pumps messages, so selections resolve against this snapshot, not the live listing.
     let playlist_locations = playlist.locations;
     let recent_paths: Vec<String> = application
         .settings

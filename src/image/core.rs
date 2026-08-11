@@ -391,7 +391,7 @@ impl ImageReleaser {
 pub struct PlaylistWindow {
     /// What the menu shows and acts on; each label derives from its location.
     pub locations: Vec<ItemLocation>,
-    /// Absolute index of the first shown name; doubles as the count hidden before it.
+    /// Absolute index of the first shown entry; doubles as the count hidden before it.
     pub first_index: usize,
     pub current_slot: Option<usize>,
     pub hidden_after: usize,
@@ -639,7 +639,7 @@ impl ImageCore {
         }
     }
 
-    /// Listing window for the menu: `capacity` names centered on the anchor, the rest a count.
+    /// Listing window for the menu: `capacity` entries centered on the anchor, the rest a count.
     pub fn playlist_window(&self, capacity: usize) -> PlaylistWindow {
         let total = self.entries.len();
         let anchor = self.anchor_index();
