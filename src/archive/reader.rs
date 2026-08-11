@@ -31,10 +31,23 @@ pub fn format_groups() -> impl Iterator<Item = (&'static str, &'static [&'static
     FORMAT_GROUPS.iter().copied()
 }
 
-pub fn is_archive_extension(extension: &str) -> bool {
+fn is_archive_extension(extension: &str) -> bool {
     FORMAT_GROUPS
         .iter()
         .any(|(_, extensions)| extensions.contains(&extension))
+}
+
+/// Whether a path names an archive; the extension decides, as it does everywhere here.
+pub fn path_is_archive(path: &Path) -> bool {
+    crate::text::lowercase_extension(path)
+        .as_deref()
+        .is_some_and(is_archive_extension)
+}
+
+/// The same question for a URL, whose extension comes out of its last path segment.
+pub fn url_is_archive(url: &str) -> bool {
+    crate::network::curl::extension_lowercase(url)
+        .is_some_and(|extension| is_archive_extension(&extension))
 }
 
 /// False when archiveint.dll (Windows 11 23H2+) is unavailable.

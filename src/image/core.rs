@@ -693,10 +693,7 @@ impl ImageCore {
             return Some(self.load_url(url));
         }
         if let ItemLocation::File(path) = &location
-            && location
-                .extension_lowercase()
-                .as_deref()
-                .is_some_and(archive_reader::is_archive_extension)
+            && archive_reader::path_is_archive(path)
         {
             // An archive anchor retries through its scan, like a URL revalidates.
             let scope = ListingScope::Archive(path.clone());
@@ -723,11 +720,7 @@ impl ImageCore {
             });
             return LoadOutcome::Pending;
         }
-        let extension = crate::text::lowercase_extension(&path);
-        if extension
-            .as_deref()
-            .is_some_and(archive_reader::is_archive_extension)
-        {
+        if archive_reader::path_is_archive(&path) {
             self.submit_scan(PendingScan {
                 scope: ListingScope::Archive(path),
                 purpose: ScanPurpose::OpenFirstEntry,
@@ -912,9 +905,7 @@ impl ImageCore {
             Some("Unsupported URL protocol")
         } else if !curl::available() {
             Some("URL support is unavailable on this Windows")
-        } else if curl::extension_lowercase(url)
-            .is_some_and(|extension| archive_reader::is_archive_extension(&extension))
-        {
+        } else if archive_reader::url_is_archive(url) {
             Some("Archives are not supported from a URL")
         } else {
             None
