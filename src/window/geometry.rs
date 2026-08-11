@@ -1,15 +1,13 @@
 //! Where the window sits and how big it is at its own DPI.
 
 use windows::Win32::Foundation::{HWND, RECT};
-use windows::Win32::Graphics::Gdi::{MONITOR_DEFAULTTONULL, MonitorFromRect};
 use windows::Win32::UI::HiDpi::{AdjustWindowRectExForDpi, GetDpiForWindow};
 use windows::Win32::UI::WindowsAndMessaging::{
     GWL_STYLE, GetWindowLongPtrW, SPI_GETWORKAREA, SYSTEM_PARAMETERS_INFO_UPDATE_FLAGS,
     SystemParametersInfoW, WINDOW_EX_STYLE, WINDOW_STYLE,
 };
 
-/// Centered origin within the primary work area, when available.
-pub fn work_area_centered_origin(width: i32, height: i32) -> Option<(i32, i32)> {
+fn primary_work_area() -> Option<RECT> {
     let mut work_area = RECT::default();
     unsafe {
         SystemParametersInfoW(
@@ -20,15 +18,16 @@ pub fn work_area_centered_origin(width: i32, height: i32) -> Option<(i32, i32)> 
         )
     }
     .ok()?;
+    Some(work_area)
+}
+
+/// Centered origin within the primary work area, when available.
+pub fn work_area_centered_origin(width: i32, height: i32) -> Option<(i32, i32)> {
+    let work_area = primary_work_area()?;
     Some((
         work_area.left + (work_area.right - work_area.left - width).max(0) / 2,
         work_area.top + (work_area.bottom - work_area.top - height).max(0) / 2,
     ))
-}
-
-/// Whether any display still covers part of the rect; a display can be unplugged between runs.
-pub fn rect_intersects_a_monitor(bounds: RECT) -> bool {
-    !unsafe { MonitorFromRect(&raw const bounds, MONITOR_DEFAULTTONULL) }.is_invalid()
 }
 
 /// The window's dots per inch, falling back to the screen default when the query fails.

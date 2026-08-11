@@ -612,10 +612,6 @@ impl Application {
             right: x + width,
             bottom: y + height,
         };
-        // The display that held the window can be gone; its coordinates would strand the window.
-        if !window::geometry::rect_intersects_a_monitor(saved_bounds) {
-            return;
-        }
         if maximized {
             // The restore rect a placement carries is in workspace coordinates, as it was saved.
             let placement = WINDOWPLACEMENT {
