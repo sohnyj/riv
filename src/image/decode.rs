@@ -2254,6 +2254,14 @@ fn decode_apng<Input: BufRead + Seek>(
         let information = reader.info();
         (information.width, information.height)
     };
+    // Untrusted IHDR: refuse an over-budget canvas up front, which also bounds the frame buffer.
+    let Some(canvas_bytes) = (canvas_width as usize)
+        .checked_mul(canvas_height as usize)
+        .and_then(|pixels| pixels.checked_mul(4))
+        .filter(|bytes| !animation_budget_exceeded(1, *bytes))
+    else {
+        return Err(uncoded_error("APNG canvas is too large to decode"));
+    };
     let icc_profile = reader
         .info()
         .icc_profile
@@ -2275,7 +2283,11 @@ fn decode_apng<Input: BufRead + Seek>(
         reader.next_frame(&mut buffer).map_err(uncoded_error)?;
     }
 
-    let mut canvas = vec![0u8; canvas_width as usize * canvas_height as usize * 4];
+    let mut canvas: Vec<u8> = Vec::new();
+    if canvas.try_reserve_exact(canvas_bytes).is_err() {
+        return Err(uncoded_error("APNG canvas is too large to fit in memory"));
+    }
+    canvas.resize(canvas_bytes, 0);
     // The png crate accepts acTL num_frames up to i32::MAX; cap the reservation.
     let mut frames = Vec::with_capacity((animation_frame_count as usize).min(4096));
     let mut frames_truncated = false;
@@ -2644,6 +2656,44 @@ fn copy_pixels_into(
 #[cfg(test)]
 mod compositor_tests {
     use super::*;
+    use std::io::Cursor;
+    use std::sync::atomic::AtomicBool;
+
+    /// CRC-32 over an APNG/PNG chunk's type and data (polynomial 0xEDB88320).
+    fn png_chunk_crc(bytes: &[u8]) -> u32 {
+        let mut crc = 0xFFFF_FFFFu32;
+        for &byte in bytes {
+            crc ^= u32::from(byte);
+            for _ in 0..8 {
+                crc = if crc & 1 != 0 {
+                    (crc >> 1) ^ 0xEDB8_8320
+                } else {
+                    crc >> 1
+                };
+            }
+        }
+        crc ^ 0xFFFF_FFFF
+    }
+
+    #[test]
+    fn an_oversized_apng_header_is_refused_without_aborting() {
+        // A real 1x1 PNG with its IHDR rewritten to an oversized canvas; the decode must refuse it.
+        let mut png = Vec::new();
+        {
+            let mut encoder = png::Encoder::new(&mut png, 1, 1);
+            encoder.set_color(png::ColorType::Rgba);
+            encoder.set_depth(png::BitDepth::Eight);
+            let mut writer = encoder.write_header().expect("header");
+            writer.write_image_data(&[0, 0, 0, 0]).expect("pixels");
+        }
+        // IHDR data begins after the 8-byte signature and the length+type fields.
+        png[16..20].copy_from_slice(&60000u32.to_be_bytes());
+        png[20..24].copy_from_slice(&60000u32.to_be_bytes());
+        let crc = png_chunk_crc(&png[12..29]);
+        png[29..33].copy_from_slice(&crc.to_be_bytes());
+        let result = decode_apng(Cursor::new(png), "PNG", &AtomicBool::new(false));
+        assert!(result.is_err(), "oversized canvas must fail closed");
+    }
 
     #[test]
     fn frames_placed_past_the_canvas_edge_are_clipped_without_panicking() {
