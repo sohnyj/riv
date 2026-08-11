@@ -30,7 +30,9 @@ impl Animation {
 
     /// A frame delay at the current speed, floored at 1ms.
     fn scaled_delay(&self, delay: u32) -> u32 {
-        (delay.max(1) * 100 / self.speed_percent).max(1)
+        // u64 arithmetic: a delay past about twelve hours overflows the u32 multiply by 100.
+        let scaled = u64::from(delay.max(1)) * 100 / u64::from(self.speed_percent);
+        scaled.clamp(1, u64::from(u32::MAX)) as u32
     }
 
     pub fn current_delay_milliseconds(&self) -> u32 {
@@ -74,5 +76,22 @@ impl Animation {
 
     pub fn reset_speed(&mut self) {
         self.speed_percent = SPEED_DEFAULT_PERCENT;
+    }
+}
+
+#[cfg(test)]
+mod delay_tests {
+    use super::*;
+
+    #[test]
+    fn a_long_frame_delay_scales_without_overflowing() {
+        // An APNG frame can declare 65535 seconds, whose multiply by 100 leaves u32.
+        let animation = Animation {
+            frame_delays_milliseconds: vec![65_535_000],
+            frame_index: 0,
+            paused: false,
+            speed_percent: SPEED_MINIMUM_PERCENT,
+        };
+        assert_eq!(animation.current_delay_milliseconds(), 131_070_000);
     }
 }
