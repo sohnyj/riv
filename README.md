@@ -24,7 +24,7 @@ A fast, precise, minimal image viewer for Windows.
 - Application
   - Customizable keyboard and mouse shortcuts
   - Per-extension file associations, reversible with no registry leftovers
-  - Single portable executable (~7 MB), no installation
+  - Single portable executable, no installation
   - Settings stored in `riv.json` next to `riv.exe`
 
 Running as administrator is blocked at startup.

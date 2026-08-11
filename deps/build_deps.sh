@@ -20,6 +20,8 @@ configure_and_install() { # <directory> [extra cmake args...]
     shift
     cmake -S "sources/$directory" -B "build/$directory" -G Ninja \
         -DCMAKE_BUILD_TYPE=Release \
+        -DCMAKE_C_FLAGS_RELEASE="/clang:-O3 /DNDEBUG" \
+        -DCMAKE_CXX_FLAGS_RELEASE="/clang:-O3 /DNDEBUG" \
         -DCMAKE_TOOLCHAIN_FILE="$ROOT/toolchain-clang-cl.cmake" \
         -DCMAKE_INSTALL_PREFIX="$PREFIX" \
         -DCMAKE_FIND_ROOT_PATH="$PREFIX" \
@@ -111,6 +113,8 @@ clone openexr https://github.com/AcademySoftwareFoundation/openexr.git release
 # EXR shim: expose the C++ RgbaInputFile through extern "C"
 cmake -S shim -B build/shim -G Ninja \
     -DCMAKE_BUILD_TYPE=Release \
+    -DCMAKE_C_FLAGS_RELEASE="/clang:-O3 /DNDEBUG" \
+    -DCMAKE_CXX_FLAGS_RELEASE="/clang:-O3 /DNDEBUG" \
     -DCMAKE_TOOLCHAIN_FILE="$ROOT/toolchain-clang-cl.cmake" \
     -DCMAKE_INSTALL_PREFIX="$PREFIX" \
     -DCMAKE_FIND_ROOT_PATH="$PREFIX" \
