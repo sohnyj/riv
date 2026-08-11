@@ -959,14 +959,21 @@ pub fn is_two_stage_preview(path: &Path) -> bool {
 
 /// The preview stage of a two-stage file: a RAW embedded preview or a sub-resolution pass.
 pub fn decode_two_stage_preview(path: &Path, cancellation: &AtomicBool) -> Option<DecodedImage> {
-    match descriptor_for_path_extension(path)?.adapter {
-        Adapter::WicRawTwoStage => decode_raw_preview(path, cancellation),
-        Adapter::WicSubresolutionTwoStage => decode_subresolution_preview(path, cancellation),
+    let descriptor = descriptor_for_path_extension(path)?;
+    match descriptor.adapter {
+        Adapter::WicRawTwoStage => decode_raw_preview(path, descriptor.name, cancellation),
+        Adapter::WicSubresolutionTwoStage => {
+            decode_subresolution_preview(path, descriptor.name, cancellation)
+        }
         _ => None,
     }
 }
 
-fn decode_raw_preview(path: &Path, cancellation: &AtomicBool) -> Option<DecodedImage> {
+fn decode_raw_preview(
+    path: &Path,
+    format_name: &'static str,
+    cancellation: &AtomicBool,
+) -> Option<DecodedImage> {
     let decoded = with_wic_factory(|factory| {
         let decoder = create_wic_decoder(factory, &DecodeInput::File(path))?;
         let preview =
@@ -992,7 +999,7 @@ fn decode_raw_preview(path: &Path, cancellation: &AtomicBool) -> Option<DecodedI
             height,
             pixel_width,
             pixel_height,
-            format_name: "RAW",
+            format_name,
             icc_profile,
             exif,
             storage: PixelStorage::Bgra8,
@@ -1038,8 +1045,11 @@ fn pixel_format_bits_per_pixel(
 }
 
 /// Decodes a display-sized stand-in through the decoder's native scaler; None keeps one stage.
-fn decode_subresolution_preview(path: &Path, cancellation: &AtomicBool) -> Option<DecodedImage> {
-    let format_name = descriptor_for_path_extension(path)?.name;
+fn decode_subresolution_preview(
+    path: &Path,
+    format_name: &'static str,
+    cancellation: &AtomicBool,
+) -> Option<DecodedImage> {
     let decoded = with_wic_factory(|factory| {
         let decoder = create_wic_decoder(factory, &DecodeInput::File(path))?;
         let frame = unsafe { decoder.GetFrame(0)? };
