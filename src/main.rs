@@ -107,7 +107,11 @@ const ANIMATION_TIMER: usize = 3;
 const CURSOR_HIDE_TIMER: usize = 4;
 const FULL_DECODE_TIMER: usize = 5;
 
+/// How far an action-driven pan moves, in device pixels.
 const PAN_STEP: f32 = 64.0;
+
+/// A wheel-driven pan moves half the delta, so a 120-unit notch moves 60 device pixels.
+const WHEEL_PAN_DIVISOR: f32 = 2.0;
 
 /// Smallest client area a resize may reach, in logical pixels before DPI scaling.
 const MINIMUM_CLIENT_SIZE: (i32, i32) = (320, 240);
@@ -2035,7 +2039,7 @@ fn handle_wheel(application: &mut Application, window: HWND, wheel_delta: i16) {
     }
     // The wheel sets its own distance; the action still owns the axis and the sign.
     if let Some((x, y)) = action.pan_direction() {
-        let distance = f32::from(wheel_delta.abs()) / 2.0;
+        let distance = f32::from(wheel_delta.abs()) / WHEEL_PAN_DIVISOR;
         application.pan_by(window, x * distance, y * distance);
         return;
     }
@@ -2626,7 +2630,8 @@ extern "system" fn window_procedure(
         WM_MOUSEHWHEEL => {
             if let Some(application) = application_from_window(window) {
                 let delta = high_word_signed(wparam.0);
-                application.pan_by(window, f32::from(delta) / -2.0, 0.0);
+                // Natural direction: a scroll to the right moves the image left.
+                application.pan_by(window, -(f32::from(delta) / WHEEL_PAN_DIVISOR), 0.0);
             }
             LRESULT(0)
         }
