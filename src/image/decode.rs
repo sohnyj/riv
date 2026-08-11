@@ -244,6 +244,14 @@ pub(crate) fn animation_budget_exceeded(frame_count: u64, canvas_bytes: usize) -
     frame_count * canvas_bytes as u64 > ANIMATION_FRAMES_BYTE_LIMIT
 }
 
+/// A zeroed buffer of `bytes`, or None when memory runs short; vec! would abort on OOM.
+pub(crate) fn try_zeroed_buffer(bytes: usize) -> Option<Vec<u8>> {
+    let mut buffer = Vec::new();
+    buffer.try_reserve_exact(bytes).ok()?;
+    buffer.resize(bytes, 0);
+    Some(buffer)
+}
+
 /// How a frame's pixels take the canvas: over what is there, or in place of it.
 #[derive(Clone, Copy, PartialEq)]
 pub enum FrameBlend {
@@ -287,9 +295,7 @@ impl FrameCompositor {
             .checked_mul(height as usize)?
             .checked_mul(4)
             .filter(|bytes| !animation_budget_exceeded(1, *bytes))?;
-        let mut canvas = Vec::new();
-        canvas.try_reserve_exact(bytes).ok()?;
-        canvas.resize(bytes, 0);
+        let canvas = try_zeroed_buffer(bytes)?;
         Some(Self {
             canvas,
             width,

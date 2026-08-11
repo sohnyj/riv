@@ -8,7 +8,7 @@ use crate::image::decode::{
     DecodeError, DecodedImage, Frame, FrameBlend, FrameCompositor, FrameDisposal, FrameRegion,
     HdrEncoding, PixelStorage, cicp_hdr_encoding, linearize_hdr_pixels,
     peak_luminance_from_half_pixels, peak_luminance_with_maximum_bits,
-    premultiplied_bgra_from_rgba, uncoded_error,
+    premultiplied_bgra_from_rgba, try_zeroed_buffer, uncoded_error,
 };
 
 /// Must match the built libwebpdemux ABI or WebPDemuxInternal returns null.
@@ -297,13 +297,10 @@ fn decode_exr_with(
     if pixel_count > MAXIMUM_FALLBACK_PIXELS {
         return Err(uncoded_error("EXR has too many pixels to decode"));
     }
-    // Fallible reservation: vec! aborts on OOM; a huge EXR should error, not crash.
-    let mut pixels: Vec<u8> = Vec::new();
-    if pixels.try_reserve_exact(pixel_count * 8).is_err() {
-        return Err(uncoded_error("EXR is too large to fit in memory"));
-    }
     // The shim writes associated-alpha linear RGBA halves (the FP16 storage layout).
-    pixels.resize(pixel_count * 8, 0);
+    let Some(mut pixels) = try_zeroed_buffer(pixel_count * 8) else {
+        return Err(uncoded_error("EXR is too large to fit in memory"));
+    };
     let mut width: c_int = 0;
     let mut height: c_int = 0;
     let mut error_message = [0u8; 256];
@@ -582,13 +579,10 @@ fn decode_heif_primary_image(
     }
     // The cap bounds pixel_count, so row_bytes * height cannot overflow usize here.
     let total_bytes = row_bytes * height as usize;
-    // Fallible reservation: vec! aborts on OOM; a huge HEIF should error, not crash.
-    let mut pixels: Vec<u8> = Vec::new();
-    if pixels.try_reserve_exact(total_bytes).is_err() {
+    let Some(mut pixels) = try_zeroed_buffer(total_bytes) else {
         unsafe { heif_image_release(image) };
         return Err(uncoded_error("HEIF is too large to fit in memory"));
-    }
-    pixels.resize(total_bytes, 0);
+    };
     for (row, output_row) in pixels.chunks_exact_mut(row_bytes).enumerate() {
         let row_pointer = unsafe { plane.add(row * stride as usize) };
         let row_pixels = unsafe { std::slice::from_raw_parts(row_pointer, row_bytes) };
