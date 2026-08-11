@@ -128,11 +128,13 @@ impl Options {
                 .and_then(Value::as_bool)
                 .unwrap_or(fallback)
         };
+        // Narrowing before the range checks would wrap a large stored value into them.
         let unsigned = |key: &str, fallback: u32| {
             options
                 .get(key)
                 .and_then(Value::as_u64)
-                .map_or(fallback, |value| value as u32)
+                .and_then(|value| u32::try_from(value).ok())
+                .unwrap_or(fallback)
         };
         // A stored value outside the list of choices falls back to the default.
         let choice = |key: &str, choices: usize, fallback: u32| {
@@ -717,6 +719,19 @@ mod option_bounds_tests {
         assert_eq!(options.dither_mode, default.dither_mode);
         assert_eq!(options.sort_files_by, default.sort_files_by);
         assert_eq!(options.after_deletion, default.after_deletion);
+    }
+
+    #[test]
+    fn values_past_u32_fall_back_instead_of_wrapping() {
+        // 2^32 + 2 truncated to 2, which passed the choice check as a valid index.
+        let document = serde_json::json!({ "options": {
+            "titlebartext": 4_294_967_298u64,
+            "zoomstep": 4_294_967_296u64,
+        }});
+        let options = Options::from_document(&document);
+        let default = Options::default();
+        assert_eq!(options.title_bar_text, default.title_bar_text);
+        assert_eq!(options.zoom_step_percent, default.zoom_step_percent);
     }
 
     #[test]
