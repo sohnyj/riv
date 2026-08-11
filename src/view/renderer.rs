@@ -442,6 +442,13 @@ fn wire_color_management(
     Ok(())
 }
 
+fn effect_when(
+    condition: bool,
+    build: impl FnOnce() -> Option<ID2D1Effect>,
+) -> Option<ID2D1Effect> {
+    condition.then(build).flatten()
+}
+
 /// WhiteLevelAdjustment multiplies by input/output white level.
 fn set_white_level_input(effect: &ID2D1Effect, input_white_nits: f32) -> Result<()> {
     unsafe {
@@ -553,10 +560,8 @@ impl Renderer {
     ) -> ModeEffects {
         let color_management_effect = Self::create_color_management_effect(d2d_context);
         // SDR only: HDR displays pass content through with no tone map.
-        let hdr_tone_map_effect = (!is_hdr_output)
-            .then_some(())
-            .and(color_management_effect.as_ref())
-            .and_then(|_| {
+        let hdr_tone_map_effect =
+            effect_when(!is_hdr_output && color_management_effect.is_some(), || {
                 let effect = unsafe { d2d_context.CreateEffect(&CLSID_D2D1HdrToneMap) }.ok()?;
                 unsafe {
                     effect.SetValue(
@@ -577,30 +582,26 @@ impl Renderer {
                 .ok()?;
                 Some(effect)
             });
-        let tone_map_normalize_effect = (!is_hdr_output)
-            .then_some(())
-            .and(hdr_tone_map_effect.as_ref())
-            .and_then(|_| {
+        let tone_map_normalize_effect =
+            effect_when(!is_hdr_output && hdr_tone_map_effect.is_some(), || {
                 let effect =
                     unsafe { d2d_context.CreateEffect(&CLSID_D2D1WhiteLevelAdjustment) }.ok()?;
                 set_white_level_input(&effect, SDR_REFERENCE_WHITE_NITS).ok()?;
                 Some(effect)
             });
         // The FP16 scRGB backbuffer of ACM-on SDR takes the tone-mapped scRGB with no re-encode.
-        let output_color_management_effect = (!is_hdr_output && !is_sdr_wide_gamut)
-            .then_some(())
-            .and(hdr_tone_map_effect.as_ref())
-            .and_then(|_| {
+        let output_color_management_effect = effect_when(
+            !is_hdr_output && !is_sdr_wide_gamut && hdr_tone_map_effect.is_some(),
+            || {
                 Self::create_conversion_effect(
                     d2d_context,
                     scrgb_color_context,
                     sdr_destination_context,
                 )
-            });
-        let white_level_effect = is_hdr_output
-            .then_some(())
-            .and(color_management_effect.as_ref())
-            .and_then(|_| {
+            },
+        );
+        let white_level_effect =
+            effect_when(is_hdr_output && color_management_effect.is_some(), || {
                 let effect =
                     unsafe { d2d_context.CreateEffect(&CLSID_D2D1WhiteLevelAdjustment) }.ok()?;
                 set_white_level_input(&effect, SDR_REFERENCE_WHITE_NITS).ok()?;
