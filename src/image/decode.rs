@@ -8,7 +8,8 @@ use std::sync::atomic::{AtomicBool, AtomicU32, Ordering};
 use std::sync::{Arc, OnceLock};
 
 use windows::Win32::Foundation::{
-    E_ABORT, GENERIC_READ, WINCODEC_ERR_COMPONENTINITIALIZEFAILURE, WINCODEC_ERR_COMPONENTNOTFOUND,
+    E_ABORT, E_OUTOFMEMORY, GENERIC_READ, WINCODEC_ERR_COMPONENTINITIALIZEFAILURE,
+    WINCODEC_ERR_COMPONENTNOTFOUND,
 };
 use windows::Win32::Graphics::Direct3D11::{
     D3D11_BIND_SHADER_RESOURCE, D3D11_SUBRESOURCE_DATA, D3D11_TEXTURE2D_DESC,
@@ -1959,7 +1960,14 @@ fn decode_animation(
             canvas_height = frame_height;
         }
         if canvas.is_empty() {
-            canvas = vec![0u8; canvas_width as usize * canvas_height as usize * 4];
+            let canvas_bytes = canvas_width as usize * canvas_height as usize * 4;
+            // The logical screen is untrusted; refuse a canvas over the animation budget.
+            if animation_budget_exceeded(1, canvas_bytes)
+                || canvas.try_reserve_exact(canvas_bytes).is_err()
+            {
+                return Err(E_OUTOFMEMORY.into());
+            }
+            canvas.resize(canvas_bytes, 0);
         }
         copy_pixels_into(
             &source,
