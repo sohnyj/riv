@@ -599,17 +599,22 @@ impl Application {
             return;
         };
         self.show_maximized = maximized;
+        let saved_bounds = RECT {
+            left: x,
+            top: y,
+            right: x + width,
+            bottom: y + height,
+        };
+        // The display that held the window can be gone; its coordinates would strand the window.
+        if !window::geometry::rect_intersects_a_monitor(saved_bounds) {
+            return;
+        }
         if maximized {
             // The restore rect a placement carries is in workspace coordinates, as it was saved.
             let placement = WINDOWPLACEMENT {
                 length: size_of::<WINDOWPLACEMENT>() as u32,
                 showCmd: SW_HIDE.0 as u32,
-                rcNormalPosition: RECT {
-                    left: x,
-                    top: y,
-                    right: x + width,
-                    bottom: y + height,
-                },
+                rcNormalPosition: saved_bounds,
                 ..Default::default()
             };
             let _ = unsafe { SetWindowPlacement(window, &raw const placement) };
