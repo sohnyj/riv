@@ -309,6 +309,11 @@ impl FrameCompositor {
         self.frames.len() as u64
     }
 
+    /// Whether one more frame past those composed still fits the budget.
+    pub fn accepts_one_more(&mut self) -> bool {
+        self.accepts_another(self.frames.len() as u64 + 1)
+    }
+
     /// Whether `declared_frames` still fit the budget; a refusal marks the animation truncated.
     pub fn accepts_another(&mut self, declared_frames: u64) -> bool {
         if !self.frames.is_empty() && animation_budget_exceeded(declared_frames, self.canvas.len())
@@ -2386,7 +2391,7 @@ fn decode_apng<Input: BufRead + Seek>(
             return Err(DecodeError::cancelled());
         }
         // acTL's declared count is untrusted, so the budget runs frame by frame.
-        if !compositor.accepts_another(compositor.frames_so_far() + 1) {
+        if !compositor.accepts_one_more() {
             break;
         }
         if !(index == 0 && (default_image_is_first_frame || !has_animation)) {
@@ -2854,10 +2859,10 @@ mod compositor_tests {
         let side = 8192;
         let mut compositor = FrameCompositor::new(side, side).expect("canvas");
         for _ in 0..4 {
-            assert!(compositor.accepts_another(compositor.frames_so_far() + 1));
+            assert!(compositor.accepts_one_more());
             compositor.add_frame(region(&blue_pixel(10), FrameDisposal::Keep));
         }
-        assert!(!compositor.accepts_another(compositor.frames_so_far() + 1));
+        assert!(!compositor.accepts_one_more());
         let (frames, truncated) = compositor.finish();
         assert_eq!(frames.len(), 4);
         assert!(truncated);
