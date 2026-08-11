@@ -80,14 +80,15 @@ use windows::Win32::UI::WindowsAndMessaging::{
     LoadCursorW, LoadIconW, MINMAXINFO, MSG, MWMO_INPUTAVAILABLE, MsgWaitForMultipleObjectsEx,
     PM_REMOVE, PeekMessageW, PostMessageW, PostQuitMessage, QS_ALLINPUT, QS_PAINT,
     QUEUE_STATUS_FLAGS, RegisterClassExW, SC_MONITORPOWER, SW_HIDE, SW_SHOW, SW_SHOWMAXIMIZED,
-    SWP_FRAMECHANGED, SWP_NOACTIVATE, SWP_NOMOVE, SWP_NOSIZE, SWP_NOZORDER, SendMessageW,
-    SetCursor, SetTimer, SetWindowLongPtrW, SetWindowPlacement, SetWindowPos, SetWindowTextW,
-    ShowWindow, TranslateMessage, WA_INACTIVE, WINDOWPLACEMENT, WM_ACTIVATE, WM_APP, WM_CLOSE,
-    WM_CONTEXTMENU, WM_DESTROY, WM_DISPLAYCHANGE, WM_DPICHANGED, WM_ENTERSIZEMOVE, WM_EXITSIZEMOVE,
-    WM_GESTURE, WM_GETMINMAXINFO, WM_KEYDOWN, WM_LBUTTONDBLCLK, WM_LBUTTONDOWN, WM_LBUTTONUP,
-    WM_MBUTTONDOWN, WM_MOUSEHWHEEL, WM_MOUSEMOVE, WM_MOUSEWHEEL, WM_MOVE, WM_NCDESTROY,
-    WM_NCLBUTTONDOWN, WM_PAINT, WM_QUIT, WM_SETCURSOR, WM_SIZE, WM_SYSCHAR, WM_SYSCOMMAND,
-    WM_SYSKEYDOWN, WM_TIMER, WM_XBUTTONDOWN, WNDCLASSEXW, WS_OVERLAPPEDWINDOW, WindowFromPoint,
+    SW_SHOWMINIMIZED, SWP_FRAMECHANGED, SWP_NOACTIVATE, SWP_NOMOVE, SWP_NOSIZE, SWP_NOZORDER,
+    SendMessageW, SetCursor, SetTimer, SetWindowLongPtrW, SetWindowPlacement, SetWindowPos,
+    SetWindowTextW, ShowWindow, TranslateMessage, WA_INACTIVE, WINDOWPLACEMENT, WM_ACTIVATE,
+    WM_APP, WM_CLOSE, WM_CONTEXTMENU, WM_DESTROY, WM_DISPLAYCHANGE, WM_DPICHANGED,
+    WM_ENTERSIZEMOVE, WM_EXITSIZEMOVE, WM_GESTURE, WM_GETMINMAXINFO, WM_KEYDOWN, WM_LBUTTONDBLCLK,
+    WM_LBUTTONDOWN, WM_LBUTTONUP, WM_MBUTTONDOWN, WM_MOUSEHWHEEL, WM_MOUSEMOVE, WM_MOUSEWHEEL,
+    WM_MOVE, WM_NCDESTROY, WM_NCLBUTTONDOWN, WM_PAINT, WM_QUIT, WM_SETCURSOR, WM_SIZE, WM_SYSCHAR,
+    WM_SYSCOMMAND, WM_SYSKEYDOWN, WM_TIMER, WM_XBUTTONDOWN, WNDCLASSEXW, WS_OVERLAPPEDWINDOW,
+    WindowFromPoint,
 };
 use windows::core::{PCWSTR, Result, w};
 
@@ -216,6 +217,11 @@ impl WindowRestore {
 
     fn maximized(self) -> bool {
         self.placement.showCmd == SW_SHOWMAXIMIZED.0 as u32
+    }
+
+    /// Minimized windows report an off-screen placeholder rect, not where they will come back.
+    fn minimized(self) -> bool {
+        self.placement.showCmd == SW_SHOWMINIMIZED.0 as u32
     }
 
     /// Maximized keeps its restore rect in the placement; anything else in the rect it held.
@@ -629,14 +635,17 @@ impl Application {
             let restore = self
                 .fullscreen_restore
                 .unwrap_or_else(|| WindowRestore::capture(window));
-            let bounds = restore.saved_bounds();
-            self.settings.set_window_geometry(
-                bounds.left,
-                bounds.top,
-                bounds.right - bounds.left,
-                bounds.bottom - bounds.top,
-                restore.maximized(),
-            );
+            // Closing while minimized keeps the stored geometry: the placeholder rect is not it.
+            if !restore.minimized() {
+                let bounds = restore.saved_bounds();
+                self.settings.set_window_geometry(
+                    bounds.left,
+                    bounds.top,
+                    bounds.right - bounds.left,
+                    bounds.bottom - bounds.top,
+                    restore.maximized(),
+                );
+            }
         }
         let _ = self.settings.save_merging_recents();
     }
