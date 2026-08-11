@@ -2032,6 +2032,10 @@ pub fn blend_over(
 ) {
     let visible_width = source_width.min(canvas_width.saturating_sub(left)) as usize;
     let visible_height = source_height.min(canvas_height.saturating_sub(top)) as usize;
+    if visible_width == 0 || visible_height == 0 {
+        // An off-canvas offset clips everything; the row start would still index past the end.
+        return;
+    }
     for row in 0..visible_height {
         let source_start = row * source_width as usize * 4;
         let canvas_start = ((top as usize + row) * canvas_width as usize + left as usize) * 4;
@@ -2066,6 +2070,10 @@ pub fn clear_rectangle(
     let canvas_height = canvas.len() / (canvas_width as usize * 4);
     let visible_width = width.min(canvas_width.saturating_sub(left)) as usize;
     let visible_height = (height as usize).min(canvas_height.saturating_sub(top as usize));
+    if visible_width == 0 || visible_height == 0 {
+        // An off-canvas offset clips everything; the row start would still index past the end.
+        return;
+    }
     for row in 0..visible_height {
         let start = ((top as usize + row) * canvas_width as usize + left as usize) * 4;
         canvas[start..start + visible_width * 4].fill(0);
@@ -2430,6 +2438,10 @@ pub fn copy_rectangle(
 ) {
     let visible_width = source_width.min(canvas_width.saturating_sub(left)) as usize;
     let visible_height = source_height.min(canvas_height.saturating_sub(top)) as usize;
+    if visible_width == 0 || visible_height == 0 {
+        // An off-canvas offset clips everything; the row start would still index past the end.
+        return;
+    }
     for row in 0..visible_height {
         let source_start = row * source_width as usize * 4;
         let canvas_start = ((top as usize + row) * canvas_width as usize + left as usize) * 4;
@@ -2619,6 +2631,22 @@ fn copy_pixels_into(
         row += rows;
     }
     Ok(())
+}
+
+#[cfg(test)]
+mod compositor_tests {
+    use super::*;
+
+    #[test]
+    fn frames_placed_past_the_canvas_edge_are_clipped_without_panicking() {
+        // left past the width with a bottom row still visible used to index past the end.
+        let mut canvas = vec![0u8; 10 * 10 * 4];
+        let source = vec![255u8; 4];
+        blend_over(&mut canvas, 10, 10, &source, 1, 1, 15, 9);
+        copy_rectangle(&mut canvas, 10, 10, &source, 1, 1, 15, 9);
+        clear_rectangle(&mut canvas, 10, 15, 9, 1, 1);
+        assert!(canvas.iter().all(|&byte| byte == 0), "nothing is visible");
+    }
 }
 
 #[cfg(test)]
