@@ -60,6 +60,8 @@ struct MenuBuilder {
     state_snapshot: MenuState,
     /// The Playlist submenu, kept so the playlist key can open the menu at it.
     playlist_menu: HMENU,
+    /// Menus no parent owns yet; a build that gives up partway destroys these.
+    unattached: Vec<HMENU>,
 }
 
 /// Win32 menus read "&" as an access key prefix; double it to render literally.
@@ -91,6 +93,7 @@ impl MenuBuilder {
             entries: Vec::new(),
             state_snapshot: state,
             playlist_menu: HMENU::default(),
+            unattached: Vec::new(),
         }
     }
 
@@ -182,7 +185,7 @@ impl MenuBuilder {
     }
 
     fn append_submenu(
-        &self,
+        &mut self,
         menu: HMENU,
         submenu: HMENU,
         label: &str,
@@ -192,15 +195,35 @@ impl MenuBuilder {
         if !enabled {
             flags |= MF_GRAYED | MF_DISABLED;
         }
-        Self::append_text(menu, flags, submenu.0 as usize, label, None)
+        Self::append_text(menu, flags, submenu.0 as usize, label, None)?;
+        // The parent owns it now, and destroying the parent will take it along.
+        self.unattached.retain(|held| *held != submenu);
+        Ok(())
     }
 
-    fn build(&mut self) -> Result<HMENU> {
+    fn create_menu(&mut self) -> Result<HMENU> {
         let menu = unsafe { CreatePopupMenu()? };
+        self.unattached.push(menu);
+        Ok(menu)
+    }
+
+    /// Destroys what it made when a step fails, so giving up leaks no menu.
+    fn build(&mut self) -> Result<HMENU> {
+        let built = self.build_menus();
+        if built.is_err() {
+            for menu in std::mem::take(&mut self.unattached) {
+                let _ = unsafe { DestroyMenu(menu) };
+            }
+        }
+        built
+    }
+
+    fn build_menus(&mut self) -> Result<HMENU> {
+        let menu = self.create_menu()?;
         self.append_action(menu, Action::Open)?;
         self.append_action(menu, Action::OpenUrl)?;
 
-        let recent = unsafe { CreatePopupMenu()? };
+        let recent = self.create_menu()?;
         for index in 0..self.state_snapshot.recent_names.len() {
             let name = self.state_snapshot.recent_names[index].clone();
             self.append_action_labeled(recent, Action::Recent(index as u8), &name)?;
@@ -210,7 +233,7 @@ impl MenuBuilder {
         }
         self.append_action_labeled(recent, Action::ClearRecents, "Clear recents")?;
         self.append_submenu(menu, recent, "Open recent", true)?;
-        let open_with = unsafe { CreatePopupMenu()? };
+        let open_with = self.create_menu()?;
         let open_with_items = self.state_snapshot.open_with_items.clone();
         for (index, label) in open_with_items.iter().enumerate() {
             self.append_open_with_entry(open_with, index, label)?;
@@ -231,7 +254,7 @@ impl MenuBuilder {
         )?;
         self.append_separator(menu)?;
 
-        let playlist = unsafe { CreatePopupMenu()? };
+        let playlist = self.create_menu()?;
         Self::append_playlist_overflow(playlist, self.state_snapshot.playlist_first_index)?;
         let playlist_names = self.state_snapshot.playlist_names.clone();
         for (slot, name) in playlist_names.iter().enumerate() {
@@ -252,7 +275,7 @@ impl MenuBuilder {
         self.append_separator(menu)?;
         self.append_action(menu, Action::PreviousFile)?;
         self.append_action(menu, Action::NextFile)?;
-        let playback = unsafe { CreatePopupMenu()? };
+        let playback = self.create_menu()?;
         let pause_label = if self.state_snapshot.animation_paused {
             "Resume"
         } else {
@@ -278,7 +301,7 @@ impl MenuBuilder {
         self.append_action(menu, Action::Reload)?;
         self.append_separator(menu)?;
 
-        let view = unsafe { CreatePopupMenu()? };
+        let view = self.create_menu()?;
         // The label names the axis a click switches to (slideshow convention).
         let fit_label = if self.state_snapshot.fit_height {
             "Fit width"
@@ -299,7 +322,7 @@ impl MenuBuilder {
         self.append_action(view, Action::Flip)?;
         self.append_submenu(menu, view, "View", true)?;
 
-        let tools = unsafe { CreatePopupMenu()? };
+        let tools = self.create_menu()?;
         self.append_action(tools, Action::ShowInExplorer)?;
         self.append_action(tools, Action::Rename)?;
         self.append_action(tools, Action::Delete)?;
@@ -314,7 +337,7 @@ impl MenuBuilder {
         self.append_action(tools, Action::Settings)?;
         self.append_submenu(menu, tools, "Tools", true)?;
 
-        let window = unsafe { CreatePopupMenu()? };
+        let window = self.create_menu()?;
         self.append_action(window, Action::AlwaysOnTop)?;
         let fullscreen_label = if self.state_snapshot.fullscreen {
             "Exit fullscreen"
