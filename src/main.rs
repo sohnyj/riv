@@ -74,7 +74,7 @@ use windows::Win32::UI::Input::KeyboardAndMouse::{
 };
 use windows::Win32::UI::WindowsAndMessaging::{
     CS_DBLCLKS, CS_HREDRAW, CS_VREDRAW, CW_USEDEFAULT, CreateWindowExW, DefWindowProcW,
-    DispatchMessageW, GWL_STYLE, GWLP_USERDATA, GetClientRect, GetCursorPos, GetMessageW,
+    DispatchMessageW, GF_BEGIN, GWL_STYLE, GWLP_USERDATA, GetClientRect, GetCursorPos, GetMessageW,
     GetWindowLongPtrW, GetWindowPlacement, GetWindowRect, HCURSOR, HTCAPTION, HTCLIENT,
     HWND_NOTOPMOST, HWND_TOP, HWND_TOPMOST, IDC_ARROW, IDC_SIZEALL, IsZoomed, KillTimer,
     LoadCursorW, LoadIconW, MINMAXINFO, MSG, MWMO_INPUTAVAILABLE, MsgWaitForMultipleObjectsEx,
@@ -2058,7 +2058,6 @@ fn handle_gesture(application: &mut Application, window: HWND, lparam: LPARAM) -
     use windows::Win32::UI::Input::Touch::{
         CloseGestureInfoHandle, GESTUREINFO, GID_PAN, GID_ZOOM, GetGestureInfo, HGESTUREINFO,
     };
-    const GF_BEGIN: u32 = 0x1;
 
     let handle = HGESTUREINFO(lparam.0 as *mut _);
     let mut information = GESTUREINFO {
@@ -2071,7 +2070,8 @@ fn handle_gesture(application: &mut Application, window: HWND, lparam: LPARAM) -
     let began = information.dwFlags & GF_BEGIN != 0;
     let handled = match information.dwID {
         identifier if identifier == GID_ZOOM.0 => {
-            let distance = (information.ullArguments & 0xFFFF_FFFF) as f32;
+            // The zoom distance is the low word; GESTUREINFO documents the high word as 0 here.
+            let distance = information.ullArguments as u32 as f32;
             if began {
                 application.gesture_zoom_distance = Some(distance);
             } else if let Some(previous) = application.gesture_zoom_distance.replace(distance)
