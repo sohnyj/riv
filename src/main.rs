@@ -138,6 +138,8 @@ struct Application {
     preserve_zoom: bool,
     always_on_top: bool,
     fullscreen_restore: Option<WindowRestore>,
+    /// Where the window last stood while visible, for a close that comes while it is minimized.
+    remembered_geometry: Option<WindowRestore>,
     sdr_white_boost: f32,
     /// Display peak over SDR white for the gain map weight; None keeps the base rendition.
     display_headroom: Option<f32>,
@@ -370,6 +372,7 @@ impl Application {
             preserve_zoom: false,
             always_on_top: false,
             fullscreen_restore: None,
+            remembered_geometry: None,
             sdr_white_boost: 1.0,
             display_headroom: None,
             pan_drag_position: None,
@@ -638,13 +641,25 @@ impl Application {
         };
     }
 
+    /// Keeps the visible geometry, which an iconic window can no longer report.
+    fn remember_geometry(&mut self, window: HWND) {
+        if self.fullscreen_restore.is_some() {
+            return; // fullscreen already holds the geometry to come back to
+        }
+        let restore = WindowRestore::capture(window);
+        if !restore.minimized() {
+            self.remembered_geometry = Some(restore);
+        }
+    }
+
     /// Exit persistence: geometry (when enabled), then the merged save.
     fn save_on_exit(&mut self, window: HWND) {
         if self.settings.options.remember_window_size_and_position {
             let restore = self
                 .fullscreen_restore
+                .or(self.remembered_geometry)
                 .unwrap_or_else(|| WindowRestore::capture(window));
-            // Closing while minimized keeps the stored geometry: the placeholder rect is not it.
+            // Nothing is written before the window has stood somewhere visible.
             if !restore.minimized() {
                 let bounds = restore.saved_bounds();
                 self.settings.set_window_geometry(
@@ -2402,6 +2417,7 @@ extern "system" fn window_procedure(
                     application.render(window);
                     let _ = unsafe { ValidateRect(Some(window), None) };
                 }
+                application.remember_geometry(window);
             }
             LRESULT(0)
         }
@@ -2742,13 +2758,14 @@ extern "system" fn window_procedure(
             LRESULT(0)
         }
         WM_MOVE => {
-            // Display-bound state re-evaluates only on a monitor change, not on every drag move.
-            if let Some(application) = application_from_window(window)
-                && application.update_current_monitor(window)
-            {
-                // The output may be rebuilt, so this drag has to draw again after all.
-                application.window_moving = false;
-                application.refresh_display_state(window);
+            if let Some(application) = application_from_window(window) {
+                application.remember_geometry(window);
+                // Display-bound state re-evaluates only on a monitor change, not on every drag move.
+                if application.update_current_monitor(window) {
+                    // The output may be rebuilt, so this drag has to draw again after all.
+                    application.window_moving = false;
+                    application.refresh_display_state(window);
+                }
             }
             LRESULT(0)
         }
