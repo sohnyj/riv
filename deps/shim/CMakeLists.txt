@@ -1,3 +1,4 @@
+# Static build of the EXR shim, installed into the deps prefix.
 cmake_minimum_required(VERSION 3.20)
 project(riv_exr_shim CXX)
 
