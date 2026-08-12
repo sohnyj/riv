@@ -11,11 +11,11 @@ A fast, precise, minimal image viewer for Windows.
 ## Features
 
 - Rendering
-  - FP16 linear render pipeline, FP16 scRGB output
+  - FP16 linear render pipeline, FP16 scRGB output on Windows Advanced Color
   - HDR passthrough on HDR displays, HDR tone-mapped on SDR displays
-  - Ultra HDR gain maps, adapted to the display's peak brightness
-  - Output dither: Ordered or Fruit shader
-  - Color management: Windows Advanced Color with WCG/HDR, PQ/HLG, embedded/display ICC profiles
+  - Ultra HDR gain maps on HDR displays, display-adapted
+  - Output dither on 8-bit: Ordered or Fruit
+  - Windows Advanced Color: WCG/HDR, PQ/HLG, embedded/display ICC profiles
 - Browsing
   - Browse images inside archives (via archiveint.dll, shipped with Windows)
   - Open http/https image URLs (via curl.exe, shipped with Windows)
@@ -33,20 +33,20 @@ Running as administrator is blocked at startup.
 
 Formats that need a codec extension from the Microsoft Store:
 
-| Format | Required extension |
-|---|---|
-| AVIF | HEIF Image Extension + AV1 Video Extension (Microsoft Corporation) |
-| JPEG XL | JPEG XL Image Extension (Microsoft Corporation) |
-| WebP (still) | WebP Image Extensions (Microsoft Corporation) |
-| Camera RAW | Raw Image Extension (Microsoft Corporation) |
+| Format | Required extension | Notes |
+|---|---|---|
+| AVIF | HEIF Image Extension + AV1 Video Extension (Microsoft Corporation) | HDR / Tone map |
+| JPEG XL | JPEG XL Image Extension (Microsoft Corporation) | HDR / Tone map |
+| WebP | WebP Image Extensions (Microsoft Corporation) | Still only |
+| Camera RAW | Raw Image Extension (Microsoft Corporation) | |
 
 **Required extensions are free and need no sign-in.**
 
 Formats with an optional codec extension:
 
-| Format | Optional extension |
-|---|---|
-| HEIC / HEIF | HEIF Image Extension + HEVC Video Extensions (Microsoft Corporation) |
+| Format | Optional extension | Notes |
+|---|---|---|
+| HEIC / HEIF | HEIF Image Extension + HEVC Video Extensions (Microsoft Corporation) | HDR / Tone map |
 
 **HEVC Video Extensions is paid.**
 
@@ -60,8 +60,8 @@ Decoded by built-in codecs:
 
 | Format | Decoder | Notes |
 |---|---|---|
-| HEIC / HEIF | libheif + libde265 | HDR |
-| EXR | OpenEXR | HDR |
+| HEIC / HEIF | libheif + libde265 | HDR / Tone map |
+| EXR | OpenEXR | HDR / Tone map |
 | PNG | png | Animated only |
 | WebP | libwebp | Animated only |
 | SVG / SVGZ | resvg | Vector only |
@@ -71,9 +71,9 @@ Decoded by Windows Imaging Component codecs:
 | Format | Notes |
 |---|---|
 | JPEG | Ultra HDR |
-| JPEG XR | HDR |
+| JPEG XR | HDR / Tone map |
 | DDS | BC1-BC3 |
-| PNG, GIF, BMP, ICO, TIFF | |
+| BMP, GIF, ICO, PNG, TIFF | |
 
 Archives browsable as image folders:
 zip, 7z, rar, tar, and cbz / cbr / cb7 / cbt.
