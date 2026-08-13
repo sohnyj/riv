@@ -15,7 +15,7 @@ A fast, precise, minimal image viewer for Windows.
   - FP16 linear render pipeline, FP16 scRGB output
   - HDR passthrough on HDR, HDR tone-mapped on SDR
   - Ultra HDR gain maps on HDR
-  - Output dither: Ordered or Fruit (8-bit only)
+  - Dither: Ordered or Fruit (8-bit output only)
 - Browsing
   - Browse images inside archives (via archiveint.dll, shipped with Windows)
   - Open http/https image URLs (via curl.exe, shipped with Windows)
