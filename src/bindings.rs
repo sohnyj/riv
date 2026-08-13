@@ -141,8 +141,8 @@ pub struct Bindings {
 }
 
 /// How many bindings one action keeps. Reading drops the rest; capturing drops the oldest.
-pub const MAX_KEYBOARD_SEQUENCES: usize = 3;
-pub const MAX_MOUSE_ENCODINGS: usize = 1;
+pub const MAXIMUM_KEYBOARD_SEQUENCES: usize = 3;
+pub const MAXIMUM_MOUSE_ENCODINGS: usize = 1;
 
 const DEFAULT_KEYBOARD: &[(&str, &[&str])] = &[
     ("open", &["Ctrl+O"]),
@@ -202,7 +202,7 @@ impl Bindings {
         let keyboard = collect_bindings(
             DEFAULT_KEYBOARD,
             keyboard_overrides,
-            MAX_KEYBOARD_SEQUENCES,
+            MAXIMUM_KEYBOARD_SEQUENCES,
             parse_key_sequence,
         )
         .into_iter()
@@ -215,7 +215,7 @@ impl Bindings {
         let mouse = collect_bindings(
             DEFAULT_MOUSE,
             mouse_overrides,
-            MAX_MOUSE_ENCODINGS,
+            MAXIMUM_MOUSE_ENCODINGS,
             parse_mouse_encoding,
         )
         .into_iter()
@@ -295,7 +295,7 @@ pub fn resolved_keyboard_sequences(
         overrides,
         action_name,
         default_keyboard_sequences(action_name),
-        MAX_KEYBOARD_SEQUENCES,
+        MAXIMUM_KEYBOARD_SEQUENCES,
     )
     .iter()
     .filter_map(|sequence| {
@@ -331,7 +331,7 @@ pub fn resolved_mouse_encodings(
         overrides,
         action_name,
         default_mouse_encodings(action_name),
-        MAX_MOUSE_ENCODINGS,
+        MAXIMUM_MOUSE_ENCODINGS,
     )
     .iter()
     .filter_map(|encoding| {
