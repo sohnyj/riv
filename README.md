@@ -11,11 +11,11 @@ A fast, precise, minimal image viewer for Windows.
 ## Features
 
 - Rendering
-  - FP16 linear render pipeline, FP16 scRGB output on Windows Advanced Color
-  - HDR passthrough on HDR displays, HDR tone-mapped on SDR displays
-  - Ultra HDR gain maps on HDR displays, display-adapted
-  - Output dither on 8-bit: Ordered or Fruit
   - Windows Advanced Color: WCG/HDR, PQ/HLG, embedded/display ICC profiles
+  - FP16 linear render pipeline, FP16 scRGB output
+  - HDR passthrough on HDR, HDR tone-mapped on SDR
+  - Ultra HDR gain maps on HDR
+  - Output dither: Ordered or Fruit (8-bit only)
 - Browsing
   - Browse images inside archives (via archiveint.dll, shipped with Windows)
   - Open http/https image URLs (via curl.exe, shipped with Windows)
@@ -33,18 +33,18 @@ Running as administrator is blocked at startup.
 
 Formats that need a codec extension from the Microsoft Store:
 
-| Format | Required extension | Notes |
+| Format | Store extension | Notes |
 |---|---|---|
 | AVIF | HEIF Image Extension + AV1 Video Extension (Microsoft Corporation) | HDR / Tone map |
 | JPEG XL | JPEG XL Image Extension (Microsoft Corporation) | HDR / Tone map |
 | WebP | WebP Image Extensions (Microsoft Corporation) | Still only |
 | Camera RAW | Raw Image Extension (Microsoft Corporation) | |
 
-**Required extensions are free and need no sign-in.**
+**These extensions are free and need no sign-in.**
 
 Formats with an optional codec extension:
 
-| Format | Optional extension | Notes |
+| Format | Store extension | Notes |
 |---|---|---|
 | HEIC / HEIF | HEIF Image Extension + HEVC Video Extensions (Microsoft Corporation) | HDR / Tone map |
 
@@ -97,13 +97,13 @@ Prerequisites:
 - `CMake` and `Ninja`, for static codec dependencies.
 - `Wine`, for the tests and for compiling the HLSL shaders.
 
-On Ubuntu 26.04, everything but Rust and xwin comes from apt:
+Ubuntu 26.04 packages:
 
 ```sh
 sudo apt-get install clang-22 lld-22 llvm-22 cmake ninja-build wine git
 ```
 
-Only the versioned directory carries the unversioned tool names:
+LLVM tools on PATH:
 
 ```sh
 export PATH="/usr/lib/llvm-22/bin:$PATH"
@@ -140,5 +140,7 @@ with SDR emulations by Dylan Raga (CC BY 4.0).
 GPL-3.0-only (see [LICENSE](LICENSE)).
 
 [THIRD-PARTY-NOTICES.md](THIRD-PARTY-NOTICES.md) lists the statically linked
-third-party components and their licenses. The application icon is derived
-from [Fluent UI System Icons](https://github.com/microsoft/fluentui-system-icons) (MIT).
+third-party components and their licenses.
+
+The application icon is derived from
+[Fluent UI System Icons](https://github.com/microsoft/fluentui-system-icons) (MIT).
