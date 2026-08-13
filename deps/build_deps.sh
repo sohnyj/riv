@@ -1,5 +1,5 @@
 #!/bin/sh
-# Static builds of the C/C++ fallback codecs with clang-cl + xwin (/arch:AVX2).
+# Static builds of the C/C++ fallback codecs with clang-cl + xwin (/arch:AVX2, thin LTO).
 # Output: deps/prefix/{lib,include}, linked by build.rs.
 set -e
 cd "$(dirname "$0")"
@@ -20,8 +20,8 @@ configure_and_install() { # <directory> [extra cmake args...]
     shift
     cmake -S "sources/$directory" -B "build/$directory" -G Ninja \
         -DCMAKE_BUILD_TYPE=Release \
-        -DCMAKE_C_FLAGS_RELEASE="/clang:-O3 /DNDEBUG" \
-        -DCMAKE_CXX_FLAGS_RELEASE="/clang:-O3 /DNDEBUG" \
+        -DCMAKE_C_FLAGS_RELEASE="/clang:-O3 /clang:-flto=thin /DNDEBUG" \
+        -DCMAKE_CXX_FLAGS_RELEASE="/clang:-O3 /clang:-flto=thin /DNDEBUG" \
         -DCMAKE_TOOLCHAIN_FILE="$ROOT/toolchain-clang-cl.cmake" \
         -DCMAKE_INSTALL_PREFIX="$PREFIX" \
         -DCMAKE_FIND_ROOT_PATH="$PREFIX" \
@@ -49,7 +49,7 @@ configure_and_install libwebp \
     -DWEBP_BUILD_WEBPINFO=OFF \
     -DWEBP_BUILD_WEBPMUX=OFF
 
-# libde265 (HEVC for the HEIF fallback); its -Wall means -Weverything to clang-cl
+# libde265 (HEVC for the HEIF fallback): its -Wall means -Weverything to clang-cl
 clone libde265 https://github.com/strukturag/libde265.git master
 (
     export CFLAGS="-Wno-everything"
@@ -110,11 +110,11 @@ clone openexr https://github.com/AcademySoftwareFoundation/openexr.git release
         -DOPENEXR_ENABLE_THREADING=ON
 )
 
-# EXR shim: expose the C++ RgbaInputFile through extern "C"
+# EXR shim exposing the C++ RgbaInputFile through extern "C"
 cmake -S shim -B build/shim -G Ninja \
     -DCMAKE_BUILD_TYPE=Release \
-    -DCMAKE_C_FLAGS_RELEASE="/clang:-O3 /DNDEBUG" \
-    -DCMAKE_CXX_FLAGS_RELEASE="/clang:-O3 /DNDEBUG" \
+    -DCMAKE_C_FLAGS_RELEASE="/clang:-O3 /clang:-flto=thin /DNDEBUG" \
+    -DCMAKE_CXX_FLAGS_RELEASE="/clang:-O3 /clang:-flto=thin /DNDEBUG" \
     -DCMAKE_TOOLCHAIN_FILE="$ROOT/toolchain-clang-cl.cmake" \
     -DCMAKE_INSTALL_PREFIX="$PREFIX" \
     -DCMAKE_FIND_ROOT_PATH="$PREFIX" \
@@ -123,5 +123,5 @@ cmake -S shim -B build/shim -G Ninja \
     -DCMAKE_MSVC_RUNTIME_LIBRARY=MultiThreaded
 ninja -C build/shim install
 
-echo "== fallback codecs installed to $PREFIX"
+echo "fallback codecs installed to $PREFIX"
 ls "$PREFIX/lib"
