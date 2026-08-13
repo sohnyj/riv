@@ -14,7 +14,7 @@ permissions:
 
 env:
   CARGO_TERM_COLOR: always
-  XWIN_VERSION: "0.9.0"
+  XWIN_VERSION: "0.10.0"
   LLVM_VERSION: "22"
 
 jobs:
@@ -89,13 +89,13 @@ jobs:
         uses: actions/cache@v6
         with:
           path: deps/prefix
-          key: deps-llvm${{ env.LLVM_VERSION }}-${{ hashFiles('deps/build_deps.sh', 'deps/toolchain-clang-cl.cmake', 'deps/shim/**') }}
+          key: deps-llvm${{ env.LLVM_VERSION }}-xwin${{ env.XWIN_VERSION }}-${{ hashFiles('deps/build_deps.sh', 'deps/toolchain-clang-cl.cmake', 'deps/shim/**') }}
 
       - name: Build the codec libraries
         if: steps.deps-cache.outputs.cache-hit != 'true'
         run: ./deps/build_deps.sh
 
-      - uses: Swatinem/rust-cache@v2.9.1
+      - uses: Swatinem/rust-cache@v2
 
       - name: Build
         run: cargo build --release
