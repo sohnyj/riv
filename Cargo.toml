@@ -68,7 +68,7 @@ resvg = { version = "0.48.1", default-features = false, features = [
 opt-level = 3
 debug = false
 strip = true
-lto = "thin"
+lto = true
 panic = "abort"
 incremental = false
 codegen-units = 1
