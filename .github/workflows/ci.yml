@@ -9,6 +9,9 @@ concurrency:
   group: ci-${{ github.ref }}
   cancel-in-progress: true
 
+permissions:
+  contents: read
+
 env:
   CARGO_TERM_COLOR: always
   XWIN_VERSION: "0.10.0"
@@ -51,16 +54,13 @@ jobs:
             | tar -xz -C "$RUNNER_TEMP"
           "$RUNNER_TEMP/xwin-${XWIN_VERSION}-x86_64-unknown-linux-musl/xwin" --accept-license splat --output ~/.xwin
 
-      - name: Cache the codec libraries
-        id: deps-cache
-        uses: actions/cache@v6
-        with:
-          path: deps/prefix
-          key: deps-llvm${{ env.LLVM_VERSION }}-xwin${{ env.XWIN_VERSION }}-${{ hashFiles('deps/build_deps.sh', 'deps/toolchain-clang-cl.cmake', 'deps/shim/**') }}
-
+      # A branch that moved renames the library cache, so only main writes it back.
       - name: Build the codec libraries
-        if: steps.deps-cache.outputs.cache-hit != 'true'
-        run: ./deps/build_deps.sh
+        uses: ./.github/actions/codec-libraries
+        with:
+          llvm-version: ${{ env.LLVM_VERSION }}
+          xwin-version: ${{ env.XWIN_VERSION }}
+          save-caches: ${{ github.ref == 'refs/heads/main' }}
 
       - uses: Swatinem/rust-cache@v2
 

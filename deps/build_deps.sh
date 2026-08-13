@@ -1,6 +1,11 @@
 #!/bin/sh
 # Static builds of the C/C++ fallback codecs with clang-cl + xwin (/arch:AVX2, thin LTO).
 # Output: deps/prefix/{lib,include}, linked by build.rs.
+# With no option, sync the sources and build.
+# Options:
+#   --sync
+#   --build
+#   --revisions-hash   Short digest of the checked-out commits, which keys the codec cache.
 set -e
 cd "$(dirname "$0")"
 ROOT=$PWD
@@ -9,11 +14,52 @@ PREFIX=$ROOT/prefix
 # cmake 4 rejects projects requiring <3.5; pin the compatibility floor.
 export CMAKE_POLICY_VERSION_MINIMUM=3.5
 
-clone() { # <directory> <repository> <branch>
-    if [ ! -d "sources/$1" ]; then
-        git clone --depth 1 --branch "$3" --filter=tree:0 "$2" "sources/$1"
-    fi
+# <directory> <repository> <branch>; moving branches by decision, so a sync follows them.
+SOURCES="\
+libwebp https://chromium.googlesource.com/webm/libwebp.git main
+libde265 https://github.com/strukturag/libde265.git master
+libheif https://github.com/strukturag/libheif.git master
+imath https://github.com/AcademySoftwareFoundation/Imath.git main
+libdeflate https://github.com/ebiggers/libdeflate.git master
+openexr https://github.com/AcademySoftwareFoundation/openexr.git release"
+
+sync_sources() {
+    mkdir -p sources
+    echo "$SOURCES" | while read -r directory repository branch; do
+        if [ -d "sources/$directory/.git" ]; then
+            git -C "sources/$directory" fetch --depth 1 origin "$branch"
+            git -C "sources/$directory" reset --hard FETCH_HEAD
+        else
+            git clone --depth 1 --branch "$branch" --filter=tree:0 \
+                "$repository" "sources/$directory"
+        fi
+    done
 }
+
+print_revisions_hash() {
+    revisions=$(echo "$SOURCES" | while read -r directory _; do
+        revision=$(git -C "sources/$directory" rev-parse HEAD)
+        echo "$directory $revision"
+    done)
+    echo "$revisions" | sha256sum | cut -c1-16
+}
+
+case "${1:-}" in
+    --sync) sync_sources; exit 0 ;;
+    --build) ;;
+    --revisions-hash) print_revisions_hash; exit 0 ;;
+    "")
+        previous=$(print_revisions_hash 2>/dev/null) || previous=""
+        sync_sources
+        if [ "$(print_revisions_hash)" != "$previous" ]; then
+            rm -rf build prefix
+        fi
+        ;;
+    *)
+        echo "usage: $0 [--sync | --build | --revisions-hash]" >&2
+        exit 2
+        ;;
+esac
 
 configure_and_install() { # <directory> [extra cmake args...]
     directory=$1
@@ -33,10 +79,9 @@ configure_and_install() { # <directory> [extra cmake args...]
     ninja -C "build/$directory" install
 }
 
-mkdir -p sources build
+mkdir -p build
 
 # libwebp (+libwebpdemux) for animated WebP
-clone libwebp https://chromium.googlesource.com/webm/libwebp.git main
 configure_and_install libwebp \
     -DWEBP_BUILD_ANIM_UTILS=OFF \
     -DWEBP_BUILD_CWEBP=OFF \
@@ -50,7 +95,6 @@ configure_and_install libwebp \
     -DWEBP_BUILD_WEBPMUX=OFF
 
 # libde265 (HEVC for the HEIF fallback): its -Wall means -Weverything to clang-cl
-clone libde265 https://github.com/strukturag/libde265.git master
 (
     export CFLAGS="-Wno-everything"
     export CXXFLAGS="-Wno-everything"
@@ -64,7 +108,6 @@ clone libde265 https://github.com/strukturag/libde265.git master
 )
 
 # libheif (HEIF runtime fallback)
-clone libheif https://github.com/strukturag/libheif.git master
 (
     export CFLAGS="-DLIBDE265_STATIC_BUILD"
     export CXXFLAGS="-DLIBDE265_STATIC_BUILD"
@@ -81,13 +124,11 @@ clone libheif https://github.com/strukturag/libheif.git master
 )
 
 # Imath + libdeflate (OpenEXR dependencies)
-clone imath https://github.com/AcademySoftwareFoundation/Imath.git main
 configure_and_install imath \
     -DBUILD_TESTING=OFF \
     -DIMATH_INSTALL_PKG_CONFIG=ON \
     -DPYTHON=OFF
 
-clone libdeflate https://github.com/ebiggers/libdeflate.git master
 configure_and_install libdeflate \
     -DLIBDEFLATE_BUILD_SHARED_LIB=OFF \
     -DLIBDEFLATE_BUILD_STATIC_LIB=ON \
@@ -95,7 +136,6 @@ configure_and_install libdeflate \
     -DLIBDEFLATE_BUILD_TESTS=OFF
 
 # OpenEXR: its CMake adds a /MP that clang-cl ignores and reports once per file
-clone openexr https://github.com/AcademySoftwareFoundation/openexr.git release
 (
     export CFLAGS="-Wno-unused-command-line-argument"
     export CXXFLAGS="-Wno-unused-command-line-argument"

@@ -1,0 +1,61 @@
+name: Codec libraries
+description: Build the C/C++ fallback codecs at their branch heads, through both codec caches.
+
+inputs:
+  llvm-version:
+    description: LLVM version, part of the library cache key.
+    required: true
+  xwin-version:
+    description: xwin version, part of the library cache key.
+    required: true
+  save-caches:
+    description: Whether this run writes both caches back.
+    required: false
+    default: "false"
+
+runs:
+  using: composite
+  steps:
+    # The revisions are known only after the sync, so restore by prefix and save under them.
+    - name: Restore the codec sources
+      id: sources-cache
+      uses: actions/cache/restore@v6
+      with:
+        path: deps/sources
+        key: codec-sources-
+        restore-keys: codec-sources-
+
+    - name: Follow the codec branches
+      id: sources
+      shell: bash
+      run: |
+        ./deps/build_deps.sh --sync
+        echo "hash=$(./deps/build_deps.sh --revisions-hash)" >> "$GITHUB_OUTPUT"
+
+    - name: Restore the codec libraries
+      id: libraries-cache
+      uses: actions/cache/restore@v6
+      with:
+        path: deps/prefix
+        key: codec-libraries-llvm${{ inputs.llvm-version }}-xwin${{ inputs.xwin-version }}-${{ steps.sources.outputs.hash }}-${{ hashFiles('deps/build_deps.sh', 'deps/toolchain-clang-cl.cmake', 'deps/shim/**') }}
+
+    # The sources already sit at the revisions the key names, so this does not sync again.
+    # success() is stated because a composite action drops the implicit one.
+    - name: Build the codec libraries
+      if: success() && steps.libraries-cache.outputs.cache-hit != 'true'
+      shell: bash
+      run: ./deps/build_deps.sh --build
+
+    - name: Save the codec libraries
+      if: ${{ success() && inputs.save-caches == 'true' && steps.libraries-cache.outputs.cache-hit != 'true' }}
+      uses: actions/cache/save@v6
+      with:
+        path: deps/prefix
+        key: ${{ steps.libraries-cache.outputs.cache-primary-key }}
+
+    - name: Save the codec sources
+      if: ${{ success() && inputs.save-caches == 'true' && steps.sources-cache.outputs.cache-matched-key != format('codec-sources-{0}', steps.sources.outputs.hash) }}
+      uses: actions/cache/save@v6
+      with:
+        path: deps/sources
+        key: codec-sources-${{ steps.sources.outputs.hash }}
