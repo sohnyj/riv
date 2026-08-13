@@ -14,8 +14,6 @@ permissions:
 
 env:
   CARGO_TERM_COLOR: always
-  XWIN_VERSION: "0.10.0"
-  LLVM_VERSION: "22"
 
 jobs:
   release:
@@ -55,41 +53,24 @@ jobs:
           git tag "$RELEASE_TAG"
           git push origin "$RELEASE_TAG"
 
-      # The MSVC STL in the xwin splat requires a recent clang (STL1000),
-      # newer than the runner default, so install from apt.llvm.org.
-      - name: Install the LLVM cross toolchain
-        run: |
-          wget -qO "$RUNNER_TEMP/llvm.sh" https://apt.llvm.org/llvm.sh
-          sudo bash "$RUNNER_TEMP/llvm.sh" "$LLVM_VERSION"
-          sudo apt-get install -y --no-install-recommends \
-            "clang-$LLVM_VERSION" "llvm-$LLVM_VERSION" "lld-$LLVM_VERSION" cmake ninja-build wine p7zip-full
-          echo "/usr/lib/llvm-$LLVM_VERSION/bin" >> "$GITHUB_PATH"
+      # The MSVC STL in the xwin splat requires a clang newer than the runner default (STL1000).
+      - name: Install the cross toolchain
+        id: toolchain
+        uses: ./.github/actions/cross-toolchain
+        with:
+          packages: p7zip-full
 
       - name: Install the Rust toolchain
         run: |
           rustup toolchain install stable --profile minimal
           rustup target add x86_64-pc-windows-msvc
 
-      - name: Cache the xwin splat
-        id: xwin-cache
-        uses: actions/cache@v6
-        with:
-          path: ~/.xwin
-          key: xwin-${{ env.XWIN_VERSION }}
-
-      - name: Splat the Windows CRT and SDK
-        if: steps.xwin-cache.outputs.cache-hit != 'true'
-        run: |
-          curl -fsSL "https://github.com/Jake-Shadle/xwin/releases/download/${XWIN_VERSION}/xwin-${XWIN_VERSION}-x86_64-unknown-linux-musl.tar.gz" \
-            | tar -xz -C "$RUNNER_TEMP"
-          "$RUNNER_TEMP/xwin-${XWIN_VERSION}-x86_64-unknown-linux-musl/xwin" --accept-license splat --output ~/.xwin
-
       # Reads both codec caches and writes neither: a tag's scope is not one main can draw from.
       - name: Build the codec libraries
         uses: ./.github/actions/codec-libraries
         with:
-          llvm-version: ${{ env.LLVM_VERSION }}
-          xwin-version: ${{ env.XWIN_VERSION }}
+          llvm-version: ${{ steps.toolchain.outputs.llvm-version }}
+          xwin-version: ${{ steps.toolchain.outputs.xwin-version }}
 
       - uses: Swatinem/rust-cache@v2
 

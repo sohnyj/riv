@@ -1,0 +1,58 @@
+name: Cross toolchain
+description: Install clang-cl and lld, and splat the Windows CRT and SDK.
+
+inputs:
+  llvm-version:
+    description: LLVM version every caller builds with.
+    required: false
+    default: "22"
+  xwin-version:
+    description: xwin version every caller builds against.
+    required: false
+    default: "0.10.0"
+  packages:
+    description: Extra apt packages to install alongside the toolchain.
+    required: false
+    default: ""
+
+outputs:
+  llvm-version:
+    description: LLVM version installed, for cache keys that name it.
+    value: ${{ inputs.llvm-version }}
+  xwin-version:
+    description: xwin version splatted, for cache keys that name it.
+    value: ${{ inputs.xwin-version }}
+
+runs:
+  using: composite
+  steps:
+    # The versioned LLVM directory carries the unversioned names the cmake toolchain calls.
+    - name: Install the LLVM cross toolchain
+      shell: bash
+      env:
+        LLVM_VERSION: ${{ inputs.llvm-version }}
+        PACKAGES: ${{ inputs.packages }}
+      run: |
+        wget -qO "$RUNNER_TEMP/llvm.sh" https://apt.llvm.org/llvm.sh
+        sudo bash "$RUNNER_TEMP/llvm.sh" "$LLVM_VERSION"
+        sudo apt-get install -y --no-install-recommends \
+          "clang-$LLVM_VERSION" "llvm-$LLVM_VERSION" "lld-$LLVM_VERSION" cmake ninja-build wine $PACKAGES
+        echo "/usr/lib/llvm-$LLVM_VERSION/bin" >> "$GITHUB_PATH"
+
+    - name: Cache the xwin splat
+      id: xwin-cache
+      uses: actions/cache@v6
+      with:
+        path: ~/.xwin
+        key: xwin-${{ inputs.xwin-version }}
+
+    # success() is stated because a composite action drops the implicit one.
+    - name: Splat the Windows CRT and SDK
+      if: success() && steps.xwin-cache.outputs.cache-hit != 'true'
+      shell: bash
+      env:
+        XWIN_VERSION: ${{ inputs.xwin-version }}
+      run: |
+        curl -fsSL "https://github.com/Jake-Shadle/xwin/releases/download/${XWIN_VERSION}/xwin-${XWIN_VERSION}-x86_64-unknown-linux-musl.tar.gz" \
+          | tar -xz -C "$RUNNER_TEMP"
+        "$RUNNER_TEMP/xwin-${XWIN_VERSION}-x86_64-unknown-linux-musl/xwin" --accept-license splat --output ~/.xwin
