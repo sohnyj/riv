@@ -61,9 +61,7 @@ fn dropped_paths(data_object: Option<&IDataObject>) -> Vec<PathBuf> {
     for index in 0..count {
         let length = unsafe { DragQueryFileW(drop_handle, index, Some(buffer.as_mut_slice())) };
         if length > 0 {
-            paths.push(PathBuf::from(String::from_utf16_lossy(
-                &buffer[..length as usize],
-            )));
+            paths.push(crate::text::path_from_wide(&buffer[..length as usize]));
         }
     }
     unsafe { ReleaseStgMedium(&raw mut medium) };

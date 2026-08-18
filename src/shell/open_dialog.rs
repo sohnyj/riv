@@ -82,7 +82,7 @@ fn select_files(
             let item = results.GetItemAt(index)?;
             let raw = item.GetDisplayName(SIGDN_FILESYSPATH)?;
             if !raw.is_null() {
-                paths.push(PathBuf::from(String::from_utf16_lossy(raw.as_wide())));
+                paths.push(crate::text::path_from_wide(raw.as_wide()));
                 CoTaskMemFree(Some(raw.as_ptr().cast()));
             }
         }

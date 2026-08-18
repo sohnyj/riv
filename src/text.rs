@@ -1,7 +1,15 @@
 //! Win32 string helpers.
 
+use std::ffi::OsString;
+use std::os::windows::ffi::OsStringExt;
+use std::path::PathBuf;
 use windows::Win32::UI::Shell::StrCmpLogicalW;
 use windows::core::HSTRING;
+
+/// A path from UTF-16 units as Windows handed them, unpaired surrogates included.
+pub fn path_from_wide(units: &[u16]) -> PathBuf {
+    PathBuf::from(OsString::from_wide(units))
+}
 
 /// Leaf name as titles and messages spell it; empty when the path ends in a root.
 pub fn file_name_text(path: &std::path::Path) -> String {

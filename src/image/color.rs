@@ -297,9 +297,7 @@ fn color_directory() -> Option<std::path::PathBuf> {
         .iter()
         .position(|unit| *unit == 0)
         .unwrap_or(buffer.len());
-    Some(std::path::PathBuf::from(String::from_utf16_lossy(
-        &buffer[..end],
-    )))
+    Some(crate::text::path_from_wide(&buffer[..end]))
 }
 
 fn capabilities_from(information: Option<&AdvancedColorInfo>, window: HWND) -> DisplayCapabilities {

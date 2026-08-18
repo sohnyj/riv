@@ -1,8 +1,6 @@
 //! Remote image fetch delegated to the Windows in-box curl.exe (System32).
 
-use std::ffi::OsString;
 use std::io::Read;
-use std::os::windows::ffi::OsStringExt;
 use std::os::windows::process::CommandExt;
 use std::path::PathBuf;
 use std::process::{Child, Command, Stdio};
@@ -48,7 +46,7 @@ impl NetworkError {
 fn executable_path() -> PathBuf {
     let mut buffer = [0u16; MAX_PATH as usize];
     let length = unsafe { GetSystemDirectoryW(Some(&mut buffer)) } as usize;
-    PathBuf::from(OsString::from_wide(&buffer[..length])).join("curl.exe")
+    crate::text::path_from_wide(&buffer[..length]).join("curl.exe")
 }
 
 pub fn is_supported_protocol(url: &str) -> bool {
