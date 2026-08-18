@@ -7,7 +7,7 @@ use windows::Win32::UI::WindowsAndMessaging::{
     EndDialog, GetDlgItem, GetDlgItemTextW, SendMessageW, SetDlgItemTextW, SetWindowLongPtrW,
     WM_COMMAND, WM_INITDIALOG,
 };
-use windows::core::PCWSTR;
+use windows::core::HSTRING;
 
 use crate::dialogs::modal::{DWLP_USER, IDCANCEL, IDOK};
 use crate::dialogs::resource::IDC_TEXT_INPUT;
@@ -21,7 +21,7 @@ pub struct TextInputRequest<'a> {
 }
 
 struct TextInputState {
-    initial_text: Vec<u16>,
+    initial_text: HSTRING,
     selection: Option<(usize, usize)>,
     accepted_text: Option<String>,
 }
@@ -29,7 +29,7 @@ struct TextInputState {
 /// Runs the modal dialog; Some(text as entered) on OK.
 pub fn show(window: HWND, request: &TextInputRequest) -> Option<String> {
     let mut state = TextInputState {
-        initial_text: crate::text::wide(request.initial_text),
+        initial_text: HSTRING::from(request.initial_text),
         selection: request.selection,
         accepted_text: None,
     };
@@ -56,8 +56,7 @@ extern "system" fn dialog_procedure(
             crate::dialogs::geometry::center_on_owner(dialog);
             let state = unsafe { &*(lparam.0 as *const TextInputState) };
             unsafe {
-                let _ =
-                    SetDlgItemTextW(dialog, IDC_TEXT_INPUT, PCWSTR(state.initial_text.as_ptr()));
+                let _ = SetDlgItemTextW(dialog, IDC_TEXT_INPUT, &state.initial_text);
                 if let Ok(edit) = GetDlgItem(Some(dialog), IDC_TEXT_INPUT) {
                     if let Some((start, end)) = state.selection {
                         SendMessageW(

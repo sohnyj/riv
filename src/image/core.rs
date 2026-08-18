@@ -12,6 +12,7 @@ use windows::Win32::Foundation::HWND;
 use windows::Win32::Storage::FileSystem::FILE_ATTRIBUTE_HIDDEN;
 use windows::Win32::System::Com::{COINIT_MULTITHREADED, CoInitializeEx};
 use windows::Win32::UI::WindowsAndMessaging::WM_APP;
+use windows::core::HSTRING;
 
 use crate::archive::reader as archive_reader;
 use crate::image::decode::{
@@ -268,7 +269,7 @@ enum AnchorIndex {
 
 pub struct ListingEntry {
     pub location: ItemLocation,
-    wide_name: Vec<u16>,
+    wide_name: HSTRING,
     file_size: u64,
     modified: SystemTime,
     created: SystemTime,
@@ -1808,7 +1809,7 @@ fn scan_folder(directory: &Path, options: &CoreOptions) -> Vec<ListingEntry> {
         if !included {
             continue;
         }
-        let wide_name = crate::text::wide(&file_name);
+        let wide_name = HSTRING::from(&file_name);
         entries.push(ListingEntry {
             location: ItemLocation::File(path),
             wide_name,
@@ -1826,7 +1827,7 @@ fn scan_folder(directory: &Path, options: &CoreOptions) -> Vec<ListingEntry> {
 fn member_entry(archive: &Path, member: archive_reader::MemberInfo) -> Option<ListingEntry> {
     let format_name = crate::text::lowercase_extension(Path::new(&member.name))
         .and_then(|extension| decode::format_name_for_extension(&extension))?;
-    let wide_name = crate::text::wide(&member.name);
+    let wide_name = HSTRING::from(&member.name);
     Some(ListingEntry {
         location: ItemLocation::ArchiveMember {
             archive: archive.to_path_buf(),
@@ -2183,7 +2184,7 @@ fn core_with_files(count: usize, anchor: Option<usize>) -> ImageCore {
     core.entries = (0..count)
         .map(|index| ListingEntry {
             location: ItemLocation::File(PathBuf::from(format!("C:\\pictures\\{index:03}.png"))),
-            wide_name: Vec::new(),
+            wide_name: HSTRING::new(),
             file_size: 0,
             modified: UNIX_EPOCH,
             created: UNIX_EPOCH,
@@ -2540,7 +2541,7 @@ mod url_session_state_tests {
         ));
         core.entries = vec![ListingEntry {
             location: ItemLocation::File(path),
-            wide_name: Vec::new(),
+            wide_name: HSTRING::new(),
             file_size: 0,
             modified: UNIX_EPOCH,
             created: UNIX_EPOCH,
@@ -2579,7 +2580,7 @@ mod url_session_state_tests {
 
         core.entries.push(ListingEntry {
             location: ItemLocation::File(PathBuf::from("C:\\pictures\\b.png")),
-            wide_name: Vec::new(),
+            wide_name: HSTRING::new(),
             file_size: 0,
             modified: UNIX_EPOCH,
             created: UNIX_EPOCH,

@@ -45,7 +45,7 @@ pub fn confirm_delete(window: HWND, details: &str, permanent: bool) -> DeleteCon
         "Move this file to the Recycle Bin?"
     };
     // The question rides in the content: a main instruction would enlarge and color it.
-    let content = crate::text::wide(format!("{question}\n\n{details}"));
+    let content = HSTRING::from(format!("{question}\n\n{details}"));
     let verification = w!("Don't ask again");
     let buttons = [
         TASKDIALOG_BUTTON {

@@ -8,7 +8,7 @@ use windows::Win32::Graphics::Gdi::{
 use windows::Win32::UI::WindowsAndMessaging::{
     GetDlgItem, SendMessageW, SetDlgItemTextW, WM_SETFONT,
 };
-use windows::core::{PCWSTR, w};
+use windows::core::{HSTRING, w};
 
 use crate::dialogs::resource::{
     IDC_ABOUT_BUILD, IDC_ABOUT_LINK, IDC_ABOUT_TITLE, IDC_ABOUT_VERSION,
@@ -36,11 +36,8 @@ impl AboutFonts {
 
 /// Fill in the version text and the title/version fonts; returns the fonts to free.
 pub fn initialize_page(page: HWND) -> AboutFonts {
-    set_text(
-        page,
-        IDC_ABOUT_VERSION,
-        concat!("version ", env!("CARGO_PKG_VERSION")),
-    );
+    let version = HSTRING::from(concat!("version ", env!("CARGO_PKG_VERSION")));
+    let _ = unsafe { SetDlgItemTextW(page, IDC_ABOUT_VERSION, &version) };
     let dpi = crate::window::geometry::dpi_for_window(page) as i32;
     let fonts = AboutFonts {
         title: create_font(TITLE_POINT_SIZE, dpi),
@@ -156,26 +153,8 @@ fn open_link(url_wide: &[u16]) {
     if length == 0 {
         return;
     }
-    let url: Vec<u16> = url_wide[..length]
-        .iter()
-        .copied()
-        .chain(std::iter::once(0))
-        .collect();
-    unsafe {
-        ShellExecuteW(
-            None,
-            w!("open"),
-            PCWSTR(url.as_ptr()),
-            None,
-            None,
-            SW_SHOWNORMAL,
-        )
-    };
-}
-
-fn set_text(page: HWND, control: i32, text: &str) {
-    let wide = crate::text::wide(text);
-    let _ = unsafe { SetDlgItemTextW(page, control, PCWSTR(wide.as_ptr())) };
+    let url = HSTRING::from_wide(&url_wide[..length]);
+    unsafe { ShellExecuteW(None, w!("open"), &url, None, None, SW_SHOWNORMAL) };
 }
 
 fn set_font(page: HWND, control: i32, font: HFONT) {

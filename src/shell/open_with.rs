@@ -102,7 +102,7 @@ pub fn invoke(path: &Path, executable_path: &str) -> Result<()> {
 }
 
 pub fn show_open_with_dialog(window: HWND, path: &Path) {
-    let wide = crate::text::wide(path);
+    let wide = HSTRING::from(path);
     let information = OPENASINFO {
         pcszFile: PCWSTR(wide.as_ptr()),
         pcszClass: PCWSTR::null(),

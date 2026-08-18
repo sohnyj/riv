@@ -31,7 +31,7 @@ use windows::Win32::UI::WindowsAndMessaging::{
     WM_INITDIALOG, WM_NOTIFY,
 };
 
-use windows::core::PCWSTR;
+use windows::core::HSTRING;
 
 use crate::actions::Action;
 use crate::archive::reader as archive_reader;
@@ -46,7 +46,6 @@ use crate::settings::{
     TITLE_BAR_TEXT_CHOICES,
 };
 use crate::shell::{file_association, start_menu};
-use crate::text::wide;
 use crate::view::dither::DitherMode;
 use crate::view::renderer::ScalingFilter;
 use crate::view::transform::FitMode;
@@ -324,8 +323,8 @@ fn initialize_frame(state: &mut OptionsState) {
     let Ok(tab) = (unsafe { GetDlgItem(Some(dialog), IDC_OPTIONS_TAB) }) else {
         return;
     };
-    for (index, (_, title)) in PAGES.iter().enumerate() {
-        let text = wide(title);
+    for (index, &(_, title)) in PAGES.iter().enumerate() {
+        let text = HSTRING::from(title);
         let item = TCITEMW {
             mask: TCIF_TEXT,
             pszText: windows::core::PWSTR(text.as_ptr().cast_mut()),
@@ -849,11 +848,8 @@ fn sync_image_page(state: &OptionsState) {
     combo_select(image_page, IDC_IMAGE_DITHER, options.dither_mode);
     combo_select(image_page, IDC_IMAGE_FITMODE, options.fit_mode);
     combo_select(image_page, IDC_IMAGE_PRELOADING, options.preloading);
-    set_dialog_item_text(
-        image_page,
-        IDC_IMAGE_ZOOM_STEP_EDIT,
-        &options.zoom_step_percent.to_string(),
-    );
+    let zoom_step = HSTRING::from(options.zoom_step_percent.to_string());
+    let _ = unsafe { SetDlgItemTextW(image_page, IDC_IMAGE_ZOOM_STEP_EDIT, &zoom_step) };
     set_check(image_page, IDC_IMAGE_CURSOR_ZOOM, options.cursor_zoom);
     set_check(
         image_page,
@@ -892,11 +888,14 @@ fn sync_miscellaneous_page(state: &OptionsState) {
         IDC_MISCELLANEOUS_SLIDESHOW_DIRECTION,
         options.slideshow_direction,
     );
-    set_dialog_item_text(
-        miscellaneous_page,
-        IDC_MISCELLANEOUS_SLIDESHOW_INTERVAL_EDIT,
-        &options.slideshow_interval_seconds.to_string(),
-    );
+    let interval = HSTRING::from(options.slideshow_interval_seconds.to_string());
+    let _ = unsafe {
+        SetDlgItemTextW(
+            miscellaneous_page,
+            IDC_MISCELLANEOUS_SLIDESHOW_INTERVAL_EDIT,
+            &interval,
+        )
+    };
     combo_select(
         miscellaneous_page,
         IDC_MISCELLANEOUS_AFTER_DELETE,
@@ -994,13 +993,13 @@ fn initialize_shortcuts_page(state: &OptionsState) {
         ("Keyboard", keyboard_width),
         ("Mouse", mouse_width),
     ]
-    .iter()
+    .into_iter()
     .enumerate()
     {
-        let text = wide(title);
+        let text = HSTRING::from(title);
         let column = LVCOLUMNW {
             mask: LVCF_TEXT | LVCF_WIDTH,
-            cx: *width,
+            cx: width,
             pszText: windows::core::PWSTR(text.as_ptr().cast_mut()),
             ..Default::default()
         };
@@ -1014,7 +1013,7 @@ fn initialize_shortcuts_page(state: &OptionsState) {
         };
     }
     for (index, row) in state.transient_shortcuts.iter().enumerate() {
-        let label = wide(row.action.label());
+        let label = HSTRING::from(row.action.label());
         let item = LVITEMW {
             mask: LVIF_TEXT,
             iItem: index as i32,
@@ -1038,7 +1037,7 @@ fn refresh_shortcut_rows(state: &OptionsState) {
     };
     for (index, row) in state.transient_shortcuts.iter().enumerate() {
         for (subitem, text) in [(1, row.keyboard.join(", ")), (2, row.mouse.join(", "))] {
-            let wide_text = wide(&text);
+            let wide_text = HSTRING::from(&text);
             let item = LVITEMW {
                 mask: LVIF_TEXT,
                 iSubItem: subitem,
@@ -1230,7 +1229,7 @@ fn tree_insert(
     item_data: isize,
     state_image: isize,
 ) -> HTREEITEM {
-    let label = wide(text);
+    let label = HSTRING::from(text);
     let insert = TVINSERTSTRUCTW {
         hParent: parent,
         hInsertAfter: TVI_LAST,
@@ -1372,8 +1371,8 @@ fn combo_fill(page: HWND, control: i32, entries: &[&str]) {
     let Ok(combo) = (unsafe { GetDlgItem(Some(page), control) }) else {
         return;
     };
-    for entry in entries {
-        let text = wide(entry);
+    for &entry in entries {
+        let text = HSTRING::from(entry);
         unsafe {
             SendMessageW(
                 combo,
@@ -1409,9 +1408,4 @@ fn set_check(page: HWND, control: i32, checked: bool) {
 
 fn is_checked(page: HWND, control: i32) -> bool {
     unsafe { IsDlgButtonChecked(page, control) == BST_CHECKED.0 }
-}
-
-fn set_dialog_item_text(page: HWND, control: i32, text: &str) {
-    let wide_text = wide(text);
-    let _ = unsafe { SetDlgItemTextW(page, control, PCWSTR(wide_text.as_ptr())) };
 }

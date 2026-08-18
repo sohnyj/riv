@@ -23,7 +23,7 @@ use windows::Win32::UI::WindowsAndMessaging::{
     WM_SETFONT, WM_SYSCHAR, WM_SYSKEYDOWN, WM_SYSKEYUP, WM_XBUTTONDBLCLK, WM_XBUTTONDOWN,
     WNDCLASSEXW, WNDPROC,
 };
-use windows::core::{PCWSTR, w};
+use windows::core::{HSTRING, w};
 
 use crate::bindings::{self, MouseBase, current_modifiers};
 use crate::dialogs::resource::{
@@ -264,8 +264,7 @@ unsafe extern "system" fn mouse_procedure(
 
 fn set_mouse_field_text(dialog: HWND, binding: Option<&str>) {
     if let Ok(field) = unsafe { GetDlgItem(Some(dialog), IDC_CAPTURE_MOUSE_FIELD) } {
-        let text = crate::text::wide(binding.unwrap_or("None"));
-        let _ = unsafe { SetWindowTextW(field, PCWSTR(text.as_ptr())) };
+        let _ = unsafe { SetWindowTextW(field, &HSTRING::from(binding.unwrap_or("None"))) };
         let _ = unsafe { InvalidateRect(Some(field), None, false) };
     }
 }
@@ -431,7 +430,7 @@ unsafe extern "system" fn key_list_procedure(
 
 fn listbox_add(dialog: HWND, text: &str) {
     if let Ok(listbox) = unsafe { GetDlgItem(Some(dialog), IDC_CAPTURE_KEY_LIST) } {
-        let wide = crate::text::wide(text);
+        let wide = HSTRING::from(text);
         unsafe {
             SendMessageW(
                 listbox,
@@ -643,6 +642,7 @@ mod listbox_item_text_tests {
     use windows::Win32::UI::WindowsAndMessaging::{
         CreateWindowExW, DestroyWindow, WINDOW_EX_STYLE, WINDOW_STYLE,
     };
+    use windows::core::PCWSTR;
 
     const WS_POPUP: u32 = 0x8000_0000;
     const LBS_HASSTRINGS: u32 = 0x0040;
@@ -651,7 +651,7 @@ mod listbox_item_text_tests {
     #[ignore = "creates a LISTBOX; runs under wine"]
     fn an_item_longer_than_the_old_fixed_buffer_reads_back_fully() {
         // > the old [u16; 128] buffer that overflowed
-        let item = crate::text::wide("A".repeat(300));
+        let item = HSTRING::from("A".repeat(300));
         let listbox = unsafe {
             CreateWindowExW(
                 WINDOW_EX_STYLE(0),

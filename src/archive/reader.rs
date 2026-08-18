@@ -4,6 +4,7 @@ use std::ffi::CStr;
 use std::path::Path;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
+use windows::core::HSTRING;
 
 use crate::archive::libarchive::{
     self, ARCHIVE_EOF, ARCHIVE_OK, Api, Archive, ArchiveEntry, FILETYPE_MASK, FILETYPE_REGULAR,
@@ -186,7 +187,7 @@ impl Reader<'_> {
                 return Err(reader.error("Archive format registration failed"));
             }
         }
-        let wide_path = crate::text::wide(archive_path);
+        let wide_path = HSTRING::from(archive_path);
         if unsafe { (api.read_open_filename_w)(handle, wide_path.as_ptr(), OPEN_BLOCK_BYTES) }
             != ARCHIVE_OK
         {

@@ -41,15 +41,18 @@ mod round_trip_tests {
     use super::*;
     use windows::Win32::System::DataExchange::{EmptyClipboard, SetClipboardData};
     use windows::Win32::System::Memory::{GMEM_MOVEABLE, GlobalAlloc};
+    use windows::core::HSTRING;
 
     fn write_text(text: &str) {
-        let wide = crate::text::wide(text);
+        let wide = HSTRING::from(text);
+        let units_with_terminator = wide.len() + 1;
         unsafe {
             OpenClipboard(None).expect("open clipboard");
             EmptyClipboard().expect("empty clipboard");
-            let global = GlobalAlloc(GMEM_MOVEABLE, wide.len() * 2).expect("clipboard alloc");
+            let global =
+                GlobalAlloc(GMEM_MOVEABLE, units_with_terminator * 2).expect("clipboard alloc");
             let pointer = GlobalLock(global).cast::<u16>();
-            std::ptr::copy_nonoverlapping(wide.as_ptr(), pointer, wide.len());
+            std::ptr::copy_nonoverlapping(wide.as_ptr(), pointer, units_with_terminator);
             let _ = GlobalUnlock(global);
             SetClipboardData(u32::from(CF_UNICODETEXT.0), Some(HANDLE(global.0)))
                 .expect("set clipboard");

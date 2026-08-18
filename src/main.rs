@@ -90,7 +90,7 @@ use windows::Win32::UI::WindowsAndMessaging::{
     WM_SYSCOMMAND, WM_SYSKEYDOWN, WM_TIMER, WM_XBUTTONDOWN, WNDCLASSEXW, WS_OVERLAPPEDWINDOW,
     WindowFromPoint,
 };
-use windows::core::{PCWSTR, Result, w};
+use windows::core::{HSTRING, PCWSTR, Result, w};
 
 /// Icon resource id 1 in riv.rc (MAKEINTRESOURCE).
 const APPLICATION_ICON_ID: PCWSTR = PCWSTR(std::ptr::without_provenance(1));
@@ -695,8 +695,7 @@ impl Application {
         if title == self.window_title {
             return;
         }
-        let wide = crate::text::wide(&title);
-        let _ = unsafe { SetWindowTextW(window, PCWSTR(wide.as_ptr())) };
+        let _ = unsafe { SetWindowTextW(window, &HSTRING::from(&title)) };
         self.window_title = title;
     }
 
@@ -964,12 +963,12 @@ impl Application {
     /// Blocks sleep and display-off, visible to powercfg; WM_SYSCOMMAND blocks the screen saver.
     fn keep_system_awake(&mut self, active: bool) {
         if active && self.power_request.is_none() {
-            let mut reason = text::wide("Slideshow");
+            let reason = HSTRING::from("Slideshow");
             let context = REASON_CONTEXT {
                 Version: POWER_REQUEST_CONTEXT_VERSION,
                 Flags: POWER_REQUEST_CONTEXT_SIMPLE_STRING,
                 Reason: REASON_CONTEXT_0 {
-                    SimpleReasonString: windows::core::PWSTR(reason.as_mut_ptr()),
+                    SimpleReasonString: windows::core::PWSTR(reason.as_ptr().cast_mut()),
                 },
             };
             self.power_request = unsafe { PowerCreateRequest(&raw const context) }.ok();
