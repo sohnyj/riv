@@ -3,32 +3,8 @@
 use windows::Win32::Foundation::{HWND, RECT};
 use windows::Win32::UI::HiDpi::{AdjustWindowRectExForDpi, GetDpiForWindow};
 use windows::Win32::UI::WindowsAndMessaging::{
-    GWL_STYLE, GetWindowLongPtrW, SPI_GETWORKAREA, SYSTEM_PARAMETERS_INFO_UPDATE_FLAGS,
-    SystemParametersInfoW, WINDOW_EX_STYLE, WINDOW_STYLE,
+    GWL_STYLE, GetWindowLongPtrW, WINDOW_EX_STYLE, WINDOW_STYLE,
 };
-
-fn primary_work_area() -> Option<RECT> {
-    let mut work_area = RECT::default();
-    unsafe {
-        SystemParametersInfoW(
-            SPI_GETWORKAREA,
-            0,
-            Some((&raw mut work_area).cast()),
-            SYSTEM_PARAMETERS_INFO_UPDATE_FLAGS(0),
-        )
-    }
-    .ok()?;
-    Some(work_area)
-}
-
-/// Centered origin within the primary work area, when available.
-pub fn work_area_centered_origin(width: i32, height: i32) -> Option<(i32, i32)> {
-    let work_area = primary_work_area()?;
-    Some((
-        work_area.left + (work_area.right - work_area.left - width).max(0) / 2,
-        work_area.top + (work_area.bottom - work_area.top - height).max(0) / 2,
-    ))
-}
 
 /// The window's dots per inch, falling back to the screen default when the query fails.
 pub fn dpi_for_window(window: HWND) -> u32 {

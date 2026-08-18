@@ -2259,16 +2259,15 @@ fn wait_for_frame_slot(slot_handle: HANDLE) -> bool {
 
 fn create_main_window(initial_path: Option<&Path>, pending_device: PendingDevice) -> Result<HWND> {
     let instance = unsafe { GetModuleHandleW(None)? };
-    let (default_x, default_y) = window::geometry::work_area_centered_origin(640, 480)
-        .unwrap_or((CW_USEDEFAULT, CW_USEDEFAULT));
+    // The shell's start position places the first window on the launching monitor.
     let window = unsafe {
         CreateWindowExW(
             view::presentation::REQUIRED_WINDOW_STYLE,
             w!("riv"),
             w!("riv"),
             WS_OVERLAPPEDWINDOW,
-            default_x,
-            default_y,
+            CW_USEDEFAULT,
+            CW_USEDEFAULT,
             640,
             480,
             None,
