@@ -894,7 +894,7 @@ impl ImageCore {
         } else if !curl::is_supported_protocol(url) {
             Some("Unsupported URL protocol")
         } else if archive_reader::url_is_archive(url) {
-            Some("Archives are not supported from a URL")
+            Some("Archives aren't supported from a URL")
         } else {
             None
         };

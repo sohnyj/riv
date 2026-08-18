@@ -90,7 +90,7 @@ pub fn decode_webp_animation(
         )
     };
     if demuxer.is_null() {
-        return Err(uncoded_error("WebP animation could not be read"));
+        return Err(uncoded_error("WebP animation couldn't be read"));
     }
     let decoded = compose_webp_frames(demuxer, format_name, maximum_frames);
     unsafe { WebPDemuxDelete(demuxer) };

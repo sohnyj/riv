@@ -2122,8 +2122,8 @@ fn main() -> Result<()> {
 
     if OsVersion::current() < MINIMUM_WINDOWS_VERSION {
         fail_fast_dialog(
-            "This version of Windows is not supported.",
-            "riv needs Windows 11 23H2 or later.",
+            "This version of Windows isn't supported.",
+            "Windows 11 23H2 or later is required.",
         );
         return Ok(());
     }
@@ -2136,8 +2136,8 @@ fn main() -> Result<()> {
     }
     if !settings::save_directory_is_writable() {
         fail_fast_dialog(
-            "Settings cannot be saved here.",
-            "This folder is not writable. Move the executable to a writable folder.",
+            "Settings can't be saved here.",
+            "This folder isn't writable. Move the executable to a writable folder.",
         );
         return Ok(());
     }

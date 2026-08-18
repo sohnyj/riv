@@ -579,7 +579,7 @@ fn append_exif_lines(lines: &mut Vec<String>, exif: &crate::image::decode::ExifM
     if let Some(flash) = exif.flash {
         let fired = flash & 0x1 != 0;
         let mode = (flash >> 3) & 0x3;
-        let mut text = String::from(if fired { "Fired" } else { "Did not fire" });
+        let mut text = String::from(if fired { "Fired" } else { "Didn't fire" });
         match mode {
             1 | 2 => text.push_str(", compulsory"),
             3 => text.push_str(", auto"),
@@ -643,7 +643,7 @@ pub fn build_error_text(
     let mut text = if file_name.is_empty() {
         reason
     } else {
-        format!("Cannot open {file_name}\n{reason}")
+        format!("Can't open {file_name}\n{reason}")
     };
     if !store_codec_names.is_empty() {
         let codec_names = store_codec_names
@@ -1110,7 +1110,7 @@ mod exif_line_tests {
                 "Exposure bias: -0.7 EV",
                 "Max aperture: f/4",
                 "Metering mode: Pattern",
-                "Flash: Did not fire",
+                "Flash: Didn't fire",
                 "Rating: 4 stars",
             ]
         );
@@ -1205,18 +1205,18 @@ mod error_text_tests {
     #[test]
     fn code_zero_drops_the_error_suffix() {
         let uncoded = build_error_text("a.png", "Unsupported URL protocol", 0, &[]);
-        assert_eq!(uncoded, "Cannot open a.png\nUnsupported URL protocol.");
+        assert_eq!(uncoded, "Can't open a.png\nUnsupported URL protocol.");
         let coded = build_error_text("a.png", "No image at this URL", 0x88982F50u32 as i32, &[]);
         assert_eq!(
             coded,
-            "Cannot open a.png\nNo image at this URL (Error 0x88982F50)"
+            "Can't open a.png\nNo image at this URL (Error 0x88982F50)"
         );
     }
 
     #[test]
     fn a_lowercase_reason_becomes_a_sentence() {
         let text = build_error_text("a.exr", "invalid data window", 0, &[]);
-        assert_eq!(text, "Cannot open a.exr\nInvalid data window.");
+        assert_eq!(text, "Can't open a.exr\nInvalid data window.");
     }
 
     #[test]

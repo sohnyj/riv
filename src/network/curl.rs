@@ -123,7 +123,7 @@ pub fn download(
         .stderr(Stdio::piped())
         .creation_flags(CREATE_NO_WINDOW.0)
         .spawn()
-        .map_err(|error| NetworkError::new(format!("curl could not be started: {error}")))?;
+        .map_err(|error| NetworkError::new(format!("curl couldn't be started: {error}")))?;
     let mut stdout = child.stdout.take().expect("stdout piped above");
     progress(0);
     let mut body = Vec::new();
@@ -157,7 +157,7 @@ pub fn download(
     let _ = stderr.read_to_string(&mut stderr_text);
     let status = child
         .wait()
-        .map_err(|error| NetworkError::new(format!("curl did not exit cleanly: {error}")))?;
+        .map_err(|error| NetworkError::new(format!("curl didn't exit cleanly: {error}")))?;
     if !status.success() {
         let message = stderr_text
             .lines()

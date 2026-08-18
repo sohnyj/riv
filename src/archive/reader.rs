@@ -164,7 +164,7 @@ struct Reader<'api> {
 impl Reader<'_> {
     fn open(archive_path: &Path) -> Result<Self, ArchiveError> {
         let api = libarchive::api()
-            .ok_or_else(|| ArchiveError::new("Archive support could not be loaded"))?;
+            .ok_or_else(|| ArchiveError::new("Archive support couldn't be loaded"))?;
         let handle = unsafe { (api.read_new)() };
         if handle.is_null() {
             return Err(ArchiveError::new("Archive reader allocation failed"));
@@ -186,7 +186,7 @@ impl Reader<'_> {
         if unsafe { (api.read_open_filename_w)(handle, wide_path.as_ptr(), OPEN_BLOCK_BYTES) }
             != ARCHIVE_OK
         {
-            return Err(reader.error("Archive could not be opened"));
+            return Err(reader.error("Archive couldn't be opened"));
         }
         Ok(reader)
     }

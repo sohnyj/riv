@@ -130,7 +130,7 @@ pub fn rename_file(path: &Path, new_name: &str) -> std::io::Result<PathBuf> {
     if new_name_is_invalid(new_name) {
         return Err(std::io::Error::new(
             std::io::ErrorKind::InvalidInput,
-            "The new name is not a valid file name.",
+            "The new name isn't a valid file name.",
         ));
     }
     let destination = path.with_file_name(new_name);
@@ -153,7 +153,7 @@ pub fn show_rename_error(window: HWND, error: &std::io::Error) {
     crate::dialogs::message::show_message(
         Some(window),
         "Rename",
-        "Cannot rename the file.",
+        "Can't rename the file.",
         &error.to_string(),
         "Close",
     );
