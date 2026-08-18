@@ -130,8 +130,8 @@ fn main() {
         .expect("codec library directory readable")
         .flatten()
     {
-        let file_name = entry.file_name().to_string_lossy().into_owned();
-        if let Some(library_name) = file_name.strip_suffix(".lib") {
+        let file_name = entry.file_name();
+        if let Some(library_name) = file_name.to_string_lossy().strip_suffix(".lib") {
             println!("cargo:rustc-link-lib=static={library_name}");
         }
     }

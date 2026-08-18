@@ -295,7 +295,7 @@ pub fn resolved_keyboard_sequences(
         default_keyboard_sequences(action_name),
         MAXIMUM_KEYBOARD_SEQUENCES,
     )
-    .iter()
+    .into_iter()
     .filter_map(|sequence| {
         let (modifiers, virtual_key) = parse_key_sequence(sequence)?;
         format_key_sequence(modifiers, virtual_key)
@@ -330,7 +330,7 @@ pub fn resolved_mouse_encodings(
         default_mouse_encodings(action_name),
         MAXIMUM_MOUSE_ENCODINGS,
     )
-    .iter()
+    .into_iter()
     .filter_map(|encoding| {
         let (modifiers, base) = parse_mouse_encoding(encoding)?;
         Some(format_mouse_encoding(modifiers, base))
@@ -349,7 +349,7 @@ fn collect_bindings<T>(
     for (name, default_sequences) in defaults {
         if let Some(action) = Action::from_name(name) {
             for sequence in override_or_default(overrides, name, default_sequences, maximum) {
-                if let Some(parsed) = parse(&sequence) {
+                if let Some(parsed) = parse(sequence) {
                     collected.push((parsed, action));
                 }
             }
@@ -362,7 +362,7 @@ fn collect_bindings<T>(
             }
             if let Some(action) = Action::from_name(name) {
                 for sequence in string_list(sequences).into_iter().take(maximum) {
-                    if let Some(parsed) = parse(&sequence) {
+                    if let Some(parsed) = parse(sequence) {
                         collected.push((parsed, action));
                     }
                 }
@@ -372,29 +372,24 @@ fn collect_bindings<T>(
     collected
 }
 
-fn override_or_default(
-    overrides: Option<&Map<String, Value>>,
+fn override_or_default<'a>(
+    overrides: Option<&'a Map<String, Value>>,
     name: &str,
-    defaults: &[&str],
+    defaults: &[&'a str],
     maximum: usize,
-) -> Vec<String> {
+) -> Vec<&'a str> {
     let mut resolved = match overrides.and_then(|map| map.get(name)) {
         Some(value) => string_list(value),
-        None => defaults.iter().map(|text| (*text).to_string()).collect(),
+        None => defaults.to_vec(),
     };
     resolved.truncate(maximum);
     resolved
 }
 
-fn string_list(value: &Value) -> Vec<String> {
+fn string_list(value: &Value) -> Vec<&str> {
     value
         .as_array()
-        .map(|list| {
-            list.iter()
-                .filter_map(Value::as_str)
-                .map(str::to_string)
-                .collect()
-        })
+        .map(|list| list.iter().filter_map(Value::as_str).collect())
         .unwrap_or_default()
 }
 

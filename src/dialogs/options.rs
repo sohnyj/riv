@@ -1055,7 +1055,7 @@ fn edit_shortcut(state: &mut OptionsState, row_index: usize, mouse_column: bool)
     if row_index >= state.transient_shortcuts.len() {
         return;
     }
-    let taken: shortcut_capture::TakenBindings = state
+    let taken: Vec<(&str, &str)> = state
         .transient_shortcuts
         .iter()
         .enumerate()
@@ -1068,7 +1068,7 @@ fn edit_shortcut(state: &mut OptionsState, row_index: usize, mouse_column: bool)
             };
             encodings
                 .iter()
-                .map(|encoding| (encoding.clone(), row.action.label()))
+                .map(|encoding| (encoding.as_str(), row.action.label()))
         })
         .collect();
     let row = &state.transient_shortcuts[row_index];
@@ -1076,10 +1076,10 @@ fn edit_shortcut(state: &mut OptionsState, row_index: usize, mouse_column: bool)
         shortcut_capture::capture_mouse_binding(
             state.dialog,
             row.mouse.first().map(String::as_str),
-            taken,
+            &taken,
         )
     } else {
-        shortcut_capture::capture_keyboard_sequences(state.dialog, &row.keyboard, taken)
+        shortcut_capture::capture_keyboard_sequences(state.dialog, &row.keyboard, &taken)
     };
     if let Some(encodings) = updated {
         let row = &mut state.transient_shortcuts[row_index];
@@ -1302,12 +1302,13 @@ fn toggle_association_item(state: &mut OptionsState, tree: HWND, item: HTREEITEM
         let Some(group) = state.groups.get(group_index) else {
             return;
         };
-        let members = group.members.clone();
-        let all_checked = members
+        let extensions = &mut state.extensions;
+        let all_checked = group
+            .members
             .iter()
-            .all(|member| state.extensions[*member].checked);
-        for member in &members {
-            let entry = &mut state.extensions[*member];
+            .all(|member| extensions[*member].checked);
+        for member in &group.members {
+            let entry = &mut extensions[*member];
             entry.checked = !all_checked;
             tree_set_state_image(tree, entry.item, check_state(entry.checked));
         }

@@ -1,5 +1,6 @@
 //! Safe read-only archive access: enumerate members, extract one to memory.
 
+use std::borrow::Cow;
 use std::ffi::CStr;
 use std::path::Path;
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -233,19 +234,11 @@ impl Reader<'_> {
 
     fn error(&self, fallback: &str) -> ArchiveError {
         let text = unsafe { (self.api.error_string)(self.handle) };
-        let message = if text.is_null() {
-            String::new()
-        } else {
-            unsafe { CStr::from_ptr(text) }
-                .to_string_lossy()
-                .into_owned()
-        };
+        let message = (!text.is_null())
+            .then(|| unsafe { CStr::from_ptr(text) }.to_string_lossy())
+            .filter(|message| !message.trim().is_empty());
         ArchiveError {
-            message: if message.trim().is_empty() {
-                fallback.to_string()
-            } else {
-                message
-            },
+            message: message.map_or_else(|| fallback.to_string(), Cow::into_owned),
             code: unsafe { (self.api.errno)(self.handle) },
             cancelled: false,
         }

@@ -176,8 +176,8 @@ fn segment_payloads(jpeg: &[u8]) -> Vec<(u8, Range<usize>)> {
         if payload.end > jpeg.len() {
             break;
         }
-        payloads.push((marker, payload.clone()));
         reader.set_position(payload.end as u64);
+        payloads.push((marker, payload));
     }
     payloads
 }

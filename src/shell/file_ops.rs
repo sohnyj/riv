@@ -1,7 +1,5 @@
 //! File operations: recycle/permanent delete, rename, Explorer select.
 
-use std::os::windows::ffi::OsStrExt;
-
 use std::path::{Path, PathBuf};
 
 use windows::Win32::Foundation::HWND;
@@ -136,11 +134,7 @@ pub fn rename_file(path: &Path, new_name: &str) -> std::io::Result<PathBuf> {
         ));
     }
     let destination = path.with_file_name(new_name);
-    if destination
-        .as_os_str()
-        .encode_wide()
-        .eq(path.as_os_str().encode_wide())
-    {
+    if destination.as_os_str() == path.as_os_str() {
         return Ok(destination);
     }
     // No replace flag: renaming onto an existing file must fail, not overwrite it.

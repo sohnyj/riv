@@ -310,148 +310,12 @@ impl SettingsFile {
 
     /// Writes the in-memory options into the settings document (persisted at exit/Apply).
     pub fn store_options(&mut self) {
-        let options = self.options.clone();
-        self.set_options(&options);
+        write_options(&mut self.document, &self.options);
+        self.options = Options::from_document(&self.document);
     }
 
     pub fn set_options(&mut self, options: &Options) {
-        let default = Options::default();
-        let entries: [(&str, Value, Value); 23] = [
-            (
-                KEY_BACKGROUND_COLOR_ENABLED,
-                Value::Bool(options.background_color_enabled),
-                Value::Bool(default.background_color_enabled),
-            ),
-            (
-                KEY_BACKGROUND_COLOR,
-                Value::String(format_hex_color(options.background_color)),
-                Value::String(format_hex_color(default.background_color)),
-            ),
-            (
-                KEY_TITLE_BAR_TEXT,
-                Value::from(options.title_bar_text),
-                Value::from(default.title_bar_text),
-            ),
-            (
-                KEY_CONTROL_DRAG_WINDOW,
-                Value::Bool(options.control_drag_window),
-                Value::Bool(default.control_drag_window),
-            ),
-            (
-                KEY_REMEMBER_WINDOW_SIZE_AND_POSITION,
-                Value::Bool(options.remember_window_size_and_position),
-                Value::Bool(default.remember_window_size_and_position),
-            ),
-            (
-                KEY_HIDE_CURSOR_FULLSCREEN,
-                Value::Bool(options.hide_cursor_fullscreen),
-                Value::Bool(default.hide_cursor_fullscreen),
-            ),
-            (
-                KEY_SCALING_FILTER,
-                Value::from(options.scaling_filter),
-                Value::from(default.scaling_filter),
-            ),
-            (
-                KEY_FIT_MODE,
-                Value::from(options.fit_mode),
-                Value::from(default.fit_mode),
-            ),
-            (
-                KEY_ZOOM_STEP_PERCENT,
-                Value::from(options.zoom_step_percent),
-                Value::from(default.zoom_step_percent),
-            ),
-            (
-                KEY_DITHER_MODE,
-                Value::from(options.dither_mode),
-                Value::from(default.dither_mode),
-            ),
-            (
-                KEY_FRACTIONAL_WHEEL_ZOOM,
-                Value::Bool(options.fractional_wheel_zoom),
-                Value::Bool(default.fractional_wheel_zoom),
-            ),
-            (
-                KEY_CURSOR_ZOOM,
-                Value::Bool(options.cursor_zoom),
-                Value::Bool(default.cursor_zoom),
-            ),
-            (
-                KEY_SORT_FILES_BY,
-                Value::from(options.sort_files_by),
-                Value::from(default.sort_files_by),
-            ),
-            (
-                KEY_SORT_DESCENDING,
-                Value::Bool(options.sort_descending),
-                Value::Bool(default.sort_descending),
-            ),
-            (
-                KEY_PRELOADING,
-                Value::from(options.preloading),
-                Value::from(default.preloading),
-            ),
-            (
-                KEY_LOOP_WITHIN_FOLDER,
-                Value::Bool(options.loop_within_folder),
-                Value::Bool(default.loop_within_folder),
-            ),
-            (
-                KEY_SLIDESHOW_DIRECTION,
-                Value::from(options.slideshow_direction),
-                Value::from(default.slideshow_direction),
-            ),
-            (
-                KEY_SLIDESHOW_INTERVAL_SECONDS,
-                Value::from(options.slideshow_interval_seconds),
-                Value::from(default.slideshow_interval_seconds),
-            ),
-            (
-                KEY_AFTER_DELETION,
-                Value::from(options.after_deletion),
-                Value::from(default.after_deletion),
-            ),
-            (
-                KEY_ASK_DELETE,
-                Value::Bool(options.ask_delete),
-                Value::Bool(default.ask_delete),
-            ),
-            (
-                KEY_DETECT_FORMAT_BY_CONTENT,
-                Value::Bool(options.detect_format_by_content),
-                Value::Bool(default.detect_format_by_content),
-            ),
-            (
-                KEY_REMEMBER_RECENTS,
-                Value::Bool(options.remember_recents),
-                Value::Bool(default.remember_recents),
-            ),
-            (
-                KEY_SKIP_HIDDEN,
-                Value::Bool(options.skip_hidden),
-                Value::Bool(default.skip_hidden),
-            ),
-        ];
-        let Some(options_object) = self
-            .document
-            .as_object_mut()
-            .and_then(|document| object_section(document, "options"))
-        else {
-            return;
-        };
-        for (key, value, default_value) in entries {
-            if value == default_value {
-                options_object.remove(key);
-            } else {
-                options_object.insert(key.to_string(), value);
-            }
-        }
-        if !options.remember_recents
-            && let Some(document) = self.document.as_object_mut()
-        {
-            document.remove("recents");
-        }
+        write_options(&mut self.document, options);
         self.options = Options::from_document(&self.document);
     }
 
@@ -538,12 +402,11 @@ impl SettingsFile {
             );
     }
 
-    pub fn last_file_dialog_directory(&self) -> Option<String> {
+    pub fn last_file_dialog_directory(&self) -> Option<&str> {
         self.document
             .get("recents")?
             .get("lastfiledialogdirectory")?
             .as_str()
-            .map(str::to_string)
     }
 
     pub fn set_last_file_dialog_directory(&mut self, directory: &str) {
@@ -634,14 +497,11 @@ impl SettingsFile {
     /// Drops the entry and tombstones it so the exit merge cannot restore it.
     pub fn remove_recent_file(&mut self, path: &std::path::Path) {
         let text = path.to_string_lossy();
-        let files = self.recent_files();
-        let kept: Vec<(String, String)> = files
-            .iter()
-            .filter(|(_, stored)| !stored.eq_ignore_ascii_case(&text))
-            .cloned()
-            .collect();
-        if kept.len() != files.len() {
-            self.set_recent_files(&kept);
+        let mut files = self.recent_files();
+        let count = files.len();
+        files.retain(|(_, stored)| !stored.eq_ignore_ascii_case(&text));
+        if files.len() != count {
+            self.set_recent_files(&files);
         }
         self.removed_recent_keys.insert(text.to_ascii_lowercase());
     }
@@ -659,6 +519,145 @@ fn settings_path() -> PathBuf {
         .and_then(|exe| Some(exe.parent()?.to_path_buf()))
         .unwrap_or_default()
         .join("riv.json")
+}
+
+fn write_options(document: &mut Value, options: &Options) {
+    let default = Options::default();
+    let entries: [(&str, Value, Value); 23] = [
+        (
+            KEY_BACKGROUND_COLOR_ENABLED,
+            Value::Bool(options.background_color_enabled),
+            Value::Bool(default.background_color_enabled),
+        ),
+        (
+            KEY_BACKGROUND_COLOR,
+            Value::String(format_hex_color(options.background_color)),
+            Value::String(format_hex_color(default.background_color)),
+        ),
+        (
+            KEY_TITLE_BAR_TEXT,
+            Value::from(options.title_bar_text),
+            Value::from(default.title_bar_text),
+        ),
+        (
+            KEY_CONTROL_DRAG_WINDOW,
+            Value::Bool(options.control_drag_window),
+            Value::Bool(default.control_drag_window),
+        ),
+        (
+            KEY_REMEMBER_WINDOW_SIZE_AND_POSITION,
+            Value::Bool(options.remember_window_size_and_position),
+            Value::Bool(default.remember_window_size_and_position),
+        ),
+        (
+            KEY_HIDE_CURSOR_FULLSCREEN,
+            Value::Bool(options.hide_cursor_fullscreen),
+            Value::Bool(default.hide_cursor_fullscreen),
+        ),
+        (
+            KEY_SCALING_FILTER,
+            Value::from(options.scaling_filter),
+            Value::from(default.scaling_filter),
+        ),
+        (
+            KEY_FIT_MODE,
+            Value::from(options.fit_mode),
+            Value::from(default.fit_mode),
+        ),
+        (
+            KEY_ZOOM_STEP_PERCENT,
+            Value::from(options.zoom_step_percent),
+            Value::from(default.zoom_step_percent),
+        ),
+        (
+            KEY_DITHER_MODE,
+            Value::from(options.dither_mode),
+            Value::from(default.dither_mode),
+        ),
+        (
+            KEY_FRACTIONAL_WHEEL_ZOOM,
+            Value::Bool(options.fractional_wheel_zoom),
+            Value::Bool(default.fractional_wheel_zoom),
+        ),
+        (
+            KEY_CURSOR_ZOOM,
+            Value::Bool(options.cursor_zoom),
+            Value::Bool(default.cursor_zoom),
+        ),
+        (
+            KEY_SORT_FILES_BY,
+            Value::from(options.sort_files_by),
+            Value::from(default.sort_files_by),
+        ),
+        (
+            KEY_SORT_DESCENDING,
+            Value::Bool(options.sort_descending),
+            Value::Bool(default.sort_descending),
+        ),
+        (
+            KEY_PRELOADING,
+            Value::from(options.preloading),
+            Value::from(default.preloading),
+        ),
+        (
+            KEY_LOOP_WITHIN_FOLDER,
+            Value::Bool(options.loop_within_folder),
+            Value::Bool(default.loop_within_folder),
+        ),
+        (
+            KEY_SLIDESHOW_DIRECTION,
+            Value::from(options.slideshow_direction),
+            Value::from(default.slideshow_direction),
+        ),
+        (
+            KEY_SLIDESHOW_INTERVAL_SECONDS,
+            Value::from(options.slideshow_interval_seconds),
+            Value::from(default.slideshow_interval_seconds),
+        ),
+        (
+            KEY_AFTER_DELETION,
+            Value::from(options.after_deletion),
+            Value::from(default.after_deletion),
+        ),
+        (
+            KEY_ASK_DELETE,
+            Value::Bool(options.ask_delete),
+            Value::Bool(default.ask_delete),
+        ),
+        (
+            KEY_DETECT_FORMAT_BY_CONTENT,
+            Value::Bool(options.detect_format_by_content),
+            Value::Bool(default.detect_format_by_content),
+        ),
+        (
+            KEY_REMEMBER_RECENTS,
+            Value::Bool(options.remember_recents),
+            Value::Bool(default.remember_recents),
+        ),
+        (
+            KEY_SKIP_HIDDEN,
+            Value::Bool(options.skip_hidden),
+            Value::Bool(default.skip_hidden),
+        ),
+    ];
+    let Some(options_object) = document
+        .as_object_mut()
+        .and_then(|document| object_section(document, "options"))
+    else {
+        return;
+    };
+    for (key, value, default_value) in entries {
+        if value == default_value {
+            options_object.remove(key);
+        } else {
+            options_object.insert(key.to_string(), value);
+        }
+    }
+    if !options.remember_recents
+        && let Some(document) = document.as_object_mut()
+    {
+        document.remove("recents");
+    }
 }
 
 /// The section as an object, replacing a stored value that is not one (the reader ignores those).

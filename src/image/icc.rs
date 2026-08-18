@@ -1,5 +1,7 @@
 //! Reading an ICC profile: what space it describes, and what it calls itself.
 
+use std::borrow::Cow;
+
 use crate::image::color;
 
 /// Big-endian u32 at the offset, when in bounds.
@@ -244,18 +246,21 @@ pub fn profile_description(icc: &[u8]) -> Option<String> {
                 .iter()
                 .position(|&byte| byte == 0)
                 .unwrap_or(bytes.len());
-            String::from_utf8(bytes[..end].to_vec()).ok()?
+            Cow::Borrowed(std::str::from_utf8(&bytes[..end]).ok()?)
         }
         b"mluc" => {
             // First record: length at +20, offset at +24, UTF-16BE.
             let length = read_u32_be(icc, offset + 20)? as usize;
             let start = offset + read_u32_be(icc, offset + 24)? as usize;
             let bytes = icc.get(start..start + length)?;
-            let units: Vec<u16> = bytes
+            let units = bytes
                 .chunks_exact(2)
-                .map(|pair| u16::from_be_bytes([pair[0], pair[1]]))
-                .collect();
-            String::from_utf16(&units).ok()?
+                .map(|pair| u16::from_be_bytes([pair[0], pair[1]]));
+            Cow::Owned(
+                char::decode_utf16(units)
+                    .collect::<Result<String, _>>()
+                    .ok()?,
+            )
         }
         _ => return None,
     };

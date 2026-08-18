@@ -239,8 +239,8 @@ const MAXIMUM_TEXTURE_DIMENSION: u32 = 16384;
 const ANIMATION_FRAMES_BYTE_LIMIT: u64 = 1 << 30;
 
 /// Whether `frame_count` canvas-sized frames would expand past the byte limit.
-pub(crate) fn animation_budget_exceeded(frame_count: u64, canvas_bytes: usize) -> bool {
-    frame_count * canvas_bytes as u64 > ANIMATION_FRAMES_BYTE_LIMIT
+pub(crate) fn animation_budget_exceeded(frame_count: u64, canvas_bytes: u64) -> bool {
+    frame_count * canvas_bytes > ANIMATION_FRAMES_BYTE_LIMIT
 }
 
 /// A zeroed buffer of `bytes`, or None when memory runs short; vec! would abort on OOM.
@@ -292,7 +292,7 @@ impl FrameCompositor {
         let bytes = (width as usize)
             .checked_mul(height as usize)?
             .checked_mul(4)
-            .filter(|bytes| !animation_budget_exceeded(1, *bytes))?;
+            .filter(|bytes| !animation_budget_exceeded(1, *bytes as u64))?;
         let canvas = try_zeroed_buffer(bytes)?;
         Some(Self {
             canvas,
@@ -303,8 +303,8 @@ impl FrameCompositor {
         })
     }
 
-    pub fn frames_so_far(&self) -> u64 {
-        self.frames.len() as u64
+    pub fn frames_so_far(&self) -> usize {
+        self.frames.len()
     }
 
     pub fn accepts_one_more(&mut self) -> bool {
@@ -313,7 +313,8 @@ impl FrameCompositor {
 
     /// Whether `declared_frames` still fit the budget; a refusal marks the animation truncated.
     pub fn accepts_another(&mut self, declared_frames: u64) -> bool {
-        if !self.frames.is_empty() && animation_budget_exceeded(declared_frames, self.canvas.len())
+        if !self.frames.is_empty()
+            && animation_budget_exceeded(declared_frames, self.canvas.len() as u64)
         {
             self.truncated = true;
             return false;
@@ -941,7 +942,7 @@ pub fn decoded_weight(width: u32, height: u32, bytes_per_pixel: u32, frame_count
     if frame_count > 1 {
         // Animations are never downscaled; the compositor works at canvas size.
         let frame_bytes = u64::from(width) * u64::from(height) * u64::from(bytes_per_pixel);
-        if animation_budget_exceeded(frame_count, frame_bytes as usize) {
+        if animation_budget_exceeded(frame_count, frame_bytes) {
             frame_bytes
         } else {
             frame_count * frame_bytes
@@ -2331,7 +2332,11 @@ fn query_string(reader: &IWICMetadataQueryReader, name: PCWSTR) -> Option<String
                 text
             })
     })
-    .map(|text| text.trim().to_string())
+    .map(|mut text| {
+        text.truncate(text.trim_end().len());
+        text.drain(..text.len() - text.trim_start().len());
+        text
+    })
     .filter(|text| !text.is_empty())
 }
 

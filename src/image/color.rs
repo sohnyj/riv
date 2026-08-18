@@ -182,7 +182,7 @@ pub struct DisplayColor {
     pub capabilities: DisplayCapabilities,
     pub gamut: Option<DisplayGamut>,
     /// The display's ICC profile, the destination when the OS color-manages nothing.
-    pub display_profile: Option<Arc<Vec<u8>>>,
+    pub display_profile: Option<Arc<[u8]>>,
 }
 
 /// The window's display information hook: advanced-color snapshots plus a change message.
@@ -238,7 +238,7 @@ pub fn display_color(watcher: Option<&DisplayWatcher>, window: HWND) -> DisplayC
     let display_profile = (!capabilities.hdr && !capabilities.advanced_color)
         .then(|| monitor_device_profile(window))
         .flatten()
-        .map(Arc::new);
+        .map(Arc::from);
     DisplayColor {
         capabilities,
         gamut: information.as_ref().and_then(gamut_from),

@@ -723,12 +723,11 @@ impl ImageCore {
             });
             return LoadOutcome::Pending;
         }
-        let directory = path.parent().map(Path::to_path_buf);
-        if let Some(directory) = directory
-            && !self.directory_covered(&directory)
+        if let Some(directory) = path.parent()
+            && !self.directory_covered(directory)
         {
             self.submit_scan(PendingScan {
-                scope: ListingScope::Directory(directory),
+                scope: ListingScope::Directory(directory.to_path_buf()),
                 purpose: ScanPurpose::CoverAnchor,
             });
         }
@@ -1077,15 +1076,14 @@ impl ImageCore {
 
     /// Goes to an item the caller already identified, listed or not.
     pub fn navigate_to_location(&mut self, target: &ItemLocation) -> Option<LoadOutcome> {
-        let target = target.clone();
         if self
             .navigation_anchor()
-            .is_some_and(|anchor| anchor == &target)
+            .is_some_and(|anchor| anchor == target)
         {
             return None;
         }
         self.opposite_steps = 0; // a jump keeps the polarity but breaks the run
-        Some(self.load_item(&target))
+        Some(self.load_item(target))
     }
 
     /// Empty-window state for when a delete leaves nothing to show.
@@ -1617,12 +1615,7 @@ impl ImageCore {
         if total <= budget {
             return;
         }
-        let weighted: Vec<(ItemLocation, u64)> = self
-            .cache
-            .iter()
-            .map(|(location, entry)| (location.clone(), self.cached_weight(location, entry)))
-            .collect();
-        let anchor = self.navigation_anchor().cloned();
+        let anchor = self.navigation_anchor();
         let priorities = preload_priorities(
             self.anchor_index(),
             backward,
@@ -1630,18 +1623,19 @@ impl ImageCore {
             self.entries.len(),
             self.options.loop_within_folder,
         );
-        let mut ranked: Vec<(ItemLocation, u64, usize)> = weighted
-            .into_iter()
-            .map(|(location, weight)| {
+        let mut ranked: Vec<(ItemLocation, u64, usize)> = self
+            .cache
+            .iter()
+            .map(|(location, entry)| {
                 // The anchor goes last even when unlisted; what left the preload targets goes first.
-                let key = if anchor.as_ref() == Some(&location) {
+                let key = if anchor == Some(location) {
                     0
                 } else {
-                    self.position_of(&location)
+                    self.position_of(location)
                         .and_then(|index| priorities.get(&index).copied())
                         .unwrap_or(usize::MAX)
                 };
-                (location, weight, key)
+                (location.clone(), self.cached_weight(location, entry), key)
             })
             .collect();
         ranked.sort_by_key(|(_, _, key)| std::cmp::Reverse(*key));

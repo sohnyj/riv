@@ -53,10 +53,10 @@ pub struct MenuState {
     pub shortcuts: HashMap<&'static str, String>,
 }
 
-struct MenuBuilder {
+struct MenuBuilder<'a> {
     /// Command IDs are entries index + 1; 0 means dismissed.
     entries: Vec<MenuSelection>,
-    state_snapshot: MenuState,
+    state_snapshot: &'a MenuState,
     /// The Playlist submenu, kept so the playlist key can open the menu at it.
     playlist_menu: HMENU,
     /// Menus no parent owns yet; a build that gives up partway destroys these.
@@ -86,8 +86,8 @@ fn mark_access_key(mut escaped: String, access_key: Option<char>) -> String {
     escaped
 }
 
-impl MenuBuilder {
-    fn new(state: MenuState) -> Self {
+impl<'a> MenuBuilder<'a> {
+    fn new(state: &'a MenuState) -> Self {
         Self {
             entries: Vec::new(),
             state_snapshot: state,
@@ -215,25 +215,24 @@ impl MenuBuilder {
         self.append_action(menu, Action::Open)?;
         self.append_action(menu, Action::OpenUrl)?;
 
+        let state = self.state_snapshot;
         let recent = self.create_menu()?;
-        for index in 0..self.state_snapshot.recent_names.len() {
-            let name = self.state_snapshot.recent_names[index].clone();
-            self.append_action_labeled(recent, Action::Recent(index as u8), &name)?;
+        for (index, name) in state.recent_names.iter().enumerate() {
+            self.append_action_labeled(recent, Action::Recent(index as u8), name)?;
         }
-        if !self.state_snapshot.recent_names.is_empty() {
+        if !state.recent_names.is_empty() {
             self.append_separator(recent)?;
         }
         self.append_action_labeled(recent, Action::ClearRecents, "Clear recents")?;
         self.append_submenu(menu, recent, "Open recent", true)?;
         let open_with = self.create_menu()?;
-        let open_with_items = self.state_snapshot.open_with_items.clone();
-        for (index, label) in open_with_items.iter().enumerate() {
+        for (index, label) in state.open_with_items.iter().enumerate() {
             self.append_open_with_entry(open_with, index, label)?;
-            if index == 0 && self.state_snapshot.open_with_has_default {
+            if index == 0 && state.open_with_has_default {
                 self.append_separator(open_with)?;
             }
         }
-        if !open_with_items.is_empty() {
+        if !state.open_with_items.is_empty() {
             self.append_separator(open_with)?;
         }
         self.append_action_labeled(open_with, Action::OtherApplication, "Other application...")?;
@@ -247,12 +246,11 @@ impl MenuBuilder {
         self.append_separator(menu)?;
 
         let playlist = self.create_menu()?;
-        Self::append_playlist_overflow(playlist, self.state_snapshot.playlist_first_index)?;
-        let playlist_names = self.state_snapshot.playlist_names.clone();
-        for (slot, name) in playlist_names.iter().enumerate() {
+        Self::append_playlist_overflow(playlist, state.playlist_first_index)?;
+        for (slot, name) in state.playlist_names.iter().enumerate() {
             self.append_playlist_entry(playlist, slot, name)?;
         }
-        Self::append_playlist_overflow(playlist, self.state_snapshot.playlist_hidden_after)?;
+        Self::append_playlist_overflow(playlist, state.playlist_hidden_after)?;
         self.playlist_menu = playlist;
         // The playlist key opens this same submenu, so the label carries that shortcut.
         let playlist_label = self.menu_text(Action::Playlist, Action::Playlist.label());
@@ -414,7 +412,7 @@ pub fn show(
     y: i32,
     target: MenuTarget,
 ) -> Option<MenuSelection> {
-    let mut builder = MenuBuilder::new(state);
+    let mut builder = MenuBuilder::new(&state);
     let menu = builder.build().ok()?;
     let (tracked, flags) = match target {
         MenuTarget::Full => (menu, TPM_RETURNCMD | TPM_RIGHTBUTTON),
@@ -470,7 +468,7 @@ mod menu_structure_tests {
     }
 
     fn submenu_is_grayed(state: MenuState, label: &str) -> bool {
-        let mut builder = MenuBuilder::new(state);
+        let mut builder = MenuBuilder::new(&state);
         let menu = builder.build().expect("menu builds");
         let position = position_of_label(menu, label).expect("submenu present");
         let grayed = is_grayed(menu, position);
@@ -499,7 +497,7 @@ mod menu_structure_tests {
     #[test]
     fn clear_recents_follows_the_recent_files() {
         let grayed = |state: MenuState| {
-            let mut builder = MenuBuilder::new(state);
+            let mut builder = MenuBuilder::new(&state);
             let menu = builder.build().expect("menu builds");
             let recent = submenu_by_label(menu, "Open recent");
             let position = position_of_label(recent, "Clear recents").expect("item present");
@@ -554,7 +552,8 @@ mod menu_structure_tests {
 
     #[test]
     fn view_leads_with_the_fit_toggle() {
-        let mut builder = MenuBuilder::new(state());
+        let width_state = state();
+        let mut builder = MenuBuilder::new(&width_state);
         let menu = builder.build().expect("menu builds");
         let view = submenu_by_label(menu, "View");
         // The fit label names the other axis: width is current here.
@@ -566,7 +565,7 @@ mod menu_structure_tests {
 
         let mut height_state = state();
         height_state.fit_height = true;
-        let mut builder = MenuBuilder::new(height_state);
+        let mut builder = MenuBuilder::new(&height_state);
         let menu = builder.build().expect("menu builds");
         let view = submenu_by_label(menu, "View");
         assert_eq!(bare_label(view, 0), "Fit width");
@@ -584,7 +583,7 @@ mod menu_structure_tests {
             .set(ActionRequirement::RecentFiles, true);
         with_names.recent_names = vec!["c&d.png".to_string()];
         with_names.open_with_items = vec!["E & F".to_string()];
-        let mut builder = MenuBuilder::new(with_names);
+        let mut builder = MenuBuilder::new(&with_names);
         let menu = builder.build().expect("menu builds");
         // GetMenuString returns the stored text; "&&" draws as a literal "&".
         assert_eq!(
@@ -620,7 +619,7 @@ mod menu_structure_tests {
         with_folder.playlist_first_index = 38;
         with_folder.playlist_current_slot = Some(12);
         with_folder.playlist_hidden_after = 42;
-        let mut builder = MenuBuilder::new(with_folder);
+        let mut builder = MenuBuilder::new(&with_folder);
         let menu = builder.build().expect("menu builds");
         let submenu = submenu_by_label(menu, "Playlist");
         assert_eq!(unsafe { GetMenuItemCount(Some(submenu)) }, 22);
@@ -669,7 +668,7 @@ mod menu_structure_tests {
         with_shortcut
             .shortcuts
             .insert(Action::Playlist.name(), "E".to_string());
-        let mut builder = MenuBuilder::new(with_shortcut);
+        let mut builder = MenuBuilder::new(&with_shortcut);
         let menu = builder.build().expect("menu builds");
         let labels = item_labels(menu);
         assert!(labels.contains(&"Playlist\tE".to_string()));
@@ -680,7 +679,8 @@ mod menu_structure_tests {
 
     #[test]
     fn top_level_items_follow_the_menu_order() {
-        let mut builder = MenuBuilder::new(state());
+        let state = state();
+        let mut builder = MenuBuilder::new(&state);
         let menu = builder.build().expect("menu builds");
         let labels = item_labels(menu);
         let _ = unsafe { DestroyMenu(menu) };
@@ -711,7 +711,8 @@ mod menu_structure_tests {
 
     #[test]
     fn window_and_tools_carry_their_sections() {
-        let mut builder = MenuBuilder::new(state());
+        let state = state();
+        let mut builder = MenuBuilder::new(&state);
         let menu = builder.build().expect("menu builds");
         let window = submenu_by_label(menu, "Window");
         assert_eq!(bare_label(window, 0), "Always on top");

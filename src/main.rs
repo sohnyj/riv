@@ -291,7 +291,7 @@ struct InfoTextCache {
 /// The output mode the renderer drives, from the display's current capabilities.
 fn output_mode(
     capabilities: &color::DisplayCapabilities,
-    display_profile: Option<Arc<Vec<u8>>>,
+    display_profile: Option<Arc<[u8]>>,
 ) -> OutputMode {
     OutputMode {
         hdr: capabilities.hdr,
@@ -304,7 +304,7 @@ fn output_mode(
 fn create_renderer(
     window: HWND,
     capabilities: &color::DisplayCapabilities,
-    display_profile: Option<Arc<Vec<u8>>>,
+    display_profile: Option<Arc<[u8]>>,
     device: GraphicsDevice,
 ) -> Result<Renderer> {
     let (width, height) = client_size(window);
@@ -490,7 +490,7 @@ impl Application {
     fn reconfigure_display_output(
         &mut self,
         capabilities: &color::DisplayCapabilities,
-        display_profile: Option<Arc<Vec<u8>>>,
+        display_profile: Option<Arc<[u8]>>,
         force: bool,
     ) -> bool {
         let mode = output_mode(capabilities, display_profile);
@@ -686,9 +686,10 @@ impl Application {
                 (0, _) | (_, None) => "riv".to_string(),
                 (2, Some(name)) => self.prefix_with_position(name),
                 (3, Some(name)) => {
-                    let body = anchor
-                        .and_then(|location| location.folder_name())
-                        .map_or_else(|| name.clone(), |folder| format!("{folder}\\{name}"));
+                    let body = match anchor.and_then(|location| location.folder_name()) {
+                        Some(folder) => format!("{folder}\\{name}"),
+                        None => name,
+                    };
                     self.prefix_with_position(body)
                 }
                 (_, Some(name)) => name,
@@ -725,14 +726,13 @@ impl Application {
         if same_view && previous_width > 0 && image.width > 0 && previous_width != image.width {
             self.view_transform.scale *= previous_width as f32 / image.width as f32;
         }
-        let texture = current.texture.clone();
         let frame = &image.frames[0];
         let upload = match &mut self.renderer {
-            Some(renderer) => renderer.set_image(&frame.pixels, texture.as_ref(), &image),
+            Some(renderer) => renderer.set_image(&frame.pixels, current.texture.as_ref(), &image),
             None => Err(windows::core::Error::empty()),
         };
         self.displayed_image = Some(image);
-        self.displayed_location = Some(location.clone());
+        self.displayed_location = Some(location);
         if !same_view {
             let transform = &mut self.view_transform;
             transform.rotation_quadrant = 0;
@@ -766,7 +766,11 @@ impl Application {
         }
         if !same_view {
             // Members list the archive itself; URL items stay out of recents.
-            if let Some(file) = location.containing_file() {
+            if let Some(file) = self
+                .displayed_location
+                .as_ref()
+                .and_then(ItemLocation::containing_file)
+            {
                 self.settings.add_recent_file(file);
             }
             self.start_open_with_enumeration(window);
@@ -866,14 +870,14 @@ impl Application {
     }
 
     fn render_animation_frame(&mut self, window: HWND, frame_index: usize) {
-        let Some(image) = self.displayed_image.clone() else {
+        let Some(image) = &self.displayed_image else {
             return;
         };
         let frame = &image.frames[frame_index];
         if let Some(renderer) = &mut self.renderer
             && renderer.update_frame_pixels(&frame.pixels).is_err()
         {
-            let _ = renderer.set_image(&frame.pixels, None, &image);
+            let _ = renderer.set_image(&frame.pixels, None, image);
         }
         self.request_render(window);
     }
@@ -1051,9 +1055,8 @@ impl Application {
                 .image_core
                 .current
                 .as_ref()
-                .and_then(|current| current.texture.clone());
-            let applied =
-                renderer.set_image(&image.frames[frame_index].pixels, texture.as_ref(), image);
+                .and_then(|current| current.texture.as_ref());
+            let applied = renderer.set_image(&image.frames[frame_index].pixels, texture, image);
             if applied.is_err() {
                 // Neither texture nor pixels on hand; the file is the master copy.
                 self.image_core.reload_current();
@@ -1618,8 +1621,9 @@ fn dispatch_action(application: &mut Application, window: HWND, action: Action) 
             let path = application
                 .settings
                 .recent_files()
-                .get(usize::from(index))
-                .map(|(_, path)| std::path::PathBuf::from(path));
+                .into_iter()
+                .nth(usize::from(index))
+                .map(|(_, path)| PathBuf::from(path));
             if let Some(path) = path {
                 open_recent_path(application, window, &path);
             }
@@ -1694,7 +1698,7 @@ fn dispatch_action(application: &mut Application, window: HWND, action: Action) 
         }
         Action::Open => {
             let last_directory = application.settings.last_file_dialog_directory();
-            let paths = open_dialog::show(window, last_directory.as_deref());
+            let paths = open_dialog::show(window, last_directory);
             for rest in paths.iter().skip(1) {
                 open_in_new_window(rest);
             }
@@ -1813,11 +1817,10 @@ fn delete_current_file(application: &mut Application, window: HWND, permanent: b
     } else {
         NavigationCommand::Next
     };
-    let deleted = ItemLocation::File(path.clone());
     match file_ops::delete_file(&path, permanent) {
         Ok(()) => match application
             .image_core
-            .remove_deleted_item(&deleted, preferred)
+            .remove_deleted_item(&ItemLocation::File(path), preferred)
         {
             Some(target) => open_external_path(application, window, &target),
             None => application.clear_displayed_image(window),
@@ -1901,12 +1904,8 @@ fn show_menu(application: &mut Application, window: HWND, x: i32, y: i32, target
         .playlist_window(context_menu::playlist_capacity(window));
     // The menu pumps messages, so selections resolve against this snapshot, not the live listing.
     let playlist_locations = playlist.locations;
-    let recent_paths: Vec<String> = application
-        .settings
-        .recent_files()
-        .into_iter()
-        .map(|(_, path)| path)
-        .collect();
+    let (recent_names, recent_paths): (Vec<String>, Vec<String>) =
+        application.settings.recent_files().into_iter().unzip();
     let open_with_target = application.image_core.current_file().map(Path::to_path_buf);
     let open_with_executables: Vec<String> =
         application
@@ -1941,12 +1940,7 @@ fn show_menu(application: &mut Application, window: HWND, x: i32, y: i32, target
         flipped: application.view_transform.flipped,
         fullscreen: application.fullscreen_restore.is_some(),
         slideshow_active: application.slideshow_item_shown_at.is_some(),
-        recent_names: application
-            .settings
-            .recent_files()
-            .into_iter()
-            .map(|(name, _)| name)
-            .collect(),
+        recent_names,
         open_with_items: application
             .current_open_with_list()
             .map_or_else(Vec::new, |list| {
@@ -1978,7 +1972,7 @@ fn show_menu(application: &mut Application, window: HWND, x: i32, y: i32, target
             // A recent opened from the menu is the one the label named, not today's first entry.
             MenuSelection::Action(Action::Recent(index)) => {
                 if let Some(path) = recent_paths.get(usize::from(index)) {
-                    open_recent_path(application, window, &PathBuf::from(path));
+                    open_recent_path(application, window, Path::new(path));
                 }
             }
             MenuSelection::Action(action) => {

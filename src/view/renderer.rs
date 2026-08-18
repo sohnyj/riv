@@ -108,7 +108,7 @@ pub struct OutputMode {
     pub hdr: bool,
     pub advanced_color: bool,
     /// The display's ICC profile, the ACM-off SDR destination; None when unavailable.
-    pub display_profile: Option<Arc<Vec<u8>>>,
+    pub display_profile: Option<Arc<[u8]>>,
 }
 
 impl OutputMode {
@@ -303,7 +303,6 @@ impl Drop for Renderer {
     }
 }
 
-#[derive(Clone)]
 pub struct GraphicsDevice {
     pub device: ID3D11Device,
     pub context: ID3D11DeviceContext,
@@ -469,17 +468,9 @@ impl Renderer {
             full_frame_nits,
         };
         // A failed first build retries without the quantize pass, never blocking launch.
-        Self::build(window, width, height, mode.clone(), target, true, &device).or_else(|_| {
+        Self::build(window, width, height, mode.clone(), target, true, device).or_else(|_| {
             // A fresh device for the retry: DXGI allows one flip swapchain per window.
-            Self::build(
-                window,
-                width,
-                height,
-                mode,
-                target,
-                false,
-                &create_device()?,
-            )
+            Self::build(window, width, height, mode, target, false, create_device()?)
         })
     }
 
@@ -518,7 +509,7 @@ impl Renderer {
         d2d_context: &ID2D1DeviceContext,
         is_hdr_output: bool,
         is_sdr_wide_gamut: bool,
-        display_profile: Option<&Arc<Vec<u8>>>,
+        display_profile: Option<&[u8]>,
     ) -> (Option<ID2D1ColorContext>, Option<&'static str>) {
         let Some(display_profile) =
             display_profile.filter(|_| !is_hdr_output && !is_sdr_wide_gamut)
@@ -646,18 +637,16 @@ impl Renderer {
         mode: OutputMode,
         target: ToneMapTarget,
         with_quantize_pass: bool,
-        device: &GraphicsDevice,
+        device: GraphicsDevice,
     ) -> Result<Self> {
-        let output_mode = mode.clone();
         let is_sdr_wide_gamut = mode.is_sdr_wide_gamut();
         let is_hdr_output = mode.hdr;
-        let display_profile = mode.display_profile;
         let tone_map_target_nits = target.peak_nits;
         let full_frame_nits = target.full_frame_nits;
         let GraphicsDevice {
             device: d3d_device,
             context: d3d_context,
-        } = device.clone();
+        } = device;
         let dxgi_device: IDXGIDevice = d3d_device.cast()?;
         let upload_maximum_frame_bytes = maximum_resource_bytes(
             unsafe { dxgi_device.GetAdapter() }
@@ -696,7 +685,7 @@ impl Renderer {
             &d2d_context,
             is_hdr_output,
             is_sdr_wide_gamut,
-            display_profile.as_ref(),
+            mode.display_profile.as_deref(),
         );
 
         // Any composition setup failure keeps the proven hwnd swapchain path.
@@ -771,7 +760,7 @@ impl Renderer {
         static UPLOAD_DEVICE_GENERATIONS: std::sync::atomic::AtomicU64 =
             std::sync::atomic::AtomicU64::new(1);
         let mut renderer = Self {
-            output_mode,
+            output_mode: mode,
             upload_device_generation: UPLOAD_DEVICE_GENERATIONS
                 .fetch_add(1, std::sync::atomic::Ordering::Relaxed),
             upload_maximum_frame_bytes,
@@ -890,8 +879,7 @@ impl Renderer {
         let destination = self
             .display_color_context
             .as_ref()
-            .and(self.output_mode.display_profile.as_deref())
-            .map(Vec::as_slice);
+            .and(self.output_mode.display_profile.as_deref());
         match (icc_profile, destination) {
             // Untagged stands for sRGB, so one side present means that side must be sRGB.
             (None, None) => true,
@@ -1056,17 +1044,15 @@ impl Renderer {
         full_frame_nits: f32,
     ) -> Result<()> {
         let is_sdr_wide_gamut = mode.is_sdr_wide_gamut();
-        let output_mode = mode.clone();
         let is_hdr_output = mode.hdr;
-        let display_profile = mode.display_profile;
         // Adopt the target state first so a partial failure cannot retry every WM_MOVE.
-        self.output_mode = output_mode;
+        self.output_mode = mode;
         (self.display_color_context, self.destination_gamut_label) =
             Self::display_context_and_label(
                 &self.d2d_context,
                 is_hdr_output,
                 is_sdr_wide_gamut,
-                display_profile.as_ref(),
+                self.output_mode.display_profile.as_deref(),
             );
         self.tone_map_target_nits = tone_map_target_nits;
         self.display_full_frame_nits = full_frame_nits;

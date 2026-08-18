@@ -13,9 +13,9 @@ use windows::core::{HSTRING, Interface, Result, w};
 pub fn shortcut_path() -> Option<PathBuf> {
     let pointer =
         unsafe { SHGetKnownFolderPath(&FOLDERID_Programs, KF_FLAG_DEFAULT, None) }.ok()?;
-    let folder = unsafe { pointer.to_string() };
+    let folder = crate::text::path_from_wide(unsafe { pointer.as_wide() });
     unsafe { CoTaskMemFree(Some(pointer.as_ptr().cast())) };
-    Some(PathBuf::from(folder.ok()?).join("riv.lnk"))
+    Some(folder.join("riv.lnk"))
 }
 
 pub fn shortcut_exists() -> bool {

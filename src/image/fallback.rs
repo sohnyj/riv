@@ -1,5 +1,6 @@
 //! Static C codec adapters: animated WebP, EXR, and HEIF fallback.
 
+use std::borrow::Cow;
 use std::ffi::{CStr, c_char, c_int, c_void};
 use std::path::Path;
 use std::sync::Arc;
@@ -162,7 +163,7 @@ fn compose_webp_frames(
                 100
             },
         });
-        if compositor.frames_so_far() as usize >= frame_limit
+        if compositor.frames_so_far() >= frame_limit
             || unsafe { WebPDemuxNextFrame(&raw mut iterator) } == 0
         {
             break;
@@ -391,11 +392,9 @@ impl HeifError {
             return Ok(());
         }
         let text = if self.message.is_null() {
-            "HEIF decode failed".to_string()
+            Cow::Borrowed("HEIF decode failed")
         } else {
-            unsafe { CStr::from_ptr(self.message) }
-                .to_string_lossy()
-                .into_owned()
+            unsafe { CStr::from_ptr(self.message) }.to_string_lossy()
         };
         Err(uncoded_error(text))
     }

@@ -15,7 +15,7 @@ use windows::Win32::Graphics::DirectWrite::{
     DWriteCreateFactory, IDWriteFactory, IDWriteTextFormat, IDWriteTextLayout,
 };
 use windows::Win32::System::Time::{FileTimeToSystemTime, SystemTimeToTzSpecificLocalTime};
-use windows::core::{Result, w};
+use windows::core::{HSTRING, Result, w};
 use windows_numerics::Vector2;
 
 use crate::image::color;
@@ -110,9 +110,9 @@ fn shaped_text<'a>(
             || cached.maximum_height != maximum_height
     });
     if stale {
-        let utf16: Vec<u16> = text.encode_utf16().collect();
+        let wide = HSTRING::from(text);
         let layout = unsafe {
-            dwrite_factory.CreateTextLayout(&utf16, format, wrap_width.max(1.0), maximum_height)
+            dwrite_factory.CreateTextLayout(&wide, format, wrap_width.max(1.0), maximum_height)
         }?;
         let mut metrics = DWRITE_TEXT_METRICS::default();
         unsafe { layout.GetMetrics(&raw mut metrics)? };
@@ -511,12 +511,11 @@ pub fn build_info_text(
         append_exif_lines(&mut exif, exif_metadata);
     }
 
-    let sections: Vec<Vec<String>> = [file, display, render, metrics, exif]
+    let sections = [file, display, render, metrics, exif]
         .into_iter()
-        .filter(|section| !section.is_empty())
-        .collect();
+        .filter(|section| !section.is_empty());
     let mut lines = Vec::new();
-    for (index, section) in sections.into_iter().enumerate() {
+    for (index, section) in sections.enumerate() {
         if index > 0 {
             lines.push(SECTION_DIVIDER.to_string());
         }
