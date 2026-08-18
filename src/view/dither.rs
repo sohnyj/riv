@@ -5,7 +5,6 @@ pub const BLUE_NOISE_SIZE: u32 = 64;
 /// Single-channel f32 texels; the build script runs the void-and-cluster construction.
 pub const BLUE_NOISE_TEXELS: &[u8] = include_bytes!(concat!(env!("OUT_DIR"), "/blue_noise.bin"));
 
-/// Settings-selected output dither.
 #[derive(Clone, Copy, PartialEq, Eq)]
 pub enum DitherMode {
     None,

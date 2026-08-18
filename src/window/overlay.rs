@@ -801,7 +801,7 @@ const NAMED_RATIOS: &[NamedRatio] = &[
 ];
 
 /// Reduced ratio terms up to this stay an integer ratio; larger reductions become a decimal.
-const RATIO_INTEGER_LIMIT: u32 = 32;
+const MAXIMUM_RATIO_TERM: u32 = 32;
 
 fn matched_ratio(value: f64) -> Option<&'static NamedRatio> {
     NAMED_RATIOS
@@ -820,7 +820,7 @@ fn greatest_common_divisor(mut first: u32, mut second: u32) -> u32 {
 fn ratio_notation(width: u32, height: u32) -> String {
     let divisor = greatest_common_divisor(width, height);
     let (reduced_width, reduced_height) = (width / divisor, height / divisor);
-    if reduced_width <= RATIO_INTEGER_LIMIT && reduced_height <= RATIO_INTEGER_LIMIT {
+    if reduced_width <= MAXIMUM_RATIO_TERM && reduced_height <= MAXIMUM_RATIO_TERM {
         format!("{reduced_width}:{reduced_height}")
     } else if width >= height {
         format!("{:.2}:1", f64::from(width) / f64::from(height))

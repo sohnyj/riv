@@ -3,9 +3,7 @@
 use std::path::Path;
 
 use windows::Win32::Foundation::HWND;
-use windows::Win32::System::Com::{
-    COINIT_MULTITHREADED, CoInitializeEx, CoTaskMemFree, IDataObject,
-};
+use windows::Win32::System::Com::{COINIT_MULTITHREADED, CoInitializeEx, IDataObject};
 use windows::Win32::UI::Shell::{
     ASSOC_FILTER_RECOMMENDED, ASSOCF_INIT_IGNOREUNKNOWN, ASSOCSTR_EXECUTABLE, AssocQueryStringW,
     BHID_DataObject, IAssocHandler, IShellItem, OAIF_ALLOW_REGISTRATION, OAIF_EXEC, OPENASINFO,
@@ -91,8 +89,7 @@ pub fn invoke(path: &Path, executable_path: &str) -> Result<()> {
             .is_some_and(|name| name.eq_ignore_ascii_case(executable_path))
         {
             unsafe {
-                let item: IShellItem =
-                    SHCreateItemFromParsingName(&HSTRING::from(path.as_os_str()), None)?;
+                let item: IShellItem = SHCreateItemFromParsingName(&HSTRING::from(path), None)?;
                 let data_object: IDataObject = item.BindToHandler(None, &BHID_DataObject)?;
                 return handler.Invoke(&data_object);
             }
@@ -130,20 +127,18 @@ fn handlers_for(extension: &str) -> Vec<IAssocHandler> {
 }
 
 fn handler_executable_path(handler: &IAssocHandler) -> Option<String> {
-    unsafe { handler.GetName() }.ok().map(take_shell_string)
+    unsafe { handler.GetName() }
+        .ok()
+        .map(crate::text::take_task_memory_string)
 }
 
 fn handler_ui_name(handler: &IAssocHandler) -> Option<String> {
-    unsafe { handler.GetUIName() }.ok().map(take_shell_string)
+    unsafe { handler.GetUIName() }
+        .ok()
+        .map(crate::text::take_task_memory_string)
 }
 
 /// Reads then frees a CoTaskMem-allocated string.
-fn take_shell_string(text: windows::core::PWSTR) -> String {
-    let owned_text = String::from_utf16_lossy(unsafe { text.as_wide() });
-    unsafe { CoTaskMemFree(Some(text.as_ptr().cast())) };
-    owned_text
-}
-
 fn default_executable_for(extension: &str) -> Option<String> {
     let extension = HSTRING::from(format!(".{extension}"));
     let mut buffer = [0u16; 1024];

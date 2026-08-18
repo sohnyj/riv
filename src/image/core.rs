@@ -1620,7 +1620,7 @@ impl ImageCore {
             .cache
             .iter()
             .map(|(location, entry)| {
-                // The anchor goes last even when unlisted; what left the preload targets goes first.
+                // The anchor goes last even when unlisted; entries off the preload targets go first.
                 let key = if anchor == Some(location) {
                     0
                 } else {
@@ -2082,7 +2082,8 @@ fn worker_loop(shared: &PoolShared, window: isize) {
                 };
                 match curl::download(url, &job.cancellation, &mut report) {
                     Ok(bytes) => {
-                        metadata.file_size = bytes.len() as u64; // the remote size becomes known here
+                        // The remote size becomes known here.
+                        metadata.file_size = bytes.len() as u64;
                         let extension = curl::extension_lowercase(url);
                         decode::decode_bytes(&bytes, extension.as_deref(), &job.cancellation)
                             .map_err(url_decode_error)

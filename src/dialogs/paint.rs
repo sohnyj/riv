@@ -17,7 +17,7 @@ pub fn end_buffered_painting() {
     let _ = unsafe { BufferedPaintUnInit() };
 }
 
-/// Runs a paint through a buffer, in the target's own coordinates, so its passes reach the screen together.
+/// Paints through a buffer in the target's coordinates so the passes reach the screen together.
 pub fn draw_buffered(target: HDC, bounds: RECT, paint: impl FnOnce(HDC)) {
     let mut device = HDC::default();
     let buffer = unsafe {

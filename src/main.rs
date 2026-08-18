@@ -732,6 +732,12 @@ impl Application {
             None => Err(windows::core::Error::empty()),
         };
         self.displayed_image = Some(image);
+        if !same_view {
+            // Members list the archive itself; URL items stay out of recents.
+            if let Some(file) = location.containing_file() {
+                self.settings.add_recent_file(file);
+            }
+        }
         self.displayed_location = Some(location);
         if !same_view {
             let transform = &mut self.view_transform;
@@ -765,14 +771,6 @@ impl Application {
             *shown = std::time::Instant::now();
         }
         if !same_view {
-            // Members list the archive itself; URL items stay out of recents.
-            if let Some(file) = self
-                .displayed_location
-                .as_ref()
-                .and_then(ItemLocation::containing_file)
-            {
-                self.settings.add_recent_file(file);
-            }
             self.start_open_with_enumeration(window);
         }
         self.preload_after_display = true;
@@ -1963,7 +1961,7 @@ fn show_menu(application: &mut Application, window: HWND, x: i32, y: i32, target
             })
             .collect(),
     };
-    let selection = context_menu::show(window, state, x, y, target);
+    let selection = context_menu::show(window, &state, x, y, target);
     // The menu pumped messages; re-fetch in case the window was destroyed.
     if let Some(selection) = selection
         && let Some(application) = application_from_window(window)
@@ -2201,8 +2199,8 @@ fn run_message_loop(window: HWND) {
             continue;
         }
         // Nothing left to wait for: block for the next message, the paint included.
-        let retrieved = unsafe { GetMessageW(&raw mut message, None, 0, 0) };
-        if retrieved.0 <= 0 {
+        let message_status = unsafe { GetMessageW(&raw mut message, None, 0, 0) };
+        if message_status.0 <= 0 {
             return;
         }
         deliver_message(&message);

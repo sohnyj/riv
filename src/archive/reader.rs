@@ -1,6 +1,5 @@
 //! Safe read-only archive access: enumerate members, extract one to memory.
 
-use std::borrow::Cow;
 use std::ffi::CStr;
 use std::path::Path;
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -206,7 +205,7 @@ impl Reader<'_> {
         declared_bytes: Option<u64>,
         cancellation: &AtomicBool,
     ) -> Result<Vec<u8>, ArchiveError> {
-        let mut member_bytes = Vec::with_capacity(
+        let mut contents = Vec::with_capacity(
             declared_bytes
                 .unwrap_or(0)
                 .min(MAXIMUM_MEMBER_RESERVATION_BYTES) as usize,
@@ -220,25 +219,33 @@ impl Reader<'_> {
                 (self.api.read_data)(self.handle, block.as_mut_ptr().cast(), block.len())
             };
             if read_bytes == 0 {
-                return Ok(member_bytes);
+                return Ok(contents);
             }
             if read_bytes < 0 {
                 return Err(self.error("Archive member extraction failed"));
             }
-            if member_bytes.len() as u64 + read_bytes as u64 > MAXIMUM_MEMBER_BYTES {
+            if contents.len() as u64 + read_bytes as u64 > MAXIMUM_MEMBER_BYTES {
                 return Err(ArchiveError::new("Archive member exceeds the 1 GiB limit"));
             }
-            member_bytes.extend_from_slice(&block[..read_bytes as usize]);
+            contents.extend_from_slice(&block[..read_bytes as usize]);
         }
     }
 
     fn error(&self, fallback: &str) -> ArchiveError {
         let text = unsafe { (self.api.error_string)(self.handle) };
-        let message = (!text.is_null())
-            .then(|| unsafe { CStr::from_ptr(text) }.to_string_lossy())
-            .filter(|message| !message.trim().is_empty());
+        let message = if text.is_null() {
+            String::new()
+        } else {
+            unsafe { CStr::from_ptr(text) }
+                .to_string_lossy()
+                .into_owned()
+        };
         ArchiveError {
-            message: message.map_or_else(|| fallback.to_string(), Cow::into_owned),
+            message: if message.trim().is_empty() {
+                fallback.to_string()
+            } else {
+                message
+            },
             code: unsafe { (self.api.errno)(self.handle) },
             cancelled: false,
         }

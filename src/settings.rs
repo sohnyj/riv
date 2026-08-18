@@ -325,10 +325,7 @@ impl SettingsFile {
         keyboard: &[(String, Vec<String>)],
         mouse: &[(String, Vec<String>)],
     ) {
-        let document = self
-            .document
-            .as_object_mut()
-            .expect("settings document is object");
+        let document = document_object(&mut self.document);
         for (section, resolved, defaults_of) in [
             (
                 "keyboardbindings",
@@ -392,10 +389,7 @@ impl SettingsFile {
         height: i32,
         maximized: bool,
     ) {
-        self.document
-            .as_object_mut()
-            .expect("settings document is object")
-            .insert(
+        document_object(&mut self.document).insert(
                 "windowgeometry".to_string(),
                 serde_json::json!({ "x": x, "y": y, "width": width, "height": height, "maximized": maximized }),
             );
@@ -409,22 +403,15 @@ impl SettingsFile {
     }
 
     pub fn set_last_file_dialog_directory(&mut self, directory: &str) {
-        self.document
-            .as_object_mut()
-            .expect("settings document is object")
-            .entry("recents")
-            .or_insert_with(|| Value::Object(Map::new()))
-            .as_object_mut()
-            .expect("recents is object")
-            .insert(
-                "lastfiledialogdirectory".to_string(),
-                Value::String(directory.to_string()),
-            );
+        object_section(document_object(&mut self.document), "recents").insert(
+            "lastfiledialogdirectory".to_string(),
+            Value::String(directory.to_string()),
+        );
     }
 
     pub fn recent_files(&self) -> Vec<(String, String)> {
         let mut files = recent_files_of(&self.document);
-        // A hand-edited document can exceed the cap; every reader sees at most the limit.
+        // A hand-edited document can exceed the maximum; every reader sees at most that many.
         files.truncate(MAXIMUM_RECENT_FILES);
         files
     }
@@ -458,15 +445,7 @@ impl SettingsFile {
             .iter()
             .map(|(name, path)| serde_json::json!({ "name": name, "path": path }))
             .collect();
-        let document = self
-            .document
-            .as_object_mut()
-            .expect("settings document is object");
-        document
-            .entry("recents")
-            .or_insert_with(|| Value::Object(Map::new()))
-            .as_object_mut()
-            .expect("recents is object")
+        object_section(document_object(&mut self.document), "recents")
             .insert("recentfiles".to_string(), Value::Array(list));
     }
 
@@ -639,9 +618,7 @@ fn write_options(document: &mut Value, options: &Options) {
             Value::Bool(default.skip_hidden),
         ),
     ];
-    let document = document
-        .as_object_mut()
-        .expect("settings document is object");
+    let document = document_object(document);
     let options_object = object_section(document, "options");
     for (key, value, default_value) in entries {
         if value == default_value {
@@ -653,6 +630,13 @@ fn write_options(document: &mut Value, options: &Options) {
     if !options.remember_recents {
         document.remove("recents");
     }
+}
+
+/// The document root; read_document only ever produces an object.
+fn document_object(document: &mut Value) -> &mut Map<String, Value> {
+    document
+        .as_object_mut()
+        .expect("settings document is object")
 }
 
 /// The section as an object, replacing a stored value that is not one (the reader ignores those).

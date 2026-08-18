@@ -10,7 +10,7 @@ pub enum ActionRequirement {
     /// Image carried by some file on disk (the archive for members, never a URL).
     ContainingFile,
     Animation,
-    /// Somewhere to go besides the anchor itself (single-entry folders have none).
+    /// Another listing entry besides the anchor (single-entry folders have none).
     NavigationTargets,
     /// At least one recent file, so there is something to clear.
     RecentFiles,

@@ -40,12 +40,10 @@ const WM_RIV_KEY_REMOVE: u32 = WM_APP + 0x42;
 
 const REMOVE_ICON_RED: COLORREF = COLORREF(0x001C_2BC4); // BGR of #C42B1C
 
-pub type TakenBindings<'a> = &'a [(&'a str, &'a str)];
-
 pub fn capture_keyboard_sequences(
     parent: HWND,
     current: &[String],
-    taken: TakenBindings,
+    taken: &[(&str, &str)],
 ) -> Option<Vec<String>> {
     ensure_capture_classes();
     let mut state = KeyboardCaptureState {
@@ -65,7 +63,7 @@ pub fn capture_keyboard_sequences(
 pub fn capture_mouse_binding(
     parent: HWND,
     current: Option<&str>,
-    taken: TakenBindings,
+    taken: &[(&str, &str)],
 ) -> Option<Vec<String>> {
     ensure_capture_classes();
     let mut state = MouseCaptureState {
@@ -94,7 +92,7 @@ fn warn_conflict(dialog: HWND, encoding: &str, owner_label: &str) {
 
 struct KeyboardCaptureState<'a> {
     sequences: Vec<String>,
-    taken: TakenBindings<'a>,
+    taken: &'a [(&'a str, &'a str)],
     accepted: bool,
 }
 
@@ -198,7 +196,7 @@ unsafe extern "system" fn keyboard_procedure(
 
 struct MouseCaptureState<'a> {
     binding: Option<String>,
-    taken: TakenBindings<'a>,
+    taken: &'a [(&'a str, &'a str)],
     accepted: bool,
 }
 

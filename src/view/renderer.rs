@@ -1233,7 +1233,7 @@ impl Renderer {
         wiring
     }
 
-    /// Updates the stored display luminances (overlay, next rewire).
+    /// True when the stored display luminances changed (overlay, next rewire).
     pub fn set_tone_map_target(&mut self, nits: f32, full_frame_nits: f32) -> bool {
         if (nits - self.tone_map_target_nits).abs() < f32::EPSILON
             && (full_frame_nits - self.display_full_frame_nits).abs() < f32::EPSILON

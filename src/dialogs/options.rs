@@ -506,7 +506,7 @@ fn apply(state: &mut OptionsState) {
     if !state.is_dirty() {
         return;
     }
-    // Each saved set is re-probed, so a write that failed keeps Apply enabled instead of showing as saved.
+    // Saved sets are re-probed: a failed write keeps Apply enabled, not shown as saved.
     let desired = state.desired_associations();
     if desired != state.saved_associations {
         file_association::set_file_associations(&desired);

@@ -94,7 +94,7 @@ pub fn delete_file(path: &Path, permanent: bool) -> Result<()> {
             flags |= FOF_ALLOWUNDO;
         }
         operation.SetOperationFlags(flags)?;
-        let item: IShellItem = SHCreateItemFromParsingName(&HSTRING::from(path.as_os_str()), None)?;
+        let item: IShellItem = SHCreateItemFromParsingName(&HSTRING::from(path), None)?;
         operation.DeleteItem(&item, None)?;
         operation.PerformOperations()
     }
@@ -140,8 +140,8 @@ pub fn rename_file(path: &Path, new_name: &str) -> std::io::Result<PathBuf> {
     // No replace flag: renaming onto an existing file must fail, not overwrite it.
     unsafe {
         MoveFileExW(
-            &HSTRING::from(path.as_os_str()),
-            &HSTRING::from(destination.as_os_str()),
+            &HSTRING::from(path),
+            &HSTRING::from(destination.as_path()),
             MOVE_FILE_FLAGS(0),
         )
     }

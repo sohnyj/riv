@@ -126,7 +126,7 @@ pub fn download(
         .map_err(|error| NetworkError::new(format!("curl could not be started: {error}")))?;
     let mut stdout = child.stdout.take().expect("stdout piped above");
     progress(0);
-    let mut downloaded_bytes = Vec::new();
+    let mut body = Vec::new();
     let mut block = vec![0u8; READ_BLOCK_BYTES];
     loop {
         if cancellation.load(Ordering::Relaxed) {
@@ -142,14 +142,14 @@ pub fn download(
                 ));
             }
         };
-        if downloaded_bytes.len() as u64 + read_bytes as u64 > MAXIMUM_DOWNLOAD_BYTES {
+        if body.len() as u64 + read_bytes as u64 > MAXIMUM_DOWNLOAD_BYTES {
             return Err(kill_child(
                 child,
                 NetworkError::new("Download exceeds the 1 GiB limit"),
             ));
         }
-        downloaded_bytes.extend_from_slice(&block[..read_bytes]);
-        progress(downloaded_bytes.len() as u64);
+        body.extend_from_slice(&block[..read_bytes]);
+        progress(body.len() as u64);
     }
     drop(stdout);
     let mut stderr_text = String::new();
@@ -171,7 +171,7 @@ pub fn download(
             cancelled: false,
         });
     }
-    Ok(downloaded_bytes)
+    Ok(body)
 }
 
 fn kill_child(mut child: Child, error: NetworkError) -> NetworkError {

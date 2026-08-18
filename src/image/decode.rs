@@ -236,11 +236,11 @@ enum FrameSemantics {
 const MAXIMUM_TEXTURE_DIMENSION: u32 = 16384;
 
 /// Cap on an animation's expanded frames; past it only the first frame is kept.
-const ANIMATION_FRAMES_BYTE_LIMIT: u64 = 1 << 30;
+const MAXIMUM_ANIMATION_FRAMES_BYTES: u64 = 1 << 30;
 
 /// Whether `frame_count` canvas-sized frames would expand past the byte limit.
 pub(crate) fn animation_budget_exceeded(frame_count: u64, canvas_bytes: u64) -> bool {
-    frame_count * canvas_bytes > ANIMATION_FRAMES_BYTE_LIMIT
+    frame_count * canvas_bytes > MAXIMUM_ANIMATION_FRAMES_BYTES
 }
 
 /// A zeroed buffer of `bytes`, or None when memory runs short; vec! would abort on OOM.
@@ -1278,7 +1278,7 @@ fn create_wic_decoder(
     match input {
         DecodeInput::File(path) => unsafe {
             factory.CreateDecoderFromFilename(
-                &HSTRING::from(path.as_os_str()),
+                &HSTRING::from(*path),
                 None,
                 GENERIC_READ,
                 WICDecodeMetadataCacheOnDemand,
@@ -1985,12 +1985,12 @@ fn icc_profile_bytes(
         if unsafe { context.GetType() } != Ok(WICColorContextProfile) {
             continue;
         }
-        let mut profile_bytes = 0u32;
-        let _ = unsafe { context.GetProfileBytes(&mut [], &raw mut profile_bytes) };
-        if profile_bytes == 0 {
+        let mut profile_byte_count = 0u32;
+        let _ = unsafe { context.GetProfileBytes(&mut [], &raw mut profile_byte_count) };
+        if profile_byte_count == 0 {
             continue;
         }
-        let mut buffer = vec![0u8; profile_bytes as usize];
+        let mut buffer = vec![0u8; profile_byte_count as usize];
         let mut written = 0u32;
         unsafe { context.GetProfileBytes(&mut buffer, &raw mut written) }.ok()?;
         buffer.truncate(written as usize);
@@ -2279,7 +2279,7 @@ fn exif_orientation(reader: Option<&IWICMetadataQueryReader>) -> u32 {
 }
 
 fn read_exif(reader: &IWICMetadataQueryReader) -> Option<ExifMetadata> {
-    let information = ExifMetadata {
+    let metadata = ExifMetadata {
         date_taken: query_filetime(reader, w!("System.Photo.DateTaken")),
         rating: query_u32(reader, w!("System.Rating")),
         camera_maker: query_string(reader, w!("System.Photo.CameraManufacturer")),
@@ -2293,7 +2293,7 @@ fn read_exif(reader: &IWICMetadataQueryReader) -> Option<ExifMetadata> {
         metering_mode: query_u32(reader, w!("System.Photo.MeteringMode")),
         flash: query_u32(reader, w!("System.Photo.Flash")),
     };
-    information.any_present().then_some(information)
+    metadata.any_present().then_some(metadata)
 }
 
 /// Runs `convert` on the named metadata PROPVARIANT, clearing it afterwards.
@@ -2320,18 +2320,12 @@ fn query_string(reader: &IWICMetadataQueryReader, name: PCWSTR) -> Option<String
     query_propvariant(reader, name, |value| {
         unsafe { PropVariantToStringAlloc(std::ptr::from_ref(value)) }
             .ok()
-            .map(|out| {
-                let text = String::from_utf16_lossy(unsafe { out.as_wide() });
-                unsafe { windows::Win32::System::Com::CoTaskMemFree(Some(out.0.cast())) };
-                text
-            })
+            .map(crate::text::take_task_memory_string)
     })
-    .map(|mut text| {
-        text.truncate(text.trim_end().len());
-        text.drain(..text.len() - text.trim_start().len());
-        text
+    .and_then(|text| {
+        let trimmed = text.trim();
+        (!trimmed.is_empty()).then(|| trimmed.to_string())
     })
-    .filter(|text| !text.is_empty())
 }
 
 fn query_filetime(reader: &IWICMetadataQueryReader, name: PCWSTR) -> Option<std::time::SystemTime> {

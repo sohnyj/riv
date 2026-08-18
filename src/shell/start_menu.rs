@@ -32,13 +32,13 @@ pub fn create_shortcut() {
     };
     let _: Result<()> = (|| unsafe {
         let link: IShellLinkW = CoCreateInstance(&ShellLink, None, CLSCTX_INPROC_SERVER)?;
-        link.SetPath(&HSTRING::from(executable.as_os_str()))?;
+        link.SetPath(&HSTRING::from(executable.as_path()))?;
         link.SetDescription(w!("riv image viewer"))?;
         if let Some(directory) = executable.parent() {
-            link.SetWorkingDirectory(&HSTRING::from(directory.as_os_str()))?;
+            link.SetWorkingDirectory(&HSTRING::from(directory))?;
         }
         let persist: IPersistFile = link.cast()?;
-        persist.Save(&HSTRING::from(path.as_os_str()), true)
+        persist.Save(&HSTRING::from(path.as_path()), true)
     })();
 }
 

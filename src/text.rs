@@ -3,8 +3,16 @@
 use std::ffi::OsString;
 use std::os::windows::ffi::OsStringExt;
 use std::path::PathBuf;
+use windows::Win32::System::Com::CoTaskMemFree;
 use windows::Win32::UI::Shell::StrCmpLogicalW;
-use windows::core::HSTRING;
+use windows::core::{HSTRING, PWSTR};
+
+/// Copies a CoTaskMem wide string out and frees it.
+pub fn take_task_memory_string(text: PWSTR) -> String {
+    let owned = String::from_utf16_lossy(unsafe { text.as_wide() });
+    unsafe { CoTaskMemFree(Some(text.as_ptr().cast())) };
+    owned
+}
 
 /// A path from UTF-16 units as Windows handed them, unpaired surrogates included.
 pub fn path_from_wide(units: &[u16]) -> PathBuf {

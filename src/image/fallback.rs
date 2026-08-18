@@ -75,7 +75,7 @@ unsafe extern "C" {
 pub fn decode_webp_animation(
     bytes: &[u8],
     format_name: &'static str,
-    frame_limit: usize,
+    maximum_frames: usize,
 ) -> Result<DecodedImage, DecodeError> {
     let webp_data = WebPData {
         bytes: bytes.as_ptr(),
@@ -92,15 +92,15 @@ pub fn decode_webp_animation(
     if demuxer.is_null() {
         return Err(uncoded_error("WebP animation could not be read"));
     }
-    let result = compose_webp_frames(demuxer, format_name, frame_limit);
+    let decoded = compose_webp_frames(demuxer, format_name, maximum_frames);
     unsafe { WebPDemuxDelete(demuxer) };
-    result
+    decoded
 }
 
 fn compose_webp_frames(
     demuxer: *mut WebPDemuxer,
     format_name: &'static str,
-    frame_limit: usize,
+    maximum_frames: usize,
 ) -> Result<DecodedImage, DecodeError> {
     let canvas_width = unsafe { WebPDemuxGetI(demuxer, WEBP_FF_CANVAS_WIDTH) };
     let canvas_height = unsafe { WebPDemuxGetI(demuxer, WEBP_FF_CANVAS_HEIGHT) };
@@ -163,7 +163,7 @@ fn compose_webp_frames(
                 100
             },
         });
-        if compositor.frames_so_far() >= frame_limit
+        if compositor.frames_so_far() >= maximum_frames
             || unsafe { WebPDemuxNextFrame(&raw mut iterator) } == 0
         {
             break;
@@ -515,9 +515,9 @@ pub fn decode_heif(bytes: &[u8], format_name: &'static str) -> Result<DecodedIma
     if context.is_null() {
         return Err(uncoded_error("HEIF context allocation failed"));
     }
-    let result = decode_heif_primary_image(context, bytes, format_name);
+    let decoded = decode_heif_primary_image(context, bytes, format_name);
     unsafe { heif_context_free(context) };
-    result
+    decoded
 }
 
 fn decode_heif_primary_image(

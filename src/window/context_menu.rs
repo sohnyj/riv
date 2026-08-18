@@ -56,7 +56,7 @@ pub struct MenuState {
 struct MenuBuilder<'a> {
     /// Command IDs are entries index + 1; 0 means dismissed.
     entries: Vec<MenuSelection>,
-    state_snapshot: &'a MenuState,
+    state: &'a MenuState,
     /// The Playlist submenu, kept so the playlist key can open the menu at it.
     playlist_menu: HMENU,
     /// Menus no parent owns yet; a build that gives up partway destroys these.
@@ -90,14 +90,14 @@ impl<'a> MenuBuilder<'a> {
     fn new(state: &'a MenuState) -> Self {
         Self {
             entries: Vec::new(),
-            state_snapshot: state,
+            state,
             playlist_menu: HMENU::default(),
             unattached: Vec::new(),
         }
     }
 
     fn requirement_satisfied(&self, requirement: ActionRequirement) -> bool {
-        self.state_snapshot.requirements.satisfied(requirement)
+        self.state.requirements.satisfied(requirement)
     }
 
     fn append_action(&mut self, menu: HMENU, action: Action) -> Result<()> {
@@ -118,7 +118,7 @@ impl<'a> MenuBuilder<'a> {
 
     /// An action's label with its shortcut in a tab-separated column.
     fn menu_text(&self, action: Action, label: &str) -> String {
-        match self.state_snapshot.shortcuts.get(action.name()) {
+        match self.state.shortcuts.get(action.name()) {
             Some(shortcut) => format!("{label}\t{shortcut}"),
             None => label.to_string(),
         }
@@ -132,12 +132,12 @@ impl<'a> MenuBuilder<'a> {
             flags |= MF_GRAYED | MF_DISABLED;
         }
         let checked = match action {
-            Action::ShowFileInfo => self.state_snapshot.file_info_shown,
-            Action::Loop => self.state_snapshot.loop_enabled,
-            Action::PreserveZoom => self.state_snapshot.preserve_zoom,
-            Action::AlwaysOnTop => self.state_snapshot.always_on_top,
-            Action::Mirror => self.state_snapshot.mirrored,
-            Action::Flip => self.state_snapshot.flipped,
+            Action::ShowFileInfo => self.state.file_info_shown,
+            Action::Loop => self.state.loop_enabled,
+            Action::PreserveZoom => self.state.preserve_zoom,
+            Action::AlwaysOnTop => self.state.always_on_top,
+            Action::Mirror => self.state.mirrored,
+            Action::Flip => self.state.flipped,
             _ => false,
         };
         if checked {
@@ -166,7 +166,7 @@ impl<'a> MenuBuilder<'a> {
         self.entries.push(MenuSelection::PlaylistEntry(slot));
         let identifier = self.entries.len();
         let mut flags = MF_STRING;
-        if self.state_snapshot.playlist_current_slot == Some(slot) {
+        if self.state.playlist_current_slot == Some(slot) {
             flags |= MF_CHECKED;
         }
         Self::append_text(menu, flags, identifier, label, None)
@@ -215,7 +215,7 @@ impl<'a> MenuBuilder<'a> {
         self.append_action(menu, Action::Open)?;
         self.append_action(menu, Action::OpenUrl)?;
 
-        let state = self.state_snapshot;
+        let state = self.state;
         let recent = self.create_menu()?;
         for (index, name) in state.recent_names.iter().enumerate() {
             self.append_action_labeled(recent, Action::Recent(index as u8), name)?;
@@ -266,7 +266,7 @@ impl<'a> MenuBuilder<'a> {
         self.append_action(menu, Action::PreviousFile)?;
         self.append_action(menu, Action::NextFile)?;
         let playback = self.create_menu()?;
-        let pause_label = if self.state_snapshot.animation_paused {
+        let pause_label = if self.state.animation_paused {
             "Resume"
         } else {
             "Pause"
@@ -293,7 +293,7 @@ impl<'a> MenuBuilder<'a> {
 
         let view = self.create_menu()?;
         // The label names the axis a click switches to (slideshow convention).
-        let fit_label = if self.state_snapshot.fit_height {
+        let fit_label = if self.state.fit_height {
             "Fit width"
         } else {
             "Fit height"
@@ -317,7 +317,7 @@ impl<'a> MenuBuilder<'a> {
         self.append_action(tools, Action::Rename)?;
         self.append_action(tools, Action::Delete)?;
         self.append_separator(tools)?;
-        let slideshow_label = if self.state_snapshot.slideshow_active {
+        let slideshow_label = if self.state.slideshow_active {
             "Stop slideshow"
         } else {
             "Start slideshow"
@@ -329,7 +329,7 @@ impl<'a> MenuBuilder<'a> {
 
         let window = self.create_menu()?;
         self.append_action(window, Action::AlwaysOnTop)?;
-        let fullscreen_label = if self.state_snapshot.fullscreen {
+        let fullscreen_label = if self.state.fullscreen {
             "Exit fullscreen"
         } else {
             "Enter fullscreen"
@@ -407,12 +407,12 @@ pub enum MenuTarget {
 
 pub fn show(
     window: HWND,
-    state: MenuState,
+    state: &MenuState,
     x: i32,
     y: i32,
     target: MenuTarget,
 ) -> Option<MenuSelection> {
-    let mut builder = MenuBuilder::new(&state);
+    let mut builder = MenuBuilder::new(state);
     let menu = builder.build().ok()?;
     let (tracked, flags) = match target {
         MenuTarget::Full => (menu, TPM_RETURNCMD | TPM_RIGHTBUTTON),
