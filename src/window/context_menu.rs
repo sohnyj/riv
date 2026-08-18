@@ -344,7 +344,7 @@ impl<'a> MenuBuilder<'a> {
 
 /// Popup rows are taller than the menu bar row this metric names; the quarter is measured margin.
 fn menu_row_height(dpi: u32) -> i32 {
-    let bar_row = unsafe { GetSystemMetricsForDpi(SM_CYMENU, dpi) }.max(1);
+    let bar_row = unsafe { GetSystemMetricsForDpi(SM_CYMENU, dpi) };
     bar_row + bar_row / 4
 }
 
@@ -369,7 +369,7 @@ fn title_bar_height(dpi: u32) -> i32 {
 
 /// Names that leave both "..." lines room; odd, so the current file sits in the middle.
 fn capacity_for_height(usable_height: i32, row_height: i32) -> usize {
-    let name_count = usable_height / row_height.max(1) - 2;
+    let name_count = usable_height / row_height - 2;
     let odd_name_count = if name_count % 2 == 0 {
         name_count - 1
     } else {

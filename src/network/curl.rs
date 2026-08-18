@@ -153,9 +153,8 @@ pub fn download(
     }
     drop(stdout);
     let mut stderr_text = String::new();
-    if let Some(mut stderr) = child.stderr.take() {
-        let _ = stderr.read_to_string(&mut stderr_text);
-    }
+    let mut stderr = child.stderr.take().expect("stderr piped above");
+    let _ = stderr.read_to_string(&mut stderr_text);
     let status = child
         .wait()
         .map_err(|error| NetworkError::new(format!("curl did not exit cleanly: {error}")))?;

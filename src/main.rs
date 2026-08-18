@@ -1438,8 +1438,8 @@ fn client_size(window: HWND) -> (u32, u32) {
     let mut bounds = RECT::default();
     let _ = unsafe { GetClientRect(window, &raw mut bounds) };
     (
-        (bounds.right - bounds.left).max(0) as u32,
-        (bounds.bottom - bounds.top).max(0) as u32,
+        (bounds.right - bounds.left) as u32,
+        (bounds.bottom - bounds.top) as u32,
     )
 }
 

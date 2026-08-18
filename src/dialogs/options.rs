@@ -1052,9 +1052,6 @@ fn refresh_shortcut_rows(state: &OptionsState) {
 }
 
 fn edit_shortcut(state: &mut OptionsState, row_index: usize, mouse_column: bool) {
-    if row_index >= state.transient_shortcuts.len() {
-        return;
-    }
     let taken: Vec<(&str, &str)> = state
         .transient_shortcuts
         .iter()
@@ -1299,9 +1296,7 @@ fn toggle_association_item(state: &mut OptionsState, tree: HWND, item: HTREEITEM
     let item_data = query.lParam.0;
     if item_data & GROUP_FLAG != 0 {
         let group_index = (item_data & !GROUP_FLAG) as usize;
-        let Some(group) = state.groups.get(group_index) else {
-            return;
-        };
+        let group = &state.groups[group_index];
         let extensions = &mut state.extensions;
         let all_checked = group
             .members
@@ -1315,9 +1310,7 @@ fn toggle_association_item(state: &mut OptionsState, tree: HWND, item: HTREEITEM
         refresh_group_check_image(state, tree, group_index);
     } else {
         let extension_index = item_data as usize;
-        let Some(entry) = state.extensions.get_mut(extension_index) else {
-            return;
-        };
+        let entry = &mut state.extensions[extension_index];
         entry.checked = !entry.checked;
         tree_set_state_image(tree, entry.item, check_state(entry.checked));
         if let Some(group_index) = state

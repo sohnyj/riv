@@ -247,7 +247,7 @@ impl CompositionPresenter {
             d3d_context.Flush();
             self.manager.Present()?;
         }
-        self.next_buffer_index = (self.next_buffer_index + 1) % self.buffers.len().max(1);
+        self.next_buffer_index = (self.next_buffer_index + 1) % self.buffers.len();
         Ok(())
     }
 }

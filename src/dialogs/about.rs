@@ -149,9 +149,6 @@ fn open_link(url_wide: &[u16]) {
         .iter()
         .position(|unit| *unit == 0)
         .unwrap_or(url_wide.len());
-    if length == 0 {
-        return;
-    }
     let url = HSTRING::from_wide(&url_wide[..length]);
     unsafe { ShellExecuteW(None, w!("open"), &url, None, None, SW_SHOWNORMAL) };
 }

@@ -95,9 +95,8 @@ impl ItemLocation {
         match self {
             Self::File(path) => crate::text::file_name_text(path),
             Self::ArchiveMember { member, .. } => member
-                .rsplit(['/', '\\'])
-                .next()
-                .unwrap_or(member)
+                .rsplit_once(['/', '\\'])
+                .map_or(member.as_str(), |(_, name)| name)
                 .to_string(),
             Self::Url(url) => curl::file_name(url).to_string(),
         }
@@ -485,11 +484,7 @@ impl ScannedListing {
     /// Enumerates and sorts the scope's contents: the worker half of submit_scan.
     fn of(scope: ListingScope, options: &CoreOptions) -> Self {
         let result = match &scope {
-            ListingScope::Directory(directory) => {
-                let mut entries = scan_folder(directory, options);
-                sort_entries(&mut entries, options);
-                Ok(entries)
-            }
+            ListingScope::Directory(directory) => Ok(scan_folder(directory, options)),
             ListingScope::Archive(archive) => enumerate_archive(archive, options),
         };
         Self {
@@ -1332,12 +1327,10 @@ impl ImageCore {
     }
 
     fn rescan_folder(&mut self, directory: &Path) {
-        let scope = ListingScope::Directory(directory.to_path_buf());
-        let scan = ScannedListing::of(scope, &self.options);
-        let mut entries = scan.result.unwrap_or_default();
+        let mut entries = scan_folder(directory, &self.options);
         self.carry_weights_into(&mut entries);
         self.entries = entries;
-        self.listing_scope = Some(scan.scope);
+        self.listing_scope = Some(ListingScope::Directory(directory.to_path_buf()));
     }
 
     /// Drops a deleted item from the listing snapshot; no rescan.
@@ -1810,6 +1803,7 @@ fn scan_folder(directory: &Path, options: &CoreOptions) -> Vec<ListingEntry> {
             weight: DecodedWeight::Unknown,
         });
     }
+    sort_entries(&mut entries, options);
     entries
 }
 

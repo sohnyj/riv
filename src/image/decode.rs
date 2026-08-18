@@ -352,6 +352,7 @@ impl FrameCompositor {
             clear_rectangle(
                 &mut self.canvas,
                 self.width,
+                self.height,
                 region.left,
                 region.top,
                 region.width,
@@ -1203,7 +1204,7 @@ fn subresolution_source(
     let (mut width, mut height) = subresolution_target_size(full_width, full_height, float_native);
     unsafe { transform.GetClosestSize(&mut width, &mut height)? };
     // A decoder that cannot scale returns the full size; stay single-stage then.
-    if width == 0 || height == 0 || (width, height) == (full_width, full_height) {
+    if (width, height) == (full_width, full_height) {
         return Ok(None);
     }
     let mut format = unsafe { frame.GetPixelFormat()? };
@@ -1675,9 +1676,6 @@ fn upload_gain_map_texture(
     upload_device: &UploadDevice,
     plane: &crate::image::gain_map::GainMapPlane,
 ) -> Option<ID3D11Texture2D> {
-    if plane.pixels.len() != plane.width as usize * plane.height as usize * 4 {
-        return None;
-    }
     let description = D3D11_TEXTURE2D_DESC {
         Width: plane.width,
         Height: plane.height,
@@ -2195,16 +2193,12 @@ fn blend_over(
 fn clear_rectangle(
     canvas: &mut [u8],
     canvas_width: u32,
+    canvas_height: u32,
     left: u32,
     top: u32,
     width: u32,
     height: u32,
 ) {
-    if canvas_width == 0 {
-        return; // a zero-width canvas has nothing to clear and would divide by zero
-    }
-    // The canvas came from FrameCompositor::new, whose dimensions both fit u32.
-    let canvas_height = (canvas.len() / (canvas_width as usize * 4)) as u32;
     let Some((visible_width, visible_height)) =
         visible_rectangle(canvas_width, canvas_height, width, height, left, top)
     else {
@@ -2798,7 +2792,7 @@ mod compositor_tests {
         let source = vec![255u8; 4];
         blend_over(&mut canvas, 10, 10, &source, 1, 1, 15, 9);
         copy_rectangle(&mut canvas, 10, 10, &source, 1, 1, 15, 9);
-        clear_rectangle(&mut canvas, 10, 15, 9, 1, 1);
+        clear_rectangle(&mut canvas, 10, 10, 15, 9, 1, 1);
         assert!(canvas.iter().all(|&byte| byte == 0), "nothing is visible");
     }
 
@@ -3426,13 +3420,6 @@ mod compositing_tests {
         }
         blend_over(&mut canvas, 16, 16, &source, 8, 8, 12, 12);
         assert_eq!(canvas, expected);
-    }
-
-    #[test]
-    fn clear_rectangle_ignores_a_zero_width_canvas() {
-        let mut canvas = Vec::new();
-        clear_rectangle(&mut canvas, 0, 0, 0, 4, 4); // must not divide by zero
-        assert!(canvas.is_empty());
     }
 
     #[test]

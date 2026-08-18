@@ -130,21 +130,18 @@ fn handlers_for(extension: &str) -> Vec<IAssocHandler> {
 }
 
 fn handler_executable_path(handler: &IAssocHandler) -> Option<String> {
-    take_shell_string(unsafe { handler.GetName() }.ok()?)
+    unsafe { handler.GetName() }.ok().map(take_shell_string)
 }
 
 fn handler_ui_name(handler: &IAssocHandler) -> Option<String> {
-    take_shell_string(unsafe { handler.GetUIName() }.ok()?)
+    unsafe { handler.GetUIName() }.ok().map(take_shell_string)
 }
 
 /// Reads then frees a CoTaskMem-allocated string.
-fn take_shell_string(text: windows::core::PWSTR) -> Option<String> {
-    if text.is_null() {
-        return None;
-    }
+fn take_shell_string(text: windows::core::PWSTR) -> String {
     let owned_text = String::from_utf16_lossy(unsafe { text.as_wide() });
     unsafe { CoTaskMemFree(Some(text.as_ptr().cast())) };
-    Some(owned_text)
+    owned_text
 }
 
 fn default_executable_for(extension: &str) -> Option<String> {

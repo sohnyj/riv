@@ -813,7 +813,7 @@ fn greatest_common_divisor(mut first: u32, mut second: u32) -> u32 {
     while second != 0 {
         (first, second) = (second, first % second);
     }
-    first.max(1)
+    first
 }
 
 /// The image's own ratio: an integer "width:height" when small, else a cinema-style decimal.

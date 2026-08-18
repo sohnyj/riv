@@ -81,10 +81,8 @@ fn select_files(
         for index in 0..count {
             let item = results.GetItemAt(index)?;
             let raw = item.GetDisplayName(SIGDN_FILESYSPATH)?;
-            if !raw.is_null() {
-                paths.push(crate::text::path_from_wide(raw.as_wide()));
-                CoTaskMemFree(Some(raw.as_ptr().cast()));
-            }
+            paths.push(crate::text::path_from_wide(raw.as_wide()));
+            CoTaskMemFree(Some(raw.as_ptr().cast()));
         }
         Ok(paths)
     }

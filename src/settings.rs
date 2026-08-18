@@ -325,9 +325,10 @@ impl SettingsFile {
         keyboard: &[(String, Vec<String>)],
         mouse: &[(String, Vec<String>)],
     ) {
-        let Some(document) = self.document.as_object_mut() else {
-            return;
-        };
+        let document = self
+            .document
+            .as_object_mut()
+            .expect("settings document is object");
         for (section, resolved, defaults_of) in [
             (
                 "keyboardbindings",
@@ -340,9 +341,7 @@ impl SettingsFile {
                 crate::bindings::default_mouse_encodings as fn(&str) -> &'static [&'static str],
             ),
         ] {
-            let Some(object) = object_section(document, section) else {
-                continue;
-            };
+            let object = object_section(document, section);
             for (action_name, sequences) in resolved {
                 let defaults = defaults_of(action_name);
                 if defaults.len() == sequences.len()
@@ -640,12 +639,10 @@ fn write_options(document: &mut Value, options: &Options) {
             Value::Bool(default.skip_hidden),
         ),
     ];
-    let Some(options_object) = document
+    let document = document
         .as_object_mut()
-        .and_then(|document| object_section(document, "options"))
-    else {
-        return;
-    };
+        .expect("settings document is object");
+    let options_object = object_section(document, "options");
     for (key, value, default_value) in entries {
         if value == default_value {
             options_object.remove(key);
@@ -653,9 +650,7 @@ fn write_options(document: &mut Value, options: &Options) {
             options_object.insert(key.to_string(), value);
         }
     }
-    if !options.remember_recents
-        && let Some(document) = document.as_object_mut()
-    {
+    if !options.remember_recents {
         document.remove("recents");
     }
 }
@@ -664,11 +659,14 @@ fn write_options(document: &mut Value, options: &Options) {
 fn object_section<'a>(
     document: &'a mut Map<String, Value>,
     section: &str,
-) -> Option<&'a mut Map<String, Value>> {
+) -> &'a mut Map<String, Value> {
     if !document.get(section).is_some_and(Value::is_object) {
         document.insert(section.to_string(), Value::Object(Map::new()));
     }
-    document.get_mut(section)?.as_object_mut()
+    document
+        .get_mut(section)
+        .and_then(Value::as_object_mut)
+        .expect("section inserted as an object above")
 }
 
 fn read_document(path: &Path) -> Value {
@@ -738,8 +736,8 @@ mod option_bounds_tests {
         // The reader already ignores these; the writer used to panic on them.
         let mut document = serde_json::json!({ "options": 3, "keyboardbindings": "x" });
         let sections = document.as_object_mut().expect("document is an object");
-        assert!(object_section(sections, "options").is_some());
-        assert!(object_section(sections, "keyboardbindings").is_some());
+        object_section(sections, "options");
+        object_section(sections, "keyboardbindings");
         assert!(sections["options"].is_object());
         assert!(sections["keyboardbindings"].is_object());
     }
