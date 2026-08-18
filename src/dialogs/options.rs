@@ -126,14 +126,14 @@ impl OptionsState {
         if self.extensions.is_empty() {
             return self.saved_associations.clone();
         }
-        let mut result: Vec<String> = self
+        let mut checked_extensions: Vec<String> = self
             .extensions
             .iter()
             .filter(|entry| entry.checked)
             .map(|entry| entry.extension.clone())
             .collect();
-        result.sort();
-        result
+        checked_extensions.sort();
+        checked_extensions
     }
 
     /// Apply enables when the transient state differs from the saved state.
@@ -561,7 +561,7 @@ unsafe extern "system" fn page_procedure(
             }
             let control = low_word(wparam.0) as i32;
             let notification = high_word(wparam.0) as usize;
-            handle_page_command(state, page, control, notification)
+            apply_page_command(state, page, control, notification)
         }
         WM_NOTIFY => {
             let Some(state) = state_mut(page) else {
@@ -581,7 +581,7 @@ unsafe extern "system" fn page_procedure(
                     1
                 }
                 IDC_ABOUT_LINK if header.code == NM_CLICK || header.code == NM_RETURN => {
-                    about::handle_link(lparam);
+                    about::open_notified_link(lparam);
                     1
                 }
                 IDC_ASSOCIATION_TREE if header.code == TVN_KEYDOWN => {
@@ -629,7 +629,7 @@ unsafe extern "system" fn page_procedure(
     }
 }
 
-fn handle_page_command(
+fn apply_page_command(
     state: &mut OptionsState,
     page: HWND,
     control: i32,
@@ -654,7 +654,7 @@ fn handle_page_command(
         (IDC_WINDOW_SAVE_POSITION, BN_CLICKED) => {
             options.remember_window_size_and_position = is_checked(page, control);
         }
-        (IDC_WINDOW_CTRL_DRAG, BN_CLICKED) => {
+        (IDC_WINDOW_CONTROL_DRAG, BN_CLICKED) => {
             options.control_drag_window = is_checked(page, control);
         }
         (IDC_WINDOW_HIDE_CURSOR_FULLSCREEN, BN_CLICKED) => {
@@ -826,7 +826,7 @@ fn sync_window_page(state: &OptionsState) {
     );
     set_check(
         window_page,
-        IDC_WINDOW_CTRL_DRAG,
+        IDC_WINDOW_CONTROL_DRAG,
         options.control_drag_window,
     );
     set_check(
@@ -884,12 +884,12 @@ fn sync_miscellaneous_page(state: &OptionsState) {
         IDC_MISCELLANEOUS_SLIDESHOW_DIRECTION,
         options.slideshow_direction,
     );
-    let interval = HSTRING::from(options.slideshow_interval_seconds.to_string());
+    let interval_seconds = HSTRING::from(options.slideshow_interval_seconds.to_string());
     let _ = unsafe {
         SetDlgItemTextW(
             miscellaneous_page,
             IDC_MISCELLANEOUS_SLIDESHOW_INTERVAL_EDIT,
-            &interval,
+            &interval_seconds,
         )
     };
     combo_select(

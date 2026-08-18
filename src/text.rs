@@ -1,4 +1,4 @@
-//! Win32 string helpers.
+//! Wide-string paths, extension text, and natural-order comparison.
 
 use std::ffi::OsString;
 use std::os::windows::ffi::OsStringExt;

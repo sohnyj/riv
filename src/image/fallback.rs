@@ -72,13 +72,13 @@ unsafe extern "C" {
 
 /// Composes only the first frame, for the animation two-stage path.
 pub fn decode_webp_animation(
-    data: &[u8],
+    bytes: &[u8],
     format_name: &'static str,
     frame_limit: usize,
 ) -> Result<DecodedImage, DecodeError> {
     let webp_data = WebPData {
-        bytes: data.as_ptr(),
-        size: data.len(),
+        bytes: bytes.as_ptr(),
+        size: bytes.len(),
     };
     let demuxer = unsafe {
         WebPDemuxInternal(
@@ -138,7 +138,7 @@ fn compose_webp_frames(
             return Err(uncoded_error("WebP frame decode failed"));
         }
         premultiply_bgra_in_place(&mut frame_pixels);
-        let duration = iterator.duration_milliseconds;
+        let duration_milliseconds = iterator.duration_milliseconds;
         compositor.add_frame(FrameRegion {
             pixels: &frame_pixels,
             left: iterator.x_offset.max(0) as u32,
@@ -156,7 +156,11 @@ fn compose_webp_frames(
             } else {
                 FrameDisposal::Keep
             },
-            delay_milliseconds: if duration > 0 { duration as u32 } else { 100 },
+            delay_milliseconds: if duration_milliseconds > 0 {
+                duration_milliseconds as u32
+            } else {
+                100
+            },
         });
         if compositor.frames_so_far() as usize >= frame_limit
             || unsafe { WebPDemuxNextFrame(&raw mut iterator) } == 0
@@ -233,11 +237,12 @@ pub fn probe_exr_dimensions(path: &Path) -> Option<(u32, u32)> {
     (status == 0).then_some((width as u32, height as u32))
 }
 
-pub fn probe_exr_bytes_dimensions(data: &[u8]) -> Option<(u32, u32)> {
+pub fn probe_exr_bytes_dimensions(bytes: &[u8]) -> Option<(u32, u32)> {
     let mut width: c_int = 0;
     let mut height: c_int = 0;
-    let status =
-        unsafe { riv_exr_probe_memory(data.as_ptr(), data.len(), &raw mut width, &raw mut height) };
+    let status = unsafe {
+        riv_exr_probe_memory(bytes.as_ptr(), bytes.len(), &raw mut width, &raw mut height)
+    };
     (status == 0).then_some((width as u32, height as u32))
 }
 
@@ -261,16 +266,16 @@ pub fn decode_exr(path: &Path, format_name: &'static str) -> Result<DecodedImage
 }
 
 pub fn decode_exr_bytes(
-    data: &[u8],
+    bytes: &[u8],
     format_name: &'static str,
 ) -> Result<DecodedImage, DecodeError> {
     decode_exr_with(
         format_name,
-        probe_exr_bytes_dimensions(data),
+        probe_exr_bytes_dimensions(bytes),
         |pixels, capacity, width, height, message, error_capacity| unsafe {
             riv_exr_decode_memory_into(
-                data.as_ptr(),
-                data.len(),
+                bytes.as_ptr(),
+                bytes.len(),
                 pixels,
                 capacity,
                 width,
@@ -464,26 +469,26 @@ fn heif_pixel_target(encoding: Option<HdrEncoding>) -> (c_int, PixelStorage) {
 }
 
 /// Container-parse size and storage of the primary image; no pixel decode.
-pub fn probe_heif_dimensions_and_storage(data: &[u8]) -> Option<(u32, u32, PixelStorage)> {
+pub fn probe_heif_dimensions_and_storage(bytes: &[u8]) -> Option<(u32, u32, PixelStorage)> {
     let context = unsafe { heif_context_alloc() };
     if context.is_null() {
         return None;
     }
-    let size = probe_heif_primary_image(context, data);
+    let dimensions_and_storage = probe_heif_primary_image(context, bytes);
     unsafe { heif_context_free(context) };
-    size
+    dimensions_and_storage
 }
 
 /// Reads the buffer into the context and takes the primary image handle.
 fn heif_primary_handle(
     context: *mut HeifContext,
-    data: &[u8],
+    bytes: &[u8],
 ) -> Result<*mut HeifImageHandle, DecodeError> {
     unsafe {
         heif_context_read_from_memory_without_copy(
             context,
-            data.as_ptr().cast(),
-            data.len(),
+            bytes.as_ptr().cast(),
+            bytes.len(),
             std::ptr::null(),
         )
     }
@@ -495,9 +500,9 @@ fn heif_primary_handle(
 
 fn probe_heif_primary_image(
     context: *mut HeifContext,
-    data: &[u8],
+    bytes: &[u8],
 ) -> Option<(u32, u32, PixelStorage)> {
-    let handle = heif_primary_handle(context, data).ok()?;
+    let handle = heif_primary_handle(context, bytes).ok()?;
     let width = unsafe { heif_image_handle_get_width(handle) };
     let height = unsafe { heif_image_handle_get_height(handle) };
     // The same check the decode makes, so the budget matches the storage it will produce.
@@ -506,22 +511,22 @@ fn probe_heif_primary_image(
     (width > 0 && height > 0).then_some((width as u32, height as u32, storage))
 }
 
-pub fn decode_heif(data: &[u8], format_name: &'static str) -> Result<DecodedImage, DecodeError> {
+pub fn decode_heif(bytes: &[u8], format_name: &'static str) -> Result<DecodedImage, DecodeError> {
     let context = unsafe { heif_context_alloc() };
     if context.is_null() {
         return Err(uncoded_error("HEIF context allocation failed"));
     }
-    let result = decode_heif_primary_image(context, data, format_name);
+    let result = decode_heif_primary_image(context, bytes, format_name);
     unsafe { heif_context_free(context) };
     result
 }
 
 fn decode_heif_primary_image(
     context: *mut HeifContext,
-    data: &[u8],
+    bytes: &[u8],
     format_name: &'static str,
 ) -> Result<DecodedImage, DecodeError> {
-    let handle = heif_primary_handle(context, data)?;
+    let handle = heif_primary_handle(context, bytes)?;
 
     // PQ/HLG survives only a 16-bit request; libheif converts no transfer function.
     let hdr_encoding = heif_hdr_encoding(handle);
@@ -538,9 +543,9 @@ fn decode_heif_primary_image(
     }
     .into_result();
     let icc_profile = {
-        let size = unsafe { heif_image_handle_get_raw_color_profile_size(handle) };
-        if size > 0 {
-            let mut buffer = vec![0u8; size];
+        let profile_bytes = unsafe { heif_image_handle_get_raw_color_profile_size(handle) };
+        if profile_bytes > 0 {
+            let mut buffer = vec![0u8; profile_bytes];
             unsafe { heif_image_handle_get_raw_color_profile(handle, buffer.as_mut_ptr().cast()) }
                 .into_result()
                 .ok()
@@ -833,15 +838,15 @@ mod exr_robustness_tests {
     #[test]
     #[ignore = "needs test/exr_base.exr"]
     fn a_valid_exr_decodes() {
-        let data = std::fs::read("test/exr_base.exr").expect("fixture");
-        assert!(decode_exr_bytes(&data, "EXR").is_ok());
+        let file_bytes = std::fs::read("test/exr_base.exr").expect("fixture");
+        assert!(decode_exr_bytes(&file_bytes, "EXR").is_ok());
     }
 
     #[test]
     #[ignore = "needs test/exr_bad_offset.exr"]
     fn a_corrupt_offset_table_errors_without_reading_out_of_bounds() {
-        let data = std::fs::read("test/exr_bad_offset.exr").expect("fixture");
+        let file_bytes = std::fs::read("test/exr_bad_offset.exr").expect("fixture");
         // The subtraction bound check must catch it, not wrap and read before the buffer.
-        assert!(decode_exr_bytes(&data, "EXR").is_err());
+        assert!(decode_exr_bytes(&file_bytes, "EXR").is_err());
     }
 }

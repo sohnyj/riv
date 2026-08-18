@@ -73,7 +73,7 @@ pub fn confirm_delete(window: HWND, details: &str, permanent: bool) -> DeleteCon
     }
     let mut pressed = IDCANCEL.0;
     let mut checked = windows::core::BOOL(0);
-    let result = unsafe {
+    let dialog_result = unsafe {
         TaskDialogIndirect(
             &raw const configuration,
             Some(&raw mut pressed),
@@ -82,7 +82,7 @@ pub fn confirm_delete(window: HWND, details: &str, permanent: bool) -> DeleteCon
         )
     };
     DeleteConfirmation {
-        confirmed: result.is_ok() && pressed == IDYES.0,
+        confirmed: dialog_result.is_ok() && pressed == IDYES.0,
         do_not_ask_again: checked.as_bool(),
     }
 }

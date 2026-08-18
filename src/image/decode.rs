@@ -76,7 +76,7 @@ pub struct DecodedImage {
     pub pixel_height: u32,
     pub format_name: &'static str,
     pub icc_profile: Option<Arc<[u8]>>,
-    pub exif: Option<ExifInfo>,
+    pub exif: Option<ExifMetadata>,
     pub storage: PixelStorage,
     /// Meaningful bits per channel of the decoded pixels (8 for Bgra8 storage).
     pub source_bits_per_channel: u32,
@@ -94,7 +94,7 @@ pub struct DecodedImage {
 }
 
 #[derive(Clone)]
-pub struct ExifInfo {
+pub struct ExifMetadata {
     pub date_taken: Option<std::time::SystemTime>,
     pub rating: Option<u32>,
     pub camera_maker: Option<String>,
@@ -104,12 +104,12 @@ pub struct ExifInfo {
     pub iso_speed: Option<u32>,
     pub exposure_bias: Option<f64>,
     pub focal_length_millimeters: Option<f64>,
-    pub max_aperture: Option<f64>,
+    pub maximum_aperture: Option<f64>,
     pub metering_mode: Option<u32>,
     pub flash: Option<u32>,
 }
 
-impl ExifInfo {
+impl ExifMetadata {
     fn any_present(&self) -> bool {
         self.date_taken.is_some()
             || self.rating.is_some()
@@ -120,7 +120,7 @@ impl ExifInfo {
             || self.iso_speed.is_some()
             || self.exposure_bias.is_some()
             || self.focal_length_millimeters.is_some()
-            || self.max_aperture.is_some()
+            || self.maximum_aperture.is_some()
             || self.metering_mode.is_some()
             || self.flash.is_some()
     }
@@ -690,8 +690,11 @@ fn descriptor_for_path(path: &Path) -> Option<&'static FormatDescriptor> {
     descriptor_for_magic(&header).map(|descriptor| refine_by_content(descriptor, &header))
 }
 
-fn descriptor_for_bytes(data: &[u8], extension: Option<&str>) -> Option<&'static FormatDescriptor> {
-    let header = &data[..data.len().min(4096)];
+fn descriptor_for_bytes(
+    bytes: &[u8],
+    extension: Option<&str>,
+) -> Option<&'static FormatDescriptor> {
+    let header = &bytes[..bytes.len().min(4096)];
     match extension
         .map(str::to_lowercase)
         .and_then(|extension| descriptor_for_extension(&extension))
@@ -718,17 +721,17 @@ pub fn decode_file(path: &Path, cancellation: &AtomicBool) -> Result<DecodedImag
 
 /// Decodes an in-memory image (an extracted archive member).
 pub fn decode_bytes(
-    data: &[u8],
+    bytes: &[u8],
     extension: Option<&str>,
     cancellation: &AtomicBool,
 ) -> Result<DecodedImage, DecodeError> {
-    decode_input(&DecodeInput::Memory { data, extension }, cancellation)
+    decode_input(&DecodeInput::Memory { bytes, extension }, cancellation)
 }
 
 enum DecodeInput<'a> {
     File(&'a Path),
     Memory {
-        data: &'a [u8],
+        bytes: &'a [u8],
         extension: Option<&'a str>,
     },
 }
@@ -737,7 +740,7 @@ impl DecodeInput<'_> {
     fn descriptor(&self) -> Option<&'static FormatDescriptor> {
         match self {
             DecodeInput::File(path) => descriptor_for_path(path),
-            DecodeInput::Memory { data, extension } => descriptor_for_bytes(data, *extension),
+            DecodeInput::Memory { bytes, extension } => descriptor_for_bytes(bytes, *extension),
         }
     }
 
@@ -747,7 +750,7 @@ impl DecodeInput<'_> {
             DecodeInput::File(path) => std::fs::read(path)
                 .map(std::borrow::Cow::Owned)
                 .map_err(uncoded_error),
-            DecodeInput::Memory { data, .. } => Ok(std::borrow::Cow::Borrowed(*data)),
+            DecodeInput::Memory { bytes, .. } => Ok(std::borrow::Cow::Borrowed(*bytes)),
         }
     }
 }
@@ -808,7 +811,7 @@ fn decode_gain_map_plane(
         let decoder = create_wic_decoder(
             factory,
             &DecodeInput::Memory {
-                data: gain_map_bytes,
+                bytes: gain_map_bytes,
                 extension: None,
             },
         )?;
@@ -861,8 +864,8 @@ fn decode_input(
                 let file = File::open(path).map_err(uncoded_error)?;
                 decode_apng(BufReader::new(file), format_name, cancellation)
             }
-            DecodeInput::Memory { data, .. } => {
-                decode_apng(Cursor::new(*data), format_name, cancellation)
+            DecodeInput::Memory { bytes, .. } => {
+                decode_apng(Cursor::new(*bytes), format_name, cancellation)
             }
         },
         Adapter::Svg => decode_svg(&input.read_all()?, format_name),
@@ -873,8 +876,8 @@ fn decode_input(
         ),
         Adapter::Exr => match input {
             DecodeInput::File(path) => crate::image::fallback::decode_exr(path, format_name),
-            DecodeInput::Memory { data, .. } => {
-                crate::image::fallback::decode_exr_bytes(data, format_name)
+            DecodeInput::Memory { bytes, .. } => {
+                crate::image::fallback::decode_exr_bytes(bytes, format_name)
             }
         }
         .and_then(|decoded| enforce_device_limit(decoded, cancellation)),
@@ -967,8 +970,8 @@ pub fn probe_file_weight(path: &Path) -> Option<u64> {
     probe_weight(&DecodeInput::File(path))
 }
 
-pub fn probe_bytes_weight(data: &[u8], extension: Option<&str>) -> Option<u64> {
-    probe_weight(&DecodeInput::Memory { data, extension })
+pub fn probe_bytes_weight(bytes: &[u8], extension: Option<&str>) -> Option<u64> {
+    probe_weight(&DecodeInput::Memory { bytes, extension })
 }
 
 fn probe_weight(input: &DecodeInput<'_>) -> Option<u64> {
@@ -979,15 +982,15 @@ fn probe_weight(input: &DecodeInput<'_>) -> Option<u64> {
         }
         Adapter::Apng => match input {
             DecodeInput::File(path) => probe_apng_weight(BufReader::new(File::open(path).ok()?)),
-            DecodeInput::Memory { data, .. } => probe_apng_weight(Cursor::new(*data)),
+            DecodeInput::Memory { bytes, .. } => probe_apng_weight(Cursor::new(*bytes)),
         },
         Adapter::Svg => probe_svg_weight(&input.read_all().ok()?),
         Adapter::WebPAnimation => probe_webp_weight(input),
         Adapter::Exr => {
             let (width, height) = match input {
                 DecodeInput::File(path) => crate::image::fallback::probe_exr_dimensions(path),
-                DecodeInput::Memory { data, .. } => {
-                    crate::image::fallback::probe_exr_bytes_dimensions(data)
+                DecodeInput::Memory { bytes, .. } => {
+                    crate::image::fallback::probe_exr_bytes_dimensions(bytes)
                 }
             }?;
             Some(decoded_weight(width, height, 8, 1))
@@ -1018,7 +1021,7 @@ fn probe_wic_weight(input: &DecodeInput<'_>, semantics: &FrameSemantics) -> Opti
         };
         let frame = unsafe { decoder.GetFrame(index)? };
         let (width, height) = source_size(&frame.cast()?)?;
-        let (bits_per_channel, _) = frame_pixel_format_info(factory, &frame);
+        let (bits_per_channel, _) = frame_pixel_format_traits(factory, &frame);
         let bytes_per_pixel = if bits_per_channel > 8 { 8 } else { 4 };
         Ok(decoded_weight(width, height, bytes_per_pixel, 1))
     })
@@ -1042,8 +1045,8 @@ fn probe_apng_weight<Input: BufRead + Seek>(input: Input) -> Option<u64> {
 }
 
 /// The raster size tracks the largest monitor, like decode_svg.
-fn probe_svg_weight(data: &[u8]) -> Option<u64> {
-    let tree = parse_svg_tree(data).ok()?;
+fn probe_svg_weight(bytes: &[u8]) -> Option<u64> {
+    let tree = parse_svg_tree(bytes).ok()?;
     let (pixel_width, pixel_height, _) = svg_raster_geometry(&tree)?;
     Some(decoded_weight(pixel_width, pixel_height, 4, 1))
 }
@@ -1056,7 +1059,7 @@ fn probe_webp_weight(input: &DecodeInput<'_>) -> Option<u64> {
             owned = read_header(path)?;
             &owned
         }
-        DecodeInput::Memory { data, .. } => data,
+        DecodeInput::Memory { bytes, .. } => bytes,
     };
     let dimension = |offset: usize| -> Option<u32> {
         let bytes = header.get(offset..offset + 3)?;
@@ -1195,7 +1198,7 @@ fn subresolution_source(
         return Ok(None);
     };
     let (full_width, full_height) = source_size(&frame.cast()?)?;
-    let (_, float_native) = frame_pixel_format_info(factory, frame);
+    let (_, float_native) = frame_pixel_format_traits(factory, frame);
     let (mut width, mut height) = subresolution_target_size(full_width, full_height, float_native);
     unsafe { transform.GetClosestSize(&mut width, &mut height)? };
     // A decoder that cannot scale returns the full size; stay single-stage then.
@@ -1280,9 +1283,9 @@ fn create_wic_decoder(
             )
         },
         // The stream borrows the buffer; decoder and stream stay within this call.
-        DecodeInput::Memory { data, .. } => unsafe {
+        DecodeInput::Memory { bytes, .. } => unsafe {
             let stream = factory.CreateStream()?;
-            stream.InitializeFromMemory(data)?;
+            stream.InitializeFromMemory(bytes)?;
             factory.CreateDecoderFromStream(
                 &stream,
                 std::ptr::null(),
@@ -1328,7 +1331,7 @@ fn enforce_device_limit(
         PixelStorage::RgbaHalf => &GUID_WICPixelFormat64bppPRGBAHalf,
     };
     let bytes_per_pixel = decoded.storage.bytes_per_pixel();
-    // u64 stride: a native EXR/HEIF width near u32::MAX would overflow width*bpp.
+    // u64 stride: a native EXR/HEIF width near u32::MAX would overflow width*bytes_per_pixel.
     let stride = u32::try_from(u64::from(width) * u64::from(bytes_per_pixel))
         .map_err(|_| uncoded_error("Image stride exceeds the addressable range"))?;
     let frame = decoded
@@ -1381,7 +1384,7 @@ fn decode_frame_source(
     let orientation = exif_orientation(metadata.as_ref());
     let icc_profile = icc_profile_bytes(factory, frame);
     let exif = metadata.as_ref().and_then(read_exif);
-    let (native_bits_per_channel, float_native) = frame_pixel_format_info(factory, frame);
+    let (native_bits_per_channel, float_native) = frame_pixel_format_traits(factory, frame);
     let high_depth = native_bits_per_channel > 8;
     // PQ/HLG integers bypass WIC's sRGB-assuming float conversion.
     let hdr_encoding = if float_native {
@@ -1483,7 +1486,7 @@ fn decode_frame_source(
 }
 
 /// Native format traits: (bits per channel, float representation).
-fn frame_pixel_format_info(
+fn frame_pixel_format_traits(
     factory: &IWICImagingFactory,
     frame: &IWICBitmapFrameDecode,
 ) -> (u32, bool) {
@@ -1698,7 +1701,7 @@ fn upload_immutable_texture(
     pixels: &[u8],
     row_pitch: u32,
 ) -> Option<ID3D11Texture2D> {
-    let data = D3D11_SUBRESOURCE_DATA {
+    let subresource = D3D11_SUBRESOURCE_DATA {
         pSysMem: pixels.as_ptr().cast(),
         SysMemPitch: row_pitch,
         ..Default::default()
@@ -1707,7 +1710,7 @@ fn upload_immutable_texture(
     unsafe {
         upload_device.device.CreateTexture2D(
             &raw const *description,
-            Some(&raw const data),
+            Some(&raw const subresource),
             Some(&raw mut texture),
         )
     }
@@ -1983,12 +1986,12 @@ fn icc_profile_bytes(
         if unsafe { context.GetType() } != Ok(WICColorContextProfile) {
             continue;
         }
-        let mut size = 0u32;
-        let _ = unsafe { context.GetProfileBytes(&mut [], &raw mut size) };
-        if size == 0 {
+        let mut profile_bytes = 0u32;
+        let _ = unsafe { context.GetProfileBytes(&mut [], &raw mut profile_bytes) };
+        if profile_bytes == 0 {
             continue;
         }
-        let mut buffer = vec![0u8; size as usize];
+        let mut buffer = vec![0u8; profile_bytes as usize];
         let mut written = 0u32;
         unsafe { context.GetProfileBytes(&mut buffer, &raw mut written) }.ok()?;
         buffer.truncate(written as usize);
@@ -2280,8 +2283,8 @@ fn exif_orientation(reader: Option<&IWICMetadataQueryReader>) -> u32 {
         .unwrap_or(1)
 }
 
-fn read_exif(reader: &IWICMetadataQueryReader) -> Option<ExifInfo> {
-    let information = ExifInfo {
+fn read_exif(reader: &IWICMetadataQueryReader) -> Option<ExifMetadata> {
+    let information = ExifMetadata {
         date_taken: query_filetime(reader, w!("System.Photo.DateTaken")),
         rating: query_u32(reader, w!("System.Rating")),
         camera_maker: query_string(reader, w!("System.Photo.CameraManufacturer")),
@@ -2291,7 +2294,7 @@ fn read_exif(reader: &IWICMetadataQueryReader) -> Option<ExifInfo> {
         iso_speed: query_u32(reader, w!("System.Photo.ISOSpeed")),
         exposure_bias: query_f64(reader, w!("System.Photo.ExposureBias")),
         focal_length_millimeters: query_f64(reader, w!("System.Photo.FocalLength")),
-        max_aperture: query_f64(reader, w!("System.Photo.MaxAperture")),
+        maximum_aperture: query_f64(reader, w!("System.Photo.MaxAperture")),
         metering_mode: query_u32(reader, w!("System.Photo.MeteringMode")),
         flash: query_u32(reader, w!("System.Photo.Flash")),
     };
@@ -2306,9 +2309,9 @@ fn query_propvariant<T>(
 ) -> Option<T> {
     let mut value = PROPVARIANT::default();
     unsafe { reader.GetMetadataByName(name, &raw mut value) }.ok()?;
-    let result = convert(&value);
+    let converted = convert(&value);
     let _ = unsafe { PropVariantClear(&raw mut value) };
-    result
+    converted
 }
 
 fn query_f64(reader: &IWICMetadataQueryReader, name: PCWSTR) -> Option<f64> {
@@ -2323,9 +2326,9 @@ fn query_string(reader: &IWICMetadataQueryReader, name: PCWSTR) -> Option<String
         unsafe { PropVariantToStringAlloc(std::ptr::from_ref(value)) }
             .ok()
             .map(|out| {
-                let result = String::from_utf16_lossy(unsafe { out.as_wide() });
+                let text = String::from_utf16_lossy(unsafe { out.as_wide() });
                 unsafe { windows::Win32::System::Com::CoTaskMemFree(Some(out.0.cast())) };
-                result
+                text
             })
     })
     .map(|text| text.trim().to_string())
@@ -2558,8 +2561,8 @@ fn copy_rectangle(
     }
 }
 
-fn decode_svg(data: &[u8], format_name: &'static str) -> Result<DecodedImage, DecodeError> {
-    let tree = parse_svg_tree(data)?;
+fn decode_svg(bytes: &[u8], format_name: &'static str) -> Result<DecodedImage, DecodeError> {
+    let tree = parse_svg_tree(bytes)?;
     let (pixel_width, pixel_height, scale) =
         svg_raster_geometry(&tree).ok_or_else(|| uncoded_error("SVG has no intrinsic size"))?;
     let mut pixmap = resvg::tiny_skia::Pixmap::new(pixel_width, pixel_height)
@@ -2596,12 +2599,12 @@ fn decode_svg(data: &[u8], format_name: &'static str) -> Result<DecodedImage, De
     })
 }
 
-fn parse_svg_tree(data: &[u8]) -> Result<resvg::usvg::Tree, DecodeError> {
+fn parse_svg_tree(bytes: &[u8]) -> Result<resvg::usvg::Tree, DecodeError> {
     let options = resvg::usvg::Options {
         fontdb: font_database().clone(),
         ..Default::default()
     };
-    resvg::usvg::Tree::from_data(data, &options).map_err(uncoded_error)
+    resvg::usvg::Tree::from_data(bytes, &options).map_err(uncoded_error)
 }
 
 /// Raster size and scale at the largest monitor's long side; probe and decode must agree.
@@ -2643,9 +2646,9 @@ fn largest_monitor_long_side() -> u32 {
         _monitor: HMONITOR,
         _device_context: HDC,
         bounds: *mut RECT,
-        state: LPARAM,
+        longest_side_pointer: LPARAM,
     ) -> BOOL {
-        let longest = unsafe { &mut *(state.0 as *mut i32) };
+        let longest = unsafe { &mut *(longest_side_pointer.0 as *mut i32) };
         let bounds = unsafe { &*bounds };
         *longest = (*longest)
             .max(bounds.right - bounds.left)
@@ -2779,8 +2782,8 @@ mod compositor_tests {
         png[20..24].copy_from_slice(&60000u32.to_be_bytes());
         let crc = png_chunk_crc(&png[12..29]);
         png[29..33].copy_from_slice(&crc.to_be_bytes());
-        let result = decode_apng(Cursor::new(png), "PNG", &AtomicBool::new(false));
-        assert!(result.is_err(), "oversized canvas must fail closed");
+        let decoded = decode_apng(Cursor::new(png), "PNG", &AtomicBool::new(false));
+        assert!(decoded.is_err(), "oversized canvas must fail closed");
     }
 
     #[test]
@@ -3572,10 +3575,10 @@ mod apng_tests {
     #[test]
     #[ignore = "needs test/apng_huge_frames.png"]
     fn a_huge_declared_frame_count_does_not_over_reserve() {
-        let data = std::fs::read("test/apng_huge_frames.png").expect("fixture");
+        let png_bytes = std::fs::read("test/apng_huge_frames.png").expect("fixture");
         let cancellation = AtomicBool::new(false);
         // Frames run out after the first; decode errors without the huge reservation.
-        assert!(decode_bytes(&data, Some("png"), &cancellation).is_err());
+        assert!(decode_bytes(&png_bytes, Some("png"), &cancellation).is_err());
     }
 }
 

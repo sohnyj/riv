@@ -1820,7 +1820,7 @@ fn scan_folder(directory: &Path, options: &CoreOptions) -> Vec<ListingEntry> {
 }
 
 /// Entry for an image member; other member types drop out of the listing.
-fn member_entry(archive: &Path, member: archive_reader::MemberInfo) -> Option<ListingEntry> {
+fn member_entry(archive: &Path, member: archive_reader::ArchiveMember) -> Option<ListingEntry> {
     let format_name = crate::text::lowercase_extension(Path::new(&member.name))
         .and_then(|extension| decode::format_name_for_extension(&extension))?;
     let wide_name = HSTRING::from(&member.name);
@@ -1830,7 +1830,7 @@ fn member_entry(archive: &Path, member: archive_reader::MemberInfo) -> Option<Li
             member: member.name,
         },
         wide_name,
-        file_size: member.size,
+        file_size: member.uncompressed_bytes,
         modified: member.modified,
         created: member.modified, // archives do not record creation times
         format_name,
@@ -2069,9 +2069,9 @@ fn worker_loop(shared: &PoolShared, window: isize) {
             }
             ItemLocation::ArchiveMember { archive, member } => {
                 match archive_reader::read_member(archive, member, &job.cancellation) {
-                    Ok(data) => {
+                    Ok(member_bytes) => {
                         let extension = job.location.extension_lowercase();
-                        decode::decode_bytes(&data, extension.as_deref(), &job.cancellation)
+                        decode::decode_bytes(&member_bytes, extension.as_deref(), &job.cancellation)
                     }
                     Err(error) => Err(error.into()),
                 }
@@ -2093,10 +2093,10 @@ fn worker_loop(shared: &PoolShared, window: isize) {
                     );
                 };
                 match curl::download(url, &job.cancellation, &mut report) {
-                    Ok(data) => {
-                        metadata.file_size = data.len() as u64; // the remote size becomes known here
+                    Ok(bytes) => {
+                        metadata.file_size = bytes.len() as u64; // the remote size becomes known here
                         let extension = curl::extension_lowercase(url);
-                        decode::decode_bytes(&data, extension.as_deref(), &job.cancellation)
+                        decode::decode_bytes(&bytes, extension.as_deref(), &job.cancellation)
                             .map_err(url_decode_error)
                     }
                     Err(error) => Err(error.into()),
@@ -2138,11 +2138,11 @@ fn run_probe_job(job: &DecodeJob, window: isize) {
             ItemLocation::ArchiveMember { archive, member } => {
                 // The member extraction repeats at decode time; only the pixel work is saved.
                 match archive_reader::read_member(archive, member, &job.cancellation) {
-                    Ok(data) => {
+                    Ok(member_bytes) => {
                         let extension = job.location.extension_lowercase();
                         (
                             false,
-                            decode::probe_bytes_weight(&data, extension.as_deref()),
+                            decode::probe_bytes_weight(&member_bytes, extension.as_deref()),
                         )
                     }
                     Err(error) => (error.cancelled, None),
@@ -2473,9 +2473,9 @@ mod item_location_tests {
         let entry = |name: &str| {
             member_entry(
                 Path::new("C:\\a.cbz"),
-                archive_reader::MemberInfo {
+                archive_reader::ArchiveMember {
                     name: name.to_string(),
-                    size: 0,
+                    uncompressed_bytes: 0,
                     modified: UNIX_EPOCH,
                 },
             )
@@ -2510,16 +2510,16 @@ mod item_location_tests {
 
     #[test]
     fn member_entries_keep_images_only() {
-        let info = |name: &str| archive_reader::MemberInfo {
+        let archive_member = |name: &str| archive_reader::ArchiveMember {
             name: name.to_string(),
-            size: 10,
+            uncompressed_bytes: 10,
             modified: UNIX_EPOCH,
         };
         let archive = Path::new("C:\\a.cbz");
-        assert!(member_entry(archive, info("art/01.png")).is_some());
-        assert!(member_entry(archive, info("info.txt")).is_none());
-        assert!(member_entry(archive, info("no_extension")).is_none());
-        let entry = member_entry(archive, info("art/01.png")).expect("image member");
+        assert!(member_entry(archive, archive_member("art/01.png")).is_some());
+        assert!(member_entry(archive, archive_member("info.txt")).is_none());
+        assert!(member_entry(archive, archive_member("no_extension")).is_none());
+        let entry = member_entry(archive, archive_member("art/01.png")).expect("image member");
         assert_eq!(entry.created, entry.modified); // archives have no creation time
         assert_eq!(entry.file_size, 10);
     }
@@ -2771,9 +2771,9 @@ mod listing_scan_tests {
     fn archive_member(archive: &Path, name: &str) -> ListingEntry {
         member_entry(
             archive,
-            archive_reader::MemberInfo {
+            archive_reader::ArchiveMember {
                 name: name.to_string(),
-                size: 8,
+                uncompressed_bytes: 8,
                 modified: UNIX_EPOCH,
             },
         )

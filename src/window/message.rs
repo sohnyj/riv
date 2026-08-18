@@ -11,13 +11,13 @@ use windows::Win32::UI::WindowsAndMessaging::{PostMessageW, SendMessageW};
 static SENT_PAYLOADS: LazyLock<Mutex<HashMap<usize, (u32, TypeId)>>> =
     LazyLock::new(|| Mutex::new(HashMap::new()));
 
-fn remember<T: 'static>(pointer: usize, message: u32) {
+fn record_sent<T: 'static>(pointer: usize, message: u32) {
     if let Ok(mut payloads) = SENT_PAYLOADS.lock() {
         payloads.insert(pointer, (message, TypeId::of::<T>()));
     }
 }
 
-fn forget(pointer: usize) {
+fn remove_sent(pointer: usize) {
     if let Ok(mut payloads) = SENT_PAYLOADS.lock() {
         payloads.remove(&pointer);
     }
@@ -33,7 +33,7 @@ fn was_sent<T: 'static>(pointer: usize, message: u32) -> bool {
 /// Posts an owned payload; reclaims it when the message cannot be delivered.
 pub fn post_boxed<T: 'static>(window: isize, message: u32, payload: Box<T>) {
     let pointer = Box::into_raw(payload);
-    remember::<T>(pointer as usize, message);
+    record_sent::<T>(pointer as usize, message);
     let posted = unsafe {
         PostMessageW(
             Some(HWND(window as *mut core::ffi::c_void)),
@@ -43,7 +43,7 @@ pub fn post_boxed<T: 'static>(window: isize, message: u32, payload: Box<T>) {
         )
     };
     if posted.is_err() {
-        forget(pointer as usize);
+        remove_sent(pointer as usize);
         drop(unsafe { Box::from_raw(pointer) });
     }
 }
@@ -65,10 +65,11 @@ pub unsafe fn take_boxed<T: 'static>(message: u32, lparam: LPARAM) -> Option<Box
 /// Sends a borrowed payload, readable by the handler for the length of the call.
 pub fn send_borrowed<T: 'static>(window: HWND, message: u32, payload: &T) -> LRESULT {
     let pointer = std::ptr::from_ref(payload) as usize;
-    remember::<T>(pointer, message);
-    let result = unsafe { SendMessageW(window, message, None, Some(LPARAM(pointer as isize))) };
-    forget(pointer);
-    result
+    record_sent::<T>(pointer, message);
+    let message_result =
+        unsafe { SendMessageW(window, message, None, Some(LPARAM(pointer as isize))) };
+    remove_sent(pointer);
+    message_result
 }
 
 /// The sent payload, or None when that pointer never went out with this message as a `T`.
@@ -118,7 +119,7 @@ mod payload_tests {
     #[test]
     fn a_payload_belongs_to_the_message_it_went_out_with() {
         let pointer = Box::into_raw(Box::new(7u64));
-        remember::<u64>(pointer as usize, 0x8001);
+        record_sent::<u64>(pointer as usize, 0x8001);
         let lparam = LPARAM(pointer as isize);
         assert!(unsafe { take_boxed::<u64>(0x8002, lparam) }.is_none());
         let taken = unsafe { take_boxed::<u64>(0x8001, lparam) };
@@ -128,7 +129,7 @@ mod payload_tests {
     #[test]
     fn a_payload_taken_as_the_wrong_type_is_refused() {
         let pointer = Box::into_raw(Box::new(7u64));
-        remember::<u64>(pointer as usize, 0x8003);
+        record_sent::<u64>(pointer as usize, 0x8003);
         let lparam = LPARAM(pointer as isize);
         assert!(unsafe { take_boxed::<u32>(0x8003, lparam) }.is_none());
         // The refusal leaves the registration, so the right type still reclaims the payload.

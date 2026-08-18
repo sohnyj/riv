@@ -163,7 +163,7 @@ impl ScalingFilter {
 
 /// Tone-map luminances for the info overlay (nits).
 #[derive(Clone, Copy, PartialEq)]
-pub struct ToneMapInfo {
+pub struct ToneMapLuminances {
     pub hdr_display: bool,
     pub display_peak_nits: f32,
     pub display_full_frame_nits: f32,
@@ -826,8 +826,8 @@ impl Renderer {
     }
 
     /// Tone-map luminances for the info overlay: display caps and the output target.
-    pub fn tone_map_info(&self) -> ToneMapInfo {
-        ToneMapInfo {
+    pub fn tone_map_luminances(&self) -> ToneMapLuminances {
+        ToneMapLuminances {
             hdr_display: self.is_hdr_output(),
             display_peak_nits: self.tone_map_target_nits,
             display_full_frame_nits: self.display_full_frame_nits,

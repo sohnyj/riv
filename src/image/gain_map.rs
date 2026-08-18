@@ -318,7 +318,9 @@ fn hdrgm_prefix(xml: &str) -> Option<&str> {
         if unquoted.is_some_and(|value| value.starts_with(HDRGM_NAMESPACE))
             && !prefix.is_empty()
             && prefix.len() <= 32
-            && prefix.chars().all(|c| c.is_ascii_alphanumeric())
+            && prefix
+                .chars()
+                .all(|character| character.is_ascii_alphanumeric())
         {
             return Some(prefix);
         }

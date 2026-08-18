@@ -43,14 +43,15 @@ fn drop_format() -> FORMATETC {
 }
 
 fn has_paths(data_object: Option<&IDataObject>) -> bool {
-    data_object.is_some_and(|data| unsafe { data.QueryGetData(&drop_format()) }.is_ok())
+    data_object
+        .is_some_and(|data_object| unsafe { data_object.QueryGetData(&drop_format()) }.is_ok())
 }
 
 fn dropped_paths(data_object: Option<&IDataObject>) -> Vec<PathBuf> {
-    let Some(data) = data_object else {
+    let Some(data_object) = data_object else {
         return Vec::new();
     };
-    let Ok(mut medium) = (unsafe { data.GetData(&drop_format()) }) else {
+    let Ok(mut medium) = (unsafe { data_object.GetData(&drop_format()) }) else {
         return Vec::new();
     };
     let drop_handle = HDROP(unsafe { medium.u.hGlobal }.0);

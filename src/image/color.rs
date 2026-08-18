@@ -1,4 +1,4 @@
-//! Color helpers: scRGB conversion and display capability queries.
+//! scRGB conversion, perceptual quantizer curves, and display capability queries.
 
 use std::sync::Arc;
 
@@ -113,8 +113,8 @@ pub struct DisplayCapabilities {
     pub hdr: bool,
     /// Wire depth of the display path, shown in the info panel; never picks formats.
     pub bits_per_color: u32,
-    pub max_luminance: Option<f32>,
-    pub max_full_frame_luminance: Option<f32>,
+    pub maximum_luminance_nits: Option<f32>,
+    pub maximum_full_frame_luminance_nits: Option<f32>,
     /// Advanced color (HDR or SDR auto color management) is on for this output.
     pub advanced_color: bool,
     /// SDR white over the 80-nit reference; meaningful on HDR outputs only.
@@ -141,12 +141,13 @@ impl DisplayCapabilities {
     /// The tone-map target and paired full-frame limit for this display.
     pub fn tone_map_targets(&self) -> (f32, f32) {
         let target = if self.hdr {
-            self.max_luminance.unwrap_or(HDR_PEAK_FALLBACK_NITS)
+            self.maximum_luminance_nits
+                .unwrap_or(HDR_PEAK_FALLBACK_NITS)
         } else {
             SDR_TONE_MAP_TARGET_NITS
         };
         let full_frame = if self.hdr {
-            self.max_full_frame_luminance.unwrap_or(target)
+            self.maximum_full_frame_luminance_nits.unwrap_or(target)
         } else {
             target
         };
@@ -158,8 +159,8 @@ impl DisplayCapabilities {
         if !self.hdr {
             return None;
         }
-        let peak = self.max_luminance?;
-        let ceiling = match self.max_full_frame_luminance {
+        let peak = self.maximum_luminance_nits?;
+        let ceiling = match self.maximum_full_frame_luminance_nits {
             Some(full_frame) => peak.min(full_frame),
             None => peak,
         };
@@ -177,7 +178,7 @@ impl DisplayCapabilities {
 }
 
 /// A display's color capabilities, native gamut, and installed profile, from one snapshot.
-pub struct DisplayColorInfo {
+pub struct DisplayColor {
     pub capabilities: DisplayCapabilities,
     pub gamut: Option<DisplayGamut>,
     /// The display's ICC profile, the destination when the OS color-manages nothing.
@@ -230,7 +231,7 @@ impl Drop for DisplayWatcher {
 }
 
 /// Queries the display's color capabilities, gamut, and profile from the watcher's snapshot.
-pub fn display_color_info(watcher: Option<&DisplayWatcher>, window: HWND) -> DisplayColorInfo {
+pub fn display_color(watcher: Option<&DisplayWatcher>, window: HWND) -> DisplayColor {
     let information = watcher.and_then(DisplayWatcher::advanced_color_info);
     let capabilities = capabilities_from(information.as_ref(), window);
     // Only ACM-off SDR consumes the profile; skip the disk read in the delegated modes.
@@ -238,7 +239,7 @@ pub fn display_color_info(watcher: Option<&DisplayWatcher>, window: HWND) -> Dis
         .then(|| monitor_device_profile(window))
         .flatten()
         .map(Arc::new);
-    DisplayColorInfo {
+    DisplayColor {
         capabilities,
         gamut: information.as_ref().and_then(gamut_from),
         display_profile,
@@ -307,10 +308,10 @@ fn capabilities_from(information: Option<&AdvancedColorInfo>, window: HWND) -> D
     DisplayCapabilities {
         hdr,
         bits_per_color: bits_per_color(window).unwrap_or(8),
-        max_luminance: nits(
+        maximum_luminance_nits: nits(
             information.and_then(|information| information.MaxLuminanceInNits().ok()),
         ),
-        max_full_frame_luminance: nits(
+        maximum_full_frame_luminance_nits: nits(
             information
                 .and_then(|information| information.MaxAverageFullFrameLuminanceInNits().ok()),
         ),

@@ -105,14 +105,14 @@ impl ViewTransform {
         image: Size,
     ) {
         // Limits stretch to the current scale so an out-of-range fit can step back in.
-        let new_scale =
+        let clamped_scale =
             (self.scale * factor).clamp(MINIMUM_ZOOM.min(self.scale), MAXIMUM_ZOOM.max(self.scale));
-        if new_scale == self.scale {
+        if clamped_scale == self.scale {
             return; // no movement toward the limits
         }
-        let factor = new_scale / self.scale;
+        let factor = clamped_scale / self.scale;
         let cursor_anchor = cursor_from_center
-            .filter(|_| factor > 1.0 && new_scale > self.fit_scale(viewport, image));
+            .filter(|_| factor > 1.0 && clamped_scale > self.fit_scale(viewport, image));
         match cursor_anchor {
             Some((cursor_x, cursor_y)) => {
                 self.pan_offset_x -= (cursor_x - self.pan_offset_x) * (factor - 1.0);
@@ -123,7 +123,7 @@ impl ViewTransform {
                 self.pan_offset_y *= factor;
             }
         }
-        self.scale = new_scale;
+        self.scale = clamped_scale;
         self.fit_tracking = false;
         self.clamp_pan(viewport, image);
     }

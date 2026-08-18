@@ -1,4 +1,4 @@
-//! Settings About page: large title, version, build info, and a repository link.
+//! Settings About page: large title, version, toolchain line, and a repository link.
 
 use windows::Win32::Foundation::{HWND, LPARAM, WPARAM};
 use windows::Win32::Graphics::Gdi::{
@@ -49,7 +49,7 @@ pub fn initialize_page(page: HWND) -> AboutFonts {
 }
 
 /// Open the repository URL carried by the link's notification.
-pub fn handle_link(lparam: LPARAM) {
+pub fn open_notified_link(lparam: LPARAM) {
     use windows::Win32::UI::Controls::NMLINK;
     let link = unsafe { &*(lparam.0 as *const NMLINK) };
     open_link(&link.item.szUrl);

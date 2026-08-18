@@ -316,7 +316,7 @@ const ACTION_TABLE: &[(Action, &str, &str, ActionRequirement)] = &[
     (Action::Exit, "exit", "Exit", ActionRequirement::Window),
 ];
 
-const RECENT_NAMES: [&str; crate::settings::RECENT_FILES_LIMIT] = [
+const RECENT_NAMES: [&str; crate::settings::MAXIMUM_RECENT_FILES] = [
     "recent0", "recent1", "recent2", "recent3", "recent4", "recent5", "recent6", "recent7",
     "recent8", "recent9",
 ];

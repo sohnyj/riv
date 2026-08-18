@@ -37,7 +37,7 @@ use shell::{clipboard, file_ops, open_dialog};
 use view::dither::DitherMode;
 use view::renderer::{
     self, FrameDecision, GraphicsDevice, OutputMode, PendingDevice, Renderer, ScalingFilter,
-    ToneMapInfo, create_device,
+    ToneMapLuminances, create_device,
 };
 use view::transform::{FitMode, Size, ViewTransform};
 use window::context_menu::{self, MenuSelection, MenuState, MenuTarget};
@@ -111,13 +111,13 @@ const CURSOR_HIDE_TIMER: usize = 4;
 const FULL_DECODE_TIMER: usize = 5;
 
 /// How far an action-driven pan moves, in device pixels.
-const PAN_STEP: f32 = 64.0;
+const PAN_STEP_PIXELS: f32 = 64.0;
 
 /// A wheel-driven pan moves half the delta, so a 120-unit notch moves 60 device pixels.
 const WHEEL_PAN_DIVISOR: f32 = 2.0;
 
 /// Smallest client area a resize may reach, in logical pixels before DPI scaling.
-const MINIMUM_CLIENT_SIZE: (i32, i32) = (320, 240);
+const MINIMUM_CLIENT_LOGICAL_PIXELS: (i32, i32) = (320, 240);
 
 struct Application {
     /// None between a device loss and the next successful rebuild.
@@ -281,7 +281,7 @@ struct InfoTextCache {
     output_label: String,
     scaling_description: &'static str,
     dither_description: &'static str,
-    tone_map: Option<ToneMapInfo>,
+    tone_map: Option<ToneMapLuminances>,
     ultra_hdr_applied: bool,
     display_labels: DisplayLabels,
     /// Shared with the overlay content, so showing it again costs no copy.
@@ -347,11 +347,11 @@ impl Application {
         if let Some(path) = initial_path {
             image_core.load_path(path);
         }
-        let color::DisplayColorInfo {
+        let color::DisplayColor {
             capabilities,
             gamut,
             display_profile,
-        } = color::display_color_info(display_watcher.as_ref(), window);
+        } = color::display_color(display_watcher.as_ref(), window);
         let renderer = create_renderer(
             window,
             &capabilities,
@@ -448,11 +448,11 @@ impl Application {
 
     /// Reconfigure the output on a display mode change; else refresh boost and tone map target.
     fn refresh_display_state(&mut self, window: HWND) {
-        let color::DisplayColorInfo {
+        let color::DisplayColor {
             capabilities,
             gamut,
             display_profile,
-        } = color::display_color_info(self.display_watcher.as_ref(), window);
+        } = color::display_color(self.display_watcher.as_ref(), window);
         let labels = DisplayLabels::new(&capabilities, gamut);
         // A label-only change (wire depth, gamut) still requires a panel repaint.
         let labels_changed = labels != self.display_labels;
@@ -910,8 +910,8 @@ impl Application {
 
     /// Restarts the slideshow interval; navigation resets it so each item gets a full turn.
     fn restart_slideshow_timer(&self, window: HWND) {
-        let interval = self.settings.options.slideshow_interval_seconds * 1000;
-        self.schedule_slideshow_timer(window, interval);
+        let interval_milliseconds = self.settings.options.slideshow_interval_seconds * 1000;
+        self.schedule_slideshow_timer(window, interval_milliseconds);
     }
 
     /// The slideshow pauses while unfocused and resumes on return; animations keep playing.
@@ -999,11 +999,11 @@ impl Application {
         self.renderer = None;
         self.overlay.release_brushes();
         self.register_upload_device();
-        let color::DisplayColorInfo {
+        let color::DisplayColor {
             capabilities,
             display_profile,
             ..
-        } = color::display_color_info(self.display_watcher.as_ref(), window);
+        } = color::display_color(self.display_watcher.as_ref(), window);
         self.adopt_display_capabilities(&capabilities);
         self.renderer = Some(create_renderer(
             window,
@@ -1114,7 +1114,7 @@ impl Application {
             .map_or("", |renderer| renderer.output_label());
         let scaling_description = self.scaling_description(frame);
         let dither_description = frame.map_or("None", FrameDecision::dither_description);
-        let tone_map = self.renderer.as_ref().map(Renderer::tone_map_info);
+        let tone_map = self.renderer.as_ref().map(Renderer::tone_map_luminances);
         let ultra_hdr_applied = self
             .renderer
             .as_ref()
@@ -1179,11 +1179,11 @@ impl Application {
         }
         if self.output_reconfigure_pending {
             self.output_reconfigure_pending = false;
-            let color::DisplayColorInfo {
+            let color::DisplayColor {
                 capabilities,
                 display_profile,
                 ..
-            } = color::display_color_info(self.display_watcher.as_ref(), window);
+            } = color::display_color(self.display_watcher.as_ref(), window);
             let _ = self.reconfigure_display_output(&capabilities, display_profile, true);
         }
         let viewport = self.viewport(window);
@@ -1478,8 +1478,8 @@ fn execute_navigation(
     window: HWND,
     command: NavigationCommand,
 ) -> bool {
-    let result = application.image_core.navigate(command);
-    let navigated = apply_navigation_result(application, window, result);
+    let load_outcome = application.image_core.navigate(command);
+    let navigated = apply_navigation_outcome(application, window, load_outcome);
     if navigated && application.slideshow_item_shown_at.is_some() {
         // A manual or auto move restarts the interval so the new item gets a full turn.
         application.restart_slideshow_timer(window);
@@ -1487,12 +1487,12 @@ fn execute_navigation(
     navigated
 }
 
-fn apply_navigation_result(
+fn apply_navigation_outcome(
     application: &mut Application,
     window: HWND,
-    result: Option<LoadOutcome>,
+    load_outcome: Option<LoadOutcome>,
 ) -> bool {
-    match result {
+    match load_outcome {
         Some(outcome) => {
             application.dismiss_status_text(window);
             application.apply_load_outcome(window, outcome);
@@ -1630,7 +1630,7 @@ fn dispatch_action(application: &mut Application, window: HWND, action: Action) 
         // The action owns the axis and the sign; this caller sets the distance.
         Action::PanUp | Action::PanDown | Action::PanLeft | Action::PanRight => {
             if let Some((x, y)) = action.pan_direction() {
-                application.pan_by(window, x * PAN_STEP, y * PAN_STEP);
+                application.pan_by(window, x * PAN_STEP_PIXELS, y * PAN_STEP_PIXELS);
             }
         }
         Action::RotateRight | Action::RotateLeft => {
@@ -1992,10 +1992,10 @@ fn show_menu(application: &mut Application, window: HWND, x: i32, y: i32, target
                 }
             }
             MenuSelection::PlaylistEntry(slot) => {
-                let result = playlist_locations
+                let load_outcome = playlist_locations
                     .get(slot)
                     .and_then(|location| application.image_core.navigate_to_location(location));
-                apply_navigation_result(application, window, result);
+                apply_navigation_outcome(application, window, load_outcome);
             }
         }
     }
@@ -2008,10 +2008,10 @@ fn consume_key_binding(message: &MSG) -> bool {
     }
     let window = message.hwnd;
     application_from_window(window)
-        .is_some_and(|application| handle_key(application, window, message.wParam.0 as u16))
+        .is_some_and(|application| dispatch_key(application, window, message.wParam.0 as u16))
 }
 
-fn handle_key(application: &mut Application, window: HWND, virtual_key: u16) -> bool {
+fn dispatch_key(application: &mut Application, window: HWND, virtual_key: u16) -> bool {
     if [VK_CONTROL, VK_SHIFT, VK_MENU, VK_LWIN, VK_RWIN]
         .iter()
         .any(|modifier| modifier.0 == virtual_key)
@@ -2034,7 +2034,7 @@ fn handle_key(application: &mut Application, window: HWND, virtual_key: u16) -> 
     false
 }
 
-fn handle_wheel(application: &mut Application, window: HWND, wheel_delta: i16) {
+fn dispatch_wheel(application: &mut Application, window: HWND, wheel_delta: i16) {
     let modifiers = current_modifiers();
     let base = MouseBase::from_wheel_delta(wheel_delta);
     let Some(action) = application.bindings.lookup_mouse(modifiers, base) else {
@@ -2065,7 +2065,7 @@ fn handle_wheel(application: &mut Application, window: HWND, wheel_delta: i16) {
     }
 }
 
-fn handle_gesture(application: &mut Application, window: HWND, lparam: LPARAM) -> bool {
+fn apply_gesture(application: &mut Application, window: HWND, lparam: LPARAM) -> bool {
     use windows::Win32::UI::Input::Touch::{
         CloseGestureInfoHandle, GESTUREINFO, GID_PAN, GID_ZOOM, GetGestureInfo, HGESTUREINFO,
     };
@@ -2207,8 +2207,8 @@ fn run_message_loop(window: HWND) {
             continue;
         }
         // Nothing left to wait for: block for the next message, the paint included.
-        let result = unsafe { GetMessageW(&raw mut message, None, 0, 0) };
-        if result.0 <= 0 {
+        let retrieved = unsafe { GetMessageW(&raw mut message, None, 0, 0) };
+        if retrieved.0 <= 0 {
             return;
         }
         deliver_message(&message);
@@ -2237,7 +2237,7 @@ fn wait_for_frame_slot(slot_handle: HANDLE) -> bool {
     /// Handle count 1, so the queue reports one past the handle.
     const MESSAGE_WAKE: WAIT_EVENT = WAIT_EVENT(WAIT_OBJECT_0.0 + 1);
 
-    let result = unsafe {
+    let wake_event = unsafe {
         MsgWaitForMultipleObjectsEx(
             Some(&[slot_handle]),
             renderer::FRAME_SLOT_TIMEOUT_MILLISECONDS,
@@ -2246,7 +2246,7 @@ fn wait_for_frame_slot(slot_handle: HANDLE) -> bool {
         )
     };
     // A queue wake can hide a ready slot: which one the wait reports is undocumented.
-    result != MESSAGE_WAKE
+    wake_event != MESSAGE_WAKE
         || unsafe { WaitForSingleObjectEx(slot_handle, 0, false) } == WAIT_OBJECT_0
 }
 
@@ -2347,7 +2347,7 @@ fn process_is_elevated() -> bool {
     elevated
 }
 
-/// No window exists yet, so the app name titles the failure.
+/// No window exists yet, so the application name titles the failure.
 fn fail_fast_dialog(reason: &str, detail: &str) {
     dialogs::message::show_message(None, "riv", reason, detail, "Close");
 }
@@ -2366,7 +2366,7 @@ extern "system" fn window_procedure(
     match message {
         WM_GETMINMAXINFO => {
             // Without this the window shrinks until only the caption and its buttons are left.
-            let (client_width, client_height) = MINIMUM_CLIENT_SIZE;
+            let (client_width, client_height) = MINIMUM_CLIENT_LOGICAL_PIXELS;
             if let Some((width, height)) =
                 window::geometry::window_size_for_client(window, client_width, client_height)
             {
@@ -2575,17 +2575,18 @@ extern "system" fn window_procedure(
         WM_TIMER if wparam.0 == SLIDESHOW_TIMER => {
             if let Some(application) = application_from_window(window) {
                 // Hold an animated frame until it finishes one loop; the interval is the floor.
-                let hold = application
+                let hold_milliseconds = application
                     .animation
                     .as_ref()
                     .map_or(0, Animation::loop_duration_milliseconds);
-                let elapsed = application
+                let elapsed_milliseconds = application
                     .slideshow_item_shown_at
                     .map_or(u32::MAX, |shown| {
                         shown.elapsed().as_millis().min(u128::from(u32::MAX)) as u32
                     });
-                if hold > elapsed {
-                    application.schedule_slideshow_timer(window, hold - elapsed);
+                if hold_milliseconds > elapsed_milliseconds {
+                    application
+                        .schedule_slideshow_timer(window, hold_milliseconds - elapsed_milliseconds);
                 } else {
                     let command = if application.settings.options.slideshow_backward() {
                         NavigationCommand::Previous
@@ -2635,7 +2636,7 @@ extern "system" fn window_procedure(
         }
         WM_GESTURE => {
             if let Some(application) = application_from_window(window)
-                && handle_gesture(application, window, lparam)
+                && apply_gesture(application, window, lparam)
             {
                 return LRESULT(0);
             }
@@ -2652,7 +2653,7 @@ extern "system" fn window_procedure(
         WM_MOUSEWHEEL => {
             if let Some(application) = application_from_window(window) {
                 let wheel_delta = high_word_signed(wparam.0);
-                handle_wheel(application, window, wheel_delta);
+                dispatch_wheel(application, window, wheel_delta);
             }
             LRESULT(0)
         }
@@ -2856,8 +2857,8 @@ mod open_url_smoke_tests {
     const SETTINGS: &str = "target/x86_64-pc-windows-msvc/debug/riv.json";
 
     fn png_bytes() -> Vec<u8> {
-        let mut data = Vec::new();
-        let mut encoder = png::Encoder::new(&mut data, 4, 4);
+        let mut bytes = Vec::new();
+        let mut encoder = png::Encoder::new(&mut bytes, 4, 4);
         encoder.set_color(png::ColorType::Rgba);
         encoder.set_depth(png::BitDepth::Eight);
         let mut writer = encoder.write_header().expect("png header");
@@ -2865,7 +2866,7 @@ mod open_url_smoke_tests {
             .write_image_data(&[0, 255, 0, 255].repeat(16))
             .expect("png data");
         writer.finish().expect("png finish");
-        data
+        bytes
     }
 
     fn serve(mut stream: TcpStream, body: &[u8]) {
@@ -2920,7 +2921,7 @@ mod open_url_smoke_tests {
         // Bind the dialog to a plain key so a posted WM_KEYDOWN can open it.
         std::fs::write(SETTINGS, r#"{"keyboardbindings":{"openurl":["U"]}}"#)
             .expect("write riv.json");
-        let mut app = std::process::Command::new(EXECUTABLE)
+        let mut riv_process = std::process::Command::new(EXECUTABLE)
             .spawn()
             .expect("riv.exe spawn (build first, run from the repo root)");
         let window =
@@ -2953,7 +2954,7 @@ mod open_url_smoke_tests {
             wait_for(|| (window_title(window) == "test.png").then_some(()), 20).is_some();
         let final_title = window_title(window);
         let _ = unsafe { PostMessageW(Some(window), WM_CLOSE, WPARAM(0), LPARAM(0)) };
-        let _ = app.wait();
+        let _ = riv_process.wait();
         let _ = std::fs::remove_file(SETTINGS);
         assert!(
             title_became_file,

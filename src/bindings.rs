@@ -342,13 +342,13 @@ pub fn resolved_mouse_encodings(
 fn collect_bindings<T>(
     defaults: &[(&str, &[&str])],
     overrides: Option<&Map<String, Value>>,
-    limit: usize,
+    maximum: usize,
     mut parse: impl FnMut(&str) -> Option<T>,
 ) -> Vec<(T, Action)> {
     let mut collected = Vec::new();
     for (name, default_sequences) in defaults {
         if let Some(action) = Action::from_name(name) {
-            for sequence in override_or_default(overrides, name, default_sequences, limit) {
+            for sequence in override_or_default(overrides, name, default_sequences, maximum) {
                 if let Some(parsed) = parse(&sequence) {
                     collected.push((parsed, action));
                 }
@@ -361,7 +361,7 @@ fn collect_bindings<T>(
                 continue;
             }
             if let Some(action) = Action::from_name(name) {
-                for sequence in string_list(sequences).into_iter().take(limit) {
+                for sequence in string_list(sequences).into_iter().take(maximum) {
                     if let Some(parsed) = parse(&sequence) {
                         collected.push((parsed, action));
                     }
@@ -376,13 +376,13 @@ fn override_or_default(
     overrides: Option<&Map<String, Value>>,
     name: &str,
     defaults: &[&str],
-    limit: usize,
+    maximum: usize,
 ) -> Vec<String> {
     let mut resolved = match overrides.and_then(|map| map.get(name)) {
         Some(value) => string_list(value),
         None => defaults.iter().map(|text| (*text).to_string()).collect(),
     };
-    resolved.truncate(limit);
+    resolved.truncate(maximum);
     resolved
 }
 
@@ -508,7 +508,7 @@ mod normalization_tests {
     }
 
     #[test]
-    fn a_hand_written_list_stops_at_the_limit() {
+    fn a_hand_written_list_stops_at_the_maximum() {
         let overrides = serde_json::json!({
             "nextfile": ["Right", "Ctrl+A", "Ctrl+B", "Ctrl+C"],
             "fullscreen": ["WheelButton", "Ctrl+WheelUp"],

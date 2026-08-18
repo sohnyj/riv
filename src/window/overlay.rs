@@ -21,7 +21,7 @@ use windows_numerics::Vector2;
 use crate::image::color;
 use crate::image::core::ItemMetadata;
 use crate::image::decode::{DecodedImage, PixelStorage};
-use crate::view::renderer::ToneMapInfo;
+use crate::view::renderer::ToneMapLuminances;
 
 /// Lucida Console design metrics: ascent 1616/2048 em, natural line exactly 1 em.
 const FONT_ASCENT_RATIO: f32 = 1616.0 / 2048.0;
@@ -90,7 +90,7 @@ const WORDMARK_SLOT: usize = 3;
 struct ShapedText {
     text: String,
     wrap_width: f32,
-    max_height: f32,
+    maximum_height: f32,
     layout: IDWriteTextLayout,
     metrics: DWRITE_TEXT_METRICS,
 }
@@ -102,22 +102,24 @@ fn shaped_text<'a>(
     text: &str,
     format: &IDWriteTextFormat,
     wrap_width: f32,
-    max_height: f32,
+    maximum_height: f32,
 ) -> Result<&'a ShapedText> {
     let stale = slot.as_ref().is_none_or(|cached| {
-        cached.text != text || cached.wrap_width != wrap_width || cached.max_height != max_height
+        cached.text != text
+            || cached.wrap_width != wrap_width
+            || cached.maximum_height != maximum_height
     });
     if stale {
         let utf16: Vec<u16> = text.encode_utf16().collect();
         let layout = unsafe {
-            dwrite_factory.CreateTextLayout(&utf16, format, wrap_width.max(1.0), max_height)
+            dwrite_factory.CreateTextLayout(&utf16, format, wrap_width.max(1.0), maximum_height)
         }?;
         let mut metrics = DWRITE_TEXT_METRICS::default();
         unsafe { layout.GetMetrics(&raw mut metrics)? };
         *slot = Some(ShapedText {
             text: text.to_string(),
             wrap_width,
-            max_height,
+            maximum_height,
             layout,
             metrics,
         });
@@ -383,14 +385,14 @@ fn create_text_formats(
     dwrite_factory: &IDWriteFactory,
     scale: f32,
 ) -> Result<(IDWriteTextFormat, IDWriteTextFormat, IDWriteTextFormat)> {
-    let create_format = |size: f32| unsafe {
+    let create_format = |font_size: f32| unsafe {
         dwrite_factory.CreateTextFormat(
             w!("Lucida Console"),
             None,
             DWRITE_FONT_WEIGHT_NORMAL,
             DWRITE_FONT_STYLE_NORMAL,
             DWRITE_FONT_STRETCH_NORMAL,
-            size * scale,
+            font_size * scale,
             w!("en-us"),
         )
     };
@@ -405,9 +407,9 @@ fn create_text_formats(
         }
     }
     // Uniform spacing keeps fallback glyphs (CJK names) from bloating single lines.
-    let set_line_spacing = |format: &IDWriteTextFormat, size: f32| {
-        let line = size * LINE_SPACING_RATIO;
-        let baseline = size * FONT_ASCENT_RATIO + (line - size) / 2.0;
+    let set_line_spacing = |format: &IDWriteTextFormat, font_size: f32| {
+        let line = font_size * LINE_SPACING_RATIO;
+        let baseline = font_size * FONT_ASCENT_RATIO + (line - font_size) / 2.0;
         unsafe { format.SetLineSpacing(DWRITE_LINE_SPACING_METHOD_UNIFORM, line, baseline) }
     };
     set_line_spacing(&text_format, 14.0 * scale)?;
@@ -424,7 +426,7 @@ pub fn build_info_text(
     output_label: &str,
     scaling_description: &str,
     dither_description: &str,
-    tone_map: Option<ToneMapInfo>,
+    tone_map: Option<ToneMapLuminances>,
     ultra_hdr_applied: bool,
     color_mode: &str,
     display_description: &str,
@@ -473,8 +475,8 @@ pub fn build_info_text(
             .as_ref()
             .is_some_and(|tone_map| tone_map.hdr_display)
     {
-        let state = if ultra_hdr_applied { "On" } else { "Off" };
-        metrics.push(format!("Ultra HDR: {state}"));
+        let ultra_hdr_label = if ultra_hdr_applied { "On" } else { "Off" };
+        metrics.push(format!("Ultra HDR: {ultra_hdr_label}"));
     }
     // An applied gain rendition reports its declared peak like any FP16 source.
     let gain_peak = image
@@ -505,8 +507,8 @@ pub fn build_info_text(
     ];
 
     let mut exif = Vec::new();
-    if let Some(info) = &image.exif {
-        append_exif_lines(&mut exif, info);
+    if let Some(exif_metadata) = &image.exif {
+        append_exif_lines(&mut exif, exif_metadata);
     }
 
     let sections: Vec<Vec<String>> = [file, display, render, metrics, exif]
@@ -524,7 +526,7 @@ pub fn build_info_text(
 }
 
 /// Photography notation, shooting-settings order; Rating is Windows metadata and goes last.
-fn append_exif_lines(lines: &mut Vec<String>, exif: &crate::image::decode::ExifInfo) {
+fn append_exif_lines(lines: &mut Vec<String>, exif: &crate::image::decode::ExifMetadata) {
     if let Some(taken) = exif.date_taken {
         lines.push(format!("Date taken: {}", format_local_datetime(taken)));
     }
@@ -560,7 +562,7 @@ fn append_exif_lines(lines: &mut Vec<String>, exif: &crate::image::decode::ExifI
         };
         lines.push(format!("Exposure bias: {signed} EV"));
     }
-    if let Some(aperture) = exif.max_aperture {
+    if let Some(aperture) = exif.maximum_aperture {
         lines.push(format!("Max aperture: f/{}", trim_number(aperture, 2)));
     }
     if let Some(mode) = exif.metering_mode {
@@ -1011,7 +1013,7 @@ mod info_text_tests {
             peak_luminance_nits: Some(1000.0),
             ..image("EXR", PixelStorage::RgbaHalf, 16)
         };
-        let tone_map = ToneMapInfo {
+        let tone_map = ToneMapLuminances {
             hdr_display: true,
             display_peak_nits: 600.0,
             display_full_frame_nits: 400.0,
@@ -1046,7 +1048,7 @@ mod info_text_tests {
             peak_luminance_nits: Some(1000.0),
             ..image("EXR", PixelStorage::RgbaHalf, 16)
         };
-        let tone_map = ToneMapInfo {
+        let tone_map = ToneMapLuminances {
             hdr_display: false,
             display_peak_nits: 203.0,
             display_full_frame_nits: 203.0,
@@ -1077,11 +1079,11 @@ mod info_text_tests {
 #[cfg(test)]
 mod exif_line_tests {
     use super::*;
-    use crate::image::decode::ExifInfo;
+    use crate::image::decode::ExifMetadata;
 
     #[test]
     fn exif_lines_follow_the_standard_notation_and_order() {
-        let exif = ExifInfo {
+        let exif = ExifMetadata {
             date_taken: None,
             rating: Some(80),
             camera_maker: Some("NIKON CORPORATION".to_string()),
@@ -1091,7 +1093,7 @@ mod exif_line_tests {
             iso_speed: Some(64),
             exposure_bias: Some(-0.7),
             focal_length_millimeters: Some(20.0),
-            max_aperture: Some(4.0),
+            maximum_aperture: Some(4.0),
             metering_mode: Some(5),
             flash: Some(0),
         };
@@ -1117,7 +1119,7 @@ mod exif_line_tests {
 
     #[test]
     fn positive_bias_carries_its_sign() {
-        let exif = ExifInfo {
+        let exif = ExifMetadata {
             date_taken: None,
             rating: None,
             camera_maker: None,
@@ -1127,7 +1129,7 @@ mod exif_line_tests {
             iso_speed: None,
             exposure_bias: Some(0.7),
             focal_length_millimeters: None,
-            max_aperture: None,
+            maximum_aperture: None,
             metering_mode: None,
             flash: None,
         };

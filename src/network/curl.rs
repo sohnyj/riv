@@ -126,7 +126,7 @@ pub fn download(
         .map_err(|error| NetworkError::new(format!("curl could not be started: {error}")))?;
     let mut stdout = child.stdout.take().expect("stdout piped above");
     progress(0);
-    let mut data = Vec::new();
+    let mut downloaded_bytes = Vec::new();
     let mut block = vec![0u8; READ_BLOCK_BYTES];
     loop {
         if cancellation.load(Ordering::Relaxed) {
@@ -142,14 +142,14 @@ pub fn download(
                 ));
             }
         };
-        if data.len() as u64 + read_bytes as u64 > MAXIMUM_DOWNLOAD_BYTES {
+        if downloaded_bytes.len() as u64 + read_bytes as u64 > MAXIMUM_DOWNLOAD_BYTES {
             return Err(kill_child(
                 child,
                 NetworkError::new("Download exceeds the 1 GiB limit"),
             ));
         }
-        data.extend_from_slice(&block[..read_bytes]);
-        progress(data.len() as u64);
+        downloaded_bytes.extend_from_slice(&block[..read_bytes]);
+        progress(downloaded_bytes.len() as u64);
     }
     drop(stdout);
     let mut stderr_text = String::new();
@@ -172,7 +172,7 @@ pub fn download(
             cancelled: false,
         });
     }
-    Ok(data)
+    Ok(downloaded_bytes)
 }
 
 fn kill_child(mut child: Child, error: NetworkError) -> NetworkError {
@@ -223,13 +223,13 @@ mod download_tests {
         });
         let cancellation = AtomicBool::new(false);
         let mut reports = Vec::new();
-        let data = download(
+        let downloaded_bytes = download(
             &format!("http://127.0.0.1:{port}/test.png"),
             &cancellation,
             &mut |received_bytes| reports.push(received_bytes),
         )
         .unwrap_or_else(|error| panic!("{}", error.message));
-        assert_eq!(data, body);
+        assert_eq!(downloaded_bytes, body);
         assert_eq!(reports.first(), Some(&0)); // spawn reads as connecting
         assert_eq!(reports.last(), Some(&(body.len() as u64)));
         let missing = download(

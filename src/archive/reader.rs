@@ -51,11 +51,11 @@ pub fn url_is_archive(url: &str) -> bool {
         .is_some_and(|extension| is_archive_extension(&extension))
 }
 
-pub struct MemberInfo {
+pub struct ArchiveMember {
     /// Path inside the archive, forward slashes as stored.
     pub name: String,
     /// Uncompressed size; 0 when the header does not declare one.
-    pub size: u64,
+    pub uncompressed_bytes: u64,
     pub modified: SystemTime,
 }
 
@@ -84,7 +84,7 @@ impl ArchiveError {
 }
 
 /// Lists regular-file members; skips encrypted ones, fails on encrypted metadata.
-pub fn enumerate(archive_path: &Path) -> Result<Vec<MemberInfo>, ArchiveError> {
+pub fn enumerate(archive_path: &Path) -> Result<Vec<ArchiveMember>, ArchiveError> {
     let mut reader = Reader::open(archive_path)?;
     let mut members = Vec::new();
     while let Some(entry) = reader.next_header()? {
@@ -99,15 +99,15 @@ pub fn enumerate(archive_path: &Path) -> Result<Vec<MemberInfo>, ArchiveError> {
         let Some(name) = entry_name(reader.api, entry) else {
             continue;
         };
-        let size = if unsafe { (reader.api.entry_size_is_set)(entry) } != 0 {
+        let uncompressed_bytes = if unsafe { (reader.api.entry_size_is_set)(entry) } != 0 {
             unsafe { (reader.api.entry_size)(entry) }.max(0) as u64
         } else {
             0
         };
         let modified_seconds = unsafe { (reader.api.entry_mtime)(entry) }.max(0) as u64;
-        members.push(MemberInfo {
+        members.push(ArchiveMember {
             name,
-            size,
+            uncompressed_bytes,
             // checked_add: a crafted PAX/GNU mtime overflows SystemTime (verified).
             modified: UNIX_EPOCH
                 .checked_add(Duration::from_secs(modified_seconds))
@@ -131,12 +131,12 @@ pub fn read_member(
         if unsafe { (reader.api.entry_is_data_encrypted)(entry) } != 0 {
             return Err(ArchiveError::new("Archive member is encrypted"));
         }
-        let declared_size = unsafe { (reader.api.entry_size_is_set)(entry) != 0 }
+        let declared_bytes = unsafe { (reader.api.entry_size_is_set)(entry) != 0 }
             .then(|| unsafe { (reader.api.entry_size)(entry) }.max(0) as u64);
-        if declared_size.is_some_and(|size| size > MAXIMUM_MEMBER_BYTES) {
+        if declared_bytes.is_some_and(|bytes| bytes > MAXIMUM_MEMBER_BYTES) {
             return Err(ArchiveError::new("Archive member exceeds the 1 GiB limit"));
         }
-        return reader.read_entry_data(declared_size, cancellation);
+        return reader.read_entry_data(declared_bytes, cancellation);
     }
     Err(ArchiveError::new("Member no longer exists in the archive"))
 }
@@ -202,11 +202,11 @@ impl Reader<'_> {
 
     fn read_entry_data(
         &mut self,
-        declared_size: Option<u64>,
+        declared_bytes: Option<u64>,
         cancellation: &AtomicBool,
     ) -> Result<Vec<u8>, ArchiveError> {
-        let mut data = Vec::with_capacity(
-            declared_size
+        let mut member_bytes = Vec::with_capacity(
+            declared_bytes
                 .unwrap_or(0)
                 .min(MAXIMUM_MEMBER_RESERVATION_BYTES) as usize,
         );
@@ -219,15 +219,15 @@ impl Reader<'_> {
                 (self.api.read_data)(self.handle, block.as_mut_ptr().cast(), block.len())
             };
             if read_bytes == 0 {
-                return Ok(data);
+                return Ok(member_bytes);
             }
             if read_bytes < 0 {
                 return Err(self.error("Archive member extraction failed"));
             }
-            if data.len() as u64 + read_bytes as u64 > MAXIMUM_MEMBER_BYTES {
+            if member_bytes.len() as u64 + read_bytes as u64 > MAXIMUM_MEMBER_BYTES {
                 return Err(ArchiveError::new("Archive member exceeds the 1 GiB limit"));
             }
-            data.extend_from_slice(&block[..read_bytes as usize]);
+            member_bytes.extend_from_slice(&block[..read_bytes as usize]);
         }
     }
 
@@ -304,11 +304,15 @@ mod fixture_tests {
                 "{fixture}: unicode member missing"
             );
             let cancellation = AtomicBool::new(false);
-            let data = read_member(Path::new(fixture), &image.name, &cancellation)
+            let member_bytes = read_member(Path::new(fixture), &image.name, &cancellation)
                 .unwrap_or_else(|error| panic!("{fixture}: {}", error.message));
-            assert!(data.starts_with(PNG_SIGNATURE), "{fixture}");
-            if image.size > 0 {
-                assert_eq!(data.len() as u64, image.size, "{fixture}");
+            assert!(member_bytes.starts_with(PNG_SIGNATURE), "{fixture}");
+            if image.uncompressed_bytes > 0 {
+                assert_eq!(
+                    member_bytes.len() as u64,
+                    image.uncompressed_bytes,
+                    "{fixture}"
+                );
             }
             let missing = read_member(Path::new(fixture), "no/such_member.png", &cancellation);
             assert!(missing.is_err(), "{fixture}");

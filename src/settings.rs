@@ -10,7 +10,7 @@ use crate::view::dither::DitherMode;
 use crate::view::renderer::ScalingFilter;
 use crate::view::transform::FitMode;
 
-pub const RECENT_FILES_LIMIT: usize = 10;
+pub const MAXIMUM_RECENT_FILES: usize = 10;
 
 /// The default window background; used when the custom color is off.
 pub const DEFAULT_BACKGROUND_COLOR: (u8, u8, u8) = (0x21, 0x21, 0x21);
@@ -563,7 +563,7 @@ impl SettingsFile {
     pub fn recent_files(&self) -> Vec<(String, String)> {
         let mut files = recent_files_of(&self.document);
         // A hand-edited document can exceed the cap; every reader sees at most the limit.
-        files.truncate(RECENT_FILES_LIMIT);
+        files.truncate(MAXIMUM_RECENT_FILES);
         files
     }
 
@@ -585,7 +585,7 @@ impl SettingsFile {
                     files.push((name, path));
                 }
             }
-            files.truncate(RECENT_FILES_LIMIT);
+            files.truncate(MAXIMUM_RECENT_FILES);
             self.set_recent_files(&files);
         }
         self.save()
@@ -627,7 +627,7 @@ impl SettingsFile {
         }
         files.retain(|(_, existing)| !existing.eq_ignore_ascii_case(&path_text));
         files.insert(0, (name, path_text));
-        files.truncate(RECENT_FILES_LIMIT);
+        files.truncate(MAXIMUM_RECENT_FILES);
         self.set_recent_files(&files);
     }
 

@@ -15,12 +15,12 @@ const XWIN_LIBRARY_DIRECTORIES: [&str; 3] =
 
 /// True when the output is missing or older than an input it is generated from.
 fn is_stale(output: &Path, inputs: &[&Path]) -> bool {
-    let Ok(output_time) = std::fs::metadata(output).and_then(|data| data.modified()) else {
+    let Ok(output_time) = std::fs::metadata(output).and_then(|metadata| metadata.modified()) else {
         return true;
     };
     inputs.iter().any(|input| {
         std::fs::metadata(input)
-            .and_then(|data| data.modified())
+            .and_then(|metadata| metadata.modified())
             .is_ok_and(|input_time| input_time > output_time)
     })
 }

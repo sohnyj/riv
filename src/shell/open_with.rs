@@ -142,9 +142,9 @@ fn take_shell_string(text: windows::core::PWSTR) -> Option<String> {
     if text.is_null() {
         return None;
     }
-    let result = String::from_utf16_lossy(unsafe { text.as_wide() });
+    let owned_text = String::from_utf16_lossy(unsafe { text.as_wide() });
     unsafe { CoTaskMemFree(Some(text.as_ptr().cast())) };
-    Some(result)
+    Some(owned_text)
 }
 
 fn default_executable_for(extension: &str) -> Option<String> {
