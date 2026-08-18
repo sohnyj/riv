@@ -30,7 +30,6 @@ pub const REQUIRED_DEVICE_FLAG: D3D11_CREATE_DEVICE_FLAG =
 /// Composed content is all the client shows, so the window needs no surface of its own.
 pub const REQUIRED_WINDOW_STYLE: WINDOW_EX_STYLE = WS_EX_NOREDIRECTIONBITMAP;
 
-/// One presentation buffer with its render bindings; the event signals availability.
 pub struct BufferSlot {
     pub buffer: IPresentationBuffer,
     pub texture: ID3D11Texture2D,
@@ -46,7 +45,6 @@ impl Drop for BufferSlot {
     }
 }
 
-/// Presentation manager, its surface bound into a DComp visual tree, and the buffer ring.
 pub struct CompositionPresenter {
     manager: IPresentationManager,
     surface: IPresentationSurface,
@@ -167,7 +165,6 @@ impl CompositionPresenter {
         unsafe { self.surface.SetColorSpace(color_space) }
     }
 
-    /// Reallocates the ring only when the format or size changed.
     pub fn ensure_buffers(
         &mut self,
         d3d_device: &ID3D11Device,
@@ -184,7 +181,6 @@ impl CompositionPresenter {
         Ok(())
     }
 
-    /// Replaces the buffer ring with `count` fresh textures and scopes the surface to them.
     fn allocate_buffers(
         &mut self,
         d3d_device: &ID3D11Device,
@@ -228,7 +224,6 @@ impl CompositionPresenter {
         &mut self.buffers
     }
 
-    /// The slot the next frame draws into.
     pub fn next_slot(&self) -> Option<&BufferSlot> {
         self.buffers.get(self.next_buffer_index)
     }
@@ -244,7 +239,6 @@ impl CompositionPresenter {
         waited == WAIT_OBJECT_0
     }
 
-    /// Shows the drawn slot and advances the ring.
     pub fn present_next(&mut self, d3d_context: &ID3D11DeviceContext) -> Result<()> {
         let slot = self.next_slot().ok_or_else(windows::core::Error::empty)?;
         unsafe {

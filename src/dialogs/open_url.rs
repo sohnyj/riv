@@ -17,7 +17,6 @@ pub fn show(window: HWND) -> Option<String> {
     .filter(|url| !url.is_empty())
 }
 
-/// Needs an interactive session (creates a real dialog window).
 #[cfg(test)]
 mod dialog_tests {
     use super::*;
@@ -35,7 +34,7 @@ mod dialog_tests {
             // 15s to ride out a cold wine start; the E2E smoke test waits as long.
             for _ in 0..300 {
                 std::thread::sleep(std::time::Duration::from_millis(50));
-                // The window answers to its title before the template builds its controls.
+                // The window is findable by its title before the template builds its controls.
                 let Ok(dialog) = (unsafe { FindWindowW(None, w!("Open URL")) }) else {
                     continue;
                 };
@@ -54,6 +53,6 @@ mod dialog_tests {
         });
         let url = show(HWND::default());
         driver.join().expect("driver thread");
-        assert_eq!(url.as_deref(), Some("http://127.0.0.1/test.png")); // trimmed
+        assert_eq!(url.as_deref(), Some("http://127.0.0.1/test.png"));
     }
 }

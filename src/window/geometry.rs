@@ -1,4 +1,4 @@
-//! Where the window sits and how big it is at its own DPI.
+//! The window's position and size at its own DPI.
 
 use windows::Win32::Foundation::{HWND, RECT};
 use windows::Win32::UI::HiDpi::{AdjustWindowRectExForDpi, GetDpiForWindow};

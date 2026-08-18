@@ -141,7 +141,6 @@ impl DecodedImage {
         self.pixel_width * self.storage.bytes_per_pixel()
     }
 
-    /// Exact byte length of one full frame at this geometry.
     pub fn frame_byte_length(&self) -> usize {
         self.row_pitch() as usize * self.pixel_height as usize
     }
@@ -252,7 +251,6 @@ pub(crate) fn try_zeroed_buffer(bytes: usize) -> Option<Vec<u8>> {
     Some(buffer)
 }
 
-/// How a frame's pixels take the canvas: over what is there, or in place of it.
 #[derive(Clone, Copy, PartialEq)]
 pub enum FrameBlend {
     Over,
@@ -309,7 +307,6 @@ impl FrameCompositor {
         self.frames.len() as u64
     }
 
-    /// Whether one more frame past those composed still fits the budget.
     pub fn accepts_one_more(&mut self) -> bool {
         self.accepts_another(self.frames.len() as u64 + 1)
     }
@@ -596,7 +593,6 @@ fn descriptor_for_magic(header: &[u8]) -> Option<&'static FormatDescriptor> {
         .or_else(|| xml_svg_probe(header))
 }
 
-/// An XML prologue counts as SVG only when an <svg tag follows in the header.
 fn xml_svg_probe(header: &[u8]) -> Option<&'static FormatDescriptor> {
     if header.starts_with(b"<?xml") && header.windows(4).any(|window| window == b"<svg") {
         descriptor_for_extension("svg")
@@ -681,7 +677,7 @@ fn descriptor_for_path(path: &Path) -> Option<&'static FormatDescriptor> {
     let by_extension = crate::text::lowercase_extension(path)
         .and_then(|extension| descriptor_for_extension(&extension));
     if let Some(descriptor) = by_extension {
-        // Only the names a header can reclassify pay for the read.
+        // The header is read only for the names it can reclassify.
         if !refines_by_content(descriptor) {
             return Some(descriptor);
         }
@@ -788,7 +784,7 @@ fn find_and_decode_gain_map(
     crate::image::gain_map::GainMapMetadata,
     crate::image::gain_map::GainMapPlane,
 )> {
-    // A header probe spares the files without one the whole-file read below.
+    // The header probe skips the whole-file read below when the JPEG carries no MPF.
     if let DecodeInput::File(path) = input {
         let file = File::open(path).ok()?;
         if !crate::image::gain_map::jpeg_carries_mpf(BufReader::new(file)) {
@@ -917,7 +913,7 @@ pub fn decode_animation_first_frame(
         })
         .ok()
         .flatten(),
-        // The acTL chunk already proved the animation; WIC hands back the default image.
+        // The acTL chunk already identified the animation; WIC returns the default image.
         Adapter::Apng => decode_with_wic(
             &input,
             descriptor.name,
@@ -971,7 +967,6 @@ pub fn probe_file_weight(path: &Path) -> Option<u64> {
     probe_weight(&DecodeInput::File(path))
 }
 
-/// Weight probe over extracted bytes (an archive member).
 pub fn probe_bytes_weight(data: &[u8], extension: Option<&str>) -> Option<u64> {
     probe_weight(&DecodeInput::Memory { data, extension })
 }
@@ -1164,7 +1159,6 @@ fn pixel_format_information(
     unsafe { factory.CreateComponentInfo(format) }?.cast()
 }
 
-/// Bits per pixel of a WIC pixel format, for sizing a native-format buffer.
 fn pixel_format_bits_per_pixel(
     factory: &IWICImagingFactory,
     format: &windows::core::GUID,
@@ -1172,7 +1166,7 @@ fn pixel_format_bits_per_pixel(
     unsafe { pixel_format_information(factory, format)?.GetBitsPerPixel() }
 }
 
-/// Decodes a display-sized stand-in through the decoder's native scaler; None keeps one stage.
+/// Decodes a display-sized preview through the decoder's native scaler; None keeps one stage.
 fn decode_subresolution_preview(
     path: &Path,
     format_name: &'static str,
@@ -1191,7 +1185,7 @@ fn decode_subresolution_preview(
     Some(decoded)
 }
 
-/// Sub-resolution copy through the decoder's native scaler; None when it cannot help.
+/// Sub-resolution copy through the decoder's native scaler; None when the decoder cannot scale.
 fn subresolution_source(
     factory: &IWICImagingFactory,
     frame: &IWICBitmapFrameDecode,
@@ -1204,7 +1198,7 @@ fn subresolution_source(
     let (_, float_native) = frame_pixel_format_info(factory, frame);
     let (mut width, mut height) = subresolution_target_size(full_width, full_height, float_native);
     unsafe { transform.GetClosestSize(&mut width, &mut height)? };
-    // A decoder that cannot scale answers with the full size; stay single-stage then.
+    // A decoder that cannot scale returns the full size; stay single-stage then.
     if width == 0 || height == 0 || (width, height) == (full_width, full_height) {
         return Ok(None);
     }
@@ -1320,7 +1314,7 @@ fn downscale_to_device_limit(
     Ok((scaler.cast()?, scaled_width, scaled_height))
 }
 
-/// DP3 for fallback decoders: downscale oversized frames before upload; failure is a decode error.
+/// Downscales fallback-decoded frames past the device limit; failure is a decode error.
 fn enforce_device_limit(
     mut decoded: DecodedImage,
     cancellation: &AtomicBool,
@@ -1413,7 +1407,7 @@ fn decode_frame_source(
             PixelStorage::Bgra8,
         )
     };
-    // The 8bpc retreat loses the PQ/HLG code values along with the depth.
+    // The 8bpc fallback loses the PQ/HLG code values along with the depth.
     let hdr_encoding = hdr_encoding.filter(|_| storage == PixelStorage::RgbaHalf);
     let source = apply_orientation(factory, source, orientation)?;
     let (width, height) = source_size(&source)?;
@@ -1422,7 +1416,7 @@ fn decode_frame_source(
             Ok((scaled, scaled_width, scaled_height)) => {
                 (scaled, scaled_width, scaled_height, storage)
             }
-            // Refused formats retreat to 8-bit; PQ/HLG keeps the error to avoid false colors.
+            // Refused formats fall back to 8-bit; PQ/HLG keeps the error to avoid false colors.
             Err(_) if storage == PixelStorage::RgbaHalf && hdr_encoding.is_none() => {
                 let fallback = convert_to_pbgra(factory, &source)?;
                 let (scaled, scaled_width, scaled_height) =
@@ -1538,14 +1532,12 @@ impl HdrEncoding {
     }
 }
 
-/// Big-endian u32 at the offset, when in bounds.
 fn read_u32_be(bytes: &[u8], offset: usize) -> Option<u32> {
     Some(u32::from_be_bytes(
         bytes.get(offset..offset + 4)?.try_into().ok()?,
     ))
 }
 
-/// CICP code points; Some for an HDR transfer (16 = PQ, 18 = HLG) with convertible primaries.
 pub(crate) fn cicp_hdr_encoding(primaries: u8, transfer: u8) -> Option<HdrEncoding> {
     const CICP_TRANSFER_PQ: u8 = 16;
     const CICP_TRANSFER_HLG: u8 = 18;
@@ -2227,7 +2219,7 @@ fn convert_to_pbgra(
     convert_pixel_format(factory, source, &GUID_WICPixelFormat32bppPBGRA)
 }
 
-/// Converts to the requested half-domain format, retreating to 8-bit PBGRA on refusal.
+/// Converts to the requested half-domain format, falling back to 8-bit PBGRA on refusal.
 fn convert_half_or_pbgra(
     factory: &IWICImagingFactory,
     source: &IWICBitmapSource,
@@ -2258,7 +2250,6 @@ fn convert_pixel_format(
     converter.cast()
 }
 
-/// Applies EXIF orientation via the WIC flip/rotator.
 fn apply_orientation(
     factory: &IWICImagingFactory,
     source: IWICBitmapSource,
@@ -2635,10 +2626,10 @@ fn font_database() -> &'static std::sync::Arc<resvg::usvg::fontdb::Database> {
     })
 }
 
-/// Cleared on a display reconfigure; 0 means "ask the system again".
+/// Cleared on a display reconfigure; 0 means the system is queried again.
 static LARGEST_MONITOR_LONG_SIDE: AtomicU32 = AtomicU32::new(0);
 
-/// Forgets the cached monitor size; the listing invalidates display-sized weights alongside.
+/// Clears the cached monitor size; the listing invalidates display-sized weights alongside.
 pub fn invalidate_monitor_size() {
     LARGEST_MONITOR_LONG_SIDE.store(0, Ordering::Relaxed);
 }
@@ -2883,7 +2874,7 @@ mod compositor_tests {
 
     #[test]
     fn frames_past_the_byte_budget_collapse_to_the_first() {
-        // One frame of this canvas is a quarter of the budget, so the fifth cannot join.
+        // One frame of this canvas is a quarter of the budget, so the fifth is refused.
         let side = 8192;
         let mut compositor = FrameCompositor::new(side, side).expect("canvas");
         for _ in 0..4 {
@@ -2904,7 +2895,7 @@ mod compositor_tests {
     /// The disposal fixture's four frames: keep, background, previous, then an empty one.
     #[test]
     #[ignore = "needs test/ fixtures"]
-    fn the_apng_disposal_fixture_composes_as_its_frames_ask() {
+    fn the_apng_disposal_fixture_composes_as_its_frames_declare() {
         let file = std::fs::File::open("test/disposal_apng.png").expect("fixture");
         let decoded = decode_apng(
             std::io::BufReader::new(file),
@@ -2941,7 +2932,7 @@ mod compositor_tests {
     /// The same four frames as the APNG fixture, read through WIC.
     #[test]
     #[ignore = "needs test/ fixtures and a WIC GIF decoder"]
-    fn the_gif_disposal_fixture_composes_as_its_frames_ask() {
+    fn the_gif_disposal_fixture_composes_as_its_frames_declare() {
         // WIC needs COM; the worker initializes it at thread start, tests do it here.
         let _ = unsafe {
             windows::Win32::System::Com::CoInitializeEx(
@@ -3456,8 +3447,6 @@ mod compositing_tests {
 #[cfg(test)]
 mod premultiplied_conversion_tests {
     use super::*;
-
-    /// Deterministic straight-alpha RGBA with frequent fully transparent and opaque pixels.
 
     #[test]
     fn rgba_conversion_matches_the_scalar_reference() {

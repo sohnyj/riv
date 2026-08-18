@@ -793,8 +793,6 @@ mod heif_range_tests {
 mod premultiply_tests {
     use super::*;
 
-    /// Deterministic straight-alpha BGRA with frequent fully transparent and opaque pixels.
-
     #[test]
     fn premultiply_matches_the_scalar_reference() {
         let mut pixels = crate::image::decode::random_pixels(64 * 64, 13);
@@ -828,7 +826,6 @@ mod premultiply_tests {
     }
 }
 
-/// A crafted near-SIZE_MAX scanline offset must error, not read out of bounds.
 #[cfg(test)]
 mod exr_robustness_tests {
     use super::*;

@@ -344,13 +344,13 @@ impl MenuBuilder {
     }
 }
 
-/// Popup rows stand taller than the menu bar row this metric names; the quarter is measured margin.
+/// Popup rows are taller than the menu bar row this metric names; the quarter is measured margin.
 fn menu_row_height(dpi: u32) -> i32 {
     let bar_row = unsafe { GetSystemMetricsForDpi(SM_CYMENU, dpi) }.max(1);
     bar_row + bar_row / 4
 }
 
-/// The title bar and top frame a normal window wears, which the menu leaves clear.
+/// The title bar and top frame of a normal window, which the menu leaves clear.
 fn title_bar_height(dpi: u32) -> i32 {
     let mut frame = RECT::default();
     if unsafe {
@@ -673,7 +673,7 @@ mod menu_structure_tests {
         let menu = builder.build().expect("menu builds");
         let labels = item_labels(menu);
         assert!(labels.contains(&"Playlist\tE".to_string()));
-        // The key opens this submenu itself, so the builder hands its handle back.
+        // The key opens this submenu itself, so the builder returns its handle.
         assert_eq!(builder.playlist_menu, submenu_by_label(menu, "Playlist\tE"));
         let _ = unsafe { DestroyMenu(menu) };
     }

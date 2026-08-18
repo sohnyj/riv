@@ -177,7 +177,7 @@ unsafe extern "system" fn keyboard_procedure(
                                 .find(|(encoding, _)| encoding == sequence)
                             {
                                 warn_conflict(dialog, encoding, owner);
-                                return 1; // conflict: block confirmation
+                                return 1;
                             }
                         }
                         state.accepted = true;

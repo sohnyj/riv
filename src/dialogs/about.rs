@@ -34,7 +34,6 @@ impl AboutFonts {
     }
 }
 
-/// Fill in the version text and the title/version fonts; returns the fonts to free.
 pub fn initialize_page(page: HWND) -> AboutFonts {
     let version = HSTRING::from(concat!("version ", env!("CARGO_PKG_VERSION")));
     let _ = unsafe { SetDlgItemTextW(page, IDC_ABOUT_VERSION, &version) };
@@ -173,7 +172,6 @@ fn set_font(page: HWND, control: i32, font: HFONT) {
     }
 }
 
-/// Point size is the only variation; weight and style stay untouched.
 fn create_font(point_size: i32, dpi: i32) -> HFONT {
     unsafe {
         CreateFontW(

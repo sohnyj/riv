@@ -20,7 +20,7 @@ fn registry_set_string(subkey: &str, value_name: &str, data: &str) {
 }
 
 fn registry_delete_value(subkey: &str, value_name: &str) {
-    // The plain open() asks for read access, which cannot delete.
+    // The plain open() requests read access, which cannot delete.
     if let Ok(key) = CURRENT_USER.options().write().open(subkey) {
         let _ = key.remove_value(value_name);
     }

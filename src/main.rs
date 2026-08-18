@@ -141,7 +141,7 @@ struct Application {
     preserve_zoom: bool,
     always_on_top: bool,
     fullscreen_restore: Option<WindowRestore>,
-    /// Where the window last stood while visible, for a close that comes while it is minimized.
+    /// The window's last visible placement, for a close that comes while it is minimized.
     remembered_geometry: Option<WindowRestore>,
     sdr_white_boost: f32,
     /// Display peak over SDR white for the gain map weight; None keeps the base rendition.
@@ -454,7 +454,7 @@ impl Application {
             display_profile,
         } = color::display_color_info(self.display_watcher.as_ref(), window);
         let labels = DisplayLabels::new(&capabilities, gamut);
-        // A label-only change (wire depth, gamut) still owes the panel a repaint.
+        // A label-only change (wire depth, gamut) still requires a panel repaint.
         let labels_changed = labels != self.display_labels;
         self.display_labels = labels;
         if self.reconfigure_display_output(&capabilities, display_profile, false) {
@@ -651,14 +651,13 @@ impl Application {
         }
     }
 
-    /// Exit persistence: geometry (when enabled), then the merged save.
     fn save_on_exit(&mut self, window: HWND) {
         if self.settings.options.remember_window_size_and_position {
             let restore = self
                 .fullscreen_restore
                 .or(self.remembered_geometry)
                 .unwrap_or_else(|| WindowRestore::capture(window));
-            // Nothing is written before the window has stood somewhere visible.
+            // Nothing is written before the window has been visible somewhere.
             if !restore.minimized() {
                 let bounds = restore.saved_bounds();
                 self.settings.set_window_geometry(
@@ -702,7 +701,6 @@ impl Application {
         self.window_title = title;
     }
 
-    /// Prefixes "[index/total]" when the listing gives a position.
     fn prefix_with_position(&self, body: String) -> String {
         match self.image_core.listing_position() {
             Some((index, total)) => format!("[{index}/{total}] {body}"),
@@ -718,7 +716,7 @@ impl Application {
         };
         let image = current.image.clone();
         let location = current.location.clone();
-        // The same item keeps its view; a stand-in of another size keeps its on-screen size.
+        // The same item keeps its view; a preview of another size keeps its on-screen size.
         let same_view = self.displayed_location.as_ref() == Some(&location);
         let previous_width = self
             .displayed_image
@@ -794,7 +792,7 @@ impl Application {
         self.update_window_title(window);
     }
 
-    /// A shown preview stand-in gets its full decode once navigation stops briefly.
+    /// A shown preview gets its full decode once navigation stops briefly.
     fn schedule_full_decode(&self, window: HWND) {
         if self.image_core.full_decode_pending() {
             unsafe { SetTimer(Some(window), FULL_DECODE_TIMER, 250, None) };
@@ -828,7 +826,6 @@ impl Application {
         }
     }
 
-    /// Freeze a playing animation while a new load runs.
     fn freeze_animation_for_load(&mut self, window: HWND) {
         if self.animation.is_some() {
             let _ = unsafe { KillTimer(Some(window), ANIMATION_TIMER) };
@@ -929,7 +926,6 @@ impl Application {
         }
     }
 
-    /// Schedules the next animation frame, unless playback is paused.
     fn schedule_animation_timer(&self, window: HWND) {
         let Some(animation) = self
             .animation
@@ -1111,7 +1107,6 @@ impl Application {
         }
     }
 
-    /// Info panel text, rebuilt only when a display input changes (else the cached copy).
     fn cached_info_text(&mut self, frame: Option<FrameDecision>) -> Option<Rc<str>> {
         let output_label = self
             .renderer
@@ -1457,7 +1452,6 @@ fn cursor_from_center(window: HWND) -> Option<(f32, f32)> {
     Some(center_offset(point, (width, height)))
 }
 
-/// Offset of a client-space point from the client-area center.
 fn center_offset(point: POINT, client: (u32, u32)) -> (f32, f32) {
     (
         point.x as f32 - client.0 as f32 / 2.0,
@@ -1533,7 +1527,6 @@ fn paste_open_url(application: &mut Application, window: HWND) {
     open_external_url(application, window, &text);
 }
 
-/// The single dispatch point; every input path converges here.
 fn dispatch_action(application: &mut Application, window: HWND, action: Action) {
     if !application.requirement_satisfied(action.requirement()) {
         return;
@@ -2201,7 +2194,7 @@ fn run_message_loop(window: HWND) {
             }
             deliver_message(&message);
         }
-        // A handle means the next frame still owes a wait.
+        // A handle means the next frame still waits on the frame slot.
         let slot_handle = application_from_window(window)
             .and_then(|application| application.pending_frame_slot());
         if let Some(handle) = slot_handle {
@@ -2222,7 +2215,7 @@ fn run_message_loop(window: HWND) {
     }
 }
 
-/// Bindings get first refusal, and a key they take never reaches translation or the window.
+/// Bindings are checked first, and a key they take never reaches translation or the window.
 fn deliver_message(message: &MSG) {
     if consume_key_binding(message) {
         return;
@@ -2935,7 +2928,7 @@ mod open_url_smoke_tests {
         // One keypress only: each opens a modal dialog, and stacking them deadlocks.
         let key = WPARAM(usize::from(u16::from(b'U')));
         let _ = unsafe { PostMessageW(Some(window), WM_KEYDOWN, key, LPARAM(0)) };
-        // The window answers to its title before the template builds its controls.
+        // The window is findable by its title before the template builds its controls.
         let dialog = wait_for(
             || {
                 let dialog = unsafe { FindWindowW(None, w!("Open URL")) }.ok()?;

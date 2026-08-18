@@ -103,7 +103,6 @@ struct ToneMapTarget {
     full_frame_nits: f32,
 }
 
-/// The output-affecting display state: HDR and advanced-color.
 #[derive(Clone, PartialEq)]
 pub struct OutputMode {
     pub hdr: bool,
@@ -113,7 +112,6 @@ pub struct OutputMode {
 }
 
 impl OutputMode {
-    /// SDR output with advanced color on: the wide-gamut path.
     pub fn is_sdr_wide_gamut(&self) -> bool {
         !self.hdr && self.advanced_color
     }
@@ -209,7 +207,7 @@ pub struct Renderer {
     display_full_frame_nits: f32,
     present_target: PresentTarget,
     d3d_device: ID3D11Device,
-    /// Minted per build; worker textures from other generations never wrap here.
+    /// Incremented per build; worker textures from other generations never wrap here.
     upload_device_generation: u64,
     /// The adapter's per-resource ceiling, fixed per device; read once at build.
     upload_maximum_frame_bytes: u64,
@@ -245,7 +243,7 @@ pub struct Renderer {
     image_pixel_size: (f32, f32),
     /// Set when the pump already waited for the next frame's present-queue room.
     frame_slot_held: bool,
-    /// Created on the first gain map bake; images without one never pay for it.
+    /// Created on the first gain map bake, so images without one allocate nothing.
     gain_pass: Option<GainMapPass>,
     gain_state: Option<GainMapState>,
     /// Display peak over current SDR white; None (failed peak query) keeps the base rendition.
@@ -267,12 +265,10 @@ pub struct FrameDecision {
 }
 
 impl FrameDecision {
-    /// Whether the frame draws at a 1:1 placement, for the info panel.
     pub fn is_identity_draw(self) -> bool {
         self.identity_placement
     }
 
-    /// What dithering the frame gets, for the info panel.
     pub fn dither_description(self) -> &'static str {
         self.dither.description()
     }
@@ -307,7 +303,6 @@ impl Drop for Renderer {
     }
 }
 
-/// A D3D11 device with its immediate context.
 #[derive(Clone)]
 pub struct GraphicsDevice {
     pub device: ID3D11Device,
@@ -421,7 +416,6 @@ fn sdr_destination<'a>(
     display_color_context.or(srgb_color_context)
 }
 
-/// Points a ColorManagement effect at its source and destination color contexts.
 fn wire_color_management(
     effect: &ID2D1Effect,
     source: &ID2D1ColorContext,
@@ -867,7 +861,7 @@ impl Renderer {
 
     /// Linear light in the given primaries; D65, which every gamut riv can state uses.
     fn create_linear_color_context(&self, primaries: [[f32; 2]; 3]) -> Option<ID2D1ColorContext> {
-        // D65 tristimulus, normalized to Y = 1, which is what whitePointXZ wants.
+        // D65 tristimulus normalized to Y = 1, the form whitePointXZ takes.
         const D65_WHITE_POINT_XZ: Vector2 = Vector2 {
             X: 0.9505,
             Y: 1.0891,
@@ -906,7 +900,6 @@ impl Renderer {
         }
     }
 
-    /// SDR destination color context: the display's own profile when mapping, else sRGB.
     fn sdr_destination_context(&self) -> Option<&ID2D1ColorContext> {
         sdr_destination(
             self.display_color_context.as_ref(),
@@ -923,7 +916,6 @@ impl Renderer {
         }
     }
 
-    /// D2D target properties for a texture the context renders into.
     fn target_bitmap_properties(format: DXGI_FORMAT) -> D2D1_BITMAP_PROPERTIES1 {
         D2D1_BITMAP_PROPERTIES1 {
             pixelFormat: D2D1_PIXEL_FORMAT {
@@ -937,7 +929,6 @@ impl Renderer {
         }
     }
 
-    /// D2D bitmap over a D3D texture, through the DXGI surface cast.
     fn bitmap_over_texture(
         d2d_context: &ID2D1DeviceContext,
         texture: &ID3D11Texture2D,
@@ -1256,7 +1247,7 @@ impl Renderer {
         wiring
     }
 
-    /// Updates the stored display luminances (overlay, next rewire); true when they changed.
+    /// Updates the stored display luminances (overlay, next rewire).
     pub fn set_tone_map_target(&mut self, nits: f32, full_frame_nits: f32) -> bool {
         if (nits - self.tone_map_target_nits).abs() < f32::EPSILON
             && (full_frame_nits - self.display_full_frame_nits).abs() < f32::EPSILON
@@ -1642,7 +1633,7 @@ impl Renderer {
         }
     }
 
-    /// What the pump waits on; None when the next frame owes no wait or nothing signals one.
+    /// What the pump waits on; None when the next frame needs no wait or nothing signals one.
     pub fn pending_frame_slot(&self) -> Option<HANDLE> {
         if self.frame_slot_held {
             return None;

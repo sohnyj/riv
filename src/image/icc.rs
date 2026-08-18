@@ -402,7 +402,7 @@ mod space_tests {
 
     #[test]
     fn a_pure_gamma_is_not_the_srgb_curve() {
-        // The two part company below the toe.
+        // The two curves diverge below the toe.
         assert!(!is_srgb(&profile(SRGB_COLORANTS, &gamma_curve(2.2))));
         assert!(!is_srgb(&profile(
             SRGB_COLORANTS,

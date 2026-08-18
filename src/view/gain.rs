@@ -27,7 +27,6 @@ fn padded(values: [f32; 3]) -> [f32; 4] {
     [values[0], values[1], values[2], 0.0]
 }
 
-/// One bake's inputs: the source views, the target, and the scalar constants.
 pub struct BakeInputs<'resources> {
     pub base: &'resources ID3D11ShaderResourceView,
     pub gain_map: &'resources ID3D11ShaderResourceView,

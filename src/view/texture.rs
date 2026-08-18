@@ -34,7 +34,6 @@ pub fn create_render_texture(
     texture.ok_or_else(windows::core::Error::empty)
 }
 
-/// Render-target view over a texture, unwrapped from the out parameter.
 pub fn create_render_target_view(
     device: &ID3D11Device,
     texture: &ID3D11Texture2D,
@@ -44,7 +43,6 @@ pub fn create_render_target_view(
     Ok(view)
 }
 
-/// Shader-resource view over a texture, unwrapped from the out parameter.
 pub fn create_shader_resource_view(
     device: &ID3D11Device,
     texture: &ID3D11Texture2D,

@@ -272,7 +272,6 @@ mod extension_tests {
     }
 }
 
-/// Needs archiveint.dll and test/ fixtures.
 #[cfg(test)]
 mod fixture_tests {
     use super::*;
@@ -328,7 +327,6 @@ mod fixture_tests {
     }
 }
 
-/// A crafted PAX mtime overflowing SystemTime must clamp, not panic.
 #[cfg(test)]
 mod mtime_tests {
     use super::*;

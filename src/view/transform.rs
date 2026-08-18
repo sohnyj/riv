@@ -76,7 +76,7 @@ impl ViewTransform {
 
     pub fn fit_scale(&self, viewport: Size, image: Size) -> f32 {
         let rotated = self.rotated_image_size(image);
-        // max(1.0): a zero-dimension frame would divide to Inf/NaN and poison the transform.
+        // max(1.0): a zero-dimension frame would divide to Inf/NaN and break the transform.
         match self.fit_mode {
             FitMode::Width => viewport.width / rotated.width.max(1.0),
             FitMode::Height => viewport.height / rotated.height.max(1.0),
@@ -111,7 +111,6 @@ impl ViewTransform {
             return; // no movement toward the limits
         }
         let factor = new_scale / self.scale;
-        // Cursor anchor only when enlarging beyond fit.
         let cursor_anchor = cursor_from_center
             .filter(|_| factor > 1.0 && new_scale > self.fit_scale(viewport, image));
         match cursor_anchor {
@@ -324,9 +323,9 @@ mod pixel_snap_tests {
         transform.pan_offset_x = 12.3;
         transform.pan_offset_y = -4.7;
         let matrix = transform.matrix(odd_viewport, image);
-        assert_eq!(matrix[0], 1.0); // unit scale on X
-        assert_eq!(matrix[3], 1.0); // unit scale on Y
-        assert_eq!(matrix[4], matrix[4].round()); // origin on a whole pixel
+        assert_eq!(matrix[0], 1.0);
+        assert_eq!(matrix[3], 1.0);
+        assert_eq!(matrix[4], matrix[4].round());
         assert_eq!(matrix[5], matrix[5].round());
         // Rotation and mirroring change which terms build the origin; the snap holds through all.
         for quadrant in 0..4 {

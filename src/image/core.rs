@@ -289,9 +289,9 @@ enum DecodedWeight {
 }
 
 pub enum DecodeStage {
-    /// Preview standing in while the same job goes on to the full decode.
+    /// Preview shown while the same job goes on to the full decode.
     Preview,
-    /// Preview and the job stops there; the full decode is owed on arrival.
+    /// Preview and the job stops there; the full decode is submitted separately after it arrives.
     PreviewFinal,
     Final,
 }
@@ -336,7 +336,7 @@ pub struct CurrentImage {
 #[derive(Clone)]
 struct CacheEntry {
     metadata: ItemMetadata,
-    /// Preview stand-in (RAW, sub-resolution, animation first frame) until the full decode is paid for.
+    /// Preview (RAW embedded, sub-resolution, animation first frame) until the full decode arrives.
     preview: bool,
     image: Arc<DecodedImage>,
     texture: Option<UploadedTexture>,
@@ -1069,7 +1069,7 @@ impl ImageCore {
         let anchor = self.navigation_anchor();
         let target = self.navigation_target(command)?;
         if anchor.is_some_and(|anchor| anchor == &target) {
-            return None; // same item, nothing to do
+            return None;
         }
         self.record_navigation(command);
         Some(self.load_item(&target))
@@ -1082,7 +1082,7 @@ impl ImageCore {
             .navigation_anchor()
             .is_some_and(|anchor| anchor == &target)
         {
-            return None; // same item, nothing to do
+            return None;
         }
         self.opposite_steps = 0; // a jump keeps the polarity but breaks the run
         Some(self.load_item(&target))
@@ -1148,7 +1148,7 @@ impl ImageCore {
         self.current = Some(current);
     }
 
-    /// Caches an entry, freeing any replaced stand-in off the UI thread.
+    /// Caches an entry, freeing any replaced preview off the UI thread.
     fn cache_image(&mut self, location: ItemLocation, entry: CacheEntry) {
         if let Some(replaced) = self.cache.insert(location, entry) {
             self.releaser.release(replaced.image);
@@ -1279,7 +1279,7 @@ impl ImageCore {
                 ),
             );
             if is_pending {
-                // Waited on: show it, then go get the full decode it stands in for.
+                // Waited on: show it, then submit the full decode it precedes.
                 return Some(self.load_item(&completion.location));
             }
             self.evict_cache();
@@ -1414,7 +1414,6 @@ impl ImageCore {
             .collect();
         targets.extend(self.navigation_anchor().cloned());
         if backward == 0 && forward == 0 {
-            // preloading off: drop the cache
             for (_, entry) in self.cache.drain() {
                 self.releaser.release(entry.image);
             }
@@ -1516,7 +1515,7 @@ impl ImageCore {
     pub fn invalidate_svg_weights(&mut self) {
         decode::invalidate_monitor_size();
         for entry in &mut self.entries {
-            // An unprobed entry has nothing to forget, and the name lookup is not free.
+            // An unprobed entry has no weight to clear, and the name lookup is not free.
             if entry.weight == DecodedWeight::Unknown {
                 continue;
             }
@@ -1546,7 +1545,7 @@ impl ImageCore {
         cached + submitted
     }
 
-    /// A stand-in weighs its full decode; others weigh what they hold, pixels or texture.
+    /// A preview weighs its full decode; others weigh what they hold, pixels or texture.
     fn cached_weight(&self, location: &ItemLocation, entry: &CacheEntry) -> u64 {
         if entry.preview
             && let Some(weight) = self.listed_weight(location)
@@ -1583,7 +1582,7 @@ impl ImageCore {
         }
     }
 
-    /// Cancels queued or running decodes and probes outside the residency set.
+    /// Cancels queued or running decodes and probes outside the preload targets.
     fn cancel_decodes_outside(&mut self, targets: &HashSet<ItemLocation>) {
         for location in self.pool.remove_queued_except(targets) {
             self.submitted_decodes.remove(&location);
@@ -1597,7 +1596,7 @@ impl ImageCore {
         }
     }
 
-    /// Leaving residency removes the entry whole; returning is a fresh preload.
+    /// Leaving the preload targets removes the entry whole; returning is a fresh preload.
     fn drop_entries_outside(&mut self, targets: &HashSet<ItemLocation>) {
         let cache = &mut self.cache;
         let releaser = &self.releaser;
@@ -1634,7 +1633,7 @@ impl ImageCore {
         let mut ranked: Vec<(ItemLocation, u64, usize)> = weighted
             .into_iter()
             .map(|(location, weight)| {
-                // The baseline goes last even when unlisted; what residency dropped goes first.
+                // The anchor goes last even when unlisted; what left the preload targets goes first.
                 let key = if anchor.as_ref() == Some(&location) {
                     0
                 } else {
@@ -1878,7 +1877,7 @@ fn compare_natural_names(a: &ListingEntry, b: &ListingEntry) -> std::cmp::Orderi
     crate::text::natural_order(&a.wide_name, &b.wide_name)
 }
 
-/// Fixed once a worker takes the job; PreviewOnly and the speculative flag keep preload cheap.
+/// Fixed once a worker takes the job; Preview, Probe and the speculative flag keep preload cheap.
 #[derive(Clone, Copy, PartialEq, Eq)]
 enum JobKind {
     Full,
@@ -1963,7 +1962,7 @@ impl DecodePool {
             .position(|job| job.kind != JobKind::Probe && job.location == *location)
             && let Some(mut job) = queue.remove(position)
         {
-            job.speculative = false; // someone is waiting on it now
+            job.speculative = false; // the pending item waits on it now
             queue.push_front(job);
         }
     }
@@ -2054,7 +2053,7 @@ fn worker_loop(shared: &PoolShared, window: isize) {
                     && let Some(preview) = decode::decode_two_stage_preview(path, &job.cancellation)
                 {
                     post_preview(preview, true);
-                    continue; // the full decode waits until someone asks for it
+                    continue; // the full decode is submitted separately
                 }
                 // An animation opens on its first frame; a guess stops there.
                 if (job.speculative || job.kind != JobKind::Full)

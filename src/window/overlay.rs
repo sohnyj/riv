@@ -86,7 +86,7 @@ const SHAPED_TEXT_SLOTS: usize = 4;
 const CENTERED_MESSAGE_SLOT: usize = 2;
 const WORDMARK_SLOT: usize = 3;
 
-/// A shaped layout reused while its text and the box it wraps into hold still.
+/// A shaped layout reused while its text and the box it wraps into stay unchanged.
 struct ShapedText {
     text: String,
     wrap_width: f32,
@@ -457,14 +457,12 @@ pub fn build_info_text(
         ));
     }
 
-    // Display: the output state.
     let display = vec![
         format!("Advanced color: {color_mode}"),
         format!("Display: {display_description}"),
         format!("Output: {output_label}"),
     ];
 
-    // Metrics: frame count and luminance figures, shown only when they apply.
     let mut metrics = Vec::new();
     if image.frames.len() > 1 {
         metrics.push(format!("Frames: {}", image.frames.len()));
@@ -501,7 +499,6 @@ pub fn build_info_text(
         }
     }
 
-    // Render: what the app applied.
     let render = vec![
         format!("Scaling: {scaling_description}"),
         format!("Dither: {dither_description}"),
@@ -1171,7 +1168,7 @@ mod aspect_ratio_tests {
 
     #[test]
     fn portrait_shows_the_reversed_ratio_tagged_vertical() {
-        // A distinct landscape name rides along inside the tag.
+        // A distinct landscape name is carried inside the tag.
         assert_eq!(format_aspect_ratio(4000, 6000), "2:3 (35mm, Vertical)");
         // When the name just repeats the ratio, only Vertical shows.
         assert_eq!(format_aspect_ratio(1080, 1920), "9:16 (Vertical)");

@@ -28,7 +28,6 @@ impl Animation {
         })
     }
 
-    /// A frame delay at the current speed, floored at 1ms.
     fn scaled_delay(&self, delay: u32) -> u32 {
         // u64 arithmetic: a delay past about twelve hours overflows the u32 multiply by 100.
         let scaled = u64::from(delay.max(1)) * 100 / u64::from(self.speed_percent);
@@ -39,7 +38,6 @@ impl Animation {
         self.scaled_delay(self.frame_delays_milliseconds[self.frame_index])
     }
 
-    /// Time for one pass through every frame at the current speed.
     pub fn loop_duration_milliseconds(&self) -> u32 {
         self.frame_delays_milliseconds
             .iter()

@@ -82,7 +82,7 @@ impl IDropTarget_Impl for DropTarget_Impl {
             *effect = if accepts {
                 DROPEFFECT_COPY
             } else {
-                DROPEFFECT_NONE // refuse non-file drops (URLs etc.)
+                DROPEFFECT_NONE
             };
         }
         Ok(())

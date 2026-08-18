@@ -18,7 +18,6 @@ pub fn create_vertex_shader(device: &ID3D11Device) -> Result<ID3D11VertexShader>
     Ok(vertex_shader.expect("CreateVertexShader succeeded without shader"))
 }
 
-/// One dynamic constant buffer sized for the pass's constants.
 pub fn create_constant_buffer<Constants>(device: &ID3D11Device) -> Result<ID3D11Buffer> {
     let buffer_description = D3D11_BUFFER_DESC {
         ByteWidth: size_of::<Constants>() as u32,

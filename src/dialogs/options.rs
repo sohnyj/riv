@@ -372,7 +372,6 @@ fn page_area(dialog: HWND, tab: HWND) -> RECT {
     area
 }
 
-/// Builds the page behind a tab if it is not there yet, then shows it.
 fn select_page(state: &mut OptionsState, tab: HWND, selected: isize) {
     if let Ok(index) = usize::try_from(selected)
         && index < PAGES.len()
@@ -392,7 +391,6 @@ const PAGES: [(u16, &str); 7] = [
     (IDD_PAGE_ABOUT, "About"),
 ];
 
-/// Builds a page the first time its tab is chosen.
 fn ensure_page(state: &mut OptionsState, tab: HWND, index: usize) {
     if !state.pages[index].is_invalid() {
         return;
@@ -508,7 +506,7 @@ fn apply(state: &mut OptionsState) {
     if !state.is_dirty() {
         return;
     }
-    // Each saved set is re-probed, so a write that failed keeps Apply enabled instead of lying.
+    // Each saved set is re-probed, so a write that failed keeps Apply enabled instead of showing as saved.
     let desired = state.desired_associations();
     if desired != state.saved_associations {
         file_association::set_file_associations(&desired);
@@ -793,7 +791,6 @@ fn sync_all_pages(state: &mut OptionsState) {
     }
 }
 
-/// Writes the transient state into one page, for a page that has just been built.
 fn sync_page(state: &mut OptionsState, index: usize) {
     state.syncing = true;
     match index {
@@ -943,7 +940,6 @@ fn rgb_to_colorref((red, green, blue): (u8, u8, u8)) -> COLORREF {
     COLORREF(u32::from(red) | (u32::from(green) << 8) | (u32::from(blue) << 16))
 }
 
-/// Unpacks a Win32 COLORREF into an (R, G, B) triple.
 fn colorref_to_rgb(color: COLORREF) -> (u8, u8, u8) {
     (
         (color.0 & 0xFF) as u8,
@@ -1158,7 +1154,6 @@ fn initialize_association_page(state: &mut OptionsState) {
     }
 }
 
-/// Adds one extension row under `parent`, records it, and answers where it landed.
 fn insert_extension(
     state: &mut OptionsState,
     tree: HWND,

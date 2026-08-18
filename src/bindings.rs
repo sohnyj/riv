@@ -30,7 +30,6 @@ fn modifier_from_token(token: &str) -> Option<u8> {
         .map(|(modifier, _)| *modifier)
 }
 
-/// Modifier mask from the live keyboard state.
 pub fn current_modifiers() -> u8 {
     use windows::Win32::UI::Input::KeyboardAndMouse::{
         GetKeyState, VK_CONTROL, VK_LWIN, VK_MENU, VK_RWIN, VK_SHIFT,
@@ -77,7 +76,6 @@ impl MouseBase {
         }
     }
 
-    /// The discriminant `from_index` reads back.
     pub fn index(self) -> u8 {
         self as u8
     }
@@ -305,7 +303,6 @@ pub fn resolved_keyboard_sequences(
     .collect()
 }
 
-/// First keyboard sequence plus the mouse binding, comma-joined.
 pub fn menu_shortcut_text(
     keyboard_overrides: Option<&Map<String, Value>>,
     mouse_overrides: Option<&Map<String, Value>>,

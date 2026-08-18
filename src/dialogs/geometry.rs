@@ -1,4 +1,4 @@
-//! Where a dialog lands and where its controls sit.
+//! Where a dialog is placed and where its controls sit.
 
 use windows::Win32::Foundation::{HWND, POINT, RECT};
 use windows::Win32::Graphics::Gdi::{
@@ -6,7 +6,7 @@ use windows::Win32::Graphics::Gdi::{
 };
 use windows::Win32::UI::WindowsAndMessaging::GetWindowRect;
 
-/// Holds a placement inside the work area of the monitor it lands on.
+/// Holds a placement inside the work area of the nearest monitor.
 fn clamp_to_work_area(x: i32, y: i32, width: i32, height: i32) -> (i32, i32) {
     let target = RECT {
         left: x,
