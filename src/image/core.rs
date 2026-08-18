@@ -1075,7 +1075,6 @@ impl ImageCore {
         Some(self.load_item(&target))
     }
 
-    /// Jumps to a listing entry; the index maps the open menu's snapshot, so no rescan first.
     /// Goes to an item the caller already identified, listed or not.
     pub fn navigate_to_location(&mut self, target: &ItemLocation) -> Option<LoadOutcome> {
         let target = target.clone();
