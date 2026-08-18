@@ -51,11 +51,6 @@ pub fn url_is_archive(url: &str) -> bool {
         .is_some_and(|extension| is_archive_extension(&extension))
 }
 
-/// False when archiveint.dll (Windows 11 23H2+) is unavailable.
-pub fn available() -> bool {
-    libarchive::api().is_some()
-}
-
 pub struct MemberInfo {
     /// Path inside the archive, forward slashes as stored.
     pub name: String,
@@ -169,7 +164,7 @@ struct Reader<'api> {
 impl Reader<'_> {
     fn open(archive_path: &Path) -> Result<Self, ArchiveError> {
         let api = libarchive::api()
-            .ok_or_else(|| ArchiveError::new("Archive support is unavailable on this Windows"))?;
+            .ok_or_else(|| ArchiveError::new("Archive support could not be loaded"))?;
         let handle = unsafe { (api.read_new)() };
         if handle.is_null() {
             return Err(ArchiveError::new("Archive reader allocation failed"));
@@ -287,7 +282,6 @@ mod fixture_tests {
     #[test]
     #[ignore = "needs archiveint.dll and test/ fixtures"]
     fn fixtures_enumerate_and_extract() {
-        assert!(available(), "archiveint.dll unavailable");
         for fixture in [
             "test/fixture.zip",
             "test/fixture.cbz",
@@ -325,7 +319,6 @@ mod fixture_tests {
     #[test]
     #[ignore = "needs archiveint.dll and test/ fixtures"]
     fn encrypted_zip_members_are_skipped() {
-        assert!(available(), "archiveint.dll unavailable");
         let members = enumerate(Path::new("test/fixture_encrypted.zip"))
             .unwrap_or_else(|error| panic!("{}", error.message));
         assert!(

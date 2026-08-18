@@ -34,7 +34,6 @@ pub struct MenuState {
     pub requirements: SatisfiedRequirements,
     pub file_info_shown: bool,
     pub loop_enabled: bool,
-    pub open_url_available: bool,
     pub playlist_names: Vec<String>,
     /// Absolute index of the first shown name; doubles as the count hidden before it.
     pub playlist_first_index: usize,
@@ -101,11 +100,6 @@ impl MenuBuilder {
         self.state_snapshot.requirements.satisfied(requirement)
     }
 
-    /// Menu only: a shortcut still opens the dialog, so the load can say why it refuses.
-    fn menu_only_disabled(&self, action: Action) -> bool {
-        action == Action::OpenUrl && !self.state_snapshot.open_url_available
-    }
-
     fn append_action(&mut self, menu: HMENU, action: Action) -> Result<()> {
         self.append_action_labeled(menu, action, action.label())
     }
@@ -134,7 +128,7 @@ impl MenuBuilder {
         self.entries.push(MenuSelection::Action(action));
         let identifier = self.entries.len();
         let mut flags = MF_STRING;
-        if !self.requirement_satisfied(action.requirement()) || self.menu_only_disabled(action) {
+        if !self.requirement_satisfied(action.requirement()) {
             flags |= MF_GRAYED | MF_DISABLED;
         }
         let checked = match action {
@@ -456,7 +450,6 @@ mod menu_structure_tests {
             }),
             file_info_shown: false,
             loop_enabled: true,
-            open_url_available: true,
             playlist_names: Vec::new(),
             playlist_first_index: 0,
             playlist_current_slot: None,

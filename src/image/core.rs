@@ -899,8 +899,6 @@ impl ImageCore {
             Some("No URL in the clipboard") // only the paste path can deliver an empty URL
         } else if !curl::is_supported_protocol(url) {
             Some("Unsupported URL protocol")
-        } else if !curl::available() {
-            Some("URL support is unavailable on this Windows")
         } else if archive_reader::url_is_archive(url) {
             Some("Archives are not supported from a URL")
         } else {

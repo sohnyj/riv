@@ -1,12 +1,14 @@
 //! Remote image fetch delegated to the Windows in-box curl.exe (System32).
 
+use std::ffi::OsString;
 use std::io::Read;
+use std::os::windows::ffi::OsStringExt;
 use std::os::windows::process::CommandExt;
-use std::path::{Path, PathBuf};
+use std::path::PathBuf;
 use std::process::{Child, Command, Stdio};
-use std::sync::OnceLock;
 use std::sync::atomic::{AtomicBool, Ordering};
 
+use windows::Win32::Foundation::MAX_PATH;
 use windows::Win32::System::SystemInformation::GetSystemDirectoryW;
 use windows::Win32::System::Threading::CREATE_NO_WINDOW;
 
@@ -42,23 +44,11 @@ impl NetworkError {
     }
 }
 
-/// False when System32\curl.exe is unavailable.
-pub fn available() -> bool {
-    executable_path().is_some()
-}
-
-fn executable_path() -> Option<&'static Path> {
-    static PATH: OnceLock<Option<PathBuf>> = OnceLock::new();
-    PATH.get_or_init(|| {
-        let mut buffer = [0u16; 260];
-        let length = unsafe { GetSystemDirectoryW(Some(&mut buffer)) } as usize;
-        if length == 0 || length > buffer.len() {
-            return None;
-        }
-        let path = PathBuf::from(String::from_utf16_lossy(&buffer[..length])).join("curl.exe");
-        path.is_file().then_some(path)
-    })
-    .as_deref()
+/// System32\curl.exe, in-box since Windows 10 1803; the startup version check vouches for it.
+fn executable_path() -> PathBuf {
+    let mut buffer = [0u16; MAX_PATH as usize];
+    let length = unsafe { GetSystemDirectoryW(Some(&mut buffer)) } as usize;
+    PathBuf::from(OsString::from_wide(&buffer[..length])).join("curl.exe")
 }
 
 pub fn is_supported_protocol(url: &str) -> bool {
@@ -103,10 +93,8 @@ pub fn download(
     if !is_supported_protocol(url) {
         return Err(NetworkError::new("Unsupported URL protocol"));
     }
-    let executable = executable_path()
-        .ok_or_else(|| NetworkError::new("URL support is unavailable on this Windows"))?;
     let maximum_bytes = MAXIMUM_DOWNLOAD_BYTES.to_string();
-    let mut child = Command::new(executable)
+    let mut child = Command::new(executable_path())
         .args([
             "--silent",
             "--show-error",
@@ -211,7 +199,6 @@ mod download_tests {
     #[test]
     #[ignore = "needs System32 curl.exe"]
     fn downloads_from_a_local_server() {
-        assert!(available(), "curl.exe unavailable");
         let listener = TcpListener::bind("127.0.0.1:0").expect("bind");
         let port = listener.local_addr().expect("local address").port();
         let body = b"\x89PNG local fixture";

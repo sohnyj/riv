@@ -34,7 +34,6 @@ use windows::Win32::UI::WindowsAndMessaging::{
 use windows::core::HSTRING;
 
 use crate::actions::Action;
-use crate::archive::reader as archive_reader;
 use crate::bindings;
 use crate::dialogs::about;
 use crate::dialogs::resource::*;
@@ -1122,8 +1121,7 @@ fn initialize_association_page(state: &mut OptionsState) {
         )
     };
 
-    for (name, extension_list) in image::formats::sorted_format_groups(archive_reader::available())
-    {
+    for (name, extension_list) in image::formats::sorted_format_groups() {
         if extension_list.len() == 1 {
             let extension = format!(".{}", extension_list[0]);
             insert_extension(

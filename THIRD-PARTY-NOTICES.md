@@ -203,6 +203,7 @@ The `windows*` crates are Copyright (c) Microsoft Corporation.
 | windows-result | 0.4.1 | MIT OR Apache-2.0 |
 | windows-strings | 0.5.1 | MIT OR Apache-2.0 |
 | windows-threading | 0.2.1 | MIT OR Apache-2.0 |
+| windows-version | 0.1.7 | MIT OR Apache-2.0 |
 | xmlwriter | 0.1.0 | MIT |
 | zmij | 1.0.23 | MIT |
 

@@ -11,7 +11,6 @@ use windows::Win32::UI::Shell::{
 };
 use windows::core::{HSTRING, PCWSTR};
 
-use crate::archive::reader as archive_reader;
 use crate::image;
 
 pub fn show(window: HWND, initial_directory: Option<&str>) -> Vec<PathBuf> {
@@ -19,8 +18,8 @@ pub fn show(window: HWND, initial_directory: Option<&str>) -> Vec<PathBuf> {
 }
 
 /// A filter per format in the file association order, then the two catch-alls and where they begin.
-fn filters(archives: bool) -> (Vec<(String, String)>, usize) {
-    let formats = image::formats::sorted_format_groups(archives);
+fn filters() -> (Vec<(String, String)>, usize) {
+    let formats = image::formats::sorted_format_groups();
     let mut filters = Vec::with_capacity(formats.len() + 2);
     for (name, extensions) in formats {
         let pattern = extensions
@@ -49,7 +48,7 @@ fn select_files(
     let dialog: IFileOpenDialog =
         unsafe { CoCreateInstance(&FileOpenDialog, None, CLSCTX_INPROC_SERVER)? };
 
-    let (filter_texts, supported_position) = filters(archive_reader::available());
+    let (filter_texts, supported_position) = filters();
     let filter_texts: Vec<(HSTRING, HSTRING)> = filter_texts
         .into_iter()
         .map(|(name, pattern)| (HSTRING::from(name), HSTRING::from(pattern)))
@@ -97,7 +96,7 @@ mod filter_tests {
 
     #[test]
     fn formats_lead_and_the_supported_filter_carries_them_all() {
-        let (filters, supported) = filters(true);
+        let (filters, supported) = filters();
         // Same order as the file association list, which sorts by format name.
         let names: Vec<&str> = filters.iter().map(|(name, _)| name.as_str()).collect();
         assert_eq!(names[0], "APNG (*.apng)");
@@ -111,13 +110,5 @@ mod filter_tests {
         assert!(all_patterns.contains("*.apng"));
         assert!(all_patterns.contains("*.cbz"));
         assert!(all_patterns.ends_with("*.webp"));
-    }
-
-    #[test]
-    fn archives_drop_out_when_the_library_is_missing() {
-        let (filters, supported) = filters(false);
-        let names: Vec<&str> = filters.iter().map(|(name, _)| name.as_str()).collect();
-        assert!(!names.iter().any(|name| name.starts_with("Archive")));
-        assert!(!filters[supported].1.contains("*.cbz"));
     }
 }

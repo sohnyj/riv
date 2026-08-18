@@ -30,7 +30,6 @@ use image::core::{
     WM_APP_DECODE_COMPLETE, WM_APP_DOWNLOAD_PROGRESS, WM_APP_LISTING_READY, WM_APP_PROBE_COMPLETE,
 };
 use image::decode::DecodedImage;
-use network::curl;
 use settings::{DEFAULT_BACKGROUND_COLOR, Options, SettingsFile};
 use shell::drag_drop::{self, WM_APP_DROP_PATHS};
 use shell::open_with::{self, OpenWithList, WM_APP_OPEN_WITH_LIST};
@@ -91,9 +90,13 @@ use windows::Win32::UI::WindowsAndMessaging::{
     WindowFromPoint,
 };
 use windows::core::{HSTRING, PCWSTR, Result, w};
+use windows_version::OsVersion;
 
 /// Icon resource id 1 in riv.rc (MAKEINTRESOURCE).
 const APPLICATION_ICON_ID: PCWSTR = PCWSTR(std::ptr::without_provenance(1));
+
+/// Windows 11 23H2, build 22631: the first release with the in-box libarchive.
+const MINIMUM_WINDOWS_VERSION: OsVersion = OsVersion::new(10, 0, 0, 22631);
 
 const WM_APP_SHOW_WINDOW: u32 = WM_APP + 2;
 /// Posted by the display watcher when the advanced-color state or luminance changes.
@@ -1927,7 +1930,6 @@ fn show_menu(application: &mut Application, window: HWND, x: i32, y: i32, target
         }),
         file_info_shown: application.show_file_info,
         loop_enabled: application.settings.options.loop_within_folder,
-        open_url_available: curl::available(),
         playlist_names: playlist_locations
             .iter()
             .map(ItemLocation::display_name)
@@ -2133,6 +2135,13 @@ fn main() -> Result<()> {
 
     unsafe { OleInitialize(None) }?;
 
+    if OsVersion::current() < MINIMUM_WINDOWS_VERSION {
+        fail_fast_dialog(
+            "This version of Windows is not supported.",
+            "riv needs Windows 11 23H2 or later.",
+        );
+        return Ok(());
+    }
     if process_is_elevated() {
         fail_fast_dialog(
             "Running as administrator is blocked.",
@@ -2850,7 +2859,6 @@ mod open_url_smoke_tests {
     use windows::core::{HSTRING, PCWSTR, w};
 
     use crate::dialogs;
-    use crate::network::curl;
 
     const EXECUTABLE: &str = "target/x86_64-pc-windows-msvc/debug/riv.exe";
     const SETTINGS: &str = "target/x86_64-pc-windows-msvc/debug/riv.json";
@@ -2908,7 +2916,6 @@ mod open_url_smoke_tests {
     #[test]
     #[ignore = "needs built riv.exe and System32 curl.exe"]
     fn an_entered_url_downloads_and_displays() {
-        assert!(curl::available(), "curl.exe unavailable");
         let listener = TcpListener::bind("127.0.0.1:0").expect("bind");
         let port = listener.local_addr().expect("local address").port();
         let body = png_bytes();
