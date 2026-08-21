@@ -191,7 +191,7 @@ fn compose_webp_frames(
 }
 
 fn premultiply_bgra_in_place(pixels: &mut [u8]) {
-    for pixel in pixels.chunks_exact_mut(4) {
+    for pixel in pixels.as_chunks_mut::<4>().0 {
         // Uniform four-lane multiply; the alpha lane's 255 factor leaves it unchanged.
         let multipliers = [pixel[3], pixel[3], pixel[3], 255];
         for (channel, multiplier) in pixel.iter_mut().zip(multipliers) {
@@ -645,7 +645,12 @@ mod heif_range_tests {
 
     /// Rewrites 16-bit little-endian codes through the expansion table, code for code.
     fn expand_to_full_range(source: &[u8], output: &mut [u8], table: &[u16; 65536]) {
-        for (code, expanded) in source.chunks_exact(2).zip(output.chunks_exact_mut(2)) {
+        for (code, expanded) in source
+            .as_chunks::<2>()
+            .0
+            .iter()
+            .zip(output.as_chunks_mut::<2>().0)
+        {
             let value = table[usize::from(u16::from_le_bytes([code[0], code[1]]))];
             expanded.copy_from_slice(&value.to_le_bytes());
         }
@@ -734,7 +739,12 @@ mod heif_range_tests {
                 let (fused, fused_maximum) = copy_then_linearize(&source, bits, encoding);
                 let mut differing = 0usize;
                 let mut widest_gap = 0u16;
-                for (left, right) in expanded.chunks_exact(2).zip(fused.chunks_exact(2)) {
+                for (left, right) in expanded
+                    .as_chunks::<2>()
+                    .0
+                    .iter()
+                    .zip(fused.as_chunks::<2>().0)
+                {
                     let left = u16::from_le_bytes([left[0], left[1]]);
                     let right = u16::from_le_bytes([right[0], right[1]]);
                     if left != right {
@@ -801,7 +811,7 @@ mod premultiply_tests {
     fn premultiply_matches_the_scalar_reference() {
         let mut pixels = crate::image::decode::random_pixels(64 * 64, 13);
         let mut expected = pixels.clone();
-        for pixel in expected.chunks_exact_mut(4) {
+        for pixel in expected.as_chunks_mut::<4>().0 {
             let alpha = u16::from(pixel[3]);
             if alpha == 255 {
                 continue;

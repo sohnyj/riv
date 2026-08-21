@@ -42,8 +42,8 @@ mod blue_noise_tests {
         let cell_count = (BLUE_NOISE_SIZE * BLUE_NOISE_SIZE) as usize;
         assert_eq!(BLUE_NOISE_TEXELS.len(), cell_count * size_of::<f32>());
         let mut seen = vec![false; cell_count];
-        for texel in BLUE_NOISE_TEXELS.chunks_exact(size_of::<f32>()) {
-            let value = f32::from_le_bytes(texel.try_into().expect("four byte texel"));
+        for texel in BLUE_NOISE_TEXELS.as_chunks::<{ size_of::<f32>() }>().0 {
+            let value = f32::from_le_bytes(*texel);
             assert!((0.0..1.0).contains(&value));
             let rank = (value * cell_count as f32) as usize;
             assert!(!seen[rank], "duplicate rank {rank}");

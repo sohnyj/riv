@@ -647,7 +647,9 @@ fn ftyp_has_brand(header: &[u8], brand: &[u8; 4]) -> bool {
         || header
             .get(16..box_size.min(header.len()))
             .unwrap_or_default()
-            .chunks_exact(4)
+            .as_chunks::<4>()
+            .0
+            .iter()
             .any(|compatible| compatible == brand)
 }
 
@@ -1785,7 +1787,7 @@ fn linearize_block(
     source_maximum: f32,
 ) -> u16 {
     let mut maximum_bits = 0u16;
-    for pixel in pixels.chunks_exact_mut(8) {
+    for pixel in pixels.as_chunks_mut::<8>().0 {
         let mut channel_nits = [0.0f32; 3];
         for (channel, nits) in channel_nits.iter_mut().enumerate() {
             let code = u16::from_le_bytes([pixel[channel * 2], pixel[channel * 2 + 1]]);
@@ -1908,7 +1910,7 @@ pub(crate) fn peak_luminance_with_maximum_bits(pixels: &[u8], maximum_bits: u16)
 /// Per-channel maxima; the discarded alpha lane keeps the stride regular.
 fn channel_maxima_from_half_pixels(pixels: &[u8]) -> [u16; 4] {
     let mut channel_maxima = [0u16; 4];
-    for pixel in pixels.chunks_exact(8) {
+    for pixel in pixels.as_chunks::<8>().0 {
         for (channel, maximum) in channel_maxima.iter_mut().enumerate() {
             let bits = u16::from_le_bytes([pixel[channel * 2], pixel[channel * 2 + 1]]);
             *maximum = (*maximum).max(positive_normal_half_bits(bits));
@@ -2177,8 +2179,10 @@ fn blend_over(
         let canvas_row = &mut canvas[canvas_start..canvas_start + visible_width * 4];
         // Branch-free over-composite; premultiplied sources make the alpha 0/255 shortcuts redundant.
         for (canvas_pixel, source_pixel) in canvas_row
-            .chunks_exact_mut(4)
-            .zip(source_row.chunks_exact(4))
+            .as_chunks_mut::<4>()
+            .0
+            .iter_mut()
+            .zip(source_row.as_chunks::<4>().0)
         {
             let inverse_alpha = 255 - u32::from(source_pixel[3]);
             for (canvas_channel, source_channel) in canvas_pixel.iter_mut().zip(source_pixel) {
@@ -2472,7 +2476,12 @@ fn decode_apng<Input: BufRead + Seek>(
 
 /// Straight RGBA to premultiplied BGRA; both slices hold the same pixel count.
 pub fn premultiplied_bgra_from_rgba(source: &[u8], output: &mut [u8]) {
-    for (source_pixel, output_pixel) in source.chunks_exact(4).zip(output.chunks_exact_mut(4)) {
+    for (source_pixel, output_pixel) in source
+        .as_chunks::<4>()
+        .0
+        .iter()
+        .zip(output.as_chunks_mut::<4>().0)
+    {
         // Uniform four-lane multiply; the alpha lane's 255 factor leaves it unchanged.
         let alpha = u16::from(source_pixel[3]);
         let swizzled = [
@@ -2507,8 +2516,10 @@ fn pixels_to_premultiplied_bgra_into(
         }
         png::ColorType::Rgb => {
             for (source_pixel, output_pixel) in pixels[..pixel_count * 3]
-                .chunks_exact(3)
-                .zip(output.chunks_exact_mut(4))
+                .as_chunks::<3>()
+                .0
+                .iter()
+                .zip(output.as_chunks_mut::<4>().0)
             {
                 output_pixel[0] = source_pixel[2];
                 output_pixel[1] = source_pixel[1];
@@ -2566,7 +2577,7 @@ fn decode_svg(bytes: &[u8], format_name: &'static str) -> Result<DecodedImage, D
         &mut pixmap.as_mut(),
     );
     let mut pixels = pixmap.take();
-    for pixel in pixels.chunks_exact_mut(4) {
+    for pixel in pixels.as_chunks_mut::<4>().0 {
         let swapped = [pixel[2], pixel[1], pixel[0], pixel[3]];
         pixel.copy_from_slice(&swapped);
     }
@@ -3117,7 +3128,7 @@ mod hdr_linearization_tests {
 
     fn linearize_hdr_pixels_reference(pixels: &mut [u8], encoding: HdrEncoding) {
         let transfer_table = hdr_transfer_lookup_table(encoding.transfer, 16);
-        for pixel in pixels.chunks_exact_mut(8) {
+        for pixel in pixels.as_chunks_mut::<8>().0 {
             let mut channel_nits = [0.0f32; 3];
             for (channel, nits) in channel_nits.iter_mut().enumerate() {
                 let code = u16::from_le_bytes([pixel[channel * 2], pixel[channel * 2 + 1]]);
@@ -3369,7 +3380,12 @@ mod compositing_tests {
     }
 
     fn blend_over_reference(canvas: &mut [u8], source: &[u8]) {
-        for (canvas_pixel, source_pixel) in canvas.chunks_exact_mut(4).zip(source.chunks_exact(4)) {
+        for (canvas_pixel, source_pixel) in canvas
+            .as_chunks_mut::<4>()
+            .0
+            .iter_mut()
+            .zip(source.as_chunks::<4>().0)
+        {
             let alpha = u32::from(source_pixel[3]);
             if alpha == 0 {
                 continue;
@@ -3445,7 +3461,7 @@ mod premultiplied_conversion_tests {
             pixels_to_premultiplied_bgra_into(&rgba, png::ColorType::Rgba, 64, 64, &mut converted);
         assert!(converted_ok.is_ok(), "conversion failed");
         let mut expected = Vec::new();
-        for pixel in rgba.chunks_exact(4) {
+        for pixel in rgba.as_chunks::<4>().0 {
             let alpha = u16::from(pixel[3]);
             expected.push((u16::from(pixel[2]) * alpha / 255) as u8);
             expected.push((u16::from(pixel[1]) * alpha / 255) as u8);
@@ -3458,7 +3474,9 @@ mod premultiplied_conversion_tests {
     #[test]
     fn rgb_conversion_matches_the_scalar_reference() {
         let rgb: Vec<u8> = random_pixels(64 * 64, 11)
-            .chunks_exact(4)
+            .as_chunks::<4>()
+            .0
+            .iter()
             .flat_map(|pixel| [pixel[0], pixel[1], pixel[2]])
             .collect();
         let mut converted = Vec::new();
@@ -3466,7 +3484,7 @@ mod premultiplied_conversion_tests {
             pixels_to_premultiplied_bgra_into(&rgb, png::ColorType::Rgb, 64, 64, &mut converted);
         assert!(converted_ok.is_ok(), "conversion failed");
         let mut expected = Vec::new();
-        for pixel in rgb.chunks_exact(3) {
+        for pixel in rgb.as_chunks::<3>().0 {
             expected.extend_from_slice(&[pixel[2], pixel[1], pixel[0], 255]);
         }
         assert_eq!(converted, expected);
@@ -3516,7 +3534,9 @@ mod premultiplied_conversion_tests {
     #[ignore = "manual timing comparison (--nocapture)"]
     fn rgb_conversion_timing() {
         let rgb: Vec<u8> = random_pixels(1920 * 1080, 23)
-            .chunks_exact(4)
+            .as_chunks::<4>()
+            .0
+            .iter()
             .flat_map(|pixel| [pixel[0], pixel[1], pixel[2]])
             .collect();
         let mut reused = Vec::new();

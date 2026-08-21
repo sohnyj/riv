@@ -252,7 +252,9 @@ pub fn profile_description(icc: &[u8]) -> Option<String> {
             let start = offset + read_u32_be(icc, offset + 24)? as usize;
             let bytes = icc.get(start..start + length)?;
             let units = bytes
-                .chunks_exact(2)
+                .as_chunks::<2>()
+                .0
+                .iter()
                 .map(|pair| u16::from_be_bytes([pair[0], pair[1]]));
             char::decode_utf16(units)
                 .collect::<Result<String, _>>()
