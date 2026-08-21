@@ -29,7 +29,7 @@ pub fn enumerate_in_background(window: HWND, extension: String) {
     let window_handle = window.0 as isize;
     std::thread::spawn(move || {
         let initialized = unsafe { CoInitializeEx(None, COINIT_MULTITHREADED) }.is_ok();
-        let list = Box::new(enumerate(&extension));
+        let list = Box::new(enumerate(extension));
         crate::window::message::post_boxed(window_handle, WM_APP_OPEN_WITH_LIST, list);
         if initialized {
             unsafe { windows::Win32::System::Com::CoUninitialize() };
@@ -37,15 +37,15 @@ pub fn enumerate_in_background(window: HWND, extension: String) {
     });
 }
 
-fn enumerate(extension: &str) -> OpenWithList {
+fn enumerate(extension: String) -> OpenWithList {
     let mut items = Vec::new();
     let own_executable = std::env::current_exe()
         .map(|exe| exe.to_string_lossy().into_owned())
         .unwrap_or_default();
-    let default_executable = default_executable_for(extension).unwrap_or_default();
+    let default_executable = default_executable_for(&extension).unwrap_or_default();
 
     // Packaged apps have no readable file path, so only riv itself is filtered out.
-    for handler in handlers_for(extension) {
+    for handler in handlers_for(&extension) {
         let Some(executable_path) = handler_executable_path(&handler) else {
             continue;
         };
@@ -74,7 +74,7 @@ fn enumerate(extension: &str) -> OpenWithList {
         has_default = true;
     }
     OpenWithList {
-        extension: extension.to_string(),
+        extension,
         has_default,
         items,
     }

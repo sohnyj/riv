@@ -42,7 +42,7 @@ impl NetworkError {
     }
 }
 
-/// System32\curl.exe, in-box since Windows 10 1803; the startup version check vouches for it.
+/// System32\curl.exe, in-box since Windows 10 1803; the startup version check guarantees it.
 fn executable_path() -> PathBuf {
     let mut buffer = [0u16; MAX_PATH as usize];
     let length = unsafe { GetSystemDirectoryW(Some(&mut buffer)) } as usize;
@@ -79,7 +79,7 @@ fn path_segment(url: &str) -> Option<&str> {
         .split_once(['?', '#'])
         .map_or(after_scheme, |(before, _)| before);
     let (_, segments) = path.split_once('/')?;
-    Some(segments.rsplit('/').next().unwrap_or(segments))
+    Some(segments.rsplit_once('/').map_or(segments, |(_, name)| name))
 }
 
 /// Fetches a URL to memory; the protocol check doubles as argument-injection defense.

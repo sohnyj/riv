@@ -272,7 +272,7 @@ pub struct ListingEntry {
     file_size: u64,
     modified: SystemTime,
     created: SystemTime,
-    /// Format name for Type sorting; the scan already knows the extension.
+    /// Format name for Type sorting; the scan already has the extension.
     format_name: &'static str,
     /// Cache weight of the fully decoded item; a probe or an arrival records it.
     weight: DecodedWeight,
@@ -2200,7 +2200,7 @@ fn core() -> ImageCore {
     )
 }
 
-/// A temp directory holding `files`; the bytes are never decoded, only listed.
+/// A temporary directory holding `files`; the bytes are never decoded, only listed.
 #[cfg(test)]
 fn fixture_directory(name: &str, files: &[&str]) -> PathBuf {
     let directory = std::env::temp_dir().join(name);

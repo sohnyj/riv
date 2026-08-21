@@ -1017,7 +1017,7 @@ impl Application {
         self.apply_renderer_state()
     }
 
-    /// Reads the current texture back while its device is alive; a dead one falls through.
+    /// Reads the current texture back while its device is alive; a removed one falls through.
     fn recover_current_pixels(&mut self) {
         let Some(renderer) = &self.renderer else {
             return;
@@ -1696,11 +1696,12 @@ fn dispatch_action(application: &mut Application, window: HWND, action: Action) 
         }
         Action::Open => {
             let last_directory = application.settings.last_file_dialog_directory();
-            let paths = open_dialog::show(window, last_directory);
-            for rest in paths.iter().skip(1) {
-                open_in_new_window(rest);
+            let mut paths = open_dialog::show(window, last_directory).into_iter();
+            let first = paths.next();
+            for rest in paths {
+                open_in_new_window(&rest);
             }
-            if let Some(first) = paths.first().cloned()
+            if let Some(first) = first
                 && let Some(application) = application_from_window(window)
             {
                 if let Some(parent) = first.parent() {
