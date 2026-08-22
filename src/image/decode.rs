@@ -232,8 +232,8 @@ enum FrameSemantics {
     SizeVariants,
 }
 
-/// D3D11 FL11 texture limit; larger sources are downscaled before upload.
-const MAXIMUM_TEXTURE_DIMENSION: u32 = 16384;
+/// The D3D11 texture cap, the same from FL 11_0 through 12_x; larger sources are downscaled before upload.
+pub(crate) const MAXIMUM_TEXTURE_DIMENSION: u32 = 16384;
 
 /// Cap on an animation's expanded frames; past it only the first frame is kept.
 const MAXIMUM_ANIMATION_FRAMES_BYTES: u64 = 1 << 30;
@@ -277,7 +277,7 @@ pub struct FrameRegion<'pixels> {
     pub delay_milliseconds: u32,
 }
 
-/// The canvas an animation composes onto; GIF, APNG, and WebP share these rules.
+/// The canvas an animation composes onto; GIF, APNG, WebP, and AVIF share these rules.
 pub struct FrameCompositor {
     canvas: Vec<u8>,
     width: u32,
@@ -383,6 +383,7 @@ enum Adapter {
     Apng,
     Svg,
     WebPAnimation,
+    AvifAnimation,
     Exr,
     HeifWithWicPreferred,
 }
@@ -613,12 +614,22 @@ static ANIMATED_WEBP: FormatDescriptor = FormatDescriptor {
     carries_gain_map: false,
 };
 
+static ANIMATED_AVIF: FormatDescriptor = FormatDescriptor {
+    name: "AVIF",
+    extensions: &[],
+    magic: &[],
+    semantics: FrameSemantics::Animation,
+    adapter: Adapter::AvifAnimation,
+    store_codec_names: &[],
+    carries_gain_map: false,
+};
+
 /// The names refine_by_content can reclassify; keep the two in step.
 fn refines_by_content(descriptor: &FormatDescriptor) -> bool {
-    matches!(descriptor.name, "PNG" | "WebP" | "HEIF")
+    matches!(descriptor.name, "PNG" | "WebP" | "HEIF" | "AVIF")
 }
 
-/// PNG + acTL = APNG; WebP + VP8X ANIM flag = animated WebP; HEIF + avif brand = AVIF.
+/// PNG + acTL = APNG; WebP + VP8X ANIM flag = animated WebP; HEIF + avif/avis brand = AVIF still/sequence.
 fn refine_by_content(
     descriptor: &'static FormatDescriptor,
     header: &[u8],
@@ -629,9 +640,10 @@ fn refine_by_content(
     if descriptor.name == "WebP" && webp_has_animation_flag(header) {
         return &ANIMATED_WEBP;
     }
-    if descriptor.name == "HEIF"
-        && (ftyp_has_brand(header, b"avif") || ftyp_has_brand(header, b"avis"))
-    {
+    if matches!(descriptor.name, "HEIF" | "AVIF") && ftyp_has_brand(header, b"avis") {
+        return &ANIMATED_AVIF;
+    }
+    if descriptor.name == "HEIF" && ftyp_has_brand(header, b"avif") {
         return descriptor_for_extension("avif").unwrap_or(descriptor);
     }
     descriptor
@@ -878,6 +890,11 @@ fn decode_input(
             format_name,
             usize::MAX,
         ),
+        Adapter::AvifAnimation => crate::image::fallback::decode_avif_animation(
+            &input.read_all()?,
+            format_name,
+            usize::MAX,
+        ),
         Adapter::Exr => match input {
             DecodeInput::File(path) => crate::image::fallback::decode_exr(path, format_name),
             DecodeInput::Memory { bytes, .. } => {
@@ -935,6 +952,13 @@ pub fn decode_animation_first_frame(
         )
         .and_then(|decoded| enforce_device_limit(decoded, cancellation))
         .ok(),
+        // The sequence decoder refuses frames past the texture limit, so no downscale step.
+        Adapter::AvifAnimation => crate::image::fallback::decode_avif_animation(
+            &input.read_all().ok()?,
+            descriptor.name,
+            1,
+        )
+        .ok(),
         _ => None,
     }
 }
@@ -990,6 +1014,12 @@ fn probe_weight(input: &DecodeInput<'_>) -> Option<u64> {
         },
         Adapter::Svg => probe_svg_weight(&input.read_all().ok()?),
         Adapter::WebPAnimation => probe_webp_weight(input),
+        // The sequence API reports no sample count, so the first frame is the weight.
+        Adapter::AvifAnimation => {
+            let (width, height) =
+                crate::image::fallback::probe_avif_sequence_dimensions(&input.read_all().ok()?)?;
+            Some(decoded_weight(width, height, 4, 1))
+        }
         Adapter::Exr => {
             let (width, height) = match input {
                 DecodeInput::File(path) => crate::image::fallback::probe_exr_dimensions(path),
@@ -3083,6 +3113,22 @@ mod descriptor_probe_tests {
         let header = ftyp_header(b"mif1", &[b"mif1", b"avif"]);
         let descriptor = descriptor_for_bytes(&header, None).expect("descriptor");
         assert_eq!(descriptor.name, "AVIF");
+        assert!(matches!(descriptor.adapter, Adapter::Wic));
+    }
+
+    #[test]
+    fn an_avis_brand_routes_to_the_sequence_decoder() {
+        // The avis brand can ride as major or compatible, on either an avif or a mif1 major.
+        for header in [
+            ftyp_header(b"avis", &[b"avif", b"avis"]),
+            ftyp_header(b"avif", &[b"avif", b"avis"]),
+            ftyp_header(b"mif1", &[b"mif1", b"avis"]),
+        ] {
+            let descriptor = descriptor_for_bytes(&header, None).expect("descriptor");
+            assert_eq!(descriptor.name, "AVIF");
+            assert!(matches!(descriptor.adapter, Adapter::AvifAnimation));
+            assert!(matches!(descriptor.semantics, FrameSemantics::Animation));
+        }
     }
 
     #[test]

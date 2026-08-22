@@ -35,8 +35,8 @@ Formats that need a codec extension from the Microsoft Store:
 
 | Format | Store extension | Notes |
 |---|---|---|
-| AVIF | HEIF Image Extension + AV1 Video Extension (Microsoft Corporation) | HDR / Tone map |
 | JPEG XL | JPEG XL Image Extension (Microsoft Corporation) | HDR / Tone map |
+| AVIF | HEIF Image Extension + AV1 Video Extension (Microsoft Corporation) | HDR / Tone map; Still only |
 | WebP | WebP Image Extensions (Microsoft Corporation) | Still only |
 | Camera RAW | Raw Image Extension (Microsoft Corporation) | |
 
@@ -60,10 +60,11 @@ Decoded by built-in codecs:
 
 | Format | Decoder | Notes |
 |---|---|---|
-| HEIC / HEIF | libheif + libde265 | HDR / Tone map |
 | EXR | OpenEXR | HDR / Tone map |
-| PNG | png | Animated only |
+| HEIC / HEIF | libheif + libde265 | HDR / Tone map |
+| AVIF | libheif + dav1d | Animated only |
 | WebP | libwebp | Animated only |
+| PNG | png | Animated only |
 | SVG / SVGZ | resvg | Vector only |
 
 Decoded by Windows Imaging Component codecs:
@@ -94,13 +95,13 @@ Prerequisites:
   Older releases can fail on the MSVC STL in the xwin splat.
 - A Windows CRT + SDK splat from [xwin](https://github.com/Jake-Shadle/xwin)
   in `~/.xwin` (override the location with `XWIN_ROOT`).
-- `CMake` and `Ninja`, for static codec dependencies.
+- `CMake`, `Ninja`, `Meson`, and `NASM`, for static codec dependencies.
 - `Wine`, for the tests and for compiling the HLSL shaders.
 
 Ubuntu 26.04 packages:
 
 ```sh
-sudo apt-get install clang-22 lld-22 llvm-22 cmake ninja-build wine git
+sudo apt-get install clang-22 lld-22 llvm-22 cmake ninja-build meson nasm wine git
 ```
 
 LLVM tools on PATH:

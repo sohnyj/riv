@@ -1,4 +1,4 @@
-//! Static C codec adapters: animated WebP, EXR, and HEIF fallback.
+//! Static C codec adapters: animated WebP, animated AVIF, EXR, and HEIF fallback.
 
 use std::borrow::Cow;
 use std::ffi::{CStr, c_char, c_int, c_void};
@@ -356,10 +356,13 @@ const HEIF_COLORSPACE_RGB: c_int = 1;
 const HEIF_CHROMA_INTERLEAVED_RGBA: c_int = 11;
 const HEIF_CHROMA_INTERLEAVED_RRGGBBAA_LE: c_int = 15;
 const HEIF_CHANNEL_INTERLEAVED: c_int = 10;
+const HEIF_ERROR_CODE_END_OF_SEQUENCE: c_int = 13;
 
 enum HeifContext {}
 enum HeifImageHandle {}
 enum HeifImage {}
+enum HeifTrack {}
+enum HeifDecodingOptions {}
 
 #[repr(C)]
 struct HeifError {
@@ -407,7 +410,7 @@ unsafe extern "C" {
         context: *mut HeifContext,
         memory: *const c_void,
         size: usize,
-        options: *const c_void,
+        options: *const HeifDecodingOptions,
     ) -> HeifError;
     fn heif_context_get_primary_image_handle(
         context: *mut HeifContext,
@@ -419,7 +422,7 @@ unsafe extern "C" {
         image: *mut *mut HeifImage,
         colorspace: c_int,
         chroma: c_int,
-        options: *const c_void,
+        options: *const HeifDecodingOptions,
     ) -> HeifError;
     fn heif_image_release(image: *const HeifImage);
     fn heif_image_get_width(image: *const HeifImage, channel: c_int) -> c_int;
@@ -442,6 +445,25 @@ unsafe extern "C" {
     fn heif_nclx_color_profile_free(profile: *mut HeifColorProfileNclx);
     fn heif_image_handle_get_width(handle: *const HeifImageHandle) -> c_int;
     fn heif_image_handle_get_height(handle: *const HeifImageHandle) -> c_int;
+    fn heif_context_get_track(context: *const HeifContext, id: u32) -> *mut HeifTrack;
+    fn heif_track_release(track: *mut HeifTrack);
+    fn heif_track_get_image_resolution(
+        track: *const HeifTrack,
+        out_width: *mut u16,
+        out_height: *mut u16,
+    ) -> HeifError;
+    fn heif_track_get_timescale(track: *const HeifTrack) -> u32;
+    fn heif_track_decode_next_image(
+        track: *mut HeifTrack,
+        out_image: *mut *mut HeifImage,
+        colorspace: c_int,
+        chroma: c_int,
+        options: *const HeifDecodingOptions,
+    ) -> HeifError;
+    fn heif_image_get_duration(image: *const HeifImage) -> u32;
+    fn heif_decoding_options_free(options: *mut HeifDecodingOptions);
+    // deps/shim/heif_shim.c: default options with ignore_sequence_editlist set.
+    fn riv_heif_sequence_decoding_options_alloc() -> *mut HeifDecodingOptions;
 }
 
 /// The primary image's NCLX as an HDR encoding; None for SDR transfers or no colr box.
@@ -479,10 +501,7 @@ pub fn probe_heif_dimensions_and_storage(bytes: &[u8]) -> Option<(u32, u32, Pixe
 }
 
 /// Reads the buffer into the context and takes the primary image handle.
-fn heif_primary_handle(
-    context: *mut HeifContext,
-    bytes: &[u8],
-) -> Result<*mut HeifImageHandle, DecodeError> {
+fn read_heif_from_memory(context: *mut HeifContext, bytes: &[u8]) -> Result<(), DecodeError> {
     unsafe {
         heif_context_read_from_memory_without_copy(
             context,
@@ -491,7 +510,14 @@ fn heif_primary_handle(
             std::ptr::null(),
         )
     }
-    .into_result()?;
+    .into_result()
+}
+
+fn heif_primary_handle(
+    context: *mut HeifContext,
+    bytes: &[u8],
+) -> Result<*mut HeifImageHandle, DecodeError> {
+    read_heif_from_memory(context, bytes)?;
     let mut handle: *mut HeifImageHandle = std::ptr::null_mut();
     unsafe { heif_context_get_primary_image_handle(context, &raw mut handle) }.into_result()?;
     Ok(handle)
@@ -624,6 +650,205 @@ fn decode_heif_primary_image(
         gain_map: None,
         gain_map_plane: None,
     })
+}
+
+/// Composes only the first frame when maximum_frames is 1, for the animation two-stage path.
+pub fn decode_avif_animation(
+    bytes: &[u8],
+    format_name: &'static str,
+    maximum_frames: usize,
+) -> Result<DecodedImage, DecodeError> {
+    let context = unsafe { heif_context_alloc() };
+    if context.is_null() {
+        return Err(uncoded_error("HEIF context allocation failed"));
+    }
+    let decoded = decode_avif_sequence(context, bytes, format_name, maximum_frames);
+    unsafe { heif_context_free(context) };
+    decoded
+}
+
+/// The file's first visual track with its resolution; the caller releases the track.
+fn avif_sequence_track(
+    context: *mut HeifContext,
+    bytes: &[u8],
+) -> Result<(*mut HeifTrack, u32, u32), DecodeError> {
+    read_heif_from_memory(context, bytes)?;
+    let track = unsafe { heif_context_get_track(context, 0) };
+    if track.is_null() {
+        return Err(uncoded_error("AVIF has no image sequence track"));
+    }
+    let mut width: u16 = 0;
+    let mut height: u16 = 0;
+    unsafe { heif_track_get_image_resolution(track, &raw mut width, &raw mut height) }
+        .into_result()
+        .inspect_err(|_| {
+            unsafe { heif_track_release(track) };
+        })?;
+    Ok((track, u32::from(width), u32::from(height)))
+}
+
+fn decode_avif_sequence(
+    context: *mut HeifContext,
+    bytes: &[u8],
+    format_name: &'static str,
+    maximum_frames: usize,
+) -> Result<DecodedImage, DecodeError> {
+    let (track, canvas_width, canvas_height) = avif_sequence_track(context, bytes)?;
+    let options = unsafe { riv_heif_sequence_decoding_options_alloc() };
+    let decoded = if options.is_null() {
+        Err(uncoded_error("HEIF options allocation failed"))
+    } else {
+        compose_avif_frames(
+            track,
+            options,
+            canvas_width,
+            canvas_height,
+            format_name,
+            maximum_frames,
+        )
+    };
+    if !options.is_null() {
+        unsafe { heif_decoding_options_free(options) };
+    }
+    unsafe { heif_track_release(track) };
+    decoded
+}
+
+fn compose_avif_frames(
+    track: *mut HeifTrack,
+    options: *const HeifDecodingOptions,
+    canvas_width: u32,
+    canvas_height: u32,
+    format_name: &'static str,
+    maximum_frames: usize,
+) -> Result<DecodedImage, DecodeError> {
+    if canvas_width == 0 || canvas_height == 0 {
+        return Err(uncoded_error("AVIF canvas has no size"));
+    }
+    // Animations are never downscaled, so a frame past the texture limit cannot be shown.
+    if canvas_width.max(canvas_height) > crate::image::decode::MAXIMUM_TEXTURE_DIMENSION {
+        return Err(uncoded_error("AVIF sequence is too large to display"));
+    }
+    let Some(mut compositor) = FrameCompositor::new(canvas_width, canvas_height) else {
+        return Err(uncoded_error("AVIF canvas is too large to decode"));
+    };
+    let frame_bytes = canvas_width as usize * canvas_height as usize * 4;
+    let Some(mut frame_pixels) = try_zeroed_buffer(frame_bytes) else {
+        return Err(uncoded_error("AVIF is too large to fit in memory"));
+    };
+    let timescale = unsafe { heif_track_get_timescale(track) };
+    loop {
+        // The container declares no sample count, so the budget is checked per frame.
+        if !compositor.accepts_one_more() {
+            break;
+        }
+        let mut image: *mut HeifImage = std::ptr::null_mut();
+        let status = unsafe {
+            heif_track_decode_next_image(
+                track,
+                &raw mut image,
+                HEIF_COLORSPACE_RGB,
+                HEIF_CHROMA_INTERLEAVED_RGBA,
+                options,
+            )
+        };
+        if status.code == HEIF_ERROR_CODE_END_OF_SEQUENCE {
+            break;
+        }
+        status.into_result()?;
+        let copied = copy_sequence_frame(image, canvas_width, canvas_height, &mut frame_pixels);
+        let duration_ticks = unsafe { heif_image_get_duration(image) };
+        unsafe { heif_image_release(image) };
+        copied?;
+        compositor.add_frame(FrameRegion {
+            pixels: &frame_pixels,
+            left: 0,
+            top: 0,
+            width: canvas_width,
+            height: canvas_height,
+            // Sequence frames are whole canvases; there is nothing to blend or dispose.
+            blend: FrameBlend::Replace,
+            disposal: FrameDisposal::Keep,
+            delay_milliseconds: sequence_delay_milliseconds(duration_ticks, timescale),
+        });
+        if compositor.frames_so_far() >= maximum_frames {
+            break;
+        }
+    }
+    let (frames, frames_truncated) = compositor.finish();
+    if frames.is_empty() {
+        return Err(uncoded_error("AVIF sequence has no frames"));
+    }
+    Ok(DecodedImage {
+        width: canvas_width,
+        height: canvas_height,
+        pixel_width: canvas_width,
+        pixel_height: canvas_height,
+        format_name,
+        icc_profile: None,
+        exif: None,
+        storage: PixelStorage::Bgra8,
+        source_bits_per_channel: 8,
+        peak_luminance_nits: None,
+        source_primaries: None,
+        frames,
+        frames_truncated,
+        gain_map: None,
+        gain_map_plane: None,
+    })
+}
+
+/// Copies one decoded RGBA image into the premultiplied BGRA frame buffer.
+fn copy_sequence_frame(
+    image: *const HeifImage,
+    canvas_width: u32,
+    canvas_height: u32,
+    frame_pixels: &mut [u8],
+) -> Result<(), DecodeError> {
+    let width = unsafe { heif_image_get_width(image, HEIF_CHANNEL_INTERLEAVED) };
+    let height = unsafe { heif_image_get_height(image, HEIF_CHANNEL_INTERLEAVED) };
+    let mut stride: c_int = 0;
+    let plane =
+        unsafe { heif_image_get_plane_readonly(image, HEIF_CHANNEL_INTERLEAVED, &raw mut stride) };
+    let row_bytes = i64::from(canvas_width) * 4;
+    if plane.is_null()
+        || i64::from(width) != i64::from(canvas_width)
+        || i64::from(height) != i64::from(canvas_height)
+        || i64::from(stride) < row_bytes
+    {
+        return Err(uncoded_error("AVIF frame differs from its sequence header"));
+    }
+    let row_bytes = row_bytes as usize;
+    for (row, output_row) in frame_pixels.chunks_exact_mut(row_bytes).enumerate() {
+        let row_pixels =
+            unsafe { std::slice::from_raw_parts(plane.add(row * stride as usize), row_bytes) };
+        premultiplied_bgra_from_rgba(row_pixels, output_row);
+    }
+    Ok(())
+}
+
+/// Track clock ticks to a frame delay; zero or unusable timing falls back like WebP.
+fn sequence_delay_milliseconds(duration_ticks: u32, timescale: u32) -> u32 {
+    match (u64::from(duration_ticks) * 1000).checked_div(u64::from(timescale)) {
+        None | Some(0) => 100,
+        Some(milliseconds) => milliseconds.min(u64::from(u32::MAX)) as u32,
+    }
+}
+
+/// Container-parse-only geometry for the weight probe; samples are not counted, like GIF and WebP.
+pub fn probe_avif_sequence_dimensions(bytes: &[u8]) -> Option<(u32, u32)> {
+    let context = unsafe { heif_context_alloc() };
+    if context.is_null() {
+        return None;
+    }
+    let geometry = avif_sequence_track(context, bytes)
+        .ok()
+        .map(|(track, width, height)| {
+            unsafe { heif_track_release(track) };
+            (width, height)
+        });
+    unsafe { heif_context_free(context) };
+    geometry
 }
 
 #[cfg(test)]
@@ -857,5 +1082,70 @@ mod exr_robustness_tests {
         let file_bytes = std::fs::read("test/exr_bad_offset.exr").expect("fixture");
         // The subtraction bound check must catch it, not wrap and read before the buffer.
         assert!(decode_exr_bytes(&file_bytes, "EXR").is_err());
+    }
+}
+
+#[cfg(test)]
+mod avif_sequence_tests {
+    use super::*;
+
+    fn fixture_bytes() -> Vec<u8> {
+        std::fs::read("test/animated_avif.avif").expect("run test/make_animation_avif.py first")
+    }
+
+    /// The fixture is high-quality YUV, not lossless, so flat colors land within a few codes.
+    fn assert_pixel_near(actual: [u8; 4], expected: [u8; 4]) {
+        for (channel, (actual_code, expected_code)) in actual.iter().zip(expected).enumerate() {
+            assert!(
+                (i16::from(*actual_code) - i16::from(expected_code)).abs() <= 6,
+                "channel {channel}: {actual:?} vs {expected:?}"
+            );
+        }
+    }
+
+    /// The fixture marks infinite repetition, so finishing at all proves the editlist is ignored.
+    #[test]
+    #[ignore = "needs test/ fixtures"]
+    fn the_avif_fixture_decodes_frames_and_timing() {
+        let decoded = decode_avif_animation(&fixture_bytes(), "AVIF", usize::MAX)
+            .map_err(|error| error.message)
+            .expect("decodes");
+        assert_eq!((decoded.width, decoded.height), (64, 32));
+        assert_eq!(decoded.frames.len(), 4);
+        assert!(!decoded.frames_truncated);
+        assert!(
+            decoded
+                .frames
+                .iter()
+                .all(|frame| frame.delay_milliseconds == 100)
+        );
+        let pixel = |frame: usize| -> [u8; 4] {
+            decoded.frames[frame].pixels[..4].try_into().expect("pixel")
+        };
+        assert_pixel_near(pixel(0), [40, 40, 220, 255]); // opaque red, BGRA order
+        assert_pixel_near(pixel(1), [60, 180, 40, 255]);
+        // Blue at alpha 128 arrives premultiplied: channel x 128 / 255.
+        assert_pixel_near(pixel(2), [115, 45, 30, 128]);
+        assert_pixel_near(pixel(3), [255, 255, 255, 255]);
+    }
+
+    #[test]
+    #[ignore = "needs test/ fixtures"]
+    fn the_first_frame_stops_a_bounded_decode() {
+        let decoded = decode_avif_animation(&fixture_bytes(), "AVIF", 1)
+            .map_err(|error| error.message)
+            .expect("decodes");
+        assert_eq!(decoded.frames.len(), 1);
+        let pixel: [u8; 4] = decoded.frames[0].pixels[..4].try_into().expect("pixel");
+        assert_pixel_near(pixel, [40, 40, 220, 255]);
+    }
+
+    #[test]
+    #[ignore = "needs test/ fixtures"]
+    fn the_probe_reports_the_track_geometry() {
+        assert_eq!(
+            probe_avif_sequence_dimensions(&fixture_bytes()),
+            Some((64, 32))
+        );
     }
 }

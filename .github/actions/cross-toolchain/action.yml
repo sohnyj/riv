@@ -36,7 +36,7 @@ runs:
         wget -qO "$RUNNER_TEMP/llvm.sh" https://apt.llvm.org/llvm.sh
         sudo bash "$RUNNER_TEMP/llvm.sh" "$LLVM_VERSION"
         sudo apt-get install -y --no-install-recommends \
-          "clang-$LLVM_VERSION" "llvm-$LLVM_VERSION" "lld-$LLVM_VERSION" cmake ninja-build wine $PACKAGES
+          "clang-$LLVM_VERSION" "llvm-$LLVM_VERSION" "lld-$LLVM_VERSION" cmake ninja-build meson nasm wine $PACKAGES
         echo "/usr/lib/llvm-$LLVM_VERSION/bin" >> "$GITHUB_PATH"
 
     - name: Cache the xwin splat

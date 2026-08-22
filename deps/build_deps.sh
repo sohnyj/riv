@@ -19,6 +19,7 @@ SOURCES="\
 libwebp https://chromium.googlesource.com/webm/libwebp.git main
 libde265 https://github.com/strukturag/libde265.git master
 libheif https://github.com/strukturag/libheif.git master
+dav1d https://github.com/videolan/dav1d.git master
 imath https://github.com/AcademySoftwareFoundation/Imath.git main
 libdeflate https://github.com/ebiggers/libdeflate.git master
 openexr https://github.com/AcademySoftwareFoundation/openexr.git release"
@@ -107,7 +108,45 @@ configure_and_install libwebp \
         -DENABLE_AVX512=ON
 )
 
-# libheif (HEIF runtime fallback)
+# dav1d (AV1 for animated AVIF): generated cross file, since meson reads no environment.
+# The includes ride on the compiler entry; the ninja dep-prefix check compiles without c_args.
+XWIN_ROOT=${XWIN_ROOT:-$HOME/.xwin}
+cat > build/dav1d-cross.ini <<CROSS
+[binaries]
+c = ['clang-cl', '--target=x86_64-pc-windows-msvc', '-imsvc', '$XWIN_ROOT/crt/include', '-imsvc', '$XWIN_ROOT/sdk/include/ucrt', '-imsvc', '$XWIN_ROOT/sdk/include/um', '-imsvc', '$XWIN_ROOT/sdk/include/shared']
+ar = 'llvm-lib'
+c_ld = 'lld-link'
+nasm = 'nasm'
+
+[host_machine]
+system = 'windows'
+cpu_family = 'x86_64'
+cpu = 'x86_64'
+endian = 'little'
+
+[built-in options]
+c_args = ['/arch:AVX2', '/clang:-O3']
+c_link_args = ['/libpath:$XWIN_ROOT/crt/lib/x86_64', '/libpath:$XWIN_ROOT/sdk/lib/um/x86_64', '/libpath:$XWIN_ROOT/sdk/lib/ucrt/x86_64']
+CROSS
+# A changed cross file needs a fresh setup; the copy in the build directory tells re-runs apart.
+if ! cmp -s build/dav1d-cross.ini build/dav1d/cross.ini; then
+    rm -rf build/dav1d
+    meson setup build/dav1d sources/dav1d \
+        --cross-file build/dav1d-cross.ini \
+        --buildtype release \
+        --default-library static \
+        --prefix "$PREFIX" \
+        --libdir lib \
+        -Db_vscrt=mt \
+        -Denable_tools=false \
+        -Denable_tests=false
+    cp build/dav1d-cross.ini build/dav1d/cross.ini
+fi
+ninja -C build/dav1d install
+# build.rs links every *.lib in the prefix; meson names the static archive libdav1d.a.
+mv "$PREFIX/lib/libdav1d.a" "$PREFIX/lib/dav1d.lib"
+
+# libheif (HEIF runtime fallback + AVIF sequences on the dav1d above)
 (
     export CFLAGS="-DLIBDE265_STATIC_BUILD"
     export CXXFLAGS="-DLIBDE265_STATIC_BUILD"
@@ -116,7 +155,7 @@ configure_and_install libwebp \
         -DENABLE_PLUGIN_LOADING=OFF \
         -DWITH_AOM_DECODER=OFF \
         -DWITH_AOM_ENCODER=OFF \
-        -DWITH_DAV1D=OFF \
+        -DWITH_DAV1D=ON \
         -DWITH_EXAMPLES=OFF \
         -DWITH_GDK_PIXBUF=OFF \
         -DWITH_LIBDE265=ON \
@@ -150,7 +189,7 @@ configure_and_install libdeflate \
         -DOPENEXR_ENABLE_THREADING=ON
 )
 
-# EXR shim exposing the C++ RgbaInputFile through extern "C"
+# EXR and HEIF shims (shim/CMakeLists.txt)
 cmake -S shim -B build/shim -G Ninja \
     -DCMAKE_BUILD_TYPE=Release \
     -DCMAKE_C_FLAGS_RELEASE="/clang:-O3 /clang:-flto=thin /DNDEBUG" \
