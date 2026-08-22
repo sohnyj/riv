@@ -496,6 +496,23 @@ mod normalization_tests {
     }
 
     #[test]
+    fn default_tables_name_actions_in_the_table_order() {
+        // collect_bindings skips names from_name cannot resolve, so a typo here silently loses a default.
+        let action_names: Vec<&str> = crate::actions::Action::all_bindable()
+            .map(|action| action.name())
+            .collect();
+        for defaults in [DEFAULT_KEYBOARD, DEFAULT_MOUSE] {
+            let mut unmatched = action_names.iter();
+            for (name, _) in defaults {
+                assert!(
+                    unmatched.any(|action_name| action_name == name),
+                    "{name} is missing from the action table or out of its order"
+                );
+            }
+        }
+    }
+
+    #[test]
     fn a_hand_written_list_stops_at_the_maximum() {
         let overrides = serde_json::json!({
             "nextfile": ["Right", "Ctrl+A", "Ctrl+B", "Ctrl+C"],
