@@ -262,9 +262,6 @@ impl<'a> MenuBuilder<'a> {
             self.requirement_satisfied(Action::Playlist.requirement()),
         )?;
         self.append_action(menu, Action::Loop)?;
-        self.append_separator(menu)?;
-        self.append_action(menu, Action::PreviousFile)?;
-        self.append_action(menu, Action::NextFile)?;
         let playback = self.create_menu()?;
         let pause_label = if self.state.animation_paused {
             "Resume"
@@ -692,9 +689,6 @@ mod menu_structure_tests {
             "", // separator
             "Playlist",
             "Loop",
-            "", // separator
-            "Previous",
-            "Next",
             "Playback",
             "", // separator
             "Show file info",
