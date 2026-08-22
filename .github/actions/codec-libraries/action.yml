@@ -37,7 +37,7 @@ runs:
       uses: actions/cache/restore@v6
       with:
         path: deps/prefix
-        key: codec-libraries-llvm${{ inputs.llvm-version }}-xwin${{ inputs.xwin-version }}-${{ steps.sources.outputs.hash }}-${{ hashFiles('deps/build_deps.sh', 'deps/toolchain-clang-cl.cmake', 'deps/shim/**') }}
+        key: codec-libraries-llvm${{ inputs.llvm-version }}-xwin${{ inputs.xwin-version }}-${{ steps.sources.outputs.hash }}-${{ hashFiles('deps/build_deps.sh', 'deps/toolchain-clang-cl.cmake', 'deps/cross-clang-cl.ini', 'deps/shim/**') }}
 
     # The sources already sit at the revisions the key names, so this does not sync again.
     # success() is stated because a composite action drops the implicit one.

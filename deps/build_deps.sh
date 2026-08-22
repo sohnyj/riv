@@ -108,38 +108,26 @@ configure_and_install libwebp \
         -DENABLE_AVX512=ON
 )
 
-# dav1d (AV1 for animated AVIF): meson reads no environment, and its ninja dep-prefix check needs the includes on the compiler entry.
+# dav1d (AV1 for animated AVIF)
 XWIN_ROOT=${XWIN_ROOT:-$HOME/.xwin}
-cat > build/dav1d-cross.ini <<CROSS
-[binaries]
-c = ['clang-cl', '--target=x86_64-pc-windows-msvc', '-imsvc', '$XWIN_ROOT/crt/include', '-imsvc', '$XWIN_ROOT/sdk/include/ucrt', '-imsvc', '$XWIN_ROOT/sdk/include/um', '-imsvc', '$XWIN_ROOT/sdk/include/shared']
-ar = 'llvm-lib'
-c_ld = 'lld-link'
-nasm = 'nasm'
-
-[host_machine]
-system = 'windows'
-cpu_family = 'x86_64'
-cpu = 'x86_64'
-endian = 'little'
-
-[built-in options]
-c_args = ['/arch:AVX2', '/clang:-O3']
-c_link_args = ['/libpath:$XWIN_ROOT/crt/lib/x86_64', '/libpath:$XWIN_ROOT/sdk/lib/um/x86_64', '/libpath:$XWIN_ROOT/sdk/lib/ucrt/x86_64']
-CROSS
-# A changed cross file needs a fresh setup; the copy in the build directory tells re-runs apart.
-if ! cmp -s build/dav1d-cross.ini build/dav1d/cross.ini; then
+sed "s|@XWIN_ROOT@|$XWIN_ROOT|g" cross-clang-cl.ini > build/dav1d-cross.ini
+DAV1D_SETUP="--cross-file build/dav1d-cross.ini \
+    --buildtype release \
+    --default-library static \
+    --prefix $PREFIX \
+    --libdir lib \
+    -Db_vscrt=mt \
+    -Db_lto=true \
+    -Db_lto_mode=thin \
+    -Denable_tools=false \
+    -Denable_tests=false \
+    -Dxxhash_muxer=disabled"
+# Meson applies neither new options nor a changed cross file to an existing setup.
+{ echo "$DAV1D_SETUP"; cat build/dav1d-cross.ini; } > build/dav1d-setup.txt
+if ! cmp -s build/dav1d-setup.txt build/dav1d/setup.txt; then
     rm -rf build/dav1d
-    meson setup build/dav1d sources/dav1d \
-        --cross-file build/dav1d-cross.ini \
-        --buildtype release \
-        --default-library static \
-        --prefix "$PREFIX" \
-        --libdir lib \
-        -Db_vscrt=mt \
-        -Denable_tools=false \
-        -Denable_tests=false
-    cp build/dav1d-cross.ini build/dav1d/cross.ini
+    meson setup build/dav1d sources/dav1d $DAV1D_SETUP
+    cp build/dav1d-setup.txt build/dav1d/setup.txt
 fi
 ninja -C build/dav1d install
 
