@@ -725,10 +725,6 @@ fn compose_avif_frames(
     if canvas_width == 0 || canvas_height == 0 {
         return Err(uncoded_error("AVIF canvas has no size"));
     }
-    // Animations are never downscaled, so a frame past the texture limit cannot be shown.
-    if canvas_width.max(canvas_height) > crate::image::decode::MAXIMUM_TEXTURE_DIMENSION {
-        return Err(uncoded_error("AVIF sequence is too large to display"));
-    }
     let Some(mut compositor) = FrameCompositor::new(canvas_width, canvas_height) else {
         return Err(uncoded_error("AVIF canvas is too large to decode"));
     };

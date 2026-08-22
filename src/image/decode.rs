@@ -233,10 +233,16 @@ enum FrameSemantics {
 }
 
 /// The D3D11 texture cap, the same from FL 11_0 through 12_x; larger sources are downscaled before upload.
-pub(crate) const MAXIMUM_TEXTURE_DIMENSION: u32 = 16384;
+const MAXIMUM_TEXTURE_DIMENSION: u32 = 16384;
 
 /// Cap on an animation's expanded frames; past it only the first frame is kept.
 const MAXIMUM_ANIMATION_FRAMES_BYTES: u64 = 1 << 30;
+
+// Shrinking the budget below one full-size canvas would need a per-canvas check in FrameCompositor::new.
+const _: () = assert!(
+    MAXIMUM_TEXTURE_DIMENSION as u64 * MAXIMUM_TEXTURE_DIMENSION as u64 * 4
+        <= MAXIMUM_ANIMATION_FRAMES_BYTES
+);
 
 /// Whether `frame_count` canvas-sized frames would expand past the byte limit.
 pub(crate) fn animation_budget_exceeded(frame_count: u64, canvas_bytes: u64) -> bool {
@@ -287,13 +293,13 @@ pub struct FrameCompositor {
 }
 
 impl FrameCompositor {
-    /// None when the canvas alone exceeds the frame budget or cannot be reserved.
+    /// None past the texture limit, or when the canvas cannot be reserved.
     pub fn new(width: u32, height: u32) -> Option<Self> {
-        let bytes = (width as usize)
-            .checked_mul(height as usize)?
-            .checked_mul(4)
-            .filter(|bytes| !animation_budget_exceeded(1, *bytes as u64))?;
-        let canvas = try_zeroed_buffer(bytes)?;
+        // Animations are never downscaled, so a canvas past the texture limit cannot be shown.
+        if width.max(height) > MAXIMUM_TEXTURE_DIMENSION {
+            return None;
+        }
+        let canvas = try_zeroed_buffer(width as usize * height as usize * 4)?;
         Some(Self {
             canvas,
             width,
@@ -991,9 +997,7 @@ pub fn decode_animation_first_frame(
             descriptor.name,
             1,
         )
-        .and_then(|decoded| enforce_device_limit(decoded, cancellation))
         .ok(),
-        // The sequence decoder refuses frames past the texture limit, so no downscale step.
         Adapter::AvifAnimation => crate::image::fallback::decode_avif_animation(
             &input.read_all().ok()?,
             descriptor.name,
@@ -2966,8 +2970,10 @@ mod compositor_tests {
     }
 
     #[test]
-    fn a_canvas_over_the_budget_is_refused() {
-        assert!(FrameCompositor::new(65535, 65535).is_none());
+    fn a_canvas_past_the_texture_limit_is_refused() {
+        assert!(FrameCompositor::new(MAXIMUM_TEXTURE_DIMENSION + 1, 1).is_none());
+        assert!(FrameCompositor::new(1, MAXIMUM_TEXTURE_DIMENSION + 1).is_none());
+        assert!(FrameCompositor::new(MAXIMUM_TEXTURE_DIMENSION, 1).is_some());
     }
 
     /// The disposal fixture's four frames: keep, background, previous, then an empty one.
