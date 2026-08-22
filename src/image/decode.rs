@@ -740,7 +740,7 @@ fn descriptor_for_path(path: &Path) -> Option<&'static FormatDescriptor> {
     let by_extension = crate::text::lowercase_extension(path)
         .and_then(|extension| descriptor_for_extension(&extension));
     if let Some(descriptor) = by_extension {
-        // The header is read only for descriptors a refinement can reclassify.
+        // Reading the header costs a file read, so only descriptors with a refinement pay it.
         if descriptor.content_refinement.is_none() {
             return Some(descriptor);
         }

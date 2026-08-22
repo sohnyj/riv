@@ -752,7 +752,12 @@ fn compose_avif_frames(
             break;
         }
         status.into_result()?;
-        let copied = copy_sequence_frame(image, canvas_width, canvas_height, &mut frame_pixels);
+        let copied = premultiplied_bgra_from_sequence_image(
+            image,
+            canvas_width,
+            canvas_height,
+            &mut frame_pixels,
+        );
         let duration_ticks = unsafe { heif_image_get_duration(image) };
         unsafe { heif_image_release(image) };
         copied?;
@@ -794,8 +799,7 @@ fn compose_avif_frames(
     })
 }
 
-/// Copies one decoded RGBA image into the premultiplied BGRA frame buffer.
-fn copy_sequence_frame(
+fn premultiplied_bgra_from_sequence_image(
     image: *const HeifImage,
     canvas_width: u32,
     canvas_height: u32,
@@ -823,7 +827,7 @@ fn copy_sequence_frame(
     Ok(())
 }
 
-/// Track clock ticks to a frame delay; zero or unusable timing falls back like WebP.
+/// Zero or unusable timing falls back to WebP's 100 ms.
 fn sequence_delay_milliseconds(duration_ticks: u32, timescale: u32) -> u32 {
     match (u64::from(duration_ticks) * 1000).checked_div(u64::from(timescale)) {
         None | Some(0) => 100,
@@ -831,7 +835,7 @@ fn sequence_delay_milliseconds(duration_ticks: u32, timescale: u32) -> u32 {
     }
 }
 
-/// Container-parse-only geometry for the weight probe; samples are not counted, like GIF and WebP.
+/// Parse-only, for the weight probe; no frame is decoded.
 pub fn probe_avif_sequence_dimensions(bytes: &[u8]) -> Option<(u32, u32)> {
     let context = unsafe { heif_context_alloc() };
     if context.is_null() {

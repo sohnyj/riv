@@ -108,8 +108,7 @@ configure_and_install libwebp \
         -DENABLE_AVX512=ON
 )
 
-# dav1d (AV1 for animated AVIF): generated cross file, since meson reads no environment.
-# The includes ride on the compiler entry; the ninja dep-prefix check compiles without c_args.
+# dav1d (AV1 for animated AVIF): meson reads no environment, and its ninja dep-prefix check needs the includes on the compiler entry.
 XWIN_ROOT=${XWIN_ROOT:-$HOME/.xwin}
 cat > build/dav1d-cross.ini <<CROSS
 [binaries]
@@ -190,7 +189,7 @@ configure_and_install libdeflate \
         -DOPENEXR_ENABLE_THREADING=ON
 )
 
-# EXR and HEIF shims (shim/CMakeLists.txt)
+# EXR and HEIF shims
 cmake -S shim -B build/shim -G Ninja \
     -DCMAKE_BUILD_TYPE=Release \
     -DCMAKE_C_FLAGS_RELEASE="/clang:-O3 /clang:-flto=thin /DNDEBUG" \
