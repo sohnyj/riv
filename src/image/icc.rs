@@ -255,7 +255,7 @@ pub fn profile_description(icc: &[u8]) -> Option<String> {
                 .as_chunks::<2>()
                 .0
                 .iter()
-                .map(|pair| u16::from_be_bytes([pair[0], pair[1]]));
+                .map(|pair| u16::from_be_bytes(*pair));
             char::decode_utf16(units)
                 .collect::<Result<String, _>>()
                 .ok()?

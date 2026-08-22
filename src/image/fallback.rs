@@ -651,7 +651,7 @@ mod heif_range_tests {
             .iter()
             .zip(output.as_chunks_mut::<2>().0)
         {
-            let value = table[usize::from(u16::from_le_bytes([code[0], code[1]]))];
+            let value = table[usize::from(u16::from_le_bytes(*code))];
             expanded.copy_from_slice(&value.to_le_bytes());
         }
     }
@@ -745,8 +745,8 @@ mod heif_range_tests {
                     .iter()
                     .zip(fused.as_chunks::<2>().0)
                 {
-                    let left = u16::from_le_bytes([left[0], left[1]]);
-                    let right = u16::from_le_bytes([right[0], right[1]]);
+                    let left = u16::from_le_bytes(*left);
+                    let right = u16::from_le_bytes(*right);
                     if left != right {
                         differing += 1;
                         widest_gap = widest_gap.max(left.abs_diff(right));
