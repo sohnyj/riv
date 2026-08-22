@@ -305,18 +305,11 @@ pub fn resolved_keyboard_sequences(
 
 pub fn menu_shortcut_text(
     keyboard_overrides: Option<&Map<String, Value>>,
-    mouse_overrides: Option<&Map<String, Value>>,
     action_name: &str,
 ) -> Option<String> {
-    let keyboard_sequences = resolved_keyboard_sequences(keyboard_overrides, action_name);
-    let mouse_encodings = resolved_mouse_encodings(mouse_overrides, action_name);
-    let parts: Vec<&str> = keyboard_sequences
-        .first()
+    resolved_keyboard_sequences(keyboard_overrides, action_name)
         .into_iter()
-        .chain(mouse_encodings.first())
-        .map(String::as_str)
-        .collect();
-    (!parts.is_empty()).then(|| parts.join(", "))
+        .next()
 }
 
 pub fn resolved_mouse_encodings(

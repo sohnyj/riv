@@ -1955,7 +1955,6 @@ fn show_menu(application: &mut Application, window: HWND, x: i32, y: i32, target
             .filter_map(|action| {
                 bindings::menu_shortcut_text(
                     application.settings.keyboard_bindings(),
-                    application.settings.mouse_bindings(),
                     action.name(),
                 )
                 .map(|text| (action.name(), text))
