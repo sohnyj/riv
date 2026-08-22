@@ -131,8 +131,12 @@ fn main() {
         .flatten()
     {
         let file_name = entry.file_name();
-        if let Some(library_name) = file_name.to_string_lossy().strip_suffix(".lib") {
+        let file_name = file_name.to_string_lossy();
+        if let Some(library_name) = file_name.strip_suffix(".lib") {
             println!("cargo:rustc-link-lib=static={library_name}");
+        } else if file_name.starts_with("lib") && file_name.ends_with(".a") {
+            // Meson archives keep their Unix name; verbatim hands lld-link the literal file.
+            println!("cargo:rustc-link-lib=static:+verbatim={file_name}");
         }
     }
     // Static MSVC C++ runtime for the C++ codecs (libheif, OpenEXR).

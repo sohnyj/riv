@@ -143,15 +143,16 @@ if ! cmp -s build/dav1d-cross.ini build/dav1d/cross.ini; then
     cp build/dav1d-cross.ini build/dav1d/cross.ini
 fi
 ninja -C build/dav1d install
-# build.rs links every *.lib in the prefix; meson names the static archive libdav1d.a.
-mv "$PREFIX/lib/libdav1d.a" "$PREFIX/lib/dav1d.lib"
 
 # libheif (HEIF runtime fallback + AVIF sequences on the dav1d above)
 (
     export CFLAGS="-DLIBDE265_STATIC_BUILD"
     export CXXFLAGS="-DLIBDE265_STATIC_BUILD"
+    # find_library looks for *.lib only, so the meson archive is pinned directly.
     configure_and_install libheif \
         -DBUILD_TESTING=OFF \
+        -DDAV1D_INCLUDE_DIR="$PREFIX/include" \
+        -DDAV1D_LIBRARY="$PREFIX/lib/libdav1d.a" \
         -DENABLE_PLUGIN_LOADING=OFF \
         -DWITH_AOM_DECODER=OFF \
         -DWITH_AOM_ENCODER=OFF \
