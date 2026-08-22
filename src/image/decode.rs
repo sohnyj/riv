@@ -397,7 +397,11 @@ pub struct FormatDescriptor {
     store_codec_names: &'static [&'static str],
     /// The container can carry an Ultra HDR gain map worth probing for.
     carries_gain_map: bool,
+    /// Header probe that can reclassify this descriptor; None skips the header read.
+    content_refinement: Option<ContentRefinement>,
 }
+
+type ContentRefinement = fn(&'static FormatDescriptor, &[u8]) -> &'static FormatDescriptor;
 
 /// Extensions, file filters, and association groups all derive from this registry.
 static REGISTRY: &[FormatDescriptor] = &[
@@ -409,6 +413,7 @@ static REGISTRY: &[FormatDescriptor] = &[
         adapter: Adapter::Wic,
         store_codec_names: &[],
         carries_gain_map: false,
+        content_refinement: Some(png_refinement),
     },
     FormatDescriptor {
         name: "APNG",
@@ -418,6 +423,7 @@ static REGISTRY: &[FormatDescriptor] = &[
         adapter: Adapter::Apng,
         store_codec_names: &[],
         carries_gain_map: false,
+        content_refinement: None,
     },
     FormatDescriptor {
         name: "SVG",
@@ -427,6 +433,7 @@ static REGISTRY: &[FormatDescriptor] = &[
         adapter: Adapter::Svg,
         store_codec_names: &[],
         carries_gain_map: false,
+        content_refinement: None,
     },
     FormatDescriptor {
         name: "JPEG",
@@ -436,6 +443,7 @@ static REGISTRY: &[FormatDescriptor] = &[
         adapter: Adapter::Wic,
         store_codec_names: &[],
         carries_gain_map: true,
+        content_refinement: None,
     },
     FormatDescriptor {
         name: "GIF",
@@ -445,6 +453,7 @@ static REGISTRY: &[FormatDescriptor] = &[
         adapter: Adapter::Wic,
         store_codec_names: &[],
         carries_gain_map: false,
+        content_refinement: None,
     },
     FormatDescriptor {
         name: "WebP",
@@ -454,6 +463,7 @@ static REGISTRY: &[FormatDescriptor] = &[
         adapter: Adapter::Wic,
         store_codec_names: &["WebP Image Extensions"],
         carries_gain_map: false,
+        content_refinement: Some(webp_refinement),
     },
     FormatDescriptor {
         name: "BMP",
@@ -464,6 +474,7 @@ static REGISTRY: &[FormatDescriptor] = &[
         adapter: Adapter::Wic,
         store_codec_names: &[],
         carries_gain_map: false,
+        content_refinement: None,
     },
     FormatDescriptor {
         name: "ICO",
@@ -473,6 +484,7 @@ static REGISTRY: &[FormatDescriptor] = &[
         adapter: Adapter::Wic,
         store_codec_names: &[],
         carries_gain_map: false,
+        content_refinement: None,
     },
     FormatDescriptor {
         name: "TIFF",
@@ -482,6 +494,7 @@ static REGISTRY: &[FormatDescriptor] = &[
         adapter: Adapter::Wic,
         store_codec_names: &[],
         carries_gain_map: false,
+        content_refinement: None,
     },
     FormatDescriptor {
         name: "DDS",
@@ -491,6 +504,7 @@ static REGISTRY: &[FormatDescriptor] = &[
         adapter: Adapter::Wic,
         store_codec_names: &[],
         carries_gain_map: false,
+        content_refinement: None,
     },
     FormatDescriptor {
         name: "HEIF",
@@ -506,6 +520,7 @@ static REGISTRY: &[FormatDescriptor] = &[
         adapter: Adapter::HeifWithWicPreferred,
         store_codec_names: &[],
         carries_gain_map: false,
+        content_refinement: Some(ftyp_refinement),
     },
     FormatDescriptor {
         name: "EXR",
@@ -515,6 +530,7 @@ static REGISTRY: &[FormatDescriptor] = &[
         adapter: Adapter::Exr,
         store_codec_names: &[],
         carries_gain_map: false,
+        content_refinement: None,
     },
     FormatDescriptor {
         name: "AVIF",
@@ -524,6 +540,7 @@ static REGISTRY: &[FormatDescriptor] = &[
         adapter: Adapter::Wic,
         store_codec_names: &["HEIF Image Extension", "AV1 Video Extension"],
         carries_gain_map: false,
+        content_refinement: Some(ftyp_refinement),
     },
     FormatDescriptor {
         name: "JPEG XL",
@@ -536,6 +553,7 @@ static REGISTRY: &[FormatDescriptor] = &[
         adapter: Adapter::Wic,
         store_codec_names: &["JPEG XL Image Extension"],
         carries_gain_map: false,
+        content_refinement: None,
     },
     FormatDescriptor {
         name: "JPEG XR",
@@ -545,6 +563,7 @@ static REGISTRY: &[FormatDescriptor] = &[
         adapter: Adapter::WicSubresolutionTwoStage,
         store_codec_names: &[],
         carries_gain_map: false,
+        content_refinement: None,
     },
     FormatDescriptor {
         name: "RAW",
@@ -557,6 +576,7 @@ static REGISTRY: &[FormatDescriptor] = &[
         adapter: Adapter::WicRawTwoStage,
         store_codec_names: &["Raw Image Extension"],
         carries_gain_map: false,
+        content_refinement: None,
     },
 ];
 
@@ -612,6 +632,7 @@ static ANIMATED_WEBP: FormatDescriptor = FormatDescriptor {
     adapter: Adapter::WebPAnimation,
     store_codec_names: &[],
     carries_gain_map: false,
+    content_refinement: None,
 };
 
 static ANIMATED_AVIF: FormatDescriptor = FormatDescriptor {
@@ -622,28 +643,48 @@ static ANIMATED_AVIF: FormatDescriptor = FormatDescriptor {
     adapter: Adapter::AvifAnimation,
     store_codec_names: &[],
     carries_gain_map: false,
+    content_refinement: None,
 };
 
-/// The names refine_by_content can reclassify; keep the two in step.
-fn refines_by_content(descriptor: &FormatDescriptor) -> bool {
-    matches!(descriptor.name, "PNG" | "WebP" | "HEIF" | "AVIF")
-}
-
-/// PNG + acTL = APNG; WebP + VP8X ANIM flag = animated WebP; HEIF + avif/avis brand = AVIF still/sequence.
 fn refine_by_content(
     descriptor: &'static FormatDescriptor,
     header: &[u8],
 ) -> &'static FormatDescriptor {
-    if descriptor.name == "PNG" && png_has_animation_control(header) {
+    match descriptor.content_refinement {
+        Some(refinement) => refinement(descriptor, header),
+        None => descriptor,
+    }
+}
+
+fn png_refinement(
+    descriptor: &'static FormatDescriptor,
+    header: &[u8],
+) -> &'static FormatDescriptor {
+    if png_has_animation_control(header) {
         return descriptor_for_extension("apng").unwrap_or(descriptor);
     }
-    if descriptor.name == "WebP" && webp_has_animation_flag(header) {
+    descriptor
+}
+
+fn webp_refinement(
+    descriptor: &'static FormatDescriptor,
+    header: &[u8],
+) -> &'static FormatDescriptor {
+    if webp_has_animation_flag(header) {
         return &ANIMATED_WEBP;
     }
-    if matches!(descriptor.name, "HEIF" | "AVIF") && ftyp_has_brand(header, b"avis") {
+    descriptor
+}
+
+fn ftyp_refinement(
+    descriptor: &'static FormatDescriptor,
+    header: &[u8],
+) -> &'static FormatDescriptor {
+    // avis outranks avif: sequence files usually carry both brands.
+    if ftyp_has_brand(header, b"avis") {
         return &ANIMATED_AVIF;
     }
-    if descriptor.name == "HEIF" && ftyp_has_brand(header, b"avif") {
+    if ftyp_has_brand(header, b"avif") {
         return descriptor_for_extension("avif").unwrap_or(descriptor);
     }
     descriptor
@@ -693,8 +734,8 @@ fn descriptor_for_path(path: &Path) -> Option<&'static FormatDescriptor> {
     let by_extension = crate::text::lowercase_extension(path)
         .and_then(|extension| descriptor_for_extension(&extension));
     if let Some(descriptor) = by_extension {
-        // The header is read only for the names it can reclassify.
-        if !refines_by_content(descriptor) {
+        // The header is read only for descriptors a refinement can reclassify.
+        if descriptor.content_refinement.is_none() {
             return Some(descriptor);
         }
         return Some(match read_header(path) {
