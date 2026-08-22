@@ -325,13 +325,13 @@ impl<'a> MenuBuilder<'a> {
         self.append_submenu(menu, tools, "Tools", true)?;
 
         let window = self.create_menu()?;
-        self.append_action(window, Action::AlwaysOnTop)?;
         let fullscreen_label = if self.state.fullscreen {
             "Exit fullscreen"
         } else {
             "Enter fullscreen"
         };
         self.append_action_labeled(window, Action::Fullscreen, fullscreen_label)?;
+        self.append_action(window, Action::AlwaysOnTop)?;
         self.append_submenu(menu, window, "Window", true)?;
         self.append_separator(menu)?;
         self.append_action(menu, Action::Exit)?;
@@ -709,8 +709,8 @@ mod menu_structure_tests {
         let mut builder = MenuBuilder::new(&state);
         let menu = builder.build().expect("menu builds");
         let window = submenu_by_label(menu, "Window");
-        assert_eq!(bare_label(window, 0), "Always on top");
-        assert_eq!(bare_label(window, 1), "Enter fullscreen");
+        assert_eq!(bare_label(window, 0), "Enter fullscreen");
+        assert_eq!(bare_label(window, 1), "Always on top");
         let tools = submenu_by_label(menu, "Tools");
         let tools_labels: Vec<String> = (0..unsafe { GetMenuItemCount(Some(tools)) })
             .map(|position| bare_label(tools, position as u32))

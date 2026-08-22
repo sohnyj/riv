@@ -178,8 +178,8 @@ const DEFAULT_KEYBOARD: &[(&str, &[&str])] = &[
     ("deletepermanently", &["Shift+Delete", "Ctrl+Shift+D"]),
     ("toggleslideshow", &["S"]),
     ("settings", &["Ctrl+,"]),
-    ("alwaysontop", &["T"]),
     ("fullscreen", &["F", "F11"]),
+    ("alwaysontop", &["T"]),
     ("exit", &["Ctrl+W"]),
 ];
 

@@ -91,8 +91,8 @@ pub enum Action {
     DeletePermanently,
     ToggleSlideshow,
     Settings,
-    AlwaysOnTop,
     Fullscreen,
+    AlwaysOnTop,
     Exit,
 }
 
@@ -302,15 +302,15 @@ const ACTION_TABLE: &[(Action, &str, &str, ActionRequirement)] = &[
         ActionRequirement::Window,
     ),
     (
-        Action::AlwaysOnTop,
-        "alwaysontop",
-        "Always on top",
-        ActionRequirement::Window,
-    ),
-    (
         Action::Fullscreen,
         "fullscreen",
         "Toggle fullscreen",
+        ActionRequirement::Window,
+    ),
+    (
+        Action::AlwaysOnTop,
+        "alwaysontop",
+        "Always on top",
         ActionRequirement::Window,
     ),
     (Action::Exit, "exit", "Exit", ActionRequirement::Window),
