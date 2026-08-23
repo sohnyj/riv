@@ -238,6 +238,9 @@ const MAXIMUM_TEXTURE_DIMENSION: u32 = 16384;
 /// Cap on an animation's expanded frames; past it only the first frame is kept.
 pub const MAXIMUM_ANIMATION_FRAMES_BYTES: u64 = 1 << 30;
 
+/// Frame delay when the container declares none or an unusable one.
+pub const DEFAULT_FRAME_DELAY_MILLISECONDS: u32 = 100;
+
 // Shrinking the budget below one full-size canvas would need a per-canvas check in FrameCompositor::new.
 const _: () = assert!(
     MAXIMUM_TEXTURE_DIMENSION as u64 * MAXIMUM_TEXTURE_DIMENSION as u64 * 4
@@ -2149,7 +2152,7 @@ fn frame_metadata(frame: &IWICBitmapFrameDecode) -> FrameMetadata {
     let delay_milliseconds = query(w!("/grctlext/Delay"))
         .map(|centiseconds| centiseconds * 10)
         .filter(|milliseconds| *milliseconds >= 20)
-        .unwrap_or(100);
+        .unwrap_or(DEFAULT_FRAME_DELAY_MILLISECONDS);
     FrameMetadata {
         left: query(w!("/imgdesc/Left")).unwrap_or(0),
         top: query(w!("/imgdesc/Top")).unwrap_or(0),

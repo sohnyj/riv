@@ -7,9 +7,9 @@ use std::sync::Arc;
 use windows::core::HSTRING;
 
 use crate::image::decode::{
-    DecodeError, DecodedImage, Frame, FrameBlend, FrameCompositor, FrameDisposal, FrameRegion,
-    HdrEncoding, PixelStorage, cicp_hdr_encoding, linearize_hdr_pixels,
-    peak_luminance_from_half_pixels, peak_luminance_with_maximum_bits,
+    DEFAULT_FRAME_DELAY_MILLISECONDS, DecodeError, DecodedImage, Frame, FrameBlend,
+    FrameCompositor, FrameDisposal, FrameRegion, HdrEncoding, PixelStorage, cicp_hdr_encoding,
+    linearize_hdr_pixels, peak_luminance_from_half_pixels, peak_luminance_with_maximum_bits,
     premultiplied_bgra_from_rgba, try_zeroed_buffer, uncoded_error,
 };
 
@@ -169,7 +169,7 @@ fn compose_webp_frames(
             delay_milliseconds: if duration_milliseconds > 0 {
                 duration_milliseconds as u32
             } else {
-                100
+                DEFAULT_FRAME_DELAY_MILLISECONDS
             },
         });
         if compositor.frames_so_far() >= maximum_frames
@@ -836,10 +836,9 @@ fn premultiplied_bgra_from_sequence_image(
     Ok(())
 }
 
-/// Zero or unusable timing falls back to WebP's 100 ms.
 fn sequence_delay_milliseconds(duration_ticks: u32, timescale: u32) -> u32 {
     match (u64::from(duration_ticks) * 1000).checked_div(u64::from(timescale)) {
-        None | Some(0) => 100,
+        None | Some(0) => DEFAULT_FRAME_DELAY_MILLISECONDS,
         Some(milliseconds) => milliseconds.min(u64::from(u32::MAX)) as u32,
     }
 }
