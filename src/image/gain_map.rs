@@ -46,8 +46,8 @@ pub struct GainMapPlane {
 
 impl GainMapPlane {
     /// The spec keeps the gain map at or below the base size; anything larger is corrupt.
-    pub fn fits_within(&self, base_width: u32, base_height: u32) -> bool {
-        self.width > 0 && self.height > 0 && self.width <= base_width && self.height <= base_height
+    pub fn size_fits_within(width: u32, height: u32, base_width: u32, base_height: u32) -> bool {
+        width > 0 && height > 0 && width <= base_width && height <= base_height
     }
 }
 

@@ -8,7 +8,7 @@ use std::sync::atomic::{AtomicBool, AtomicU32, Ordering};
 use std::sync::{Arc, OnceLock};
 
 use windows::Win32::Foundation::{
-    E_ABORT, E_OUTOFMEMORY, GENERIC_READ, WINCODEC_ERR_COMPONENTINITIALIZEFAILURE,
+    E_ABORT, E_FAIL, E_OUTOFMEMORY, GENERIC_READ, WINCODEC_ERR_COMPONENTINITIALIZEFAILURE,
     WINCODEC_ERR_COMPONENTNOTFOUND,
 };
 use windows::Win32::Graphics::Direct3D11::{
@@ -859,15 +859,20 @@ fn find_and_decode_gain_map(
     }
     let bytes = input.read_all().ok()?;
     let found = crate::image::gain_map::find_ultra_hdr(&bytes)?;
-    let plane = decode_gain_map_plane(bytes.get(found.gain_map_range.clone())?, cancellation)?;
-    plane
-        .fits_within(base_width, base_height)
-        .then_some((found.metadata, plane))
+    let plane = decode_gain_map_plane(
+        bytes.get(found.gain_map_range.clone())?,
+        base_width,
+        base_height,
+        cancellation,
+    )?;
+    Some((found.metadata, plane))
 }
 
 /// Decodes the gain map JPEG to BGRA, the storage every base frame already uses.
 fn decode_gain_map_plane(
     gain_map_bytes: &[u8],
+    base_width: u32,
+    base_height: u32,
     cancellation: &AtomicBool,
 ) -> Option<crate::image::gain_map::GainMapPlane> {
     with_wic_factory(|factory| {
@@ -881,6 +886,15 @@ fn decode_gain_map_plane(
         let frame = unsafe { decoder.GetFrame(0)? };
         let source = convert_to_pbgra(factory, &frame.cast()?)?;
         let (width, height) = source_size(&source)?;
+        // Refused before the copy below allocates the stated size.
+        if !crate::image::gain_map::GainMapPlane::size_fits_within(
+            width,
+            height,
+            base_width,
+            base_height,
+        ) {
+            return Err(E_FAIL.into());
+        }
         let pixels = copy_pixels(&source, width, height, 4, cancellation)?;
         Ok(crate::image::gain_map::GainMapPlane {
             width,
@@ -3728,6 +3742,36 @@ mod gain_map_decode_tests {
         let _ = unsafe { CoInitializeEx(None, COINIT_MULTITHREADED) };
     }
 
+    /// A minimal 24-bit BMP; WIC reports the declared header size before reading pixels.
+    fn bmp_with_declared_size(width: i32, height: i32, pixels: &[u8]) -> Vec<u8> {
+        let mut bytes = Vec::new();
+        bytes.extend_from_slice(b"BM");
+        bytes.extend_from_slice(&(54 + pixels.len() as u32).to_le_bytes());
+        bytes.extend_from_slice(&[0; 4]);
+        bytes.extend_from_slice(&54u32.to_le_bytes());
+        bytes.extend_from_slice(&40u32.to_le_bytes());
+        bytes.extend_from_slice(&width.to_le_bytes());
+        bytes.extend_from_slice(&height.to_le_bytes());
+        bytes.extend_from_slice(&1u16.to_le_bytes());
+        bytes.extend_from_slice(&24u16.to_le_bytes());
+        bytes.extend_from_slice(&[0; 24]);
+        bytes.extend_from_slice(pixels);
+        bytes
+    }
+
+    #[test]
+    fn an_oversized_plane_is_refused_before_its_pixels_are_copied() {
+        initialize_com();
+        let cancellation = AtomicBool::new(false);
+        // Control: the same construction decodes when the plane fits the base.
+        let small = bmp_with_declared_size(2, 2, &[0u8; 16]);
+        let plane = decode_gain_map_plane(&small, 100, 100, &cancellation);
+        assert!(plane.is_some_and(|plane| plane.width == 2 && plane.height == 2));
+        // The stated size alone must reject it; the file stays 70 bytes.
+        let oversized = bmp_with_declared_size(60000, 60000, &[0u8; 16]);
+        assert!(decode_gain_map_plane(&oversized, 100, 100, &cancellation).is_none());
+    }
+
     #[test]
     #[ignore = "needs test/test_uhdr fixtures"]
     fn an_ultra_hdr_jpeg_decodes_with_its_gain_plane() {
@@ -3741,7 +3785,12 @@ mod gain_map_decode_tests {
         let metadata = decoded.gain_map.expect("gain map parameters");
         assert!(metadata.hdr_capacity_maximum > 0.0);
         let plane = decoded.gain_map_plane.as_ref().expect("gain plane");
-        assert!(plane.fits_within(decoded.width, decoded.height));
+        assert!(crate::image::gain_map::GainMapPlane::size_fits_within(
+            plane.width,
+            plane.height,
+            decoded.width,
+            decoded.height
+        ));
         assert_eq!(
             plane.pixels.len(),
             plane.width as usize * plane.height as usize * 4
