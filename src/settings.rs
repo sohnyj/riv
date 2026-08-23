@@ -208,7 +208,7 @@ impl Options {
                 KEY_SLIDESHOW_INTERVAL_SECONDS,
                 default.slideshow_interval_seconds,
             )
-            .clamp(1, 3600),
+            .clamp(1, 600),
             after_deletion: choice(
                 KEY_AFTER_DELETION,
                 AFTER_DELETION_CHOICES.len(),
@@ -743,7 +743,7 @@ mod option_bounds_tests {
         }});
         let options = Options::from_document(&document);
         assert_eq!(options.zoom_step_percent, 1);
-        assert_eq!(options.slideshow_interval_seconds, 3600);
+        assert_eq!(options.slideshow_interval_seconds, 600);
     }
 
     #[test]

@@ -699,7 +699,7 @@ fn apply_page_command(
         }
         (IDC_MISCELLANEOUS_SLIDESHOW_INTERVAL_EDIT, EN_CHANGE) => {
             let value = unsafe { GetDlgItemInt(page, control, None, false) };
-            options.slideshow_interval_seconds = value.clamp(1, 3600);
+            options.slideshow_interval_seconds = value.clamp(1, 600);
         }
         (IDC_MISCELLANEOUS_AFTER_DELETE, CBN_SELCHANGE) => {
             options.after_deletion = combo_selection(page, control);
@@ -788,7 +788,7 @@ fn initialize_miscellaneous_page(state: &OptionsState) {
         &AFTER_DELETION_CHOICES,
     );
     if let Ok(spin) = unsafe { GetDlgItem(Some(page), IDC_MISCELLANEOUS_SLIDESHOW_INTERVAL_SPIN) } {
-        unsafe { SendMessageW(spin, UDM_SETRANGE32, Some(WPARAM(1)), Some(LPARAM(3600))) };
+        unsafe { SendMessageW(spin, UDM_SETRANGE32, Some(WPARAM(1)), Some(LPARAM(600))) };
     }
 }
 
