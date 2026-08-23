@@ -368,7 +368,13 @@ impl SettingsFile {
 
     pub fn window_geometry(&self) -> Option<(i32, i32, i32, i32, bool)> {
         let geometry = self.document.get("windowgeometry")?;
-        let read = |key: &str| geometry.get(key)?.as_i64().map(|value| value as i32);
+        // A stored value past i32 drops the restore instead of wrapping into it.
+        let read = |key: &str| {
+            geometry
+                .get(key)?
+                .as_i64()
+                .and_then(|value| i32::try_from(value).ok())
+        };
         Some((
             read("x")?,
             read("y")?,
@@ -755,6 +761,35 @@ mod option_bounds_tests {
         assert_eq!(options.fit_mode, 1);
         assert_eq!(options.preloading, 2);
         assert_eq!(options.zoom_step_percent, 200);
+    }
+}
+
+#[cfg(test)]
+mod geometry_bounds_tests {
+    use super::*;
+
+    fn settings_with(document: serde_json::Value) -> SettingsFile {
+        SettingsFile {
+            path: PathBuf::new(),
+            document,
+            options: Options::default(),
+            removed_recent_keys: HashSet::new(),
+        }
+    }
+
+    #[test]
+    fn geometry_past_i32_drops_the_restore_instead_of_wrapping() {
+        let stored = settings_with(serde_json::json!({ "windowgeometry": {
+            "x": 100, "y": -200, "width": 640, "height": 480, "maximized": true } }));
+        assert_eq!(stored.window_geometry(), Some((100, -200, 640, 480, true)));
+        // 2^32 used to fold to x = 0 and restore a place never saved.
+        let wrapped = settings_with(serde_json::json!({ "windowgeometry": {
+            "x": 4_294_967_296i64, "y": 0, "width": 640, "height": 480 } }));
+        assert_eq!(wrapped.window_geometry(), None);
+        // 2^32 + 1 used to fold to width 1 and pass the positive filter.
+        let folded = settings_with(serde_json::json!({ "windowgeometry": {
+            "x": 0, "y": 0, "width": 4_294_967_297i64, "height": 480 } }));
+        assert_eq!(folded.window_geometry(), None);
     }
 }
 
