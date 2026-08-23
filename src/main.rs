@@ -89,11 +89,14 @@ use windows::Win32::UI::WindowsAndMessaging::{
     WM_SIZE, WM_SYSCHAR, WM_SYSCOMMAND, WM_SYSKEYDOWN, WM_TIMER, WM_XBUTTONDOWN, WNDCLASSEXW,
     WS_OVERLAPPEDWINDOW, WindowFromPoint,
 };
-use windows::core::{HSTRING, PCWSTR, Result, w};
+use windows::core::{HSTRING, PCWSTR, Result};
 use windows_version::OsVersion;
 
 /// Icon resource id 1 in riv.rc (MAKEINTRESOURCE).
 const APPLICATION_ICON_ID: PCWSTR = PCWSTR(std::ptr::without_provenance(1));
+
+/// The app name: the window class, the bare window title, and the startup error title.
+const APPLICATION_NAME: &str = "riv";
 
 /// Windows 11 23H2, build 22631: the first release with the in-box libarchive.
 const MINIMUM_WINDOWS_VERSION: OsVersion = OsVersion::new(10, 0, 0, 22631);
@@ -393,7 +396,7 @@ impl Application {
             status_text: None,
             info_text_cache: None,
             display_labels: DisplayLabels::new(&capabilities, gamut),
-            window_title: "riv".to_string(),
+            window_title: APPLICATION_NAME.to_string(),
             current_monitor: unsafe { MonitorFromWindow(window, MONITOR_DEFAULTTONEAREST) },
             window_moving: false,
             window_active: true,
@@ -683,7 +686,7 @@ impl Application {
                 .map(|location| location.display_name())
                 .filter(|name| !name.is_empty());
             match (self.settings.options.title_bar_text, file_name) {
-                (0, _) | (_, None) => "riv".to_string(),
+                (0, _) | (_, None) => APPLICATION_NAME.to_string(),
                 (2, Some(name)) => self.prefix_with_position(name),
                 (3, Some(name)) => {
                     let body = match anchor.and_then(|location| location.folder_name()) {
@@ -2180,7 +2183,7 @@ fn main() -> Result<()> {
     let argument_path = std::env::args_os().nth(1).map(std::path::PathBuf::from);
 
     let instance = unsafe { GetModuleHandleW(None)? };
-    let class_name = w!("riv");
+    let class_name = HSTRING::from(APPLICATION_NAME);
 
     let application_icon = unsafe { LoadIconW(Some(instance.into()), APPLICATION_ICON_ID)? };
     let window_class = WNDCLASSEXW {
@@ -2193,7 +2196,7 @@ fn main() -> Result<()> {
         hCursor: unsafe { LoadCursorW(None, IDC_ARROW)? },
         // No class brush: the renderer owns the client area; a system erase would flash on resize.
         hbrBackground: HBRUSH::default(),
-        lpszClassName: class_name,
+        lpszClassName: PCWSTR(class_name.as_ptr()),
         ..Default::default()
     };
     let class_atom = unsafe { RegisterClassExW(&raw const window_class) };
@@ -2279,8 +2282,8 @@ fn create_main_window(initial_path: Option<&Path>, pending_device: PendingDevice
     let window = unsafe {
         CreateWindowExW(
             view::presentation::REQUIRED_WINDOW_STYLE,
-            w!("riv"),
-            w!("riv"),
+            &HSTRING::from(APPLICATION_NAME),
+            &HSTRING::from(APPLICATION_NAME),
             WS_OVERLAPPEDWINDOW,
             CW_USEDEFAULT,
             CW_USEDEFAULT,
@@ -2372,7 +2375,7 @@ fn process_is_elevated() -> bool {
 
 /// No window exists yet, so the application name titles the failure.
 fn fail_fast_dialog(reason: &str, detail: &str) {
-    dialogs::message::show_message(None, "riv", reason, detail, "Close");
+    dialogs::message::show_message(None, APPLICATION_NAME, reason, detail, "Close");
 }
 
 fn application_from_window(window: HWND) -> Option<&'static mut Application> {
