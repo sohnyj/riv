@@ -11,7 +11,7 @@ use windows::Win32::System::SystemInformation::GetSystemDirectoryW;
 use windows::Win32::System::Threading::CREATE_NO_WINDOW;
 
 /// Download ceiling, matching the archive member cap.
-const MAXIMUM_DOWNLOAD_BYTES: u64 = 1 << 30;
+const MAXIMUM_DOWNLOAD_BYTES: u64 = crate::archive::reader::MAXIMUM_MEMBER_BYTES;
 
 /// Receive chunk; cancellation is checked between chunks.
 const READ_BLOCK_BYTES: usize = 256 * 1024;
@@ -146,7 +146,10 @@ pub fn download(
         if body.len() as u64 + read_bytes as u64 > MAXIMUM_DOWNLOAD_BYTES {
             return Err(kill_child(
                 child,
-                NetworkError::new("Download exceeds the 1 GiB limit"),
+                NetworkError::new(format!(
+                    "Download exceeds the {} GiB limit",
+                    MAXIMUM_DOWNLOAD_BYTES >> 30
+                )),
             ));
         }
         body.extend_from_slice(&block[..read_bytes]);

@@ -17,7 +17,7 @@ const FORMAT_GROUPS: &[(&str, &[&str])] = &[
 ];
 
 /// Uncompressed per-member ceiling; guards against decompression bombs.
-const MAXIMUM_MEMBER_BYTES: u64 = 1 << 30;
+pub const MAXIMUM_MEMBER_BYTES: u64 = 1 << 30;
 
 /// libarchive read-ahead block for archive_read_open_filename_w.
 const OPEN_BLOCK_BYTES: usize = 128 * 1024;
@@ -134,7 +134,10 @@ pub fn read_member(
         let declared_bytes = unsafe { (reader.api.entry_size_is_set)(entry) != 0 }
             .then(|| unsafe { (reader.api.entry_size)(entry) }.max(0) as u64);
         if declared_bytes.is_some_and(|bytes| bytes > MAXIMUM_MEMBER_BYTES) {
-            return Err(ArchiveError::new("Archive member exceeds the 1 GiB limit"));
+            return Err(ArchiveError::new(format!(
+                "Archive member exceeds the {} GiB limit",
+                MAXIMUM_MEMBER_BYTES >> 30
+            )));
         }
         return reader.read_entry_data(declared_bytes, cancellation);
     }
@@ -225,7 +228,10 @@ impl Reader<'_> {
                 return Err(self.error("Archive member extraction failed"));
             }
             if contents.len() as u64 + read_bytes as u64 > MAXIMUM_MEMBER_BYTES {
-                return Err(ArchiveError::new("Archive member exceeds the 1 GiB limit"));
+                return Err(ArchiveError::new(format!(
+                    "Archive member exceeds the {} GiB limit",
+                    MAXIMUM_MEMBER_BYTES >> 30
+                )));
             }
             contents.extend_from_slice(&block[..read_bytes as usize]);
         }

@@ -236,7 +236,7 @@ enum FrameSemantics {
 const MAXIMUM_TEXTURE_DIMENSION: u32 = 16384;
 
 /// Cap on an animation's expanded frames; past it only the first frame is kept.
-const MAXIMUM_ANIMATION_FRAMES_BYTES: u64 = 1 << 30;
+pub const MAXIMUM_ANIMATION_FRAMES_BYTES: u64 = 1 << 30;
 
 // Shrinking the budget below one full-size canvas would need a per-canvas check in FrameCompositor::new.
 const _: () = assert!(

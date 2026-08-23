@@ -764,7 +764,10 @@ impl Application {
         {
             self.show_status_text(
                 window,
-                "Animation: First frame only (over 1 GiB)".to_string(),
+                format!(
+                    "Animation: First frame only (over {} GiB)",
+                    crate::image::decode::MAXIMUM_ANIMATION_FRAMES_BYTES >> 30
+                ),
             );
         }
         if let Some(shown) = &mut self.slideshow_item_shown_at {
