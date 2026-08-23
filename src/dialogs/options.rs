@@ -72,6 +72,11 @@ const STATE_UNCHECKED: isize = 1;
 const STATE_CHECKED: isize = 2;
 const STATE_PARTIAL: isize = 3;
 
+/// Shortcut list columns; the header order, the hit test, and the refresh share them.
+const ACTION_COLUMN: i32 = 0;
+const KEYBOARD_COLUMN: i32 = 1;
+const MOUSE_COLUMN: i32 = 2;
+
 /// Tri-state check cell edge; the image list, the bitmap, and both rectangles share it.
 const STATE_IMAGE_SIZE: i32 = 16;
 
@@ -607,7 +612,11 @@ unsafe extern "system" fn page_procedure(
                 IDC_SHORTCUTS_LIST if header.code == NM_DBLCLK => {
                     let activate = unsafe { &*(lparam.0 as *const NMITEMACTIVATE) };
                     if activate.iItem >= 0 {
-                        edit_shortcut(page, activate.iItem as usize, activate.iSubItem == 2);
+                        edit_shortcut(
+                            page,
+                            activate.iItem as usize,
+                            activate.iSubItem == MOUSE_COLUMN,
+                        );
                     }
                     1
                 }
@@ -1072,14 +1081,11 @@ fn initialize_shortcuts_page(state: &OptionsState) {
     let action_width = usable * 36 / 100;
     let keyboard_width = usable * 32 / 100;
     let mouse_width = usable - action_width - keyboard_width;
-    for (index, (title, width)) in [
-        ("Action", action_width),
-        ("Keyboard", keyboard_width),
-        ("Mouse", mouse_width),
-    ]
-    .into_iter()
-    .enumerate()
-    {
+    for (index, title, width) in [
+        (ACTION_COLUMN, "Action", action_width),
+        (KEYBOARD_COLUMN, "Keyboard", keyboard_width),
+        (MOUSE_COLUMN, "Mouse", mouse_width),
+    ] {
         let text = HSTRING::from(title);
         let column = LVCOLUMNW {
             mask: LVCF_TEXT | LVCF_WIDTH,
@@ -1091,7 +1097,7 @@ fn initialize_shortcuts_page(state: &OptionsState) {
             SendMessageW(
                 list,
                 LVM_INSERTCOLUMNW,
-                Some(WPARAM(index)),
+                Some(WPARAM(index as usize)),
                 Some(LPARAM(&raw const column as isize)),
             )
         };
@@ -1121,7 +1127,10 @@ fn refresh_shortcut_rows(state: &OptionsState) {
         return;
     };
     for (index, row) in state.transient_shortcuts.iter().enumerate() {
-        for (subitem, text) in [(1, row.keyboard.join(", ")), (2, row.mouse.join(", "))] {
+        for (subitem, text) in [
+            (KEYBOARD_COLUMN, row.keyboard.join(", ")),
+            (MOUSE_COLUMN, row.mouse.join(", ")),
+        ] {
             let wide_text = HSTRING::from(&text);
             let item = LVITEMW {
                 mask: LVIF_TEXT,
