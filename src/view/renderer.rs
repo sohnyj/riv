@@ -96,9 +96,9 @@ struct ModeEffects {
     white_level_effect: Option<ID2D1Effect>,
 }
 
-/// Display luminances: the tone-map peak, and the full-frame limit shown in the overlay.
+/// The tone-map peak, and the full-frame limit shown only in the overlay.
 #[derive(Clone, Copy)]
-struct ToneMapTarget {
+struct DisplayLuminances {
     peak_nits: f32,
     full_frame_nits: f32,
 }
@@ -464,14 +464,31 @@ impl Renderer {
         full_frame_nits: f32,
         device: GraphicsDevice,
     ) -> Result<Self> {
-        let target = ToneMapTarget {
+        let luminances = DisplayLuminances {
             peak_nits: tone_map_target_nits,
             full_frame_nits,
         };
         // A failed first build retries without the quantize pass, never blocking launch.
-        Self::build(window, width, height, mode.clone(), target, true, device).or_else(|_| {
+        Self::build(
+            window,
+            width,
+            height,
+            mode.clone(),
+            luminances,
+            true,
+            device,
+        )
+        .or_else(|_| {
             // A fresh device for the retry: DXGI allows one flip swapchain per window.
-            Self::build(window, width, height, mode, target, false, create_device()?)
+            Self::build(
+                window,
+                width,
+                height,
+                mode,
+                luminances,
+                false,
+                create_device()?,
+            )
         })
     }
 
@@ -636,14 +653,14 @@ impl Renderer {
         width: u32,
         height: u32,
         mode: OutputMode,
-        target: ToneMapTarget,
+        luminances: DisplayLuminances,
         with_quantize_pass: bool,
         device: GraphicsDevice,
     ) -> Result<Self> {
         let is_sdr_wide_gamut = mode.is_sdr_wide_gamut();
         let is_hdr_output = mode.hdr;
-        let tone_map_target_nits = target.peak_nits;
-        let full_frame_nits = target.full_frame_nits;
+        let tone_map_target_nits = luminances.peak_nits;
+        let full_frame_nits = luminances.full_frame_nits;
         let GraphicsDevice {
             device: d3d_device,
             context: d3d_context,
