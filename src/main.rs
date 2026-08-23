@@ -81,8 +81,8 @@ use windows::Win32::UI::WindowsAndMessaging::{
     QUEUE_STATUS_FLAGS, RegisterClassExW, SC_MONITORPOWER, SW_HIDE, SW_SHOW, SW_SHOWMAXIMIZED,
     SW_SHOWMINIMIZED, SWP_FRAMECHANGED, SWP_NOACTIVATE, SWP_NOMOVE, SWP_NOSIZE, SWP_NOZORDER,
     SendMessageW, SetCursor, SetTimer, SetWindowLongPtrW, SetWindowPlacement, SetWindowPos,
-    SetWindowTextW, ShowWindow, TranslateMessage, WA_INACTIVE, WINDOWPLACEMENT, WM_ACTIVATE,
-    WM_APP, WM_CAPTURECHANGED, WM_CLOSE, WM_CONTEXTMENU, WM_DESTROY, WM_DISPLAYCHANGE,
+    SetWindowTextW, ShowWindow, TranslateMessage, WA_INACTIVE, WHEEL_DELTA, WINDOWPLACEMENT,
+    WM_ACTIVATE, WM_APP, WM_CAPTURECHANGED, WM_CLOSE, WM_CONTEXTMENU, WM_DESTROY, WM_DISPLAYCHANGE,
     WM_DPICHANGED, WM_ENTERSIZEMOVE, WM_EXITSIZEMOVE, WM_GESTURE, WM_GETMINMAXINFO, WM_KEYDOWN,
     WM_LBUTTONDBLCLK, WM_LBUTTONDOWN, WM_LBUTTONUP, WM_MBUTTONDOWN, WM_MOUSEHWHEEL, WM_MOUSEMOVE,
     WM_MOUSEWHEEL, WM_MOVE, WM_NCDESTROY, WM_NCLBUTTONDOWN, WM_PAINT, WM_QUIT, WM_SETCURSOR,
@@ -1354,7 +1354,7 @@ impl Application {
     fn wheel_zoom(&mut self, window: HWND, wheel_delta: i16) {
         let step = self.zoom_step();
         let exponent = if self.settings.options.fractional_wheel_zoom {
-            f32::from(wheel_delta) / 120.0
+            f32::from(wheel_delta) / WHEEL_DELTA as f32
         } else {
             let notches = self.accumulate_wheel_notches(wheel_delta);
             if notches == 0 {
@@ -1367,8 +1367,8 @@ impl Application {
 
     fn accumulate_wheel_notches(&mut self, wheel_delta: i16) -> i32 {
         self.wheel_notch_accumulator += i32::from(wheel_delta);
-        let notches = self.wheel_notch_accumulator / 120;
-        self.wheel_notch_accumulator %= 120;
+        let notches = self.wheel_notch_accumulator / WHEEL_DELTA as i32;
+        self.wheel_notch_accumulator %= WHEEL_DELTA as i32;
         notches
     }
 
