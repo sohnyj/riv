@@ -1575,12 +1575,9 @@ fn dispatch_action(application: &mut Application, window: HWND, action: Action) 
             application.request_render(window);
         }
         Action::ToggleFitMode => {
-            application.settings.options.fit_mode ^= 1;
-            let axis = if application.settings.options.fit_mode == 1 {
-                "Height"
-            } else {
-                "Width"
-            };
+            application.settings.options.fit_mode = (application.settings.options.fit_mode + 1)
+                % FitMode::IN_SETTING_ORDER.len() as u32;
+            let axis = FitMode::from_setting(application.settings.options.fit_mode).description();
             application.show_status_text(window, format!("Fit: {axis}"));
             application.commit_options(window);
         }
@@ -1935,7 +1932,7 @@ fn show_menu(application: &mut Application, window: HWND, x: i32, y: i32, target
             .animation
             .as_ref()
             .is_some_and(|animation| animation.paused),
-        fit_height: application.settings.options.fit_mode == 1,
+        fit_height: FitMode::from_setting(application.settings.options.fit_mode) == FitMode::Height,
         preserve_zoom: application.preserve_zoom,
         always_on_top: application.always_on_top,
         mirrored: application.view_transform.mirrored,
