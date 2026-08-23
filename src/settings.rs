@@ -12,6 +12,12 @@ use crate::view::transform::FitMode;
 
 pub const MAXIMUM_RECENT_FILES: usize = 10;
 
+/// Numeric option bounds; the loader clamp and the dialog controls share them.
+pub const MINIMUM_ZOOM_STEP_PERCENT: u32 = 1;
+pub const MAXIMUM_ZOOM_STEP_PERCENT: u32 = 200;
+pub const MINIMUM_SLIDESHOW_INTERVAL_SECONDS: u32 = 1;
+pub const MAXIMUM_SLIDESHOW_INTERVAL_SECONDS: u32 = 600;
+
 /// The default window background; used when the custom color is off.
 pub const DEFAULT_BACKGROUND_COLOR: (u8, u8, u8) = (0x21, 0x21, 0x21);
 
@@ -196,7 +202,7 @@ impl Options {
                 default.fit_mode,
             ),
             zoom_step_percent: unsigned(KEY_ZOOM_STEP_PERCENT, default.zoom_step_percent)
-                .clamp(1, 200),
+                .clamp(MINIMUM_ZOOM_STEP_PERCENT, MAXIMUM_ZOOM_STEP_PERCENT),
             dither_mode: choice(
                 KEY_DITHER_MODE,
                 DitherMode::IN_SETTING_ORDER.len(),
@@ -224,7 +230,10 @@ impl Options {
                 KEY_SLIDESHOW_INTERVAL_SECONDS,
                 default.slideshow_interval_seconds,
             )
-            .clamp(1, 600),
+            .clamp(
+                MINIMUM_SLIDESHOW_INTERVAL_SECONDS,
+                MAXIMUM_SLIDESHOW_INTERVAL_SECONDS,
+            ),
             after_deletion: choice(
                 KEY_AFTER_DELETION,
                 AFTER_DELETION_CHOICES.len(),

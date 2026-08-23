@@ -41,8 +41,9 @@ use crate::dialogs::shortcut_capture;
 use crate::image;
 use crate::image::core::SortMode;
 use crate::settings::{
-    AFTER_DELETION_CHOICES, Options, PRELOADING_CHOICES, SLIDESHOW_DIRECTION_CHOICES, SettingsFile,
-    TITLE_BAR_TEXT_CHOICES,
+    AFTER_DELETION_CHOICES, MAXIMUM_SLIDESHOW_INTERVAL_SECONDS, MAXIMUM_ZOOM_STEP_PERCENT,
+    MINIMUM_SLIDESHOW_INTERVAL_SECONDS, MINIMUM_ZOOM_STEP_PERCENT, Options, PRELOADING_CHOICES,
+    SLIDESHOW_DIRECTION_CHOICES, SettingsFile, TITLE_BAR_TEXT_CHOICES,
 };
 use crate::shell::{file_association, start_menu};
 use crate::view::dither::DitherMode;
@@ -675,7 +676,8 @@ fn apply_page_command(
         }
         (IDC_IMAGE_ZOOM_STEP_EDIT, EN_CHANGE) => {
             let value = unsafe { GetDlgItemInt(page, control, None, false) };
-            options.zoom_step_percent = value.clamp(1, 200);
+            options.zoom_step_percent =
+                value.clamp(MINIMUM_ZOOM_STEP_PERCENT, MAXIMUM_ZOOM_STEP_PERCENT);
         }
         (IDC_IMAGE_CURSOR_ZOOM, BN_CLICKED) => {
             options.cursor_zoom = is_checked(page, control);
@@ -699,7 +701,10 @@ fn apply_page_command(
         }
         (IDC_MISCELLANEOUS_SLIDESHOW_INTERVAL_EDIT, EN_CHANGE) => {
             let value = unsafe { GetDlgItemInt(page, control, None, false) };
-            options.slideshow_interval_seconds = value.clamp(1, 600);
+            options.slideshow_interval_seconds = value.clamp(
+                MINIMUM_SLIDESHOW_INTERVAL_SECONDS,
+                MAXIMUM_SLIDESHOW_INTERVAL_SECONDS,
+            );
         }
         (IDC_MISCELLANEOUS_AFTER_DELETE, CBN_SELCHANGE) => {
             options.after_deletion = combo_selection(page, control);
@@ -766,7 +771,14 @@ fn initialize_image_page(state: &OptionsState) {
     );
     combo_fill(page, IDC_IMAGE_PRELOADING, &PRELOADING_CHOICES);
     if let Ok(spin) = unsafe { GetDlgItem(Some(page), IDC_IMAGE_ZOOM_STEP_SPIN) } {
-        unsafe { SendMessageW(spin, UDM_SETRANGE32, Some(WPARAM(1)), Some(LPARAM(200))) };
+        unsafe {
+            SendMessageW(
+                spin,
+                UDM_SETRANGE32,
+                Some(WPARAM(MINIMUM_ZOOM_STEP_PERCENT as usize)),
+                Some(LPARAM(MAXIMUM_ZOOM_STEP_PERCENT as isize)),
+            )
+        };
     }
 }
 
@@ -788,7 +800,14 @@ fn initialize_miscellaneous_page(state: &OptionsState) {
         &AFTER_DELETION_CHOICES,
     );
     if let Ok(spin) = unsafe { GetDlgItem(Some(page), IDC_MISCELLANEOUS_SLIDESHOW_INTERVAL_SPIN) } {
-        unsafe { SendMessageW(spin, UDM_SETRANGE32, Some(WPARAM(1)), Some(LPARAM(600))) };
+        unsafe {
+            SendMessageW(
+                spin,
+                UDM_SETRANGE32,
+                Some(WPARAM(MINIMUM_SLIDESHOW_INTERVAL_SECONDS as usize)),
+                Some(LPARAM(MAXIMUM_SLIDESHOW_INTERVAL_SECONDS as isize)),
+            )
+        };
     }
 }
 
