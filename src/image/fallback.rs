@@ -124,7 +124,16 @@ fn compose_webp_frames(
         }
         let frame_width = iterator.width.max(0) as u32;
         let frame_height = iterator.height.max(0) as u32;
-        frame_pixels.resize(frame_width as usize * frame_height as usize * 4, 0);
+        let frame_bytes = frame_width as usize * frame_height as usize * 4;
+        // Grown fallibly in place: vec-style growth would abort where an error must show.
+        if frame_pixels
+            .try_reserve_exact(frame_bytes.saturating_sub(frame_pixels.len()))
+            .is_err()
+        {
+            unsafe { WebPDemuxReleaseIterator(&raw mut iterator) };
+            return Err(uncoded_error("WebP is too large to fit in memory"));
+        }
+        frame_pixels.resize(frame_bytes, 0);
         let decoded = unsafe {
             WebPDecodeBGRAInto(
                 iterator.fragment.bytes,
