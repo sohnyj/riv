@@ -561,6 +561,11 @@ unsafe extern "system" fn page_procedure(
             }
             let control = low_word(wparam.0) as i32;
             let notification = high_word(wparam.0) as usize;
+            if control == IDC_WINDOW_BACKGROUND_COLOR_BUTTON && notification == BN_CLICKED {
+                // Runs a modal that re-enters this procedure; it borrows the state in stages.
+                choose_background_color(page);
+                return 1;
+            }
             apply_page_command(state, page, control, notification)
         }
         WM_NOTIFY => {
@@ -572,7 +577,7 @@ unsafe extern "system" fn page_procedure(
                 IDC_SHORTCUTS_LIST if header.code == NM_DBLCLK => {
                     let activate = unsafe { &*(lparam.0 as *const NMITEMACTIVATE) };
                     if activate.iItem >= 0 {
-                        edit_shortcut(state, activate.iItem as usize, activate.iSubItem == 2);
+                        edit_shortcut(page, activate.iItem as usize, activate.iSubItem == 2);
                     }
                     1
                 }
@@ -641,9 +646,6 @@ fn apply_page_command(
         (IDC_WINDOW_BACKGROUND_COLOR_ENABLED, BN_CLICKED) => {
             options.background_color_enabled = is_checked(page, control);
             sync_background_color_button(state, page);
-        }
-        (IDC_WINDOW_BACKGROUND_COLOR_BUTTON, BN_CLICKED) => {
-            choose_background_color(state, page);
         }
         (IDC_WINDOW_TITLEBAR_MODE, CBN_SELCHANGE) => {
             options.title_bar_text = combo_selection(page, control);
@@ -948,19 +950,36 @@ fn colorref_to_rgb(color: COLORREF) -> (u8, u8, u8) {
     )
 }
 
-fn choose_background_color(state: &mut OptionsState, page: HWND) {
+/// Borrows the state in stages: the color dialog's modal loop re-enters the procedures.
+fn choose_background_color(page: HWND) {
+    let Some((owner, initial, mut custom_colors)) = state_mut(page).map(|state| {
+        (
+            state.dialog,
+            state.transient_options.background_color,
+            state.custom_colors,
+        )
+    }) else {
+        return;
+    };
+    // The dialog writes the custom colors through this local, not through the state.
     let mut configuration = CHOOSECOLORW {
         lStructSize: size_of::<CHOOSECOLORW>() as u32,
-        hwndOwner: state.dialog,
-        rgbResult: rgb_to_colorref(state.transient_options.background_color),
-        lpCustColors: state.custom_colors.as_mut_ptr(),
+        hwndOwner: owner,
+        rgbResult: rgb_to_colorref(initial),
+        lpCustColors: custom_colors.as_mut_ptr(),
         Flags: CC_RGBINIT | CC_FULLOPEN,
         ..Default::default()
     };
-    if unsafe { ChooseColorW(&raw mut configuration) }.as_bool() {
+    let confirmed = unsafe { ChooseColorW(&raw mut configuration) }.as_bool();
+    let Some(state) = state_mut(page) else {
+        return;
+    };
+    state.custom_colors = custom_colors;
+    if confirmed {
         state.transient_options.background_color = colorref_to_rgb(configuration.rgbResult);
         sync_background_color_button(state, page);
     }
+    update_buttons(state);
 }
 
 fn initialize_shortcuts_page(state: &OptionsState) {
@@ -1051,43 +1070,58 @@ fn refresh_shortcut_rows(state: &OptionsState) {
     }
 }
 
-fn edit_shortcut(state: &mut OptionsState, row_index: usize, mouse_column: bool) {
-    let taken: Vec<(&str, &str)> = state
-        .transient_shortcuts
-        .iter()
-        .enumerate()
-        .filter(|(index, _)| *index != row_index)
-        .flat_map(|(_, row)| {
-            let encodings = if mouse_column {
-                &row.mouse
-            } else {
-                &row.keyboard
-            };
-            encodings
-                .iter()
-                .map(|encoding| (encoding.as_str(), row.action.label()))
-        })
-        .collect();
-    let row = &state.transient_shortcuts[row_index];
-    let updated = if mouse_column {
-        shortcut_capture::capture_mouse_binding(
-            state.dialog,
-            row.mouse.first().map(String::as_str),
-            &taken,
-        )
-    } else {
-        shortcut_capture::capture_keyboard_sequences(state.dialog, &row.keyboard, &taken)
-    };
-    if let Some(encodings) = updated {
-        let row = &mut state.transient_shortcuts[row_index];
-        if mouse_column {
-            row.mouse = encodings;
+/// Borrows the state in stages: the capture dialog's modal loop re-enters the procedures.
+fn edit_shortcut(page: HWND, row_index: usize, mouse_column: bool) {
+    let Some((dialog, current, taken)) = state_mut(page).map(|state| {
+        let taken: Vec<(String, &'static str)> = state
+            .transient_shortcuts
+            .iter()
+            .enumerate()
+            .filter(|(index, _)| *index != row_index)
+            .flat_map(|(_, row)| {
+                let encodings = if mouse_column {
+                    &row.mouse
+                } else {
+                    &row.keyboard
+                };
+                encodings
+                    .iter()
+                    .map(|encoding| (encoding.clone(), row.action.label()))
+            })
+            .collect();
+        let row = &state.transient_shortcuts[row_index];
+        let current = if mouse_column {
+            row.mouse.clone()
         } else {
-            row.keyboard = encodings;
-        }
-        refresh_shortcut_rows(state);
-        update_buttons(state);
+            row.keyboard.clone()
+        };
+        (state.dialog, current, taken)
+    }) else {
+        return;
+    };
+    let taken: Vec<(&str, &str)> = taken
+        .iter()
+        .map(|(encoding, owner)| (encoding.as_str(), *owner))
+        .collect();
+    let updated = if mouse_column {
+        shortcut_capture::capture_mouse_binding(dialog, current.first().map(String::as_str), &taken)
+    } else {
+        shortcut_capture::capture_keyboard_sequences(dialog, &current, &taken)
+    };
+    let Some(encodings) = updated else {
+        return;
+    };
+    let Some(state) = state_mut(page) else {
+        return;
+    };
+    let row = &mut state.transient_shortcuts[row_index];
+    if mouse_column {
+        row.mouse = encodings;
+    } else {
+        row.keyboard = encodings;
     }
+    refresh_shortcut_rows(state);
+    update_buttons(state);
 }
 
 fn initialize_association_page(state: &mut OptionsState) {
