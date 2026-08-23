@@ -2768,7 +2768,7 @@ extern "system" fn window_procedure(
             // HDR/ACM toggle, bit depth, or monitor reconfigure: re-evaluate once.
             if let Some(application) = application_from_window(window) {
                 let _ = application.update_current_monitor(window);
-                application.image_core.invalidate_svg_weights();
+                application.image_core.invalidate_svg_rasters();
                 application.refresh_display_state(window);
             }
             LRESULT(0)

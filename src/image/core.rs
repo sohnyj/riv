@@ -1502,21 +1502,47 @@ impl ImageCore {
         }
     }
 
-    /// SVG rasters at the largest monitor's size, so its weights expire with it.
-    pub fn invalidate_svg_weights(&mut self) {
+    /// SVG rasters at the largest monitor's size, so a monitor change expires them.
+    pub fn invalidate_svg_rasters(&mut self) {
         decode::invalidate_monitor_size();
+        let display_sized = |location: &ItemLocation| {
+            location
+                .extension_lowercase()
+                .is_some_and(|extension| decode::weight_depends_on_display(&extension))
+        };
         for entry in &mut self.entries {
             // An unprobed entry has no weight to clear, and the name lookup is not free.
             if entry.weight == DecodedWeight::Unknown {
                 continue;
             }
-            let display_sized = entry
-                .location
-                .extension_lowercase()
-                .is_some_and(|extension| decode::weight_depends_on_display(&extension));
-            if display_sized {
+            if display_sized(&entry.location) {
                 entry.weight = DecodedWeight::Unknown;
             }
+        }
+        // The cached rasters expire with the weights; a revisit rasterizes at the new size.
+        let stale: Vec<ItemLocation> = self
+            .cache
+            .keys()
+            .filter(|location| display_sized(location))
+            .cloned()
+            .collect();
+        for location in stale {
+            if let Some(entry) = self.cache.remove(&location) {
+                self.releaser.release(entry.image);
+            }
+        }
+        // The one on screen re-rasterizes now; a URL waits for reload, its only outlet.
+        if self.request.pending().is_none()
+            && let Some(location) = self
+                .current
+                .as_ref()
+                .map(|current| &current.location)
+                .filter(|location| {
+                    display_sized(location) && !matches!(location, ItemLocation::Url(_))
+                })
+                .cloned()
+        {
+            self.load_item(&location);
         }
     }
 
