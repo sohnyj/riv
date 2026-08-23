@@ -513,6 +513,29 @@ mod normalization_tests {
     }
 
     #[test]
+    fn default_tables_spell_the_parser_round_trip() {
+        // An unparseable default drops silently; a non-canonical one becomes a stored override.
+        for (name, sequences) in DEFAULT_KEYBOARD {
+            for sequence in *sequences {
+                let (modifiers, virtual_key) =
+                    parse_key_sequence(sequence).unwrap_or_else(|| panic!("{name}: {sequence}"));
+                assert_eq!(
+                    format_key_sequence(modifiers, virtual_key).as_deref(),
+                    Some(*sequence),
+                    "{name}"
+                );
+            }
+        }
+        for (name, encodings) in DEFAULT_MOUSE {
+            for encoding in *encodings {
+                let (modifiers, base) =
+                    parse_mouse_encoding(encoding).unwrap_or_else(|| panic!("{name}: {encoding}"));
+                assert_eq!(format_mouse_encoding(modifiers, base), *encoding, "{name}");
+            }
+        }
+    }
+
+    #[test]
     fn a_hand_written_list_stops_at_the_maximum() {
         let overrides = serde_json::json!({
             "nextfile": ["Right", "Ctrl+A", "Ctrl+B", "Ctrl+C"],
