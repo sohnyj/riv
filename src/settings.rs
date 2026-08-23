@@ -436,6 +436,9 @@ impl SettingsFile {
             }
             files.truncate(MAXIMUM_RECENT_FILES);
             self.set_recent_files(&files);
+        } else {
+            // set_last_file_dialog_directory can re-insert the section after write_options dropped it.
+            document_object(&mut self.document).remove("recents");
         }
         self.save()
     }
@@ -752,5 +755,31 @@ mod option_bounds_tests {
         assert_eq!(options.fit_mode, 1);
         assert_eq!(options.preloading, 2);
         assert_eq!(options.zoom_step_percent, 200);
+    }
+}
+
+#[cfg(test)]
+mod recents_save_tests {
+    use super::*;
+
+    #[test]
+    fn saving_with_recents_off_drops_the_section() {
+        let path = std::env::temp_dir().join("riv-recents-off.json");
+        let _ = std::fs::remove_file(&path);
+        let mut settings = SettingsFile {
+            path: path.clone(),
+            document: serde_json::json!({}),
+            options: Options {
+                remember_recents: false,
+                ..Options::default()
+            },
+            removed_recent_keys: HashSet::new(),
+        };
+        // The open dialog records its directory without consulting the option.
+        settings.set_last_file_dialog_directory("C:\\pictures");
+        settings.save_merging_recents().expect("save");
+        let saved = read_document(&path);
+        let _ = std::fs::remove_file(&path);
+        assert!(saved.get("recents").is_none());
     }
 }
