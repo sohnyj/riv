@@ -77,6 +77,18 @@ pub const FRAME_SLOT_TIMEOUT_MILLISECONDS: u32 = 1000;
 /// Two presentation buffers: draw one while the last presented one retires.
 const PRESENTATION_BUFFER_COUNT: usize = 2;
 
+/// The FP16 scRGB backbuffer of HDR and ACM-on wide gamut output; DWM quantizes it.
+const SCRGB_BACKBUFFER_FORMAT: DXGI_FORMAT = DXGI_FORMAT_R16G16B16A16_FLOAT;
+
+/// The 8-bit backbuffer of plain SDR output; the app quantizes and dithers it.
+const SDR_BACKBUFFER_FORMAT: DXGI_FORMAT = DXGI_FORMAT_B8G8R8A8_UNORM;
+
+/// The color space composition reads the SDR backbuffer in.
+const SDR_COLOR_SPACE: DXGI_COLOR_SPACE_TYPE = DXGI_COLOR_SPACE_RGB_FULL_G22_NONE_P709;
+
+/// The UNORM16 intermediate scene the quantize pass reads.
+const SCENE_TEXTURE_FORMAT: DXGI_FORMAT = DXGI_FORMAT_R16G16B16A16_UNORM;
+
 /// Where frames go out: composed presentation buffers, or the hwnd swapchain where unsupported.
 enum PresentTarget {
     Composition(CompositionPresenter),
@@ -627,7 +639,7 @@ impl Renderer {
 
     /// Dither only the 8-bit backbuffer the app quantizes; FP16 leaves quantization to DWM.
     fn backbuffer_bits_for(format: DXGI_FORMAT) -> Option<u32> {
-        (format == DXGI_FORMAT_B8G8R8A8_UNORM).then_some(8)
+        (format == SDR_BACKBUFFER_FORMAT).then_some(8)
     }
 
     /// FP16 scRGB for HDR and ACM-on wide gamut, 8-bit sRGB otherwise; both paths share it.
@@ -637,14 +649,11 @@ impl Renderer {
     ) -> (DXGI_FORMAT, DXGI_COLOR_SPACE_TYPE) {
         if is_hdr_output || is_sdr_wide_gamut {
             (
-                DXGI_FORMAT_R16G16B16A16_FLOAT,
+                SCRGB_BACKBUFFER_FORMAT,
                 DXGI_COLOR_SPACE_RGB_FULL_G10_NONE_P709,
             )
         } else {
-            (
-                DXGI_FORMAT_B8G8R8A8_UNORM,
-                DXGI_COLOR_SPACE_RGB_FULL_G22_NONE_P709,
-            )
+            (SDR_BACKBUFFER_FORMAT, SDR_COLOR_SPACE)
         }
     }
 
@@ -689,9 +698,8 @@ impl Renderer {
             Self::mode_format_and_color_space(is_hdr_output, is_sdr_wide_gamut);
         // D2D draws the UNORM16 scene and the pass quantizes it; FP16 leaves that to DWM.
         let quantize_pass = (with_quantize_pass
-            && backbuffer_format != DXGI_FORMAT_R16G16B16A16_FLOAT
-            && unsafe { d2d_context.IsDxgiFormatSupported(DXGI_FORMAT_R16G16B16A16_UNORM) }
-                .as_bool())
+            && backbuffer_format != SCRGB_BACKBUFFER_FORMAT
+            && unsafe { d2d_context.IsDxgiFormatSupported(SCENE_TEXTURE_FORMAT) }.as_bool())
         .then(|| QuantizePass::new(&d3d_device).ok())
         .flatten();
 
@@ -849,7 +857,7 @@ impl Renderer {
 
     /// The backbuffer is FP16 scRGB; app-drawn colors encode linearly for it.
     pub fn is_scrgb_output(&self) -> bool {
-        self.backbuffer_format == DXGI_FORMAT_R16G16B16A16_FLOAT
+        self.backbuffer_format == SCRGB_BACKBUFFER_FORMAT
     }
 
     /// Active backbuffer, for the info overlay. ACM-off SDR names the gamut it maps into.
@@ -859,7 +867,7 @@ impl Renderer {
 
     /// Recomputes the cached output label after a format, mode, or gamut change.
     fn refresh_output_label(&mut self) {
-        self.output_label = if self.backbuffer_format == DXGI_FORMAT_R16G16B16A16_FLOAT {
+        self.output_label = if self.backbuffer_format == SCRGB_BACKBUFFER_FORMAT {
             "FP16 scRGB".to_string()
         } else {
             self.sdr_output_label("8-bit")
@@ -951,12 +959,12 @@ impl Renderer {
         let scene_texture = crate::view::texture::create_render_texture(
             &self.d3d_device,
             self.backbuffer_size,
-            DXGI_FORMAT_R16G16B16A16_UNORM,
+            SCENE_TEXTURE_FORMAT,
             D3D11_RESOURCE_MISC_FLAG(0),
         )?;
         self.scene_shader_resource_view =
             crate::view::texture::create_shader_resource_view(&self.d3d_device, &scene_texture)?;
-        let properties = Self::target_bitmap_properties(DXGI_FORMAT_R16G16B16A16_UNORM);
+        let properties = Self::target_bitmap_properties(SCENE_TEXTURE_FORMAT);
         let target = Self::bitmap_over_texture(&self.d2d_context, &scene_texture, &properties)?;
         unsafe { self.d2d_context.SetTarget(&target) };
         self.target = Some(target);
@@ -1084,15 +1092,11 @@ impl Renderer {
 
         let (format, color_space) =
             Self::mode_format_and_color_space(is_hdr_output, is_sdr_wide_gamut);
-        if format == DXGI_FORMAT_R16G16B16A16_FLOAT {
+        if format == SCRGB_BACKBUFFER_FORMAT {
             // FP16 leaves quantization to DWM.
             self.quantize_pass = None;
         } else if self.quantize_pass.is_none()
-            && unsafe {
-                self.d2d_context
-                    .IsDxgiFormatSupported(DXGI_FORMAT_R16G16B16A16_UNORM)
-            }
-            .as_bool()
+            && unsafe { self.d2d_context.IsDxgiFormatSupported(SCENE_TEXTURE_FORMAT) }.as_bool()
         {
             // The pass depends only on the (unchanged) device, so keep it across reconfigures.
             self.quantize_pass = QuantizePass::new(&self.d3d_device).ok();
@@ -1109,10 +1113,7 @@ impl Renderer {
                         let _ = declare_color_space(&swap_chain3, color_space);
                     } else {
                         // Undo any FP16 declaration; SDR composition reads sRGB.
-                        let _ = declare_color_space(
-                            &swap_chain3,
-                            DXGI_COLOR_SPACE_RGB_FULL_G22_NONE_P709,
-                        );
+                        let _ = declare_color_space(&swap_chain3, SDR_COLOR_SPACE);
                     }
                 }
                 format
