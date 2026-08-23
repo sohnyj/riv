@@ -14,7 +14,9 @@ use crate::dialogs::resource::{
     IDC_ABOUT_BUILD, IDC_ABOUT_LINK, IDC_ABOUT_TITLE, IDC_ABOUT_VERSION,
 };
 
-const TITLE_POINT_SIZE: i32 = 40;
+/// Title type, shared with the empty-window wordmark that matches it.
+pub const TITLE_POINT_SIZE: i32 = 40;
+pub const TITLE_FONT_FAMILY: windows::core::PCWSTR = w!("Lucida Console");
 const VERSION_POINT_SIZE: i32 = 14;
 
 /// The two fonts the page owns; the Settings dialog frees them when it closes.
@@ -185,7 +187,7 @@ fn create_font(point_size: i32, dpi: i32) -> HFONT {
             CLIP_DEFAULT_PRECIS,
             CLEARTYPE_QUALITY,
             Default::default(),
-            w!("Lucida Console"),
+            TITLE_FONT_FAMILY,
         )
     }
 }

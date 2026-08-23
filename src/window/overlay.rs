@@ -18,6 +18,7 @@ use windows::Win32::System::Time::{FileTimeToSystemTime, SystemTimeToTzSpecificL
 use windows::core::{HSTRING, Result, w};
 use windows_numerics::Vector2;
 
+use crate::dialogs::about::{TITLE_FONT_FAMILY, TITLE_POINT_SIZE};
 use crate::image::color;
 use crate::image::core::ItemMetadata;
 use crate::image::decode::{DecodedImage, PixelStorage};
@@ -387,7 +388,7 @@ fn create_text_formats(
 ) -> Result<(IDWriteTextFormat, IDWriteTextFormat, IDWriteTextFormat)> {
     let create_format = |font_size: f32| unsafe {
         dwrite_factory.CreateTextFormat(
-            w!("Lucida Console"),
+            TITLE_FONT_FAMILY,
             None,
             DWRITE_FONT_WEIGHT_NORMAL,
             DWRITE_FONT_STYLE_NORMAL,
@@ -398,8 +399,8 @@ fn create_text_formats(
     };
     let text_format = create_format(14.0)?;
     let centered_format = create_format(16.0)?;
-    // The wordmark matches the About title: 40pt, size is the only variation.
-    let wordmark_format = create_format(40.0 * 96.0 / 72.0)?;
+    // The About title's point size, to pixels at the D2D 96 DPI baseline.
+    let wordmark_format = create_format(TITLE_POINT_SIZE as f32 * 96.0 / 72.0)?;
     for format in [&centered_format, &wordmark_format] {
         unsafe {
             format.SetTextAlignment(DWRITE_TEXT_ALIGNMENT_CENTER)?;
