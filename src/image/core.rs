@@ -2018,25 +2018,25 @@ fn worker_loop(shared: &PoolShared, window: isize) {
             continue;
         }
         let mut metadata = job.metadata;
+        let post_preview = |image: DecodedImage, last: bool| {
+            post_boxed(
+                window,
+                WM_APP_DECODE_COMPLETE,
+                Box::new(DecodeCompletion {
+                    location: job.location.clone(),
+                    metadata: job.metadata,
+                    stage: if last {
+                        DecodeStage::PreviewFinal
+                    } else {
+                        DecodeStage::Preview
+                    },
+                    result: Ok(Arc::new(image)),
+                    texture: None,
+                }),
+            );
+        };
         let result = match &job.location {
             ItemLocation::File(path) => {
-                let post_preview = |image: DecodedImage, last: bool| {
-                    post_boxed(
-                        window,
-                        WM_APP_DECODE_COMPLETE,
-                        Box::new(DecodeCompletion {
-                            location: job.location.clone(),
-                            metadata: job.metadata,
-                            stage: if last {
-                                DecodeStage::PreviewFinal
-                            } else {
-                                DecodeStage::Preview
-                            },
-                            result: Ok(Arc::new(image)),
-                            texture: None,
-                        }),
-                    );
-                };
                 if job.kind != JobKind::Full
                     && let Some(preview) = decode::decode_two_stage_preview(path, &job.cancellation)
                 {
@@ -2059,6 +2059,19 @@ fn worker_loop(shared: &PoolShared, window: isize) {
                 match archive_reader::read_member(archive, member, &job.cancellation) {
                     Ok(member_bytes) => {
                         let extension = job.location.extension_lowercase();
+                        // An animation opens on its first frame; a guess stops there.
+                        if (job.speculative || job.kind != JobKind::Full)
+                            && let Some(first_frame) = decode::decode_animation_first_frame_bytes(
+                                &member_bytes,
+                                extension.as_deref(),
+                                &job.cancellation,
+                            )
+                        {
+                            post_preview(first_frame, job.speculative);
+                            if job.speculative {
+                                continue;
+                            }
+                        }
                         decode::decode_bytes(&member_bytes, extension.as_deref(), &job.cancellation)
                     }
                     Err(error) => Err(error.into()),

@@ -985,7 +985,22 @@ pub fn decode_animation_first_frame(
     path: &Path,
     cancellation: &AtomicBool,
 ) -> Option<DecodedImage> {
-    let input = DecodeInput::File(path);
+    animation_first_frame(&DecodeInput::File(path), cancellation)
+}
+
+/// First frame of an in-memory animation (an extracted archive member).
+pub fn decode_animation_first_frame_bytes(
+    bytes: &[u8],
+    extension: Option<&str>,
+    cancellation: &AtomicBool,
+) -> Option<DecodedImage> {
+    animation_first_frame(&DecodeInput::Memory { bytes, extension }, cancellation)
+}
+
+fn animation_first_frame(
+    input: &DecodeInput<'_>,
+    cancellation: &AtomicBool,
+) -> Option<DecodedImage> {
     let descriptor = input.descriptor()?;
     if !matches!(descriptor.semantics, FrameSemantics::Animation) {
         return None;
@@ -993,7 +1008,7 @@ pub fn decode_animation_first_frame(
     match descriptor.adapter {
         // A GIF frame can be a placed sub-rectangle, so even one goes through the compositor.
         Adapter::Wic => with_wic_factory(|factory| {
-            let decoder = create_wic_decoder(factory, &input)?;
+            let decoder = create_wic_decoder(factory, input)?;
             if unsafe { decoder.GetFrameCount()? } <= 1 {
                 return Ok(None);
             }
@@ -1003,7 +1018,7 @@ pub fn decode_animation_first_frame(
         .flatten(),
         // The acTL chunk already identified the animation; WIC returns the default image.
         Adapter::Apng => decode_with_wic(
-            &input,
+            input,
             descriptor.name,
             &FrameSemantics::Single,
             cancellation,
