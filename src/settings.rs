@@ -40,6 +40,22 @@ const KEY_DETECT_FORMAT_BY_CONTENT: &str = "detectformatbycontent";
 const KEY_REMEMBER_RECENTS: &str = "rememberrecents";
 const KEY_SKIP_HIDDEN: &str = "skiphidden";
 
+/// riv.json sections and their inner keys; the read and the write name the same constant.
+const SECTION_OPTIONS: &str = "options";
+const SECTION_RECENTS: &str = "recents";
+const SECTION_KEYBOARD_BINDINGS: &str = "keyboardbindings";
+const SECTION_MOUSE_BINDINGS: &str = "mousebindings";
+const SECTION_WINDOW_GEOMETRY: &str = "windowgeometry";
+const KEY_RECENT_FILES: &str = "recentfiles";
+const KEY_RECENT_FILE_NAME: &str = "name";
+const KEY_RECENT_FILE_PATH: &str = "path";
+const KEY_LAST_FILE_DIALOG_DIRECTORY: &str = "lastfiledialogdirectory";
+const KEY_GEOMETRY_X: &str = "x";
+const KEY_GEOMETRY_Y: &str = "y";
+const KEY_GEOMETRY_WIDTH: &str = "width";
+const KEY_GEOMETRY_HEIGHT: &str = "height";
+const KEY_GEOMETRY_MAXIMIZED: &str = "maximized";
+
 /// Combo rows in stored order; the index is read back by `Application::window_title`.
 pub const TITLE_BAR_TEXT_CHOICES: [&str; 4] = [
     "App name",
@@ -119,7 +135,7 @@ impl Options {
 
     fn from_document(document: &Value) -> Self {
         let default = Self::default();
-        let Some(options) = document.get("options").and_then(Value::as_object) else {
+        let Some(options) = document.get(SECTION_OPTIONS).and_then(Value::as_object) else {
             return default;
         };
         let boolean = |key: &str, fallback: bool| {
@@ -262,15 +278,15 @@ pub struct SettingsFile {
 
 fn recent_files_of(document: &Value) -> Vec<(String, String)> {
     document
-        .get("recents")
-        .and_then(|recents| recents.get("recentfiles"))
+        .get(SECTION_RECENTS)
+        .and_then(|recents| recents.get(KEY_RECENT_FILES))
         .and_then(Value::as_array)
         .map(|list| {
             list.iter()
                 .filter_map(|entry| {
                     Some((
-                        entry.get("name")?.as_str()?.to_string(),
-                        entry.get("path")?.as_str()?.to_string(),
+                        entry.get(KEY_RECENT_FILE_NAME)?.as_str()?.to_string(),
+                        entry.get(KEY_RECENT_FILE_PATH)?.as_str()?.to_string(),
                     ))
                 })
                 .collect()
@@ -301,11 +317,11 @@ impl SettingsFile {
     }
 
     pub fn keyboard_bindings(&self) -> Option<&Map<String, Value>> {
-        self.document.get("keyboardbindings")?.as_object()
+        self.document.get(SECTION_KEYBOARD_BINDINGS)?.as_object()
     }
 
     pub fn mouse_bindings(&self) -> Option<&Map<String, Value>> {
-        self.document.get("mousebindings")?.as_object()
+        self.document.get(SECTION_MOUSE_BINDINGS)?.as_object()
     }
 
     /// Writes the in-memory options into the settings document (persisted at exit/Apply).
@@ -328,12 +344,12 @@ impl SettingsFile {
         let document = document_object(&mut self.document);
         for (section, resolved, defaults_of) in [
             (
-                "keyboardbindings",
+                SECTION_KEYBOARD_BINDINGS,
                 keyboard,
                 crate::bindings::default_keyboard_sequences as fn(&str) -> &'static [&'static str],
             ),
             (
-                "mousebindings",
+                SECTION_MOUSE_BINDINGS,
                 mouse,
                 crate::bindings::default_mouse_encodings as fn(&str) -> &'static [&'static str],
             ),
@@ -367,7 +383,7 @@ impl SettingsFile {
     }
 
     pub fn window_geometry(&self) -> Option<(i32, i32, i32, i32, bool)> {
-        let geometry = self.document.get("windowgeometry")?;
+        let geometry = self.document.get(SECTION_WINDOW_GEOMETRY)?;
         // A stored value past i32 drops the restore instead of wrapping into it.
         let read = |key: &str| {
             geometry
@@ -376,12 +392,12 @@ impl SettingsFile {
                 .and_then(|value| i32::try_from(value).ok())
         };
         Some((
-            read("x")?,
-            read("y")?,
-            read("width").filter(|width| *width > 0)?,
-            read("height").filter(|height| *height > 0)?,
+            read(KEY_GEOMETRY_X)?,
+            read(KEY_GEOMETRY_Y)?,
+            read(KEY_GEOMETRY_WIDTH).filter(|width| *width > 0)?,
+            read(KEY_GEOMETRY_HEIGHT).filter(|height| *height > 0)?,
             geometry
-                .get("maximized")
+                .get(KEY_GEOMETRY_MAXIMIZED)
                 .and_then(Value::as_bool)
                 .unwrap_or(false),
         ))
@@ -396,21 +412,27 @@ impl SettingsFile {
         maximized: bool,
     ) {
         document_object(&mut self.document).insert(
-                "windowgeometry".to_string(),
-                serde_json::json!({ "x": x, "y": y, "width": width, "height": height, "maximized": maximized }),
-            );
+            SECTION_WINDOW_GEOMETRY.to_string(),
+            serde_json::json!({
+                KEY_GEOMETRY_X: x,
+                KEY_GEOMETRY_Y: y,
+                KEY_GEOMETRY_WIDTH: width,
+                KEY_GEOMETRY_HEIGHT: height,
+                KEY_GEOMETRY_MAXIMIZED: maximized,
+            }),
+        );
     }
 
     pub fn last_file_dialog_directory(&self) -> Option<&str> {
         self.document
-            .get("recents")?
-            .get("lastfiledialogdirectory")?
+            .get(SECTION_RECENTS)?
+            .get(KEY_LAST_FILE_DIALOG_DIRECTORY)?
             .as_str()
     }
 
     pub fn set_last_file_dialog_directory(&mut self, directory: &str) {
-        object_section(document_object(&mut self.document), "recents").insert(
-            "lastfiledialogdirectory".to_string(),
+        object_section(document_object(&mut self.document), SECTION_RECENTS).insert(
+            KEY_LAST_FILE_DIALOG_DIRECTORY.to_string(),
             Value::String(directory.to_string()),
         );
     }
@@ -444,7 +466,7 @@ impl SettingsFile {
             self.set_recent_files(&files);
         } else {
             // set_last_file_dialog_directory can re-insert the section after write_options dropped it.
-            document_object(&mut self.document).remove("recents");
+            document_object(&mut self.document).remove(SECTION_RECENTS);
         }
         self.save()
     }
@@ -452,10 +474,12 @@ impl SettingsFile {
     fn set_recent_files(&mut self, files: &[(String, String)]) {
         let list: Vec<Value> = files
             .iter()
-            .map(|(name, path)| serde_json::json!({ "name": name, "path": path }))
+            .map(|(name, path)| {
+                serde_json::json!({ KEY_RECENT_FILE_NAME: name, KEY_RECENT_FILE_PATH: path })
+            })
             .collect();
-        object_section(document_object(&mut self.document), "recents")
-            .insert("recentfiles".to_string(), Value::Array(list));
+        object_section(document_object(&mut self.document), SECTION_RECENTS)
+            .insert(KEY_RECENT_FILES.to_string(), Value::Array(list));
     }
 
     pub fn add_recent_file(&mut self, path: &std::path::Path) {
@@ -628,7 +652,7 @@ fn write_options(document: &mut Value, options: &Options) {
         ),
     ];
     let document = document_object(document);
-    let options_object = object_section(document, "options");
+    let options_object = object_section(document, SECTION_OPTIONS);
     for (key, value, default_value) in entries {
         if value == default_value {
             options_object.remove(key);
@@ -637,7 +661,7 @@ fn write_options(document: &mut Value, options: &Options) {
         }
     }
     if !options.remember_recents {
-        document.remove("recents");
+        document.remove(SECTION_RECENTS);
     }
 }
 
