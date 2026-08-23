@@ -246,7 +246,10 @@ const _: () = assert!(
 
 /// Whether `frame_count` canvas-sized frames would expand past the byte limit.
 pub(crate) fn animation_budget_exceeded(frame_count: u64, canvas_bytes: u64) -> bool {
-    frame_count * canvas_bytes > MAXIMUM_ANIMATION_FRAMES_BYTES
+    // A forged header can overflow the product; overflow reads as exceeded.
+    frame_count
+        .checked_mul(canvas_bytes)
+        .is_none_or(|bytes| bytes > MAXIMUM_ANIMATION_FRAMES_BYTES)
 }
 
 /// A zeroed buffer of `bytes`, or None when memory runs short; vec! would abort on OOM.
@@ -3729,6 +3732,17 @@ mod decoded_weight_tests {
         // A forged canvas is never capped: the weight blocks speculation instead.
         let frame_bytes = 60000u64 * 60000 * 4;
         assert_eq!(decoded_weight(60000, 60000, 4, 10), frame_bytes);
+    }
+
+    #[test]
+    fn a_wrapping_frame_product_reads_as_exceeded() {
+        // acTL's u32 frame count times a 65535-square canvas overflows u64 in release.
+        let frame_bytes = 65535u64 * 65535 * 4;
+        assert!(animation_budget_exceeded(u64::from(u32::MAX), frame_bytes));
+        assert_eq!(
+            decoded_weight(65535, 65535, 4, u64::from(u32::MAX)),
+            frame_bytes
+        );
     }
 }
 
