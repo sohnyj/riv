@@ -223,7 +223,7 @@ impl<'a> MenuBuilder<'a> {
         if !state.recent_names.is_empty() {
             self.append_separator(recent)?;
         }
-        self.append_action_labeled(recent, Action::ClearRecents, "Clear recents")?;
+        self.append_action(recent, Action::ClearRecents)?;
         self.append_submenu(menu, recent, "Open recent", true)?;
         let open_with = self.create_menu()?;
         for (index, label) in state.open_with_items.iter().enumerate() {
@@ -235,7 +235,7 @@ impl<'a> MenuBuilder<'a> {
         if !state.open_with_items.is_empty() {
             self.append_separator(open_with)?;
         }
-        self.append_action_labeled(open_with, Action::OtherApplication, "Other application...")?;
+        self.append_action(open_with, Action::OtherApplication)?;
         // No on-disk file (archive member or URL) means nothing to hand off.
         self.append_submenu(
             menu,
@@ -266,7 +266,7 @@ impl<'a> MenuBuilder<'a> {
         let pause_label = if self.state.animation_paused {
             "Resume"
         } else {
-            "Pause"
+            Action::Pause.label()
         };
         self.append_action_labeled(playback, Action::Pause, pause_label)?;
         self.append_action(playback, Action::PreviousFrame)?;
