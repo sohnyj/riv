@@ -82,12 +82,12 @@ use windows::Win32::UI::WindowsAndMessaging::{
     SW_SHOWMINIMIZED, SWP_FRAMECHANGED, SWP_NOACTIVATE, SWP_NOMOVE, SWP_NOSIZE, SWP_NOZORDER,
     SendMessageW, SetCursor, SetTimer, SetWindowLongPtrW, SetWindowPlacement, SetWindowPos,
     SetWindowTextW, ShowWindow, TranslateMessage, WA_INACTIVE, WINDOWPLACEMENT, WM_ACTIVATE,
-    WM_APP, WM_CLOSE, WM_CONTEXTMENU, WM_DESTROY, WM_DISPLAYCHANGE, WM_DPICHANGED,
-    WM_ENTERSIZEMOVE, WM_EXITSIZEMOVE, WM_GESTURE, WM_GETMINMAXINFO, WM_KEYDOWN, WM_LBUTTONDBLCLK,
-    WM_LBUTTONDOWN, WM_LBUTTONUP, WM_MBUTTONDOWN, WM_MOUSEHWHEEL, WM_MOUSEMOVE, WM_MOUSEWHEEL,
-    WM_MOVE, WM_NCDESTROY, WM_NCLBUTTONDOWN, WM_PAINT, WM_QUIT, WM_SETCURSOR, WM_SIZE, WM_SYSCHAR,
-    WM_SYSCOMMAND, WM_SYSKEYDOWN, WM_TIMER, WM_XBUTTONDOWN, WNDCLASSEXW, WS_OVERLAPPEDWINDOW,
-    WindowFromPoint,
+    WM_APP, WM_CAPTURECHANGED, WM_CLOSE, WM_CONTEXTMENU, WM_DESTROY, WM_DISPLAYCHANGE,
+    WM_DPICHANGED, WM_ENTERSIZEMOVE, WM_EXITSIZEMOVE, WM_GESTURE, WM_GETMINMAXINFO, WM_KEYDOWN,
+    WM_LBUTTONDBLCLK, WM_LBUTTONDOWN, WM_LBUTTONUP, WM_MBUTTONDOWN, WM_MOUSEHWHEEL, WM_MOUSEMOVE,
+    WM_MOUSEWHEEL, WM_MOVE, WM_NCDESTROY, WM_NCLBUTTONDOWN, WM_PAINT, WM_QUIT, WM_SETCURSOR,
+    WM_SIZE, WM_SYSCHAR, WM_SYSCOMMAND, WM_SYSKEYDOWN, WM_TIMER, WM_XBUTTONDOWN, WNDCLASSEXW,
+    WS_OVERLAPPEDWINDOW, WindowFromPoint,
 };
 use windows::core::{HSTRING, PCWSTR, Result, w};
 use windows_version::OsVersion;
@@ -2722,6 +2722,13 @@ extern "system" fn window_procedure(
                 && application.pan_drag_position.take().is_some()
             {
                 let _ = unsafe { ReleaseCapture() };
+            }
+            LRESULT(0)
+        }
+        WM_CAPTURECHANGED => {
+            // A taken capture swallows the ending release, so the drag ends here instead.
+            if let Some(application) = application_from_window(window) {
+                application.pan_drag_position = None;
             }
             LRESULT(0)
         }
