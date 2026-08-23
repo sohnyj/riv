@@ -481,7 +481,7 @@ impl SettingsFile {
         self.set_recent_files(&files);
     }
 
-    /// Drops the entry and tombstones it so the exit merge cannot restore it.
+    /// Drops the entry and records its key so the exit merge cannot restore it.
     pub fn remove_recent_file(&mut self, path: &std::path::Path) {
         let text = path.to_string_lossy();
         let mut files = self.recent_files();
