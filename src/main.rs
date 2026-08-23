@@ -1695,8 +1695,12 @@ fn dispatch_action(application: &mut Application, window: HWND, action: Action) 
             application.request_render(window);
         }
         Action::Open => {
-            let last_directory = application.settings.last_file_dialog_directory();
-            let mut paths = open_dialog::show(window, last_directory).into_iter();
+            // Owned across the modal: the dialog's loop re-enters and re-borrows settings.
+            let last_directory = application
+                .settings
+                .last_file_dialog_directory()
+                .map(str::to_owned);
+            let mut paths = open_dialog::show(window, last_directory.as_deref()).into_iter();
             let first = paths.next();
             for rest in paths {
                 open_in_new_window(&rest);
