@@ -1335,6 +1335,8 @@ impl ImageCore {
     fn rescan_folder(&mut self, directory: &Path) {
         let mut entries = scan_folder(directory, &self.options);
         self.carry_weights_into(&mut entries);
+        // A dropped anchor keeps its place here too, as the scan arrival already does.
+        self.missing_anchor = self.missing_anchor_for(&entries);
         self.entries = entries;
         self.listing_scope = Some(ListingScope::Directory(directory.to_path_buf()));
     }
@@ -2769,6 +2771,26 @@ mod listing_scan_tests {
         assert_eq!(core.entries.len(), 2);
         let chosen = ItemLocation::File(std::path::absolute(&chosen).expect("absolute"));
         assert!(core.request.pending() == Some(&chosen));
+        let _ = std::fs::remove_dir_all(&directory);
+    }
+
+    #[test]
+    fn a_dropped_anchor_keeps_its_place_through_a_synchronous_rescan() {
+        let directory = fixture_directory("riv-rescan-anchor", &["1.png", "2.png", "3.png"]);
+        let mut core = core();
+        core.load_path(&directory.join("2.png"));
+        let scan = ScannedListing::of(ListingScope::Directory(directory.clone()), &core.options);
+        core.install_listing_scan(scan);
+        assert_eq!(core.entries.len(), 3);
+        // The viewed file drops out when an options change re-collects the listing.
+        std::fs::remove_file(directory.join("2.png")).expect("remove");
+        core.rescan_listing();
+        assert_eq!(core.entries.len(), 2);
+        // Next continues at the vanished position, not at the first entry.
+        core.navigate(NavigationCommand::Next);
+        let successor =
+            ItemLocation::File(std::path::absolute(directory.join("3.png")).expect("absolute"));
+        assert!(core.request.pending() == Some(&successor));
         let _ = std::fs::remove_dir_all(&directory);
     }
 
