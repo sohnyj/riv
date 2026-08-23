@@ -296,6 +296,7 @@ impl Drop for Renderer {
         unsafe { self.d2d_context.SetTarget(None) };
         self.effect_output = None;
         self.image = None;
+        self.gain_state = None;
         self.target = None;
         self.scene_shader_resource_view = None;
         self.backbuffer_render_target_view = None;
