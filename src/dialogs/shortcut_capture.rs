@@ -40,6 +40,9 @@ const WM_RIV_KEY_REMOVE: u32 = WM_APP + 0x42;
 
 const REMOVE_ICON_RED: COLORREF = COLORREF(0x001C_2BC4); // BGR of #C42B1C
 
+/// Unbound-field placeholder; the paint handler recovers it by string comparison.
+const NO_BINDING_TEXT: &str = "None";
+
 pub fn capture_keyboard_sequences(
     parent: HWND,
     current: &[String],
@@ -262,7 +265,8 @@ unsafe extern "system" fn mouse_procedure(
 
 fn set_mouse_field_text(dialog: HWND, binding: Option<&str>) {
     if let Ok(field) = unsafe { GetDlgItem(Some(dialog), IDC_CAPTURE_MOUSE_FIELD) } {
-        let _ = unsafe { SetWindowTextW(field, &HSTRING::from(binding.unwrap_or("None"))) };
+        let _ =
+            unsafe { SetWindowTextW(field, &HSTRING::from(binding.unwrap_or(NO_BINDING_TEXT))) };
         let _ = unsafe { InvalidateRect(Some(field), None, false) };
     }
 }
@@ -622,10 +626,14 @@ unsafe extern "system" fn mouse_field_procedure(
                 windows::Win32::UI::WindowsAndMessaging::GetWindowTextW(field, &mut text)
             };
             let current = String::from_utf16_lossy(&text[..length as usize]);
-            let hint = current.is_empty() || current == "None";
+            let hint = current.is_empty() || current == NO_BINDING_TEXT;
             paint_field(
                 field,
-                if current.is_empty() { "None" } else { &current },
+                if current.is_empty() {
+                    NO_BINDING_TEXT
+                } else {
+                    &current
+                },
                 hint,
             );
             LRESULT(0)
