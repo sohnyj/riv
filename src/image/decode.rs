@@ -253,6 +253,9 @@ pub const DEFAULT_FRAME_DELAY_MILLISECONDS: u32 = 100;
 /// Header probe window; the memory and the file inputs must classify identically.
 const HEADER_PROBE_BYTES: usize = 4096;
 
+/// Highest source depth the HDR transfer tables cover; the table arrays are sized from it.
+pub(crate) const MAXIMUM_HDR_SOURCE_BITS: u32 = 16;
+
 // Shrinking the budget below one full-size canvas would need a per-canvas check in FrameCompositor::new.
 const _: () = assert!(
     MAXIMUM_TEXTURE_DIMENSION as u64 * MAXIMUM_TEXTURE_DIMENSION as u64 * 4
@@ -1723,10 +1726,12 @@ pub(crate) fn boxed_lookup_table<T: Copy + Default + std::fmt::Debug>() -> Box<[
 
 /// Exact code lookup per source depth, with the full-range expansion folded in.
 fn hdr_transfer_lookup_table(transfer: HdrTransfer, source_bits: u32) -> &'static [f32; 65536] {
-    // One table per source depth, 1 through 16.
-    type TablesByDepth = [OnceLock<Box<[f32; 65536]>>; 17];
-    static PERCEPTUAL_QUANTIZER_TABLES: TablesByDepth = [const { OnceLock::new() }; 17];
-    static HYBRID_LOG_GAMMA_TABLES: TablesByDepth = [const { OnceLock::new() }; 17];
+    // One table per source depth, indexed by its bit count; slot 0 stays unused.
+    type TablesByDepth = [OnceLock<Box<[f32; 65536]>>; MAXIMUM_HDR_SOURCE_BITS as usize + 1];
+    static PERCEPTUAL_QUANTIZER_TABLES: TablesByDepth =
+        [const { OnceLock::new() }; MAXIMUM_HDR_SOURCE_BITS as usize + 1];
+    static HYBRID_LOG_GAMMA_TABLES: TablesByDepth =
+        [const { OnceLock::new() }; MAXIMUM_HDR_SOURCE_BITS as usize + 1];
     let (tables, function): (&TablesByDepth, fn(f32) -> f32) = match transfer {
         HdrTransfer::PerceptualQuantizer => {
             (&PERCEPTUAL_QUANTIZER_TABLES, perceptual_quantizer_nits)
@@ -1902,7 +1907,7 @@ pub(crate) fn linearize_hdr_pixels(
     encoding: HdrEncoding,
     source_bits: u32,
 ) -> u16 {
-    let source_bits = source_bits.clamp(1, 16);
+    let source_bits = source_bits.clamp(1, MAXIMUM_HDR_SOURCE_BITS);
     let transfer_table = hdr_transfer_lookup_table(encoding.transfer, source_bits);
     let source_maximum = ((1u32 << source_bits) - 1) as f32;
     map_pixel_blocks(pixels, 8, |block| {

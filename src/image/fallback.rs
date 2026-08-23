@@ -8,9 +8,10 @@ use windows::core::HSTRING;
 
 use crate::image::decode::{
     DEFAULT_FRAME_DELAY_MILLISECONDS, DecodeError, DecodedImage, Frame, FrameBlend,
-    FrameCompositor, FrameDisposal, FrameRegion, HdrEncoding, PixelStorage, cicp_hdr_encoding,
-    linearize_hdr_pixels, peak_luminance_from_half_pixels, peak_luminance_with_maximum_bits,
-    premultiplied_bgra_from_rgba, try_zeroed_buffer, uncoded_error,
+    FrameCompositor, FrameDisposal, FrameRegion, HdrEncoding, MAXIMUM_HDR_SOURCE_BITS,
+    PixelStorage, cicp_hdr_encoding, linearize_hdr_pixels, peak_luminance_from_half_pixels,
+    peak_luminance_with_maximum_bits, premultiplied_bgra_from_rgba, try_zeroed_buffer,
+    uncoded_error,
 };
 
 /// Must match the built libwebpdemux ABI or WebPDemuxInternal returns null.
@@ -605,7 +606,7 @@ fn decode_heif_primary_image(
     if plane.is_null()
         || width <= 0
         || height <= 0
-        || !(1..=16).contains(&source_bits_per_channel)
+        || !(1..=MAXIMUM_HDR_SOURCE_BITS as c_int).contains(&source_bits_per_channel)
         || i64::from(stride) < row_bytes
     {
         unsafe { heif_image_release(image) };
