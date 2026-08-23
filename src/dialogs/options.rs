@@ -102,7 +102,7 @@ struct AssociationGroup {
 struct OptionsState {
     parent: HWND,
     dialog: HWND,
-    pages: [HWND; 7],
+    pages: [HWND; PAGES.len()],
     saved_options: Options,
     transient_options: Options,
     saved_shortcuts: Vec<ShortcutRow>,
@@ -213,7 +213,7 @@ pub fn show(parent: HWND, snapshot: OptionsSnapshot) {
     let mut state = OptionsState {
         parent,
         dialog: HWND::default(),
-        pages: [HWND::default(); 7],
+        pages: [HWND::default(); PAGES.len()],
         saved_options: options.clone(),
         transient_options: options,
         saved_shortcuts: shortcuts.clone(),
@@ -393,6 +393,25 @@ const PAGES: [(u16, &str); 7] = [
     (IDD_PAGE_ABOUT, "About"),
 ];
 
+/// A page's slot in `pages`, derived from the table so a reorder cannot strand an index.
+const fn page_position(template: u16) -> usize {
+    let mut index = 0;
+    while index < PAGES.len() {
+        if PAGES[index].0 == template {
+            return index;
+        }
+        index += 1;
+    }
+    panic!("the template is not in PAGES");
+}
+const WINDOW_PAGE: usize = page_position(IDD_PAGE_WINDOW);
+const IMAGE_PAGE: usize = page_position(IDD_PAGE_IMAGE);
+const MISCELLANEOUS_PAGE: usize = page_position(IDD_PAGE_MISCELLANEOUS);
+const SHORTCUTS_PAGE: usize = page_position(IDD_PAGE_SHORTCUTS);
+const ASSOCIATION_PAGE: usize = page_position(IDD_PAGE_ASSOCIATION);
+const START_MENU_PAGE: usize = page_position(IDD_PAGE_START_MENU);
+const ABOUT_PAGE: usize = page_position(IDD_PAGE_ABOUT);
+
 fn ensure_page(state: &mut OptionsState, tab: HWND, index: usize) {
     if !state.pages[index].is_invalid() {
         return;
@@ -423,19 +442,18 @@ fn ensure_page(state: &mut OptionsState, tab: HWND, index: usize) {
     };
     state.pages[index] = page;
     match index {
-        0 => initialize_window_page(state),
-        1 => initialize_image_page(state),
-        2 => initialize_miscellaneous_page(state),
-        3 => {
+        WINDOW_PAGE => initialize_window_page(state),
+        IMAGE_PAGE => initialize_image_page(state),
+        MISCELLANEOUS_PAGE => initialize_miscellaneous_page(state),
+        SHORTCUTS_PAGE => {
             fit_page_controls(page, IDC_SHORTCUTS_LIST, IDC_SHORTCUTS_CLEAR_ALL);
             initialize_shortcuts_page(state);
         }
-        4 => {
+        ASSOCIATION_PAGE => {
             fit_page_controls(page, IDC_ASSOCIATION_TREE, IDC_ASSOCIATION_SELECT_NONE);
             initialize_association_page(state);
         }
-        5 => {}
-        6 => state.about_fonts = about::initialize_page(page),
+        ABOUT_PAGE => state.about_fonts = about::initialize_page(page),
         _ => {}
     }
     sync_page(state, index);
@@ -748,12 +766,12 @@ fn apply_page_command(
 }
 
 fn initialize_window_page(state: &OptionsState) {
-    let page = state.pages[0];
+    let page = state.pages[WINDOW_PAGE];
     combo_fill(page, IDC_WINDOW_TITLEBAR_MODE, &TITLE_BAR_TEXT_CHOICES);
 }
 
 fn initialize_image_page(state: &OptionsState) {
-    let page = state.pages[1];
+    let page = state.pages[IMAGE_PAGE];
     combo_fill(
         page,
         IDC_IMAGE_SCALING,
@@ -783,7 +801,7 @@ fn initialize_image_page(state: &OptionsState) {
 }
 
 fn initialize_miscellaneous_page(state: &OptionsState) {
-    let page = state.pages[2];
+    let page = state.pages[MISCELLANEOUS_PAGE];
     combo_fill(
         page,
         IDC_MISCELLANEOUS_SORT,
@@ -820,21 +838,21 @@ fn sync_all_pages(state: &mut OptionsState) {
 fn sync_page(state: &mut OptionsState, index: usize) {
     state.syncing = true;
     match index {
-        0 => sync_window_page(state),
-        1 => sync_image_page(state),
-        2 => sync_miscellaneous_page(state),
-        5 => sync_start_menu_page(state),
+        WINDOW_PAGE => sync_window_page(state),
+        IMAGE_PAGE => sync_image_page(state),
+        MISCELLANEOUS_PAGE => sync_miscellaneous_page(state),
+        START_MENU_PAGE => sync_start_menu_page(state),
         _ => {}
     }
     state.syncing = false;
-    if index == 3 {
+    if index == SHORTCUTS_PAGE {
         refresh_shortcut_rows(state);
     }
 }
 
 fn sync_window_page(state: &OptionsState) {
     let options = &state.transient_options;
-    let window_page = state.pages[0];
+    let window_page = state.pages[WINDOW_PAGE];
     set_check(
         window_page,
         IDC_WINDOW_BACKGROUND_COLOR_ENABLED,
@@ -865,7 +883,7 @@ fn sync_window_page(state: &OptionsState) {
 
 fn sync_image_page(state: &OptionsState) {
     let options = &state.transient_options;
-    let image_page = state.pages[1];
+    let image_page = state.pages[IMAGE_PAGE];
     combo_select(image_page, IDC_IMAGE_SCALING, options.scaling_filter);
     combo_select(image_page, IDC_IMAGE_DITHER, options.dither_mode);
     combo_select(image_page, IDC_IMAGE_FITMODE, options.fit_mode);
@@ -882,7 +900,7 @@ fn sync_image_page(state: &OptionsState) {
 
 fn sync_miscellaneous_page(state: &OptionsState) {
     let options = &state.transient_options;
-    let miscellaneous_page = state.pages[2];
+    let miscellaneous_page = state.pages[MISCELLANEOUS_PAGE];
     combo_select(
         miscellaneous_page,
         IDC_MISCELLANEOUS_SORT,
@@ -947,7 +965,7 @@ fn sync_miscellaneous_page(state: &OptionsState) {
 
 fn sync_start_menu_page(state: &OptionsState) {
     set_check(
-        state.pages[5],
+        state.pages[START_MENU_PAGE],
         IDC_START_MENU_SHORTCUT,
         state.start_menu_desired,
     );
@@ -1029,7 +1047,7 @@ fn choose_background_color(page: HWND) {
 }
 
 fn initialize_shortcuts_page(state: &OptionsState) {
-    let page = state.pages[3];
+    let page = state.pages[SHORTCUTS_PAGE];
     let Ok(list) = (unsafe { GetDlgItem(Some(page), IDC_SHORTCUTS_LIST) }) else {
         return;
     };
@@ -1092,7 +1110,8 @@ fn initialize_shortcuts_page(state: &OptionsState) {
 }
 
 fn refresh_shortcut_rows(state: &OptionsState) {
-    let Ok(list) = (unsafe { GetDlgItem(Some(state.pages[3]), IDC_SHORTCUTS_LIST) }) else {
+    let Ok(list) = (unsafe { GetDlgItem(Some(state.pages[SHORTCUTS_PAGE]), IDC_SHORTCUTS_LIST) })
+    else {
         return;
     };
     for (index, row) in state.transient_shortcuts.iter().enumerate() {
@@ -1171,7 +1190,7 @@ fn edit_shortcut(page: HWND, row_index: usize, mouse_column: bool) {
 }
 
 fn initialize_association_page(state: &mut OptionsState) {
-    let page = state.pages[4];
+    let page = state.pages[ASSOCIATION_PAGE];
     let Ok(tree) = (unsafe { GetDlgItem(Some(page), IDC_ASSOCIATION_TREE) }) else {
         return;
     };
@@ -1422,7 +1441,9 @@ fn refresh_group_check_image(state: &OptionsState, tree: HWND, group_index: usiz
 }
 
 fn set_all_associations(state: &mut OptionsState, checked: bool) {
-    let Ok(tree) = (unsafe { GetDlgItem(Some(state.pages[4]), IDC_ASSOCIATION_TREE) }) else {
+    let Ok(tree) =
+        (unsafe { GetDlgItem(Some(state.pages[ASSOCIATION_PAGE]), IDC_ASSOCIATION_TREE) })
+    else {
         return;
     };
     for entry in &mut state.extensions {
