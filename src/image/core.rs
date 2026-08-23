@@ -1358,6 +1358,10 @@ impl ImageCore {
             })
             .and_then(|candidate| candidate.as_file().map(Path::to_path_buf));
         self.remove_listing_entry(location);
+        // The file is gone; its decode must not outlive it in the cache.
+        if let Some(entry) = self.cache.remove(location) {
+            self.releaser.release(entry.image);
+        }
         if successor.is_none() {
             self.clear_current_item();
         }
@@ -3001,6 +3005,59 @@ mod navigation_direction_tests {
 #[cfg(test)]
 mod deleted_item_tests {
     use super::*;
+
+    /// A minimal cached decode, enough for the eviction assertions.
+    fn cache_stub(core: &mut ImageCore, location: &ItemLocation) {
+        let image = decode::DecodedImage {
+            width: 1,
+            height: 1,
+            pixel_width: 1,
+            pixel_height: 1,
+            format_name: "PNG",
+            icc_profile: None,
+            exif: None,
+            storage: decode::PixelStorage::Bgra8,
+            source_bits_per_channel: 8,
+            peak_luminance_nits: None,
+            source_primaries: None,
+            frames: vec![decode::Frame {
+                pixels: vec![0; 4],
+                delay_milliseconds: 0,
+            }],
+            frames_truncated: false,
+            gain_map: None,
+            gain_map_plane: None,
+        };
+        core.cache.insert(
+            location.clone(),
+            CacheEntry {
+                metadata: ItemMetadata::default(),
+                preview: false,
+                image: Arc::new(image),
+                texture: None,
+            },
+        );
+    }
+
+    #[test]
+    fn a_deleted_item_leaves_the_cache_with_it() {
+        let file = |index: usize| {
+            ItemLocation::File(PathBuf::from(format!("C:\\pictures\\{index:03}.png")))
+        };
+        let mut core = core_with_files(2, Some(0));
+        cache_stub(&mut core, &file(0));
+        core.remove_deleted_item(&file(0), NavigationCommand::Next);
+        assert!(core.cache.is_empty());
+
+        // The empty-window branch used to keep the entry until the next load.
+        let mut core = core_with_files(1, Some(0));
+        cache_stub(&mut core, &file(0));
+        assert_eq!(
+            core.remove_deleted_item(&file(0), NavigationCommand::Next),
+            None
+        );
+        assert!(core.cache.is_empty());
+    }
 
     #[test]
     fn a_deleted_item_hands_the_place_to_its_successor() {
