@@ -72,6 +72,12 @@ const STATE_UNCHECKED: isize = 1;
 const STATE_CHECKED: isize = 2;
 const STATE_PARTIAL: isize = 3;
 
+/// Tri-state check cell edge; the image list, the bitmap, and both rectangles share it.
+const STATE_IMAGE_SIZE: i32 = 16;
+
+/// TVIS state image slot: the index sits above this shift (INDEXTOSTATEIMAGEMASK).
+const STATE_IMAGE_SHIFT: u32 = 12;
+
 /// State image for a leaf row; groups pick their own from the member count.
 fn check_state(checked: bool) -> isize {
     if checked {
@@ -1272,7 +1278,15 @@ fn insert_extension(
 }
 
 fn create_tristate_images() -> HIMAGELIST {
-    let images = unsafe { ImageList_Create(16, 16, ILC_COLOR32 | ILC_MASK, 4, 0) };
+    let images = unsafe {
+        ImageList_Create(
+            STATE_IMAGE_SIZE,
+            STATE_IMAGE_SIZE,
+            ILC_COLOR32 | ILC_MASK,
+            4,
+            0,
+        )
+    };
     let screen = unsafe { GetDC(None) };
     for style in [
         DFCS_BUTTONCHECK, // index 0 placeholder (state image 0 = none)
@@ -1282,21 +1296,21 @@ fn create_tristate_images() -> HIMAGELIST {
     ] {
         unsafe {
             let memory = CreateCompatibleDC(Some(screen));
-            let bitmap = CreateCompatibleBitmap(screen, 16, 16);
+            let bitmap = CreateCompatibleBitmap(screen, STATE_IMAGE_SIZE, STATE_IMAGE_SIZE);
             let previous = SelectObject(memory, bitmap.into());
             let mut bounds = RECT {
                 left: 1,
                 top: 1,
-                right: 15,
-                bottom: 15,
+                right: STATE_IMAGE_SIZE - 1,
+                bottom: STATE_IMAGE_SIZE - 1,
             };
             FillRect(
                 memory,
                 &RECT {
                     left: 0,
                     top: 0,
-                    right: 16,
-                    bottom: 16,
+                    right: STATE_IMAGE_SIZE,
+                    bottom: STATE_IMAGE_SIZE,
                 },
                 GetSysColorBrush(windows::Win32::Graphics::Gdi::COLOR_WINDOW),
             );
@@ -1327,7 +1341,7 @@ fn tree_insert(
                 mask: TVIF_TEXT | TVIF_PARAM | TVIF_STATE,
                 pszText: windows::core::PWSTR(label.as_ptr().cast_mut()),
                 lParam: LPARAM(item_data),
-                state: (state_image as u32) << 12,
+                state: (state_image as u32) << STATE_IMAGE_SHIFT,
                 stateMask: TVIS_STATEIMAGEMASK.0,
                 ..Default::default()
             },
