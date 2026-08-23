@@ -887,11 +887,18 @@ fn group_thousands(value: u64) -> String {
 
 /// Fixed 24-hour local time; locale forms can pull fallback glyphs into the panel.
 fn format_local_datetime(time: SystemTime) -> String {
-    let Ok(elapsed) = time.duration_since(UNIX_EPOCH) else {
-        return String::new();
+    // FILETIME reaches back to 1601, so a modified time before 1970 still formats.
+    let epoch_intervals = u128::from(crate::image::decode::FILETIME_UNIX_EPOCH);
+    let intervals = match time.duration_since(UNIX_EPOCH) {
+        Ok(elapsed) => epoch_intervals + elapsed.as_nanos() / 100,
+        Err(earlier) => {
+            let Some(intervals) = epoch_intervals.checked_sub(earlier.duration().as_nanos() / 100)
+            else {
+                return String::new();
+            };
+            intervals
+        }
     };
-    let intervals =
-        elapsed.as_nanos() / 100 + u128::from(crate::image::decode::FILETIME_UNIX_EPOCH);
     let file_time = FILETIME {
         dwLowDateTime: intervals as u32,
         dwHighDateTime: (intervals >> 32) as u32,
@@ -907,6 +914,19 @@ fn format_local_datetime(time: SystemTime) -> String {
         "{:04}-{:02}-{:02} {:02}:{:02}:{:02}",
         local.wYear, local.wMonth, local.wDay, local.wHour, local.wMinute, local.wSecond
     )
+}
+
+#[cfg(test)]
+mod datetime_tests {
+    use super::*;
+    use std::time::Duration;
+
+    #[test]
+    fn a_timestamp_before_1970_still_formats() {
+        // Mid-1969: no time zone offset can move the year.
+        let time = UNIX_EPOCH - Duration::from_secs(184 * 24 * 60 * 60);
+        assert!(format_local_datetime(time).starts_with("1969-"));
+    }
 }
 
 #[cfg(test)]
