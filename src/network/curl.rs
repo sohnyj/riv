@@ -92,6 +92,7 @@ pub fn download(
         return Err(NetworkError::new("Unsupported URL protocol"));
     }
     let maximum_bytes = MAXIMUM_DOWNLOAD_BYTES.to_string();
+    let protocol_allowlist = format!("={}", SUPPORTED_PROTOCOLS.join(","));
     let mut child = Command::new(executable_path())
         .args([
             "--silent",
@@ -102,9 +103,9 @@ pub fn download(
             "10",
             "--globoff",
             "--proto",
-            "=http,https",
+            protocol_allowlist.as_str(),
             "--proto-redir",
-            "=http,https",
+            protocol_allowlist.as_str(),
             "--max-filesize",
             maximum_bytes.as_str(),
             "--connect-timeout",
