@@ -60,6 +60,15 @@ impl PixelStorage {
         }
     }
 
+    /// The storage the WIC decode picks for a source depth; the weight probe must predict it.
+    fn for_source_bits(bits_per_channel: u32) -> Self {
+        if bits_per_channel > 8 {
+            Self::RgbaHalf
+        } else {
+            Self::Bgra8
+        }
+    }
+
     /// The DXGI format both the worker upload and the D2D wrap must agree on.
     pub fn dxgi_format(self) -> windows::Win32::Graphics::Dxgi::Common::DXGI_FORMAT {
         match self {
@@ -1101,7 +1110,12 @@ fn probe_weight(input: &DecodeInput<'_>) -> Option<u64> {
         Adapter::AvifAnimation => {
             let (width, height) =
                 crate::image::fallback::probe_avif_sequence_dimensions(&input.read_all().ok()?)?;
-            Some(decoded_weight(width, height, 4, 1))
+            Some(decoded_weight(
+                width,
+                height,
+                PixelStorage::Bgra8.bytes_per_pixel(),
+                1,
+            ))
         }
         Adapter::Exr => {
             let (width, height) = match input {
@@ -1110,7 +1124,12 @@ fn probe_weight(input: &DecodeInput<'_>) -> Option<u64> {
                     crate::image::fallback::probe_exr_bytes_dimensions(bytes)
                 }
             }?;
-            Some(decoded_weight(width, height, 8, 1))
+            Some(decoded_weight(
+                width,
+                height,
+                PixelStorage::RgbaHalf.bytes_per_pixel(),
+                1,
+            ))
         }
         Adapter::HeifWithWicPreferred => {
             // Mirrors the decode dispatch: WIC first, the bundled decoder on failure.
@@ -1139,8 +1158,8 @@ fn probe_wic_weight(input: &DecodeInput<'_>, semantics: &FrameSemantics) -> Opti
         let frame = unsafe { decoder.GetFrame(index)? };
         let (width, height) = source_size(&frame.cast()?)?;
         let (bits_per_channel, _) = frame_pixel_format_traits(factory, &frame);
-        let bytes_per_pixel = if bits_per_channel > 8 { 8 } else { 4 };
-        Ok(decoded_weight(width, height, bytes_per_pixel, 1))
+        let storage = PixelStorage::for_source_bits(bits_per_channel);
+        Ok(decoded_weight(width, height, storage.bytes_per_pixel(), 1))
     })
     .ok()
 }
@@ -1502,7 +1521,8 @@ fn decode_frame_source(
     let icc_profile = icc_profile_bytes(factory, frame);
     let exif = metadata.as_ref().and_then(read_exif);
     let (native_bits_per_channel, float_native) = frame_pixel_format_traits(factory, frame);
-    let high_depth = native_bits_per_channel > 8;
+    let high_depth =
+        PixelStorage::for_source_bits(native_bits_per_channel) == PixelStorage::RgbaHalf;
     // PQ/HLG integers bypass WIC's sRGB-assuming float conversion.
     let hdr_encoding = if float_native {
         None
