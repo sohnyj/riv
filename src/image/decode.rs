@@ -411,6 +411,11 @@ const AVIF_SEQUENCE_BRAND: &[u8; 4] = b"avis";
 const WEBP_NAME: &str = "WebP";
 const AVIF_NAME: &str = "AVIF";
 
+/// Extension lists whose first entry doubles as a refinement lookup key.
+const APNG_EXTENSIONS: &[&str] = &["apng"];
+const SVG_EXTENSIONS: &[&str] = &["svg", "svgz"];
+const AVIF_EXTENSIONS: &[&str] = &["avif"];
+
 enum Adapter {
     Wic,
     WicRawTwoStage,
@@ -452,7 +457,7 @@ static REGISTRY: &[FormatDescriptor] = &[
     },
     FormatDescriptor {
         name: "APNG",
-        extensions: &["apng"],
+        extensions: APNG_EXTENSIONS,
         magic: &[],
         semantics: FrameSemantics::Animation,
         adapter: Adapter::Apng,
@@ -462,7 +467,7 @@ static REGISTRY: &[FormatDescriptor] = &[
     },
     FormatDescriptor {
         name: "SVG",
-        extensions: &["svg", "svgz"],
+        extensions: SVG_EXTENSIONS,
         magic: &[&[(0, b"<svg")]],
         semantics: FrameSemantics::Single,
         adapter: Adapter::Svg,
@@ -569,7 +574,7 @@ static REGISTRY: &[FormatDescriptor] = &[
     },
     FormatDescriptor {
         name: AVIF_NAME,
-        extensions: &["avif"],
+        extensions: AVIF_EXTENSIONS,
         magic: &[
             &[(4, b"ftyp"), (8, AVIF_STILL_BRAND)],
             &[(4, b"ftyp"), (8, AVIF_SEQUENCE_BRAND)],
@@ -656,7 +661,7 @@ fn descriptor_for_magic(header: &[u8]) -> Option<&'static FormatDescriptor> {
 
 fn xml_svg_probe(header: &[u8]) -> Option<&'static FormatDescriptor> {
     if header.starts_with(b"<?xml") && header.windows(4).any(|window| window == b"<svg") {
-        descriptor_for_extension("svg")
+        descriptor_for_extension(SVG_EXTENSIONS[0])
     } else {
         None
     }
@@ -699,7 +704,7 @@ fn png_refinement(
     header: &[u8],
 ) -> &'static FormatDescriptor {
     if png_has_animation_control(header) {
-        return descriptor_for_extension("apng").unwrap_or(descriptor);
+        return descriptor_for_extension(APNG_EXTENSIONS[0]).unwrap_or(descriptor);
     }
     descriptor
 }
@@ -723,7 +728,7 @@ fn ftyp_refinement(
         return &ANIMATED_AVIF;
     }
     if ftyp_has_brand(header, AVIF_STILL_BRAND) {
-        return descriptor_for_extension("avif").unwrap_or(descriptor);
+        return descriptor_for_extension(AVIF_EXTENSIONS[0]).unwrap_or(descriptor);
     }
     descriptor
 }
