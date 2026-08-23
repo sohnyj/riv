@@ -241,6 +241,9 @@ pub const MAXIMUM_ANIMATION_FRAMES_BYTES: u64 = 1 << 30;
 /// Frame delay when the container declares none or an unusable one.
 pub const DEFAULT_FRAME_DELAY_MILLISECONDS: u32 = 100;
 
+/// Header probe window; the memory and the file inputs must classify identically.
+const HEADER_PROBE_BYTES: usize = 4096;
+
 // Shrinking the budget below one full-size canvas would need a per-canvas check in FrameCompositor::new.
 const _: () = assert!(
     MAXIMUM_TEXTURE_DIMENSION as u64 * MAXIMUM_TEXTURE_DIMENSION as u64 * 4
@@ -763,7 +766,7 @@ fn descriptor_for_bytes(
     bytes: &[u8],
     extension: Option<&str>,
 ) -> Option<&'static FormatDescriptor> {
-    let header = &bytes[..bytes.len().min(4096)];
+    let header = &bytes[..bytes.len().min(HEADER_PROBE_BYTES)];
     match extension
         .map(str::to_lowercase)
         .and_then(|extension| descriptor_for_extension(&extension))
@@ -777,7 +780,7 @@ fn descriptor_for_bytes(
 
 fn read_header(path: &Path) -> Option<Vec<u8>> {
     let mut file = File::open(path).ok()?;
-    let mut buffer = vec![0u8; 4096];
+    let mut buffer = vec![0u8; HEADER_PROBE_BYTES];
     let read_bytes = file.read(&mut buffer).ok()?;
     buffer.truncate(read_bytes);
     Some(buffer)
