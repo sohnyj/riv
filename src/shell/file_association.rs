@@ -97,7 +97,7 @@ fn ensure_application_registration() {
     registry_set_string(
         &capabilities_key(),
         "ApplicationDescription",
-        "riv image viewer",
+        crate::APPLICATION_DESCRIPTION,
     );
     registry_set_string(
         REGISTERED_APPLICATIONS_KEY,

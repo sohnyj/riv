@@ -98,6 +98,9 @@ const APPLICATION_ICON_ID: PCWSTR = PCWSTR(std::ptr::without_provenance(1));
 /// The app name: the window class, the bare window title, and the startup error title.
 const APPLICATION_NAME: &str = "riv";
 
+/// One-line description the Start Menu shortcut and the registry capabilities share.
+const APPLICATION_DESCRIPTION: &str = "riv image viewer";
+
 /// Build 22631, the first release with the in-box libarchive; the name is its dialog wording.
 const MINIMUM_WINDOWS_VERSION: OsVersion = OsVersion::new(10, 0, 0, 22631);
 const MINIMUM_WINDOWS_NAME: &str = "Windows 11 23H2";

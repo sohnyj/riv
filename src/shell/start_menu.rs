@@ -8,7 +8,7 @@ use windows::Win32::System::Com::{
 use windows::Win32::UI::Shell::{
     FOLDERID_Programs, IShellLinkW, KF_FLAG_DEFAULT, SHGetKnownFolderPath, ShellLink,
 };
-use windows::core::{HSTRING, Interface, Result, w};
+use windows::core::{HSTRING, Interface, Result};
 
 pub fn shortcut_path() -> Option<PathBuf> {
     let pointer =
@@ -33,7 +33,7 @@ pub fn create_shortcut() {
     let _: Result<()> = (|| unsafe {
         let link: IShellLinkW = CoCreateInstance(&ShellLink, None, CLSCTX_INPROC_SERVER)?;
         link.SetPath(&HSTRING::from(executable.as_path()))?;
-        link.SetDescription(w!("riv image viewer"))?;
+        link.SetDescription(&HSTRING::from(crate::APPLICATION_DESCRIPTION))?;
         if let Some(directory) = executable.parent() {
             link.SetWorkingDirectory(&HSTRING::from(directory))?;
         }
