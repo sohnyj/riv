@@ -278,7 +278,7 @@ pub struct ListingEntry {
     weight: DecodedWeight,
 }
 
-/// The weight outlives the cache entry: eviction drops pixels, not this knowledge.
+/// The weight outlives the cache entry: eviction drops pixels, not the recorded weight.
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 enum DecodedWeight {
     Unknown,

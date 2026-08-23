@@ -71,7 +71,7 @@ unsafe extern "C" {
     ) -> *mut u8;
 }
 
-/// Composes only the first frame, for the animation two-stage path.
+/// Composes only the first frame when maximum_frames is 1, for the animation two-stage path.
 pub fn decode_webp_animation(
     bytes: &[u8],
     format_name: &'static str,

@@ -138,7 +138,6 @@ fn handler_ui_name(handler: &IAssocHandler) -> Option<String> {
         .map(crate::text::take_task_memory_string)
 }
 
-/// Reads then frees a CoTaskMem-allocated string.
 fn default_executable_for(extension: &str) -> Option<String> {
     let extension = HSTRING::from(format!(".{extension}"));
     let mut buffer = [0u16; 1024];
