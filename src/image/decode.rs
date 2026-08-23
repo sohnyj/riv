@@ -403,6 +403,10 @@ pub const FILETIME_UNIX_EPOCH: u64 = 116_444_736_000_000_000;
 
 type MagicSignature = &'static [(usize, &'static [u8])];
 
+/// AVIF ftyp brands; the magic table and the sequence refinement read the same pair.
+const AVIF_STILL_BRAND: &[u8; 4] = b"avif";
+const AVIF_SEQUENCE_BRAND: &[u8; 4] = b"avis";
+
 enum Adapter {
     Wic,
     WicRawTwoStage,
@@ -562,7 +566,10 @@ static REGISTRY: &[FormatDescriptor] = &[
     FormatDescriptor {
         name: "AVIF",
         extensions: &["avif"],
-        magic: &[&[(4, b"ftypavif")], &[(4, b"ftypavis")]],
+        magic: &[
+            &[(4, b"ftyp"), (8, AVIF_STILL_BRAND)],
+            &[(4, b"ftyp"), (8, AVIF_SEQUENCE_BRAND)],
+        ],
         semantics: FrameSemantics::Single,
         adapter: Adapter::Wic,
         store_codec_names: &["HEIF Image Extension", "AV1 Video Extension"],
@@ -708,10 +715,10 @@ fn ftyp_refinement(
     header: &[u8],
 ) -> &'static FormatDescriptor {
     // avis outranks avif: sequence files usually carry both brands.
-    if ftyp_has_brand(header, b"avis") {
+    if ftyp_has_brand(header, AVIF_SEQUENCE_BRAND) {
         return &ANIMATED_AVIF;
     }
-    if ftyp_has_brand(header, b"avif") {
+    if ftyp_has_brand(header, AVIF_STILL_BRAND) {
         return descriptor_for_extension("avif").unwrap_or(descriptor);
     }
     descriptor
