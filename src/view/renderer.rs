@@ -1563,6 +1563,10 @@ impl Renderer {
         self.gain_state = None;
         self.image = None;
         self.effect_output = None;
+        if let Some(color_management) = &self.mode_effects.color_management_effect {
+            // Unwire the previous bitmap so the effect does not keep it alive.
+            unsafe { color_management.SetInput(0, None, true) };
+        }
     }
 
     /// Decides the frame's placement and quantization; the info panel reads it.
