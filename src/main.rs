@@ -98,8 +98,9 @@ const APPLICATION_ICON_ID: PCWSTR = PCWSTR(std::ptr::without_provenance(1));
 /// The app name: the window class, the bare window title, and the startup error title.
 const APPLICATION_NAME: &str = "riv";
 
-/// Windows 11 23H2, build 22631: the first release with the in-box libarchive.
+/// Build 22631, the first release with the in-box libarchive; the name is its dialog wording.
 const MINIMUM_WINDOWS_VERSION: OsVersion = OsVersion::new(10, 0, 0, 22631);
+const MINIMUM_WINDOWS_NAME: &str = "Windows 11 23H2";
 
 const WM_APP_SHOW_WINDOW: u32 = WM_APP + 2;
 /// Posted by the display watcher when the advanced-color state or luminance changes.
@@ -2157,7 +2158,7 @@ fn main() -> Result<()> {
     if OsVersion::current() < MINIMUM_WINDOWS_VERSION {
         fail_fast_dialog(
             "This version of Windows isn't supported.",
-            "Windows 11 23H2 or later is required.",
+            &format!("{MINIMUM_WINDOWS_NAME} or later is required."),
         );
         return Ok(());
     }
