@@ -84,7 +84,7 @@ const SCRGB_BACKBUFFER_FORMAT: DXGI_FORMAT = DXGI_FORMAT_R16G16B16A16_FLOAT;
 const SDR_BACKBUFFER_FORMAT: DXGI_FORMAT = DXGI_FORMAT_B8G8R8A8_UNORM;
 
 /// The color space composition reads the SDR backbuffer in.
-const SDR_COLOR_SPACE: DXGI_COLOR_SPACE_TYPE = DXGI_COLOR_SPACE_RGB_FULL_G22_NONE_P709;
+const SDR_BACKBUFFER_COLOR_SPACE: DXGI_COLOR_SPACE_TYPE = DXGI_COLOR_SPACE_RGB_FULL_G22_NONE_P709;
 
 /// The UNORM16 intermediate scene the quantize pass reads.
 const SCENE_TEXTURE_FORMAT: DXGI_FORMAT = DXGI_FORMAT_R16G16B16A16_UNORM;
@@ -659,7 +659,7 @@ impl Renderer {
                 DXGI_COLOR_SPACE_RGB_FULL_G10_NONE_P709,
             )
         } else {
-            (SDR_BACKBUFFER_FORMAT, SDR_COLOR_SPACE)
+            (SDR_BACKBUFFER_FORMAT, SDR_BACKBUFFER_COLOR_SPACE)
         }
     }
 
@@ -1119,7 +1119,7 @@ impl Renderer {
                         let _ = declare_color_space(&swap_chain3, color_space);
                     } else {
                         // Undo any FP16 declaration; SDR composition reads sRGB.
-                        let _ = declare_color_space(&swap_chain3, SDR_COLOR_SPACE);
+                        let _ = declare_color_space(&swap_chain3, SDR_BACKBUFFER_COLOR_SPACE);
                     }
                 }
                 format

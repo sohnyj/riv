@@ -78,7 +78,7 @@ const KEYBOARD_COLUMN: i32 = 1;
 const MOUSE_COLUMN: i32 = 2;
 
 /// Tri-state check cell edge; the image list, the bitmap, and both rectangles share it.
-const STATE_IMAGE_SIZE: i32 = 16;
+const STATE_IMAGE_EDGE_PIXELS: i32 = 16;
 
 /// TVIS state image slot: the index sits above this shift (INDEXTOSTATEIMAGEMASK).
 const STATE_IMAGE_SHIFT: u32 = 12;
@@ -404,7 +404,7 @@ const PAGES: [(u16, &str); 7] = [
     (IDD_PAGE_ABOUT, "About"),
 ];
 
-/// A page's slot in `pages`, derived from the table so a reorder cannot strand an index.
+/// A page's slot in `pages`, derived from the table so a reorder moves every index with it.
 const fn page_position(template: u16) -> usize {
     let mut index = 0;
     while index < PAGES.len() {
@@ -1289,8 +1289,8 @@ fn insert_extension(
 fn create_tristate_images() -> HIMAGELIST {
     let images = unsafe {
         ImageList_Create(
-            STATE_IMAGE_SIZE,
-            STATE_IMAGE_SIZE,
+            STATE_IMAGE_EDGE_PIXELS,
+            STATE_IMAGE_EDGE_PIXELS,
             ILC_COLOR32 | ILC_MASK,
             4,
             0,
@@ -1305,21 +1305,22 @@ fn create_tristate_images() -> HIMAGELIST {
     ] {
         unsafe {
             let memory = CreateCompatibleDC(Some(screen));
-            let bitmap = CreateCompatibleBitmap(screen, STATE_IMAGE_SIZE, STATE_IMAGE_SIZE);
+            let bitmap =
+                CreateCompatibleBitmap(screen, STATE_IMAGE_EDGE_PIXELS, STATE_IMAGE_EDGE_PIXELS);
             let previous = SelectObject(memory, bitmap.into());
             let mut bounds = RECT {
                 left: 1,
                 top: 1,
-                right: STATE_IMAGE_SIZE - 1,
-                bottom: STATE_IMAGE_SIZE - 1,
+                right: STATE_IMAGE_EDGE_PIXELS - 1,
+                bottom: STATE_IMAGE_EDGE_PIXELS - 1,
             };
             FillRect(
                 memory,
                 &RECT {
                     left: 0,
                     top: 0,
-                    right: STATE_IMAGE_SIZE,
-                    bottom: STATE_IMAGE_SIZE,
+                    right: STATE_IMAGE_EDGE_PIXELS,
+                    bottom: STATE_IMAGE_EDGE_PIXELS,
                 },
                 GetSysColorBrush(windows::Win32::Graphics::Gdi::COLOR_WINDOW),
             );

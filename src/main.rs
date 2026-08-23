@@ -103,7 +103,7 @@ const APPLICATION_DESCRIPTION: &str = "riv image viewer";
 
 /// Build 22631, the first release with the in-box libarchive; the name is its dialog wording.
 const MINIMUM_WINDOWS_VERSION: OsVersion = OsVersion::new(10, 0, 0, 22631);
-const MINIMUM_WINDOWS_NAME: &str = "Windows 11 23H2";
+const MINIMUM_WINDOWS_VERSION_NAME: &str = "Windows 11 23H2";
 
 const WM_APP_SHOW_WINDOW: u32 = WM_APP + 2;
 /// Posted by the display watcher when the advanced-color state or luminance changes.
@@ -2154,7 +2154,7 @@ fn main() -> Result<()> {
     if OsVersion::current() < MINIMUM_WINDOWS_VERSION {
         fail_fast_dialog(
             "This version of Windows isn't supported.",
-            &format!("{MINIMUM_WINDOWS_NAME} or later is required."),
+            &format!("{MINIMUM_WINDOWS_VERSION_NAME} or later is required."),
         );
         return Ok(());
     }
@@ -2275,12 +2275,13 @@ fn wait_for_frame_slot(slot_handle: HANDLE) -> bool {
 
 fn create_main_window(initial_path: Option<&Path>, pending_device: PendingDevice) -> Result<HWND> {
     let instance = unsafe { GetModuleHandleW(None)? };
+    let application_name = HSTRING::from(APPLICATION_NAME);
     // The shell's start position places the first window on the launching monitor.
     let window = unsafe {
         CreateWindowExW(
             view::presentation::REQUIRED_WINDOW_STYLE,
-            &HSTRING::from(APPLICATION_NAME),
-            &HSTRING::from(APPLICATION_NAME),
+            &application_name,
+            &application_name,
             WS_OVERLAPPEDWINDOW,
             CW_USEDEFAULT,
             CW_USEDEFAULT,

@@ -79,30 +79,28 @@ fn ensure_application_registration() {
     let executable = std::env::current_exe()
         .map(|path| path.to_string_lossy().into_owned())
         .unwrap_or_default();
+    let progid_key = classes_progid_key();
+    let capabilities = capabilities_key();
     registry_set_string(
-        &format!("{}\\DefaultIcon", classes_progid_key()),
+        &format!("{progid_key}\\DefaultIcon"),
         "",
         &format!("\"{executable}\",0"),
     );
     registry_set_string(
-        &format!("{}\\shell\\open\\command", classes_progid_key()),
+        &format!("{progid_key}\\shell\\open\\command"),
         "",
         &format!("\"{executable}\" \"%1\""),
     );
+    registry_set_string(&capabilities, "ApplicationName", crate::APPLICATION_NAME);
     registry_set_string(
-        &capabilities_key(),
-        "ApplicationName",
-        crate::APPLICATION_NAME,
-    );
-    registry_set_string(
-        &capabilities_key(),
+        &capabilities,
         "ApplicationDescription",
         crate::APPLICATION_DESCRIPTION,
     );
     registry_set_string(
         REGISTERED_APPLICATIONS_KEY,
         crate::APPLICATION_NAME,
-        &capabilities_key(),
+        &capabilities,
     );
 }
 
