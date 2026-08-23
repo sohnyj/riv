@@ -1991,12 +1991,10 @@ fn show_menu(application: &mut Application, window: HWND, x: i32, y: i32, target
                     match open_with::invoke(&path, executable) {
                         open_with::InvokeOutcome::Invoked => {}
                         open_with::InvokeOutcome::HandlerMissing => {
-                            dialogs::message::show_message(
-                                Some(window),
-                                "Open with",
-                                &format!("Can't open the file with {name}."),
+                            show_open_with_failure(
+                                window,
+                                name,
                                 "The app isn't registered for this file type anymore.",
-                                "Close",
                             );
                             // The failure proved the cached list stale; collect it again.
                             if let Some(application) = application_from_window(window)
@@ -2007,13 +2005,7 @@ fn show_menu(application: &mut Application, window: HWND, x: i32, y: i32, target
                             }
                         }
                         open_with::InvokeOutcome::Failed(error) => {
-                            dialogs::message::show_message(
-                                Some(window),
-                                "Open with",
-                                &format!("Can't open the file with {name}."),
-                                &error.to_string(),
-                                "Close",
-                            );
+                            show_open_with_failure(window, name, &error.to_string());
                         }
                     }
                 }
@@ -2377,6 +2369,17 @@ fn process_is_elevated() -> bool {
 /// No window exists yet, so the application name titles the failure.
 fn fail_fast_dialog(reason: &str, detail: &str) {
     dialogs::message::show_message(None, APPLICATION_NAME, reason, detail, "Close");
+}
+
+/// Both invoke failures show the same dialog; only the detail line differs.
+fn show_open_with_failure(window: HWND, name: &str, detail: &str) {
+    dialogs::message::show_message(
+        Some(window),
+        "Open with",
+        &format!("Can't open the file with {name}."),
+        detail,
+        "Close",
+    );
 }
 
 fn application_from_window(window: HWND) -> Option<&'static mut Application> {
