@@ -321,27 +321,33 @@ pub struct GraphicsDevice {
     pub context: ID3D11DeviceContext,
 }
 
+/// D2D interop needs BGRA support on every device riv creates.
+const REQUIRED_DEVICE_FLAGS: D3D11_CREATE_DEVICE_FLAG = D3D11_CREATE_DEVICE_BGRA_SUPPORT;
+
+/// Both hardware attempts must request the same level or they produce different devices.
+const HARDWARE_FEATURE_LEVELS: [D3D_FEATURE_LEVEL; 1] = [D3D_FEATURE_LEVEL_12_0];
+
 /// Hardware when available, WARP otherwise.
 pub fn create_device() -> Result<GraphicsDevice> {
-    let presentation_flags = D3D11_CREATE_DEVICE_BGRA_SUPPORT | presentation::REQUIRED_DEVICE_FLAG;
+    let presentation_flags = REQUIRED_DEVICE_FLAGS | presentation::REQUIRED_DEVICE_FLAG;
     // D3D11 WARP is documented only through 11_1; shader model 5.0 needs no more.
     create_d3d_device(
         D3D_DRIVER_TYPE_HARDWARE,
-        &[D3D_FEATURE_LEVEL_12_0],
+        &HARDWARE_FEATURE_LEVELS,
         presentation_flags,
     )
     .or_else(|_| {
         create_d3d_device(
             D3D_DRIVER_TYPE_HARDWARE,
-            &[D3D_FEATURE_LEVEL_12_0],
-            D3D11_CREATE_DEVICE_BGRA_SUPPORT,
+            &HARDWARE_FEATURE_LEVELS,
+            REQUIRED_DEVICE_FLAGS,
         )
     })
     .or_else(|_| {
         create_d3d_device(
             D3D_DRIVER_TYPE_WARP,
             &[D3D_FEATURE_LEVEL_11_0],
-            D3D11_CREATE_DEVICE_BGRA_SUPPORT,
+            REQUIRED_DEVICE_FLAGS,
         )
     })
 }
@@ -743,7 +749,7 @@ impl Renderer {
                             Quality: 0,
                         },
                         BufferUsage: DXGI_USAGE_RENDER_TARGET_OUTPUT,
-                        BufferCount: 2,
+                        BufferCount: PRESENTATION_BUFFER_COUNT as u32,
                         Scaling: DXGI_SCALING_STRETCH,
                         SwapEffect: DXGI_SWAP_EFFECT_FLIP_DISCARD,
                         AlphaMode: DXGI_ALPHA_MODE_IGNORE,
