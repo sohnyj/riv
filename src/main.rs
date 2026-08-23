@@ -81,13 +81,13 @@ use windows::Win32::UI::WindowsAndMessaging::{
     QUEUE_STATUS_FLAGS, RegisterClassExW, SC_MONITORPOWER, SW_HIDE, SW_SHOW, SW_SHOWMAXIMIZED,
     SW_SHOWMINIMIZED, SWP_FRAMECHANGED, SWP_NOACTIVATE, SWP_NOMOVE, SWP_NOSIZE, SWP_NOZORDER,
     SendMessageW, SetCursor, SetTimer, SetWindowLongPtrW, SetWindowPlacement, SetWindowPos,
-    SetWindowTextW, ShowWindow, TranslateMessage, WA_INACTIVE, WHEEL_DELTA, WINDOWPLACEMENT,
-    WM_ACTIVATE, WM_APP, WM_CAPTURECHANGED, WM_CLOSE, WM_CONTEXTMENU, WM_DESTROY, WM_DISPLAYCHANGE,
-    WM_DPICHANGED, WM_ENTERSIZEMOVE, WM_EXITSIZEMOVE, WM_GESTURE, WM_GETMINMAXINFO, WM_KEYDOWN,
-    WM_LBUTTONDBLCLK, WM_LBUTTONDOWN, WM_LBUTTONUP, WM_MBUTTONDOWN, WM_MOUSEHWHEEL, WM_MOUSEMOVE,
-    WM_MOUSEWHEEL, WM_MOVE, WM_NCDESTROY, WM_NCLBUTTONDOWN, WM_PAINT, WM_QUIT, WM_SETCURSOR,
-    WM_SIZE, WM_SYSCHAR, WM_SYSCOMMAND, WM_SYSKEYDOWN, WM_TIMER, WM_XBUTTONDOWN, WNDCLASSEXW,
-    WS_OVERLAPPEDWINDOW, WindowFromPoint,
+    SetWindowTextW, ShowWindow, TranslateMessage, USER_DEFAULT_SCREEN_DPI, WA_INACTIVE,
+    WHEEL_DELTA, WINDOWPLACEMENT, WM_ACTIVATE, WM_APP, WM_CAPTURECHANGED, WM_CLOSE, WM_CONTEXTMENU,
+    WM_DESTROY, WM_DISPLAYCHANGE, WM_DPICHANGED, WM_ENTERSIZEMOVE, WM_EXITSIZEMOVE, WM_GESTURE,
+    WM_GETMINMAXINFO, WM_KEYDOWN, WM_LBUTTONDBLCLK, WM_LBUTTONDOWN, WM_LBUTTONUP, WM_MBUTTONDOWN,
+    WM_MOUSEHWHEEL, WM_MOUSEMOVE, WM_MOUSEWHEEL, WM_MOVE, WM_NCDESTROY, WM_NCLBUTTONDOWN, WM_PAINT,
+    WM_QUIT, WM_SETCURSOR, WM_SIZE, WM_SYSCHAR, WM_SYSCOMMAND, WM_SYSKEYDOWN, WM_TIMER,
+    WM_XBUTTONDOWN, WNDCLASSEXW, WS_OVERLAPPEDWINDOW, WindowFromPoint,
 };
 use windows::core::{HSTRING, PCWSTR, Result};
 use windows_version::OsVersion;
@@ -365,7 +365,8 @@ impl Application {
             display_profile,
             pending_device.wait()?,
         )?;
-        let device_pixel_ratio = unsafe { GetDpiForWindow(window) } as f32 / 96.0;
+        let device_pixel_ratio =
+            unsafe { GetDpiForWindow(window) } as f32 / USER_DEFAULT_SCREEN_DPI as f32;
         let mut application = Self {
             renderer: Some(renderer),
             display_watcher,
@@ -2825,7 +2826,7 @@ extern "system" fn window_procedure(
         }
         WM_DPICHANGED => {
             if let Some(application) = application_from_window(window) {
-                let ratio = low_word(wparam.0) as f32 / 96.0;
+                let ratio = low_word(wparam.0) as f32 / USER_DEFAULT_SCREEN_DPI as f32;
                 application.overlay.set_scale(ratio);
             }
             let suggested_bounds = unsafe { &*(lparam.0 as *const RECT) };
