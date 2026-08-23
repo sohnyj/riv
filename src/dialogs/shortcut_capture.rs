@@ -43,6 +43,9 @@ const REMOVE_ICON_RED: COLORREF = COLORREF(0x001C_2BC4); // BGR of #C42B1C
 /// Unbound-field placeholder; the paint handler recovers it by string comparison.
 const NO_BINDING_TEXT: &str = "None";
 
+/// WM_RIV_MOUSE_CAPTURED wparam layout: modifiers above this shift, the base index below.
+const MOUSE_CAPTURE_MODIFIER_SHIFT: usize = 8;
+
 pub fn capture_keyboard_sequences(
     parent: HWND,
     current: &[String],
@@ -218,7 +221,7 @@ unsafe extern "system" fn mouse_procedure(
             1
         }
         WM_RIV_MOUSE_CAPTURED => {
-            let modifiers = (wparam.0 >> 8) as u8;
+            let modifiers = (wparam.0 >> MOUSE_CAPTURE_MODIFIER_SHIFT) as u8;
             if let Some(base) = MouseBase::from_index(wparam.0 as u8)
                 && let Some(state) = state_mut::<MouseCaptureState>(dialog)
             {
@@ -591,7 +594,8 @@ unsafe extern "system" fn mouse_field_procedure(
     lparam: LPARAM,
 ) -> LRESULT {
     fn notify(field: HWND, base: MouseBase) -> LRESULT {
-        let packed = ((current_modifiers() as usize) << 8) | base.index() as usize;
+        let packed = ((current_modifiers() as usize) << MOUSE_CAPTURE_MODIFIER_SHIFT)
+            | base.index() as usize;
         if let Ok(parent) = unsafe { GetParent(field) } {
             unsafe { SendMessageW(parent, WM_RIV_MOUSE_CAPTURED, Some(WPARAM(packed)), None) };
         }
