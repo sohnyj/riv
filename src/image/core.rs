@@ -718,13 +718,19 @@ impl ImageCore {
             });
             return LoadOutcome::Pending;
         }
-        if let Some(directory) = path.parent()
-            && !self.directory_covered(directory)
-        {
-            self.submit_scan(PendingScan {
-                scope: ListingScope::Directory(directory.to_path_buf()),
-                purpose: ScanPurpose::CoverAnchor,
-            });
+        if let Some(directory) = path.parent() {
+            if !self.directory_covered(directory) {
+                self.submit_scan(PendingScan {
+                    scope: ListingScope::Directory(directory.to_path_buf()),
+                    purpose: ScanPurpose::CoverAnchor,
+                });
+            } else if let Some(pending) = &mut self.pending_scan
+                && matches!(&pending.scope, ListingScope::Directory(scanned) if paths_equal(scanned, directory))
+                && pending.purpose == ScanPurpose::OpenFirstEntry
+            {
+                // This load owns the view now; the arrival must only install the listing.
+                pending.purpose = ScanPurpose::CoverAnchor;
+            }
         }
         self.load_item(&ItemLocation::File(path))
     }
@@ -2744,6 +2750,27 @@ mod url_session_state_tests {
 #[cfg(test)]
 mod listing_scan_tests {
     use super::*;
+
+    #[test]
+    fn a_file_opened_during_the_folder_scan_keeps_the_view() {
+        let directory = fixture_directory("riv-open-during-scan", &["1.png", "2.png"]);
+        let chosen = directory.join("2.png");
+        let mut core = core();
+        // Open the folder, then a file inside it before the enumeration arrives.
+        core.load_path(&directory);
+        assert!(core.listing_scan_pending());
+        core.load_path(&chosen);
+        let scan = ScannedListing::of(ListingScope::Directory(directory.clone()), &core.options);
+        // The demoted arrival installs the listing without loading the first entry.
+        assert!(matches!(
+            core.install_listing_scan(scan),
+            ListingInstall::Installed
+        ));
+        assert_eq!(core.entries.len(), 2);
+        let chosen = ItemLocation::File(std::path::absolute(&chosen).expect("absolute"));
+        assert!(core.request.pending() == Some(&chosen));
+        let _ = std::fs::remove_dir_all(&directory);
+    }
 
     #[test]
     fn a_stale_scan_arrival_is_discarded() {
