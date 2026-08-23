@@ -1910,15 +1910,14 @@ fn show_menu(application: &mut Application, window: HWND, x: i32, y: i32, target
     let (recent_names, recent_paths): (Vec<String>, Vec<String>) =
         application.settings.recent_files().into_iter().unzip();
     let open_with_target = application.image_core.current_file().map(Path::to_path_buf);
-    let open_with_executables: Vec<String> =
-        application
-            .current_open_with_list()
-            .map_or_else(Vec::new, |list| {
-                list.items
-                    .iter()
-                    .map(|item| item.executable_path.clone())
-                    .collect()
-            });
+    let (open_with_names, open_with_executables): (Vec<String>, Vec<String>) = application
+        .current_open_with_list()
+        .map_or_else(Default::default, |list| {
+            list.items
+                .iter()
+                .map(|item| (item.display_name.clone(), item.executable_path.clone()))
+                .unzip()
+        });
     let state = MenuState {
         requirements: SatisfiedRequirements::evaluate(|requirement| {
             application.requirement_satisfied(requirement)
@@ -1984,7 +1983,35 @@ fn show_menu(application: &mut Application, window: HWND, x: i32, y: i32, target
                 if let (Some(path), Some(executable)) =
                     (open_with_target, open_with_executables.get(index))
                 {
-                    let _ = open_with::invoke(&path, executable);
+                    let name = open_with_names.get(index).map_or("the app", String::as_str);
+                    match open_with::invoke(&path, executable) {
+                        open_with::InvokeOutcome::Invoked => {}
+                        open_with::InvokeOutcome::HandlerMissing => {
+                            dialogs::message::show_message(
+                                Some(window),
+                                "Open with",
+                                &format!("Can't open the file with {name}."),
+                                "The app isn't registered for this file type anymore.",
+                                "Close",
+                            );
+                            // The failure proved the cached list stale; collect it again.
+                            if let Some(application) = application_from_window(window)
+                                && let Some(extension) = text::lowercase_extension(&path)
+                            {
+                                application.open_with_lists.remove(&extension);
+                                application.start_open_with_enumeration(window);
+                            }
+                        }
+                        open_with::InvokeOutcome::Failed(error) => {
+                            dialogs::message::show_message(
+                                Some(window),
+                                "Open with",
+                                &format!("Can't open the file with {name}."),
+                                &error.to_string(),
+                                "Close",
+                            );
+                        }
+                    }
                 }
             }
             MenuSelection::PlaylistEntry(slot) => {

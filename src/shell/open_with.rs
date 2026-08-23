@@ -80,22 +80,35 @@ fn enumerate(extension: String) -> OpenWithList {
     }
 }
 
-pub fn invoke(path: &Path, executable_path: &str) -> Result<()> {
+/// The launch result; a missing handler means the cached menu list went stale.
+pub enum InvokeOutcome {
+    Invoked,
+    HandlerMissing,
+    Failed(windows::core::Error),
+}
+
+pub fn invoke(path: &Path, executable_path: &str) -> InvokeOutcome {
     let Some(extension) = crate::text::lowercase_extension(path) else {
-        return Ok(());
+        return InvokeOutcome::HandlerMissing;
     };
     for handler in handlers_for(&extension) {
         if handler_executable_path(&handler)
             .is_some_and(|name| name.eq_ignore_ascii_case(executable_path))
         {
-            unsafe {
-                let item: IShellItem = SHCreateItemFromParsingName(&HSTRING::from(path), None)?;
-                let data_object: IDataObject = item.BindToHandler(None, &BHID_DataObject)?;
-                return handler.Invoke(&data_object);
-            }
+            let launched = (|| -> Result<()> {
+                unsafe {
+                    let item: IShellItem = SHCreateItemFromParsingName(&HSTRING::from(path), None)?;
+                    let data_object: IDataObject = item.BindToHandler(None, &BHID_DataObject)?;
+                    handler.Invoke(&data_object)
+                }
+            })();
+            return match launched {
+                Ok(()) => InvokeOutcome::Invoked,
+                Err(error) => InvokeOutcome::Failed(error),
+            };
         }
     }
-    Ok(())
+    InvokeOutcome::HandlerMissing
 }
 
 pub fn show_open_with_dialog(window: HWND, path: &Path) {
