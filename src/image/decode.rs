@@ -2488,7 +2488,9 @@ fn decode_apng<Input: BufRead + Seek>(
     let buffer_size = reader
         .output_buffer_size()
         .ok_or_else(|| uncoded_error("APNG output buffer size overflow"))?;
-    let mut buffer = vec![0u8; buffer_size];
+    let Some(mut buffer) = try_zeroed_buffer(buffer_size) else {
+        return Err(uncoded_error("APNG is too large to fit in memory"));
+    };
 
     if has_animation && !default_image_is_first_frame {
         reader.next_frame(&mut buffer).map_err(uncoded_error)?;
