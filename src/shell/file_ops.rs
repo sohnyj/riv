@@ -155,7 +155,7 @@ pub fn show_rename_error(window: HWND, error: &std::io::Error) {
         "Rename",
         "Can't rename the file.",
         &error.to_string(),
-        "Close",
+        crate::dialogs::message::CLOSE_BUTTON,
     );
 }
 

@@ -9,6 +9,9 @@ use windows::core::{HSTRING, PCWSTR};
 
 use crate::dialogs::modal::IDOK;
 
+/// The dismiss label every plain failure dialog passes.
+pub const CLOSE_BUTTON: &str = "Close";
+
 /// One-message task dialog titled after the action; the headline leads the message.
 pub fn show_message(owner: Option<HWND>, title: &str, headline: &str, detail: &str, button: &str) {
     let title = HSTRING::from(title);

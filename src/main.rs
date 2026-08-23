@@ -2368,7 +2368,13 @@ fn process_is_elevated() -> bool {
 
 /// No window exists yet, so the application name titles the failure.
 fn fail_fast_dialog(reason: &str, detail: &str) {
-    dialogs::message::show_message(None, APPLICATION_NAME, reason, detail, "Close");
+    dialogs::message::show_message(
+        None,
+        APPLICATION_NAME,
+        reason,
+        detail,
+        dialogs::message::CLOSE_BUTTON,
+    );
 }
 
 /// Both invoke failures show the same dialog; only the detail line differs.
@@ -2378,7 +2384,7 @@ fn show_open_with_failure(window: HWND, name: &str, detail: &str) {
         "Open with",
         &format!("Can't open the file with {name}."),
         detail,
-        "Close",
+        dialogs::message::CLOSE_BUTTON,
     );
 }
 
