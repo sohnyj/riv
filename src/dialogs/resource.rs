@@ -7,6 +7,10 @@ pub fn template_name(identifier: u16) -> PCWSTR {
     PCWSTR(identifier as usize as *const u16)
 }
 
+/// Authored size of the seven settings pages, in dialog units.
+pub const PAGE_TEMPLATE_WIDTH: i32 = 292;
+pub const PAGE_TEMPLATE_HEIGHT: i32 = 194;
+
 pub const IDD_OPTIONS: u16 = 100;
 pub const IDD_PAGE_WINDOW: u16 = 110;
 pub const IDD_PAGE_IMAGE: u16 = 120;
@@ -84,7 +88,11 @@ mod header_mirror_tests {
         let header: Vec<(&str, &str)> = include_str!("../../res/resource.h")
             .lines()
             .filter_map(|line| line.strip_prefix("#define ")?.split_once(' '))
-            .filter(|(name, _)| name.starts_with("IDD_") || name.starts_with("IDC_"))
+            .filter(|(name, _)| {
+                name.starts_with("IDD_")
+                    || name.starts_with("IDC_")
+                    || name.starts_with("PAGE_TEMPLATE_")
+            })
             .collect();
         let declared: Vec<(&str, &str)> = include_str!("resource.rs")
             .lines()

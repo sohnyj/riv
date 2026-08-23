@@ -472,14 +472,14 @@ fn show_page(state: &OptionsState, selected: isize) {
     }
 }
 
-/// Page templates are authored at 292 x 194; the tab's inner area runs a little wider.
+/// The tab's inner area runs a little wider than the authored template size.
 fn fit_page_controls(page: HWND, stretch: i32, follow_right_edge: i32) {
     // Both measurements must be taken here: the page carries its final font and DPI now.
     let mut template = RECT {
         left: 0,
         top: 0,
-        right: 292,
-        bottom: 194,
+        right: PAGE_TEMPLATE_WIDTH,
+        bottom: PAGE_TEMPLATE_HEIGHT,
     };
     let mut client = RECT::default();
     if unsafe { MapDialogRect(page, &raw mut template) }.is_err()
