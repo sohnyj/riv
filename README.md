@@ -74,7 +74,7 @@ Decoded by Windows Imaging Component codecs:
 | JPEG | Ultra HDR |
 | JPEG XR | HDR / Tone map |
 | DDS | BC1-BC3 |
-| BMP, GIF, ICO, PNG, TIFF | |
+| BMP, DIB, GIF, ICO, PNG, TIFF | |
 
 Archives browsable as image folders:
 zip, 7z, rar, tar, and cbz / cbr / cb7 / cbt.
