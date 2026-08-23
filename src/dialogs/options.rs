@@ -63,6 +63,7 @@ use crate::dialogs::modal::{DWLP_USER, IDCANCEL, IDOK};
 const BN_CLICKED: usize = 0;
 const CBN_SELCHANGE: usize = 1;
 const EN_CHANGE: usize = 0x0300;
+const EN_KILLFOCUS: usize = 0x0200;
 
 const GROUP_FLAG: isize = 0x1000_0000;
 
@@ -566,6 +567,10 @@ unsafe extern "system" fn page_procedure(
                 choose_background_color(page);
                 return 1;
             }
+            if notification == EN_KILLFOCUS {
+                // The write-back re-enters this procedure too; same staged borrows.
+                return show_clamped_number(page, control);
+            }
             apply_page_command(state, page, control, notification)
         }
         WM_NOTIFY => {
@@ -948,6 +953,28 @@ fn colorref_to_rgb(color: COLORREF) -> (u8, u8, u8) {
         ((color.0 >> 8) & 0xFF) as u8,
         ((color.0 >> 16) & 0xFF) as u8,
     )
+}
+
+/// The stored value is already clamped; the field catches up when focus leaves it.
+fn show_clamped_number(page: HWND, control: i32) -> isize {
+    let Some(value) = state_mut(page).and_then(|state| match control {
+        IDC_IMAGE_ZOOM_STEP_EDIT => Some(state.transient_options.zoom_step_percent),
+        IDC_MISCELLANEOUS_SLIDESHOW_INTERVAL_EDIT => {
+            Some(state.transient_options.slideshow_interval_seconds)
+        }
+        _ => None,
+    }) else {
+        return 0;
+    };
+    if let Some(state) = state_mut(page) {
+        state.syncing = true;
+    }
+    let text = HSTRING::from(value.to_string());
+    let _ = unsafe { SetDlgItemTextW(page, control, &text) };
+    if let Some(state) = state_mut(page) {
+        state.syncing = false;
+    }
+    1
 }
 
 /// Borrows the state in stages: the color dialog's modal loop re-enters the procedures.
