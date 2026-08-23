@@ -10,7 +10,7 @@ use windows::Win32::Devices::Display::{
     DisplayConfigGetDeviceInfo, GetDisplayConfigBufferSizes, QDC_ONLY_ACTIVE_PATHS,
     QueryDisplayConfig,
 };
-use windows::Win32::Foundation::{ERROR_SUCCESS, HWND, LPARAM, WPARAM};
+use windows::Win32::Foundation::{ERROR_INSUFFICIENT_BUFFER, ERROR_SUCCESS, HWND, LPARAM, WPARAM};
 use windows::Win32::Graphics::Direct2D::Common::D2D1_COLOR_F;
 use windows::Win32::Graphics::Dxgi::{CreateDXGIFactory1, IDXGIFactory1, IDXGIOutput6};
 use windows::Win32::Graphics::Gdi::{
@@ -431,30 +431,38 @@ fn for_window_display_path<T>(
 
     let mut path_count = 0u32;
     let mut mode_count = 0u32;
-    if unsafe {
-        GetDisplayConfigBufferSizes(
-            QDC_ONLY_ACTIVE_PATHS,
-            &raw mut path_count,
-            &raw mut mode_count,
-        )
-    } != ERROR_SUCCESS
-    {
-        return None;
-    }
-    let mut paths = vec![DISPLAYCONFIG_PATH_INFO::default(); path_count as usize];
-    let mut modes = vec![DISPLAYCONFIG_MODE_INFO::default(); mode_count as usize];
-    if unsafe {
-        QueryDisplayConfig(
-            QDC_ONLY_ACTIVE_PATHS,
-            &raw mut path_count,
-            paths.as_mut_ptr(),
-            &raw mut mode_count,
-            modes.as_mut_ptr(),
-            None,
-        )
-    } != ERROR_SUCCESS
-    {
-        return None;
+    let mut paths;
+    let mut modes;
+    // The topology can grow between the two calls; the documented pattern re-sizes and retries.
+    loop {
+        if unsafe {
+            GetDisplayConfigBufferSizes(
+                QDC_ONLY_ACTIVE_PATHS,
+                &raw mut path_count,
+                &raw mut mode_count,
+            )
+        } != ERROR_SUCCESS
+        {
+            return None;
+        }
+        paths = vec![DISPLAYCONFIG_PATH_INFO::default(); path_count as usize];
+        modes = vec![DISPLAYCONFIG_MODE_INFO::default(); mode_count as usize];
+        let result = unsafe {
+            QueryDisplayConfig(
+                QDC_ONLY_ACTIVE_PATHS,
+                &raw mut path_count,
+                paths.as_mut_ptr(),
+                &raw mut mode_count,
+                modes.as_mut_ptr(),
+                None,
+            )
+        };
+        if result == ERROR_SUCCESS {
+            break;
+        }
+        if result != ERROR_INSUFFICIENT_BUFFER {
+            return None;
+        }
     }
 
     for path in &paths[..path_count as usize] {
