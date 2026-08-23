@@ -407,6 +407,10 @@ type MagicSignature = &'static [(usize, &'static [u8])];
 const AVIF_STILL_BRAND: &[u8; 4] = b"avif";
 const AVIF_SEQUENCE_BRAND: &[u8; 4] = b"avis";
 
+/// Format names shared by a registry entry and its animated twin; the name is the Type sort key.
+const WEBP_NAME: &str = "WebP";
+const AVIF_NAME: &str = "AVIF";
+
 enum Adapter {
     Wic,
     WicRawTwoStage,
@@ -487,7 +491,7 @@ static REGISTRY: &[FormatDescriptor] = &[
         content_refinement: None,
     },
     FormatDescriptor {
-        name: "WebP",
+        name: WEBP_NAME,
         extensions: &["webp"],
         magic: &[&[(0, b"RIFF"), (8, b"WEBP")]],
         semantics: FrameSemantics::Single,
@@ -564,7 +568,7 @@ static REGISTRY: &[FormatDescriptor] = &[
         content_refinement: None,
     },
     FormatDescriptor {
-        name: "AVIF",
+        name: AVIF_NAME,
         extensions: &["avif"],
         magic: &[
             &[(4, b"ftyp"), (8, AVIF_STILL_BRAND)],
@@ -659,7 +663,7 @@ fn xml_svg_probe(header: &[u8]) -> Option<&'static FormatDescriptor> {
 }
 
 static ANIMATED_WEBP: FormatDescriptor = FormatDescriptor {
-    name: "WebP",
+    name: WEBP_NAME,
     extensions: &[],
     magic: &[],
     semantics: FrameSemantics::Animation,
@@ -670,7 +674,7 @@ static ANIMATED_WEBP: FormatDescriptor = FormatDescriptor {
 };
 
 static ANIMATED_AVIF: FormatDescriptor = FormatDescriptor {
-    name: "AVIF",
+    name: AVIF_NAME,
     extensions: &[],
     magic: &[],
     semantics: FrameSemantics::Animation,
