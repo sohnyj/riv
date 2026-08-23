@@ -33,6 +33,12 @@ const LINE_SPACING_RATIO: f32 = 1.3;
 const PANEL_FONT_SIZE: f32 = 14.0;
 const CENTERED_FONT_SIZE: f32 = 16.0;
 
+/// Field labels the info panel and the delete-confirmation summary spell alike.
+const FORMAT_LABEL: &str = "Format: ";
+const SIZE_LABEL: &str = "Size: ";
+const DATE_TAKEN_LABEL: &str = "Date taken: ";
+const DATE_MODIFIED_LABEL: &str = "Date modified: ";
+
 /// Separates the info panel's sections; sized to the longest field label ("Advanced color:").
 const SECTION_DIVIDER: &str = "───────────────";
 
@@ -450,17 +456,17 @@ pub fn build_info_text(
     // File: the file's own identity, always present so navigation stays steady.
     let mut file = vec![
         file_name.to_string(),
-        format!("Format: {}", image.format_name),
+        format!("{FORMAT_LABEL}{}", image.format_name),
         resolution_text(image),
         format!("Ratio: {}", format_aspect_ratio(image.width, image.height)),
         format!("Bit depth: {bit_depth}"),
         format!("Color profile: {color_profile}"),
         format!("Path: {location_text}"),
-        format!("Size: {}", format_file_size(metadata.file_size)),
+        format!("{SIZE_LABEL}{}", format_file_size(metadata.file_size)),
     ];
     if let Some(modified) = metadata.modified {
         file.push(format!(
-            "Date modified: {}",
+            "{DATE_MODIFIED_LABEL}{}",
             format_local_datetime(modified)
         ));
     }
@@ -533,7 +539,10 @@ pub fn build_info_text(
 /// Photography notation, shooting-settings order; Rating is Windows metadata and goes last.
 fn append_exif_lines(lines: &mut Vec<String>, exif: &crate::image::decode::ExifMetadata) {
     if let Some(taken) = exif.date_taken {
-        lines.push(format!("Date taken: {}", format_local_datetime(taken)));
+        lines.push(format!(
+            "{DATE_TAKEN_LABEL}{}",
+            format_local_datetime(taken)
+        ));
     }
     if let Some(maker) = &exif.camera_maker {
         lines.push(format!("Camera maker: {maker}"));
@@ -683,19 +692,25 @@ pub fn build_file_summary_text(
 ) -> String {
     let mut lines = vec![file_name.to_string()];
     if let Some(image) = image {
-        lines.push(format!("Format: {}", image.format_name));
+        lines.push(format!("{FORMAT_LABEL}{}", image.format_name));
         lines.push(resolution_text(image));
     }
     if let Some(metadata) = metadata {
-        lines.push(format!("Size: {}", binary_size_text(metadata.file_size)));
+        lines.push(format!(
+            "{SIZE_LABEL}{}",
+            binary_size_text(metadata.file_size)
+        ));
     }
     // Date taken identifies the photograph; the file's own time stands in when there is none.
     let taken = image.and_then(|image| image.exif.as_ref()?.date_taken);
     if let Some(taken) = taken {
-        lines.push(format!("Date taken: {}", format_local_datetime(taken)));
+        lines.push(format!(
+            "{DATE_TAKEN_LABEL}{}",
+            format_local_datetime(taken)
+        ));
     } else if let Some(modified) = metadata.and_then(|metadata| metadata.modified) {
         lines.push(format!(
-            "Date modified: {}",
+            "{DATE_MODIFIED_LABEL}{}",
             format_local_datetime(modified)
         ));
     }
