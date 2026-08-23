@@ -29,6 +29,10 @@ const FONT_ASCENT_RATIO: f32 = 1616.0 / 2048.0;
 /// Roomier than the font's tight single-em natural line.
 const LINE_SPACING_RATIO: f32 = 1.3;
 
+/// Unscaled text sizes of the info panel and the centered messages.
+const PANEL_FONT_SIZE: f32 = 14.0;
+const CENTERED_FONT_SIZE: f32 = 16.0;
+
 /// Separates the info panel's sections; sized to the longest field label ("Advanced color:").
 const SECTION_DIVIDER: &str = "───────────────";
 
@@ -397,8 +401,8 @@ fn create_text_formats(
             w!("en-us"),
         )
     };
-    let text_format = create_format(14.0)?;
-    let centered_format = create_format(16.0)?;
+    let text_format = create_format(PANEL_FONT_SIZE)?;
+    let centered_format = create_format(CENTERED_FONT_SIZE)?;
     // The About title's point size, to pixels at the D2D 96 DPI baseline.
     let wordmark_format = create_format(TITLE_POINT_SIZE as f32 * 96.0 / 72.0)?;
     for format in [&centered_format, &wordmark_format] {
@@ -409,12 +413,13 @@ fn create_text_formats(
     }
     // Uniform spacing keeps fallback glyphs (CJK names) from bloating single lines.
     let set_line_spacing = |format: &IDWriteTextFormat, font_size: f32| {
-        let line = font_size * LINE_SPACING_RATIO;
-        let baseline = font_size * FONT_ASCENT_RATIO + (line - font_size) / 2.0;
+        let scaled = font_size * scale;
+        let line = scaled * LINE_SPACING_RATIO;
+        let baseline = scaled * FONT_ASCENT_RATIO + (line - scaled) / 2.0;
         unsafe { format.SetLineSpacing(DWRITE_LINE_SPACING_METHOD_UNIFORM, line, baseline) }
     };
-    set_line_spacing(&text_format, 14.0 * scale)?;
-    set_line_spacing(&centered_format, 16.0 * scale)?;
+    set_line_spacing(&text_format, PANEL_FONT_SIZE)?;
+    set_line_spacing(&centered_format, CENTERED_FONT_SIZE)?;
     Ok((text_format, centered_format, wordmark_format))
 }
 
