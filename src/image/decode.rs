@@ -256,6 +256,9 @@ const HEADER_PROBE_BYTES: usize = 4096;
 /// Highest source depth the HDR transfer tables cover; the table arrays are sized from it.
 pub(crate) const MAXIMUM_HDR_SOURCE_BITS: u32 = 16;
 
+/// Meaningful bits of Bgra8 pixels; RgbaHalf keeps the source's own count instead.
+pub(crate) const BGRA8_SOURCE_BITS: u32 = 8;
+
 // Shrinking the budget below one full-size canvas would need a per-canvas check in FrameCompositor::new.
 const _: () = assert!(
     MAXIMUM_TEXTURE_DIMENSION as u64 * MAXIMUM_TEXTURE_DIMENSION as u64 * 4
@@ -1284,7 +1287,7 @@ fn decode_raw_preview(
             icc_profile,
             exif,
             storage: PixelStorage::Bgra8,
-            source_bits_per_channel: 8,
+            source_bits_per_channel: BGRA8_SOURCE_BITS,
             peak_luminance_nits: None,
             source_primaries: None,
             frames: vec![Frame {
@@ -1609,7 +1612,7 @@ fn decode_frame_source(
     let source_bits_per_channel = if storage == PixelStorage::RgbaHalf {
         native_bits_per_channel
     } else {
-        8
+        BGRA8_SOURCE_BITS
     };
     // Only a conversion riv drove keeps the source primaries; a float native is scRGB already.
     let source_primaries = match hdr_encoding {
@@ -2279,7 +2282,7 @@ fn decode_animation(
         icc_profile,
         exif: None,
         storage: PixelStorage::Bgra8,
-        source_bits_per_channel: 8,
+        source_bits_per_channel: BGRA8_SOURCE_BITS,
         peak_luminance_nits: None,
         source_primaries: None,
         frames,
@@ -2620,7 +2623,7 @@ fn decode_apng<Input: BufRead + Seek>(
         icc_profile,
         exif: None,
         storage: PixelStorage::Bgra8,
-        source_bits_per_channel: 8,
+        source_bits_per_channel: BGRA8_SOURCE_BITS,
         peak_luminance_nits: None,
         source_primaries: None,
         frames,
@@ -2746,7 +2749,7 @@ fn decode_svg(bytes: &[u8], format_name: &'static str) -> Result<DecodedImage, D
         icc_profile: None,
         exif: None,
         storage: PixelStorage::Bgra8,
-        source_bits_per_channel: 8,
+        source_bits_per_channel: BGRA8_SOURCE_BITS,
         peak_luminance_nits: None,
         source_primaries: None,
         frames: vec![Frame {

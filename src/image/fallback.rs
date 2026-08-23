@@ -7,8 +7,8 @@ use std::sync::Arc;
 use windows::core::HSTRING;
 
 use crate::image::decode::{
-    DEFAULT_FRAME_DELAY_MILLISECONDS, DecodeError, DecodedImage, Frame, FrameBlend,
-    FrameCompositor, FrameDisposal, FrameRegion, HdrEncoding, MAXIMUM_HDR_SOURCE_BITS,
+    BGRA8_SOURCE_BITS, DEFAULT_FRAME_DELAY_MILLISECONDS, DecodeError, DecodedImage, Frame,
+    FrameBlend, FrameCompositor, FrameDisposal, FrameRegion, HdrEncoding, MAXIMUM_HDR_SOURCE_BITS,
     PixelStorage, cicp_hdr_encoding, linearize_hdr_pixels, peak_luminance_from_half_pixels,
     peak_luminance_with_maximum_bits, premultiplied_bgra_from_rgba, try_zeroed_buffer,
     uncoded_error,
@@ -190,7 +190,7 @@ fn compose_webp_frames(
         icc_profile: None,
         exif: None,
         storage: PixelStorage::Bgra8,
-        source_bits_per_channel: 8,
+        source_bits_per_channel: BGRA8_SOURCE_BITS,
         peak_luminance_nits: None,
         source_primaries: None,
         frames,
@@ -799,7 +799,7 @@ fn compose_avif_frames(
         icc_profile: None,
         exif: None,
         storage: PixelStorage::Bgra8,
-        source_bits_per_channel: 8,
+        source_bits_per_channel: BGRA8_SOURCE_BITS,
         peak_luminance_nits: None,
         source_primaries: None,
         frames,
