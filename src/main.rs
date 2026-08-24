@@ -2257,20 +2257,43 @@ fn peek_except_paint(message: *mut MSG) -> bool {
 
 /// Waits for the frame slot or the queue and reports whether the slot is in hand.
 fn wait_for_frame_slot(slot_handle: HANDLE) -> bool {
+    use windows::Win32::Foundation::{CloseHandle, DUPLICATE_SAME_ACCESS, DuplicateHandle};
+    use windows::Win32::System::Threading::GetCurrentProcess;
+
     /// Handle count 1, so the queue reports one past the handle.
     const MESSAGE_WAKE: WAIT_EVENT = WAIT_EVENT(WAIT_OBJECT_0.0 + 1);
 
+    // Sent messages dispatched by the wait can close the renderer's handle; the wait holds its own.
+    let process = unsafe { GetCurrentProcess() };
+    let mut duplicate = HANDLE::default();
+    let duplicated = unsafe {
+        DuplicateHandle(
+            process,
+            slot_handle,
+            process,
+            &raw mut duplicate,
+            0,
+            false,
+            DUPLICATE_SAME_ACCESS,
+        )
+    }
+    .is_ok();
+    let wait_handle = if duplicated { duplicate } else { slot_handle };
     let wake_event = unsafe {
         MsgWaitForMultipleObjectsEx(
-            Some(&[slot_handle]),
+            Some(&[wait_handle]),
             renderer::FRAME_SLOT_TIMEOUT_MILLISECONDS,
             QUEUE_STATUS_FLAGS(QS_ALLINPUT.0 & !QS_PAINT.0),
             MWMO_INPUTAVAILABLE,
         )
     };
     // A queue wake can hide a ready slot: which one the wait reports is undocumented.
-    wake_event != MESSAGE_WAKE
-        || unsafe { WaitForSingleObjectEx(slot_handle, 0, false) } == WAIT_OBJECT_0
+    let slot_in_hand = wake_event != MESSAGE_WAKE
+        || unsafe { WaitForSingleObjectEx(wait_handle, 0, false) } == WAIT_OBJECT_0;
+    if duplicated {
+        let _ = unsafe { CloseHandle(duplicate) };
+    }
+    slot_in_hand
 }
 
 fn create_main_window(initial_path: Option<&Path>, pending_device: PendingDevice) -> Result<HWND> {
