@@ -194,6 +194,7 @@ impl Reader<'_> {
         Ok(reader)
     }
 
+    // The handle owns the returned entry; the next header read or the drop invalidates it.
     fn next_header(&mut self) -> Result<Option<*mut ArchiveEntry>, ArchiveError> {
         let mut entry: *mut ArchiveEntry = std::ptr::null_mut();
         match unsafe { (self.api.read_next_header)(self.handle, &raw mut entry) } {
