@@ -464,11 +464,8 @@ pub fn build_info_text(
         format!("Path: {location_text}"),
         format!("{SIZE_LABEL}{}", format_file_size(metadata.file_size)),
     ];
-    if let Some(modified) = metadata.modified {
-        file.push(format!(
-            "{DATE_MODIFIED_LABEL}{}",
-            format_local_datetime(modified)
-        ));
+    if let Some(datetime) = metadata.modified.and_then(format_local_datetime) {
+        file.push(format!("{DATE_MODIFIED_LABEL}{datetime}"));
     }
 
     let display = vec![
@@ -538,11 +535,8 @@ pub fn build_info_text(
 
 /// Photography notation, shooting-settings order; Rating is Windows metadata and goes last.
 fn append_exif_lines(lines: &mut Vec<String>, exif: &crate::image::decode::ExifMetadata) {
-    if let Some(taken) = exif.date_taken {
-        lines.push(format!(
-            "{DATE_TAKEN_LABEL}{}",
-            format_local_datetime(taken)
-        ));
+    if let Some(datetime) = exif.date_taken.and_then(format_local_datetime) {
+        lines.push(format!("{DATE_TAKEN_LABEL}{datetime}"));
     }
     if let Some(maker) = &exif.camera_maker {
         lines.push(format!("Camera maker: {maker}"));
@@ -703,16 +697,13 @@ pub fn build_file_summary_text(
     }
     // Date taken identifies the photograph; the file's own time stands in when there is none.
     let taken = image.and_then(|image| image.exif.as_ref()?.date_taken);
-    if let Some(taken) = taken {
-        lines.push(format!(
-            "{DATE_TAKEN_LABEL}{}",
-            format_local_datetime(taken)
-        ));
-    } else if let Some(modified) = metadata.and_then(|metadata| metadata.modified) {
-        lines.push(format!(
-            "{DATE_MODIFIED_LABEL}{}",
-            format_local_datetime(modified)
-        ));
+    if let Some(datetime) = taken.and_then(format_local_datetime) {
+        lines.push(format!("{DATE_TAKEN_LABEL}{datetime}"));
+    } else if let Some(datetime) = metadata
+        .and_then(|metadata| metadata.modified)
+        .and_then(format_local_datetime)
+    {
+        lines.push(format!("{DATE_MODIFIED_LABEL}{datetime}"));
     }
     lines.join("\n")
 }
@@ -907,18 +898,12 @@ fn group_thousands(value: u64) -> String {
 }
 
 /// Fixed 24-hour local time; locale forms can pull fallback glyphs into the panel.
-fn format_local_datetime(time: SystemTime) -> String {
+fn format_local_datetime(time: SystemTime) -> Option<String> {
     // FILETIME reaches back to 1601, so a modified time before 1970 still formats.
     let epoch_intervals = u128::from(crate::image::decode::FILETIME_UNIX_EPOCH);
     let intervals = match time.duration_since(UNIX_EPOCH) {
         Ok(elapsed) => epoch_intervals + elapsed.as_nanos() / 100,
-        Err(earlier) => {
-            let Some(intervals) = epoch_intervals.checked_sub(earlier.duration().as_nanos() / 100)
-            else {
-                return String::new();
-            };
-            intervals
-        }
+        Err(earlier) => epoch_intervals.checked_sub(earlier.duration().as_nanos() / 100)?,
     };
     let file_time = FILETIME {
         dwLowDateTime: intervals as u32,
@@ -929,12 +914,12 @@ fn format_local_datetime(time: SystemTime) -> String {
     if unsafe { FileTimeToSystemTime(&raw const file_time, &raw mut utc) }.is_err()
         || unsafe { SystemTimeToTzSpecificLocalTime(None, &raw const utc, &raw mut local) }.is_err()
     {
-        return String::new();
+        return None;
     }
-    format!(
+    Some(format!(
         "{:04}-{:02}-{:02} {:02}:{:02}:{:02}",
         local.wYear, local.wMonth, local.wDay, local.wHour, local.wMinute, local.wSecond
-    )
+    ))
 }
 
 #[cfg(test)]
@@ -946,7 +931,7 @@ mod datetime_tests {
     fn a_timestamp_before_1970_still_formats() {
         // Mid-1969: no time zone offset can move the year.
         let time = UNIX_EPOCH - Duration::from_secs(184 * 24 * 60 * 60);
-        assert!(format_local_datetime(time).starts_with("1969-"));
+        assert!(format_local_datetime(time).is_some_and(|text| text.starts_with("1969-")));
     }
 }
 
