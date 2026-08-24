@@ -1421,6 +1421,7 @@ impl Renderer {
             return Err(windows::core::Error::empty());
         };
         let pitch = self.image_pixel_size.0 as u32 * self.image_storage.bytes_per_pixel();
+        // CopyFromMemory reads the whole bitmap from pixels unchecked; frames stay canvas-sized.
         unsafe { bitmap.CopyFromMemory(None, pixels.as_ptr().cast(), pitch) }?;
         Ok(())
     }
