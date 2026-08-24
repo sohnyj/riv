@@ -310,17 +310,22 @@ unsafe extern "system" fn frame_procedure(
             }
         }
         WM_DESTROY => {
+            let Some((pages, state_images)) =
+                state_mut(dialog).map(|state| (state.pages, state.state_images))
+            else {
+                return 0;
+            };
+            // Page destruction can send focus notifications back here; no borrow spans it.
+            for page in pages {
+                if !page.is_invalid() {
+                    let _ = unsafe { DestroyWindow(page) };
+                }
+            }
+            if !state_images.is_invalid() {
+                let _ =
+                    unsafe { windows::Win32::UI::Controls::ImageList_Destroy(Some(state_images)) };
+            }
             if let Some(state) = state_mut(dialog) {
-                for page in state.pages {
-                    if !page.is_invalid() {
-                        let _ = unsafe { DestroyWindow(page) };
-                    }
-                }
-                if !state.state_images.is_invalid() {
-                    let _ = unsafe {
-                        windows::Win32::UI::Controls::ImageList_Destroy(Some(state.state_images))
-                    };
-                }
                 state.about_fonts.destroy();
             }
             0
