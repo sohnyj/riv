@@ -2146,6 +2146,7 @@ fn icc_profile_bytes(
             continue;
         }
         let mut profile_byte_count = 0u32;
+        // A failed size query skips this context only; another context may still carry a profile.
         let _ = unsafe { context.GetProfileBytes(&mut [], &raw mut profile_byte_count) };
         if profile_byte_count == 0 {
             continue;
