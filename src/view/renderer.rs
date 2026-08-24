@@ -1544,13 +1544,17 @@ impl Renderer {
                     return;
                 }
                 let output_maximum = self.tone_map_target_nits;
-                let _ = unsafe {
+                let output_set = unsafe {
                     tone_map_effect.SetValue(
                         D2D1_HDRTONEMAP_PROP_OUTPUT_MAX_LUMINANCE.0 as u32,
                         D2D1_PROPERTY_TYPE_FLOAT,
                         &output_maximum.to_ne_bytes(),
                     )
-                };
+                }
+                .is_ok();
+                if !output_set {
+                    return;
+                }
                 unsafe { tone_map_effect.SetInput(0, &converted, true) };
                 let tone_mapped = unsafe { tone_map_effect.GetOutput() }.ok();
                 // Reinterpret scene-referred white as display-referred, then re-encode to sRGB.
