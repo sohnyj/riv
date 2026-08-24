@@ -263,6 +263,9 @@ unsafe extern "system" fn frame_procedure(
             let state = unsafe { &mut *(lparam.0 as *mut OptionsState) };
             state.dialog = dialog;
             initialize_frame(state);
+            if let Ok(tab) = unsafe { GetDlgItem(Some(dialog), IDC_OPTIONS_TAB) } {
+                select_page(dialog, tab, 0);
+            }
             1
         }
         WM_NOTIFY => {
@@ -270,9 +273,7 @@ unsafe extern "system" fn frame_procedure(
             if header.idFrom == IDC_OPTIONS_TAB as usize && header.code == TCN_SELCHANGE {
                 let selected =
                     unsafe { SendMessageW(header.hwndFrom, TCM_GETCURSEL, None, None).0 };
-                if let Some(state) = state_mut(dialog) {
-                    select_page(state, header.hwndFrom, selected);
-                }
+                select_page(dialog, header.hwndFrom, selected);
                 if let Ok(index) = usize::try_from(selected) {
                     sync_number_edit(dialog, index);
                 }
@@ -375,7 +376,6 @@ fn initialize_frame(state: &mut OptionsState) {
         }
     }
 
-    select_page(state, tab, 0);
     update_buttons(state);
 }
 
@@ -394,13 +394,14 @@ fn page_area(dialog: HWND, tab: HWND) -> RECT {
     area
 }
 
-fn select_page(state: &mut OptionsState, tab: HWND, selected: isize) {
+fn select_page(dialog: HWND, tab: HWND, selected: isize) {
     if let Ok(index) = usize::try_from(selected)
         && index < PAGES.len()
+        && let Some(state) = state_mut(dialog)
     {
         ensure_page(state, tab, index);
     }
-    show_page(state, selected);
+    show_page(dialog, selected);
 }
 
 const PAGES: [(u16, &str); 7] = [
@@ -480,12 +481,16 @@ fn ensure_page(state: &mut OptionsState, tab: HWND, index: usize) {
 }
 
 /// The selected page goes up before the others go down, so the bare tab never shows.
-fn show_page(state: &OptionsState, selected: isize) {
+fn show_page(dialog: HWND, selected: isize) {
+    let Some(pages) = state_mut(dialog).map(|state| state.pages) else {
+        return;
+    };
+    // No borrow spans the shows: a synchronously delivered draw message would take a second &mut.
     let visible = usize::try_from(selected).ok();
-    if let Some(page) = visible.and_then(|index| state.pages.get(index)) {
+    if let Some(page) = visible.and_then(|index| pages.get(index)) {
         let _ = unsafe { ShowWindow(*page, SW_SHOW) };
     }
-    for (index, page) in state.pages.iter().enumerate() {
+    for (index, page) in pages.iter().enumerate() {
         if Some(index) != visible {
             let _ = unsafe { ShowWindow(*page, SW_HIDE) };
         }
