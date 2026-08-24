@@ -1804,9 +1804,7 @@ pub fn upload_still_texture(
         [frame] => frame,
         _ => return None,
     };
-    if frame.pixels.len() != image.frame_byte_length()
-        || frame.pixels.len() as u64 > upload_device.maximum_frame_bytes
-    {
+    if frame.pixels.len() as u64 > upload_device.maximum_frame_bytes {
         return None;
     }
     let description = D3D11_TEXTURE2D_DESC {
@@ -1859,13 +1857,15 @@ fn upload_immutable_texture(
     pixels: &[u8],
     row_pitch: u32,
 ) -> Option<ID3D11Texture2D> {
+    if pixels.len() != row_pitch as usize * description.Height as usize {
+        return None;
+    }
     let subresource = D3D11_SUBRESOURCE_DATA {
         pSysMem: pixels.as_ptr().cast(),
         SysMemPitch: row_pitch,
         ..Default::default()
     };
     let mut texture = None;
-    // CreateTexture2D reads row_pitch * Height bytes from pixels unchecked; callers guarantee the length.
     unsafe {
         upload_device.device.CreateTexture2D(
             &raw const *description,
