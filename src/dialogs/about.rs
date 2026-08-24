@@ -5,6 +5,7 @@ use windows::Win32::Graphics::Gdi::{
     CLEARTYPE_QUALITY, CLIP_DEFAULT_PRECIS, CreateFontW, DEFAULT_CHARSET, DeleteObject, FW_NORMAL,
     HFONT, OUT_DEFAULT_PRECIS,
 };
+use windows::Win32::UI::Controls::NMLINK;
 use windows::Win32::UI::WindowsAndMessaging::{
     GetDlgItem, SendMessageW, SetDlgItemTextW, WM_SETFONT,
 };
@@ -51,9 +52,7 @@ pub fn initialize_page(page: HWND) -> AboutFonts {
 }
 
 /// Open the repository URL carried by the link's notification.
-pub fn open_notified_link(lparam: LPARAM) {
-    use windows::Win32::UI::Controls::NMLINK;
-    let link = unsafe { &*(lparam.0 as *const NMLINK) };
+pub fn open_notified_link(link: &NMLINK) {
     open_link(&link.item.szUrl);
 }
 

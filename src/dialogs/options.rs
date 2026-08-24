@@ -15,7 +15,7 @@ use windows::Win32::UI::Controls::{
     ImageList_Add, ImageList_Create, IsDlgButtonChecked, LVCF_TEXT, LVCF_WIDTH, LVCOLUMNW,
     LVIF_TEXT, LVITEMW, LVM_INSERTCOLUMNW, LVM_INSERTITEMW, LVM_SETEXTENDEDLISTVIEWSTYLE,
     LVM_SETITEMTEXTW, LVS_EX_DOUBLEBUFFER, LVS_EX_FULLROWSELECT, NM_CLICK, NM_DBLCLK, NM_RETURN,
-    NMHDR, NMITEMACTIVATE, NMTVKEYDOWN, TCIF_TEXT, TCITEMW, TCM_ADJUSTRECT, TCM_GETCURSEL,
+    NMHDR, NMITEMACTIVATE, NMLINK, NMTVKEYDOWN, TCIF_TEXT, TCITEMW, TCM_ADJUSTRECT, TCM_GETCURSEL,
     TCM_INSERTITEMW, TCM_SETPADDING, TCN_SELCHANGE, TVGN_CARET, TVHITTESTINFO,
     TVHT_ONITEMSTATEICON, TVI_LAST, TVI_ROOT, TVIF_PARAM, TVIF_STATE, TVIF_TEXT, TVINSERTSTRUCTW,
     TVIS_STATEIMAGEMASK, TVITEMEXW, TVM_GETITEMW, TVM_GETNEXTITEM, TVM_HITTEST, TVM_INSERTITEMW,
@@ -635,7 +635,8 @@ unsafe extern "system" fn page_procedure(
                     1
                 }
                 IDC_ABOUT_LINK if header.code == NM_CLICK || header.code == NM_RETURN => {
-                    about::open_notified_link(lparam);
+                    let link = unsafe { &*(lparam.0 as *const NMLINK) };
+                    about::open_notified_link(link);
                     1
                 }
                 IDC_ASSOCIATION_TREE if header.code == TVN_KEYDOWN => {
