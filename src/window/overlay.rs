@@ -362,25 +362,25 @@ impl Overlay {
         )?;
         let metrics = cached.metrics;
         let brushes = brushes_for(&mut self.brushes, context, content.output_color_target)?;
-        unsafe {
-            if boxed {
-                let panel = D2D1_ROUNDED_RECT {
-                    rect: D2D_RECT_F {
-                        left: inset + metrics.left - padding_x,
-                        top: metrics.top - padding_y,
-                        right: inset + metrics.left + metrics.width + padding_x,
-                        bottom: metrics.top + metrics.height + padding_y,
-                    },
-                    radiusX: PANEL_CORNER_RADIUS * self.scale,
-                    radiusY: PANEL_CORNER_RADIUS * self.scale,
-                };
-                context.FillRoundedRectangle(&raw const panel, &brushes.panel_background);
-            }
-            let text_brush = if boxed || !content.background_is_bright {
-                &brushes.white
-            } else {
-                &brushes.black
+        if boxed {
+            let panel = D2D1_ROUNDED_RECT {
+                rect: D2D_RECT_F {
+                    left: inset + metrics.left - padding_x,
+                    top: metrics.top - padding_y,
+                    right: inset + metrics.left + metrics.width + padding_x,
+                    bottom: metrics.top + metrics.height + padding_y,
+                },
+                radiusX: PANEL_CORNER_RADIUS * self.scale,
+                radiusY: PANEL_CORNER_RADIUS * self.scale,
             };
+            unsafe { context.FillRoundedRectangle(&raw const panel, &brushes.panel_background) };
+        }
+        let text_brush = if boxed || !content.background_is_bright {
+            &brushes.white
+        } else {
+            &brushes.black
+        };
+        unsafe {
             context.DrawTextLayout(
                 Vector2 { X: inset, Y: 0.0 },
                 &cached.layout,
