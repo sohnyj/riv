@@ -1731,40 +1731,40 @@ impl Renderer {
                 }
                 self.d2d_context.SetTransform(&Matrix3x2::identity());
             }
-            // Overlay failure must not block presenting the frame.
-            let overlay_result = draw_overlay(&self.d2d_context);
-            self.d2d_context.EndDraw(None, None)?;
-            let quantize_target = match &self.present_target {
-                PresentTarget::SwapChain { .. } => self.backbuffer_render_target_view.as_ref(),
-                PresentTarget::Composition(presenter) => presenter
-                    .next_slot()
-                    .and_then(|slot| slot.render_target_view.as_ref()),
-            };
-            if let (Some(quantize_pass), Some(quantization_steps), Some(scene), Some(backbuffer)) = (
-                &self.quantize_pass,
-                decision.quantization_steps,
-                &self.scene_shader_resource_view,
-                quantize_target,
-            ) {
-                quantize_pass.draw(
-                    &self.d3d_context,
-                    scene,
-                    backbuffer,
-                    self.backbuffer_size,
-                    decision.dither,
-                    quantization_steps,
-                );
-            }
-            match &mut self.present_target {
-                PresentTarget::SwapChain { swap_chain, .. } => {
-                    swap_chain.Present(1, DXGI_PRESENT(0)).ok()?;
-                }
-                PresentTarget::Composition(presenter) => {
-                    presenter.present_next(&self.d3d_context)?;
-                }
-            }
-            overlay_result
         }
+        // Overlay failure must not block presenting the frame.
+        let overlay_result = draw_overlay(&self.d2d_context);
+        unsafe { self.d2d_context.EndDraw(None, None) }?;
+        let quantize_target = match &self.present_target {
+            PresentTarget::SwapChain { .. } => self.backbuffer_render_target_view.as_ref(),
+            PresentTarget::Composition(presenter) => presenter
+                .next_slot()
+                .and_then(|slot| slot.render_target_view.as_ref()),
+        };
+        if let (Some(quantize_pass), Some(quantization_steps), Some(scene), Some(backbuffer)) = (
+            &self.quantize_pass,
+            decision.quantization_steps,
+            &self.scene_shader_resource_view,
+            quantize_target,
+        ) {
+            quantize_pass.draw(
+                &self.d3d_context,
+                scene,
+                backbuffer,
+                self.backbuffer_size,
+                decision.dither,
+                quantization_steps,
+            );
+        }
+        match &mut self.present_target {
+            PresentTarget::SwapChain { swap_chain, .. } => {
+                unsafe { swap_chain.Present(1, DXGI_PRESENT(0)) }.ok()?;
+            }
+            PresentTarget::Composition(presenter) => {
+                presenter.present_next(&self.d3d_context)?;
+            }
+        }
+        overlay_result
     }
 
     /// A whole-pixel 1:1 placement (unit scale, integer offset) that resamples nothing.
