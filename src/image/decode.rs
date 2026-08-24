@@ -1865,6 +1865,7 @@ fn upload_immutable_texture(
         ..Default::default()
     };
     let mut texture = None;
+    // CreateTexture2D reads row_pitch * Height bytes from pixels unchecked; callers guarantee the length.
     unsafe {
         upload_device.device.CreateTexture2D(
             &raw const *description,
