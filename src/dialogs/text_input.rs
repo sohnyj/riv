@@ -4,8 +4,8 @@ use windows::Win32::Foundation::{HWND, LPARAM, WPARAM};
 use windows::Win32::UI::Controls::EM_SETSEL;
 use windows::Win32::UI::Input::KeyboardAndMouse::SetFocus;
 use windows::Win32::UI::WindowsAndMessaging::{
-    EndDialog, GetDlgItem, GetDlgItemTextW, SendMessageW, SetDlgItemTextW, SetWindowLongPtrW,
-    WM_COMMAND, WM_INITDIALOG,
+    EndDialog, GetDlgItem, GetWindowTextLengthW, GetWindowTextW, SendMessageW, SetDlgItemTextW,
+    SetWindowLongPtrW, WM_COMMAND, WM_INITDIALOG,
 };
 use windows::core::HSTRING;
 
@@ -76,12 +76,14 @@ unsafe extern "system" fn dialog_procedure(
             match command {
                 IDOK => {
                     if let Some(state) = crate::dialogs::modal::state_mut::<TextInputState>(dialog)
+                        && let Ok(edit) = unsafe { GetDlgItem(Some(dialog), IDC_TEXT_INPUT) }
                     {
-                        let mut buffer = [0u16; 2048];
-                        let length =
-                            unsafe { GetDlgItemTextW(dialog, IDC_TEXT_INPUT, &mut buffer) };
+                        // Sized per read, so a long URL survives whole instead of truncating.
+                        let length = unsafe { GetWindowTextLengthW(edit) };
+                        let mut buffer = vec![0u16; length as usize + 1];
+                        let written = unsafe { GetWindowTextW(edit, &mut buffer) };
                         state.accepted_text =
-                            Some(String::from_utf16_lossy(&buffer[..length as usize]));
+                            Some(String::from_utf16_lossy(&buffer[..written as usize]));
                     }
                     let _ = unsafe { EndDialog(dialog, IDOK as isize) };
                     1
