@@ -12,22 +12,20 @@ static SENT_PAYLOADS: LazyLock<Mutex<HashMap<usize, (u32, TypeId)>>> =
     LazyLock::new(|| Mutex::new(HashMap::new()));
 
 fn record_sent<T: 'static>(pointer: usize, message: u32) {
-    if let Ok(mut payloads) = SENT_PAYLOADS.lock() {
-        payloads.insert(pointer, (message, TypeId::of::<T>()));
-    }
+    lock_sent().insert(pointer, (message, TypeId::of::<T>()));
 }
 
 fn remove_sent(pointer: usize) {
-    if let Ok(mut payloads) = SENT_PAYLOADS.lock() {
-        payloads.remove(&pointer);
-    }
+    lock_sent().remove(&pointer);
 }
 
 /// Whether this pointer went out with this message carrying a `T`.
 fn was_sent<T: 'static>(pointer: usize, message: u32) -> bool {
-    SENT_PAYLOADS
-        .lock()
-        .is_ok_and(|payloads| payloads.get(&pointer) == Some(&(message, TypeId::of::<T>())))
+    lock_sent().get(&pointer) == Some(&(message, TypeId::of::<T>()))
+}
+
+fn lock_sent() -> std::sync::MutexGuard<'static, HashMap<usize, (u32, TypeId)>> {
+    SENT_PAYLOADS.lock().expect("payload registry poisoned")
 }
 
 /// Posts an owned payload; reclaims it when the message cannot be delivered.
@@ -53,7 +51,7 @@ pub unsafe fn take_boxed<T: 'static>(message: u32, lparam: LPARAM) -> Option<Box
     let pointer = lparam.0 as usize;
     {
         // One locked check-and-remove, so the pointer is reclaimed exactly once.
-        let mut payloads = SENT_PAYLOADS.lock().ok()?;
+        let mut payloads = lock_sent();
         if payloads.get(&pointer) != Some(&(message, TypeId::of::<T>())) {
             return None;
         }
