@@ -2393,6 +2393,7 @@ fn show_open_with_failure(window: HWND, name: &str, detail: &str) {
     );
 }
 
+// A pumped message re-enters here for a second &mut; end the borrow before anything that pumps.
 fn application_from_window(window: HWND) -> Option<&'static mut Application> {
     let pointer = unsafe { GetWindowLongPtrW(window, GWLP_USERDATA) } as *mut Application;
     unsafe { pointer.as_mut() }
