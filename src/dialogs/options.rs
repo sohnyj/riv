@@ -267,13 +267,15 @@ unsafe extern "system" fn frame_procedure(
         }
         WM_NOTIFY => {
             let header = unsafe { &*(lparam.0 as *const NMHDR) };
-            if header.idFrom == IDC_OPTIONS_TAB as usize
-                && header.code == TCN_SELCHANGE
-                && let Some(state) = state_mut(dialog)
-            {
+            if header.idFrom == IDC_OPTIONS_TAB as usize && header.code == TCN_SELCHANGE {
                 let selected =
                     unsafe { SendMessageW(header.hwndFrom, TCM_GETCURSEL, None, None).0 };
-                select_page(state, header.hwndFrom, selected);
+                if let Some(state) = state_mut(dialog) {
+                    select_page(state, header.hwndFrom, selected);
+                }
+                if let Ok(index) = usize::try_from(selected) {
+                    sync_number_edit(dialog, index);
+                }
             }
             0
         }
@@ -304,6 +306,8 @@ unsafe extern "system" fn frame_procedure(
                         sync_all_pages(state);
                         update_buttons(state);
                     }
+                    sync_number_edit(dialog, IMAGE_PAGE);
+                    sync_number_edit(dialog, MISCELLANEOUS_PAGE);
                     1
                 }
                 _ => 0,
@@ -873,6 +877,21 @@ fn sync_page(state: &mut OptionsState, index: usize) {
     }
 }
 
+/// Writing a number edit re-enters through EN_CHANGE, so callers run this after their borrow ends.
+fn sync_number_edit(dialog: HWND, index: usize) {
+    let control = match index {
+        IMAGE_PAGE => IDC_IMAGE_ZOOM_STEP_EDIT,
+        MISCELLANEOUS_PAGE => IDC_MISCELLANEOUS_SLIDESHOW_INTERVAL_EDIT,
+        _ => return,
+    };
+    let Some(page) = state_mut(dialog).map(|state| state.pages[index]) else {
+        return;
+    };
+    if !page.is_invalid() {
+        show_clamped_number(page, control);
+    }
+}
+
 fn sync_window_page(state: &OptionsState) {
     let options = &state.transient_options;
     let window_page = state.pages[WINDOW_PAGE];
@@ -911,8 +930,6 @@ fn sync_image_page(state: &OptionsState) {
     combo_select(image_page, IDC_IMAGE_DITHER, options.dither_mode);
     combo_select(image_page, IDC_IMAGE_FITMODE, options.fit_mode);
     combo_select(image_page, IDC_IMAGE_PRELOADING, options.preloading);
-    let zoom_step = HSTRING::from(options.zoom_step_percent.to_string());
-    let _ = unsafe { SetDlgItemTextW(image_page, IDC_IMAGE_ZOOM_STEP_EDIT, &zoom_step) };
     set_check(image_page, IDC_IMAGE_CURSOR_ZOOM, options.cursor_zoom);
     set_check(
         image_page,
@@ -951,14 +968,6 @@ fn sync_miscellaneous_page(state: &OptionsState) {
         IDC_MISCELLANEOUS_SLIDESHOW_DIRECTION,
         options.slideshow_direction,
     );
-    let interval_seconds = HSTRING::from(options.slideshow_interval_seconds.to_string());
-    let _ = unsafe {
-        SetDlgItemTextW(
-            miscellaneous_page,
-            IDC_MISCELLANEOUS_SLIDESHOW_INTERVAL_EDIT,
-            &interval_seconds,
-        )
-    };
     combo_select(
         miscellaneous_page,
         IDC_MISCELLANEOUS_AFTER_DELETE,
