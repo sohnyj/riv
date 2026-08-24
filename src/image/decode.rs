@@ -1440,7 +1440,7 @@ fn create_wic_decoder(
                 WICDecodeMetadataCacheOnDemand,
             )
         },
-        // The stream borrows the buffer; decoder and stream stay within this call.
+        // InitializeFromMemory keeps a raw pointer into bytes; the decoder must not outlive the buffer.
         DecodeInput::Memory { bytes, .. } => unsafe {
             let stream = factory.CreateStream()?;
             stream.InitializeFromMemory(bytes)?;
