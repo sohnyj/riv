@@ -604,9 +604,7 @@ unsafe extern "system" fn page_procedure(
             apply_page_command(state, page, control, notification)
         }
         WM_NOTIFY => {
-            let Some(state) = state_mut(page) else {
-                return 0;
-            };
+            // State only inside a matched branch: item insertions notify here while an initializer's borrow is live.
             let header = unsafe { &*(lparam.0 as *const NMHDR) };
             match header.idFrom as i32 {
                 IDC_SHORTCUTS_LIST if header.code == NM_DBLCLK => {
@@ -621,6 +619,9 @@ unsafe extern "system" fn page_procedure(
                     1
                 }
                 IDC_ASSOCIATION_TREE if header.code == NM_CLICK => {
+                    let Some(state) = state_mut(page) else {
+                        return 0;
+                    };
                     toggle_association_at_cursor(state, header.hwndFrom);
                     1
                 }
@@ -639,7 +640,9 @@ unsafe extern "system" fn page_procedure(
                                 None,
                             )
                         };
-                        if selected.0 != 0 {
+                        if selected.0 != 0
+                            && let Some(state) = state_mut(page)
+                        {
                             toggle_association_item(state, header.hwndFrom, HTREEITEM(selected.0));
                         }
                     }
