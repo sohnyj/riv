@@ -72,8 +72,9 @@ fn select_files(
         {
             let _ = dialog.SetFolder(&folder);
         }
+        // Cancellation is the only failure Show produces in practice; both fold to no selection.
         if dialog.Show(Some(window)).is_err() {
-            return Ok(Vec::new()); // cancelled
+            return Ok(Vec::new());
         }
         let results = dialog.GetResults()?;
         let count = results.GetCount()?;
