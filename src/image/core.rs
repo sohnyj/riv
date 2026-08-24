@@ -701,8 +701,19 @@ impl ImageCore {
     }
 
     pub fn load_path(&mut self, path: &Path) -> LoadOutcome {
-        let Ok(path) = std::path::absolute(path) else {
-            return LoadOutcome::Pending;
+        let path = match std::path::absolute(path) {
+            Ok(path) => path,
+            Err(error) => {
+                self.request = ViewRequest::Failed(
+                    ItemLocation::File(path.to_path_buf()),
+                    DecodeError {
+                        code: error.raw_os_error().unwrap_or(0),
+                        message: error.to_string(),
+                        store_codec_names: &[],
+                    },
+                );
+                return LoadOutcome::Failed;
+            }
         };
         if path.is_dir() {
             self.submit_scan(PendingScan {
