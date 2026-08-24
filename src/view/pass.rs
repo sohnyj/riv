@@ -45,6 +45,7 @@ pub fn write_constants<Constants>(
 ) -> Result<()> {
     unsafe {
         let mut mapped = Default::default();
+        // The copy trusts the ByteWidth: the buffer must come from create_constant_buffer::<Constants>.
         context.Map(buffer, 0, D3D11_MAP_WRITE_DISCARD, 0, Some(&raw mut mapped))?;
         std::ptr::copy_nonoverlapping(
             std::ptr::from_ref(constants).cast::<u8>(),
