@@ -1450,6 +1450,8 @@ impl Renderer {
         let Some(color_management) = &self.mode_effects.color_management_effect else {
             return;
         };
+        // Unwire the previous bitmap now, so a failure return does not keep it alive.
+        unsafe { color_management.SetInput(0, None, true) };
         // HDR passes through; SDR maps content above SDR white to the target.
         let hdr_content = peak_luminance_nits.is_some_and(|peak| peak > SDR_REFERENCE_WHITE_NITS);
         let tone_map = self
@@ -1464,8 +1466,6 @@ impl Renderer {
             && !scrgb_destination
             && self.is_destination_space(icc_bytes)
         {
-            // Unwire the previous bitmap so the effect does not keep it alive.
-            unsafe { color_management.SetInput(0, None, true) };
             return;
         }
         // FP16 pixels are linear light in the stated primaries; scRGB covers unknown ones.
