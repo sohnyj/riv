@@ -775,7 +775,8 @@ impl ImageCore {
     fn spawn_scan(&self, scope: ListingScope) {
         let options = self.options.clone();
         let window = self.window;
-        let _ = std::thread::Builder::new()
+        // A swallowed spawn failure would leave the listing waiting forever.
+        std::thread::Builder::new()
             .name("riv-listing-scan".to_string())
             .spawn(move || {
                 post_boxed(
@@ -783,7 +784,8 @@ impl ImageCore {
                     WM_APP_LISTING_READY,
                     Box::new(ScannedListing::of(scope, &options)),
                 );
-            });
+            })
+            .expect("listing scan thread spawn failed");
     }
 
     /// What an anchor the incoming listing dropped now sits behind, if it sat in it at all.
