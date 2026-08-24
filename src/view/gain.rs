@@ -1,13 +1,14 @@
 //! Gain application pass: base x 2^(boost x W) baked into a linear FP16 texture.
 
 use windows::Win32::Graphics::Direct3D11::{
-    D3D11_FILTER_MIN_MAG_MIP_LINEAR, D3D11_SAMPLER_DESC, D3D11_TEXTURE_ADDRESS_CLAMP, ID3D11Buffer,
-    ID3D11Device, ID3D11DeviceContext, ID3D11PixelShader, ID3D11RenderTargetView,
-    ID3D11SamplerState, ID3D11ShaderResourceView, ID3D11VertexShader,
+    D3D11_FILTER_MIN_MAG_MIP_LINEAR, D3D11_SAMPLER_DESC, D3D11_TEXTURE_ADDRESS_CLAMP, ID3D11Device,
+    ID3D11DeviceContext, ID3D11PixelShader, ID3D11RenderTargetView, ID3D11SamplerState,
+    ID3D11ShaderResourceView, ID3D11VertexShader,
 };
 use windows::core::Result;
 
 use crate::image::gain_map::GainMapMetadata;
+use crate::view::pass::ConstantBuffer;
 
 /// DXBC compiled by the build script; the viewer never runs a shader compiler.
 const GAIN_APPLY_SHADER: &[u8] = include_bytes!(concat!(env!("OUT_DIR"), "/gain_apply.dxbc"));
@@ -40,7 +41,7 @@ pub struct BakeInputs<'resources> {
 pub struct GainMapPass {
     vertex_shader: ID3D11VertexShader,
     pixel_shader: ID3D11PixelShader,
-    constant_buffer: ID3D11Buffer,
+    constant_buffer: ConstantBuffer<GainConstants>,
     /// Bilinear for the gain map, which is usually smaller than the base.
     sampler: ID3D11SamplerState,
 }

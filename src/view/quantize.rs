@@ -4,13 +4,14 @@ use std::cell::Cell;
 
 use windows::Win32::Graphics::Direct3D11::{
     D3D11_BIND_SHADER_RESOURCE, D3D11_SUBRESOURCE_DATA, D3D11_TEXTURE2D_DESC,
-    D3D11_USAGE_IMMUTABLE, ID3D11Buffer, ID3D11Device, ID3D11DeviceContext, ID3D11PixelShader,
+    D3D11_USAGE_IMMUTABLE, ID3D11Device, ID3D11DeviceContext, ID3D11PixelShader,
     ID3D11RenderTargetView, ID3D11ShaderResourceView, ID3D11VertexShader,
 };
 use windows::Win32::Graphics::Dxgi::Common::{DXGI_FORMAT_R32_FLOAT, DXGI_SAMPLE_DESC};
 use windows::core::Result;
 
 use crate::view::dither::{BLUE_NOISE_SIZE, BLUE_NOISE_TEXELS, DitherMode};
+use crate::view::pass::ConstantBuffer;
 
 /// DXBC compiled by the build script; the viewer never runs a shader compiler.
 const COPY_SHADER: &[u8] = include_bytes!(concat!(env!("OUT_DIR"), "/copy.dxbc"));
@@ -28,7 +29,7 @@ pub struct QuantizePass {
     copy_shader: ID3D11PixelShader,
     ordered_shader: ID3D11PixelShader,
     fruit_shader: ID3D11PixelShader,
-    constant_buffer: ID3D11Buffer,
+    constant_buffer: ConstantBuffer<QuantizationConstants>,
     /// What the buffer already holds; the depth only moves when the output is rebuilt.
     written_steps: Cell<Option<u32>>,
     blue_noise_view: ID3D11ShaderResourceView,

@@ -1,5 +1,7 @@
 //! Shared machinery of the fullscreen passes: constant upload and the draw protocol.
 
+use std::marker::PhantomData;
+
 use windows::Win32::Graphics::Direct3D::D3D11_PRIMITIVE_TOPOLOGY_TRIANGLELIST;
 use windows::Win32::Graphics::Direct3D11::{
     D3D11_BIND_CONSTANT_BUFFER, D3D11_BUFFER_DESC, D3D11_CPU_ACCESS_WRITE, D3D11_MAP_WRITE_DISCARD,
@@ -18,7 +20,15 @@ pub fn create_vertex_shader(device: &ID3D11Device) -> Result<ID3D11VertexShader>
     Ok(vertex_shader.expect("CreateVertexShader succeeded without shader"))
 }
 
-pub fn create_constant_buffer<Constants>(device: &ID3D11Device) -> Result<ID3D11Buffer> {
+/// A dynamic buffer and the one Constants layout its ByteWidth was sized for.
+pub struct ConstantBuffer<Constants> {
+    buffer: ID3D11Buffer,
+    sized_for: PhantomData<Constants>,
+}
+
+pub fn create_constant_buffer<Constants>(
+    device: &ID3D11Device,
+) -> Result<ConstantBuffer<Constants>> {
     let buffer_description = D3D11_BUFFER_DESC {
         ByteWidth: size_of::<Constants>() as u32,
         Usage: D3D11_USAGE_DYNAMIC,
@@ -34,35 +44,43 @@ pub fn create_constant_buffer<Constants>(device: &ID3D11Device) -> Result<ID3D11
             Some(&raw mut constant_buffer),
         )?;
     }
-    Ok(constant_buffer.expect("CreateBuffer succeeded without buffer"))
+    Ok(ConstantBuffer {
+        buffer: constant_buffer.expect("CreateBuffer succeeded without buffer"),
+        sized_for: PhantomData,
+    })
 }
 
 /// Overwrites a dynamic constant buffer with one plain-layout value.
 pub fn write_constants<Constants>(
     context: &ID3D11DeviceContext,
-    buffer: &ID3D11Buffer,
+    buffer: &ConstantBuffer<Constants>,
     constants: &Constants,
 ) -> Result<()> {
     unsafe {
         let mut mapped = Default::default();
-        // The copy trusts the ByteWidth: the buffer must come from create_constant_buffer::<Constants>.
-        context.Map(buffer, 0, D3D11_MAP_WRITE_DISCARD, 0, Some(&raw mut mapped))?;
+        context.Map(
+            &buffer.buffer,
+            0,
+            D3D11_MAP_WRITE_DISCARD,
+            0,
+            Some(&raw mut mapped),
+        )?;
         std::ptr::copy_nonoverlapping(
             std::ptr::from_ref(constants).cast::<u8>(),
             mapped.pData.cast::<u8>(),
             size_of::<Constants>(),
         );
-        context.Unmap(buffer, 0);
+        context.Unmap(&buffer.buffer, 0);
     }
     Ok(())
 }
 
 /// One fullscreen triangle through the pixel shader, with D2D state reset around it.
-pub fn draw_fullscreen(
+pub fn draw_fullscreen<Constants>(
     context: &ID3D11DeviceContext,
     vertex_shader: &ID3D11VertexShader,
     pixel_shader: &ID3D11PixelShader,
-    constant_buffer: &ID3D11Buffer,
+    constant_buffer: &ConstantBuffer<Constants>,
     shader_resources: &[Option<ID3D11ShaderResourceView>; 2],
     target: &ID3D11RenderTargetView,
     target_size: (u32, u32),
@@ -85,7 +103,7 @@ pub fn draw_fullscreen(
         context.IASetPrimitiveTopology(D3D11_PRIMITIVE_TOPOLOGY_TRIANGLELIST);
         context.VSSetShader(vertex_shader, None);
         context.PSSetShader(pixel_shader, None);
-        context.PSSetConstantBuffers(0, Some(&[Some(constant_buffer.clone())]));
+        context.PSSetConstantBuffers(0, Some(&[Some(constant_buffer.buffer.clone())]));
         context.PSSetShaderResources(0, Some(shader_resources.as_slice()));
         context.Draw(3, 0);
         // Unbind so D2D can retake the textures next frame.
