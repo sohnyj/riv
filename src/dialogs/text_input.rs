@@ -44,7 +44,7 @@ pub fn show(window: HWND, request: &TextInputRequest) -> Option<String> {
         .flatten()
 }
 
-extern "system" fn dialog_procedure(
+unsafe extern "system" fn dialog_procedure(
     dialog: HWND,
     message: u32,
     wparam: WPARAM,
