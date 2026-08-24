@@ -2,7 +2,7 @@
 
 use std::path::{Path, PathBuf};
 
-use windows::Win32::Foundation::HWND;
+use windows::Win32::Foundation::{E_ABORT, HWND};
 use windows::Win32::Storage::FileSystem::{MOVE_FILE_FLAGS, MoveFileExW};
 use windows::Win32::System::Com::{CLSCTX_INPROC_SERVER, CoCreateInstance};
 use windows::Win32::UI::Controls::{
@@ -96,7 +96,12 @@ pub fn delete_file(path: &Path, permanent: bool) -> Result<()> {
         operation.SetOperationFlags(flags)?;
         let item: IShellItem = SHCreateItemFromParsingName(&HSTRING::from(path), None)?;
         operation.DeleteItem(&item, None)?;
-        operation.PerformOperations()
+        operation.PerformOperations()?;
+        // PerformOperations reports success even when the shell aborted the deletion.
+        if operation.GetAnyOperationsAborted()?.as_bool() {
+            return Err(windows::core::Error::from_hresult(E_ABORT));
+        }
+        Ok(())
     }
 }
 
