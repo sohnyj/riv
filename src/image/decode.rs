@@ -707,7 +707,7 @@ fn png_refinement(
     header: &[u8],
 ) -> &'static FormatDescriptor {
     if png_has_animation_control(header) {
-        return descriptor_for_extension(APNG_EXTENSIONS[0]).unwrap_or(descriptor);
+        return descriptor_for_extension(APNG_EXTENSIONS[0]).expect("apng is in the registry");
     }
     descriptor
 }
@@ -731,7 +731,7 @@ fn ftyp_refinement(
         return &ANIMATED_AVIF;
     }
     if ftyp_has_brand(header, AVIF_STILL_BRAND) {
-        return descriptor_for_extension(AVIF_EXTENSIONS[0]).unwrap_or(descriptor);
+        return descriptor_for_extension(AVIF_EXTENSIONS[0]).expect("avif is in the registry");
     }
     descriptor
 }
