@@ -173,18 +173,23 @@ unsafe extern "system" fn keyboard_procedure(
                     1
                 }
                 command if command == IDOK as i32 => {
-                    if let Some(state) = state_mut::<KeyboardCaptureState>(dialog) {
+                    let conflict = state_mut::<KeyboardCaptureState>(dialog).and_then(|state| {
                         for sequence in &state.sequences {
                             if let Some((encoding, owner)) = state
                                 .taken
                                 .iter()
                                 .find(|(encoding, _)| encoding == sequence)
                             {
-                                warn_conflict(dialog, encoding, owner);
-                                return 1;
+                                return Some((encoding.to_string(), owner.to_string()));
                             }
                         }
                         state.accepted = true;
+                        None
+                    });
+                    // The warning runs a modal loop that re-enters this procedure; the borrow ended above.
+                    if let Some((encoding, owner)) = conflict {
+                        warn_conflict(dialog, &encoding, &owner);
+                        return 1;
                     }
                     let _ = unsafe { EndDialog(dialog, IDOK as isize) };
                     1
@@ -242,15 +247,20 @@ unsafe extern "system" fn mouse_procedure(
                     1
                 }
                 command if command == IDOK as i32 => {
-                    if let Some(state) = state_mut::<MouseCaptureState>(dialog) {
+                    let conflict = state_mut::<MouseCaptureState>(dialog).and_then(|state| {
                         if let Some(binding) = &state.binding
                             && let Some((encoding, owner)) =
                                 state.taken.iter().find(|(encoding, _)| encoding == binding)
                         {
-                            warn_conflict(dialog, encoding, owner);
-                            return 1;
+                            return Some((encoding.to_string(), owner.to_string()));
                         }
                         state.accepted = true;
+                        None
+                    });
+                    // The warning runs a modal loop that re-enters this procedure; the borrow ended above.
+                    if let Some((encoding, owner)) = conflict {
+                        warn_conflict(dialog, &encoding, &owner);
+                        return 1;
                     }
                     let _ = unsafe { EndDialog(dialog, IDOK as isize) };
                     1
