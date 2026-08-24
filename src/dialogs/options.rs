@@ -1320,6 +1320,10 @@ fn create_tristate_images() -> HIMAGELIST {
             0,
         )
     };
+    // Without the list the tree simply shows no state images; the destroy path checks the same.
+    if images.is_invalid() {
+        return images;
+    }
     let screen = unsafe { GetDC(None) };
     for style in [
         DFCS_BUTTONCHECK, // index 0 placeholder (state image 0 = none)
