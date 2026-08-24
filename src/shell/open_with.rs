@@ -40,8 +40,9 @@ pub fn enumerate_in_background(window: HWND, extension: String) {
 fn enumerate(extension: String) -> OpenWithList {
     let mut items = Vec::new();
     let own_executable = std::env::current_exe()
-        .map(|exe| exe.to_string_lossy().into_owned())
-        .unwrap_or_default();
+        .expect("the running module always has a path")
+        .to_string_lossy()
+        .into_owned();
     let default_executable = default_executable_for(&extension).unwrap_or_default();
 
     // Packaged apps have no readable file path, so only riv itself is filtered out.

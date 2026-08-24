@@ -77,8 +77,9 @@ fn registry_key_is_empty(subkey: &str) -> bool {
 
 fn ensure_application_registration() {
     let executable = std::env::current_exe()
-        .map(|path| path.to_string_lossy().into_owned())
-        .unwrap_or_default();
+        .expect("the running module always has a path")
+        .to_string_lossy()
+        .into_owned();
     let progid_key = classes_progid_key();
     let capabilities = capabilities_key();
     registry_set_string(

@@ -27,9 +27,7 @@ pub fn create_shortcut() {
     let Some(path) = shortcut_path() else {
         return;
     };
-    let Ok(executable) = std::env::current_exe() else {
-        return;
-    };
+    let executable = std::env::current_exe().expect("the running module always has a path");
     let _: Result<()> = (|| unsafe {
         let link: IShellLinkW = CoCreateInstance(&ShellLink, None, CLSCTX_INPROC_SERVER)?;
         link.SetPath(&HSTRING::from(executable.as_path()))?;

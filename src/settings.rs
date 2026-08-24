@@ -535,9 +535,9 @@ impl SettingsFile {
 
 fn settings_path() -> PathBuf {
     std::env::current_exe()
-        .ok()
-        .and_then(|exe| Some(exe.parent()?.to_path_buf()))
-        .unwrap_or_default()
+        .expect("the running module always has a path")
+        .parent()
+        .expect("the executable path always names a directory")
         .join("riv.json")
 }
 

@@ -2360,9 +2360,8 @@ fn create_main_window(initial_path: Option<&Path>, pending_device: PendingDevice
 }
 
 fn open_in_new_window(path: &Path) {
-    if let Ok(executable) = std::env::current_exe() {
-        let _ = std::process::Command::new(executable).arg(path).spawn();
-    }
+    let executable = std::env::current_exe().expect("the running module always has a path");
+    let _ = std::process::Command::new(executable).arg(path).spawn();
 }
 
 /// TokenElevation misreports admin accounts with UAC off; check the elevation type.
