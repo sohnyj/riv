@@ -256,13 +256,11 @@ fn display_path_profile(path: &DISPLAYCONFIG_PATH_INFO) -> Option<Vec<u8>> {
     use windows::Win32::Foundation::{HLOCAL, LocalFree};
     use windows::Win32::UI::ColorSystem::{
         CPST_NONE, CPT_ICC, ColorProfileGetDisplayDefault, ColorProfileGetDisplayUserScope,
-        WCS_PROFILE_MANAGEMENT_SCOPE_SYSTEM_WIDE,
     };
 
     let adapter = path.targetInfo.adapterId;
     let source = path.sourceInfo.id;
-    let scope = unsafe { ColorProfileGetDisplayUserScope(adapter, source) }
-        .unwrap_or(WCS_PROFILE_MANAGEMENT_SCOPE_SYSTEM_WIDE);
+    let scope = unsafe { ColorProfileGetDisplayUserScope(adapter, source) }.ok()?;
     let name = unsafe { ColorProfileGetDisplayDefault(scope, adapter, source, CPT_ICC, CPST_NONE) }
         .ok()?;
     let profile = unsafe { name.to_string() }.ok();
