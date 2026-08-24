@@ -37,17 +37,17 @@ pub fn create_render_texture(
 pub fn create_render_target_view(
     device: &ID3D11Device,
     texture: &ID3D11Texture2D,
-) -> windows::core::Result<Option<ID3D11RenderTargetView>> {
+) -> windows::core::Result<ID3D11RenderTargetView> {
     let mut view = None;
     unsafe { device.CreateRenderTargetView(texture, None, Some(&raw mut view))? };
-    Ok(view)
+    view.ok_or_else(windows::core::Error::empty)
 }
 
 pub fn create_shader_resource_view(
     device: &ID3D11Device,
     texture: &ID3D11Texture2D,
-) -> windows::core::Result<Option<ID3D11ShaderResourceView>> {
+) -> windows::core::Result<ID3D11ShaderResourceView> {
     let mut view = None;
     unsafe { device.CreateShaderResourceView(texture, None, Some(&raw mut view))? };
-    Ok(view)
+    view.ok_or_else(windows::core::Error::empty)
 }

@@ -968,8 +968,10 @@ impl Renderer {
             SCENE_TEXTURE_FORMAT,
             D3D11_RESOURCE_MISC_FLAG(0),
         )?;
-        self.scene_shader_resource_view =
-            crate::view::texture::create_shader_resource_view(&self.d3d_device, &scene_texture)?;
+        self.scene_shader_resource_view = Some(crate::view::texture::create_shader_resource_view(
+            &self.d3d_device,
+            &scene_texture,
+        )?);
         let properties = Self::target_bitmap_properties(SCENE_TEXTURE_FORMAT);
         let target = Self::bitmap_over_texture(&self.d2d_context, &scene_texture, &properties)?;
         unsafe { self.d2d_context.SetTarget(&target) };
@@ -993,8 +995,9 @@ impl Renderer {
         self.backbuffer_size = (buffer_description.Width, buffer_description.Height);
         if self.quantize_pass.is_some() {
             // The pass dithers and quantizes the scene into the backbuffer.
-            self.backbuffer_render_target_view =
-                crate::view::texture::create_render_target_view(&self.d3d_device, &buffer)?;
+            self.backbuffer_render_target_view = Some(
+                crate::view::texture::create_render_target_view(&self.d3d_device, &buffer)?,
+            );
             return self.create_scene_target();
         }
         let properties = Self::target_bitmap_properties(self.backbuffer_format);
@@ -1019,10 +1022,11 @@ impl Renderer {
                 if quantizing {
                     // The pass writes each presentation buffer; D2D draws the shared scene.
                     slot.d2d_target = None;
-                    slot.render_target_view = crate::view::texture::create_render_target_view(
-                        &self.d3d_device,
-                        &slot.texture,
-                    )?;
+                    slot.render_target_view =
+                        Some(crate::view::texture::create_render_target_view(
+                            &self.d3d_device,
+                            &slot.texture,
+                        )?);
                 } else {
                     // D2D draws each presentation buffer directly; render retargets per frame.
                     slot.render_target_view = None;
@@ -1219,7 +1223,7 @@ impl Renderer {
                 .ok()?;
                 let render_target_view =
                     crate::view::texture::create_render_target_view(&self.d3d_device, &texture)
-                        .ok()??;
+                        .ok()?;
                 let properties = image_bitmap_properties(PixelStorage::RgbaHalf);
                 let bitmap =
                     Self::bitmap_over_texture(&self.d2d_context, &texture, &properties).ok()?;
@@ -1334,10 +1338,10 @@ impl Renderer {
         let gain_map_texture = uploaded.gain_map.as_ref()?;
         let base_view =
             crate::view::texture::create_shader_resource_view(&self.d3d_device, &uploaded.texture)
-                .ok()??;
+                .ok()?;
         let gain_map_view =
             crate::view::texture::create_shader_resource_view(&self.d3d_device, gain_map_texture)
-                .ok()??;
+                .ok()?;
         Some(GainMapState {
             metadata,
             base_bitmap,
