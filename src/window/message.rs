@@ -78,6 +78,7 @@ pub unsafe fn borrowed_payload<'payload, T: 'static>(
     lparam: LPARAM,
 ) -> Option<&'payload T> {
     let pointer = lparam.0 as usize;
+    // The sender's stack owns the value only during the send; the reference must not outlive the handler.
     was_sent::<T>(pointer, message).then(|| unsafe { &*(pointer as *const T) })
 }
 
