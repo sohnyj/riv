@@ -1100,7 +1100,9 @@ fn initialize_shortcuts_page(state: &OptionsState) {
         )
     };
     let mut bounds = RECT::default();
-    let _ = unsafe { GetClientRect(list, &raw mut bounds) };
+    if unsafe { GetClientRect(list, &raw mut bounds) }.is_err() {
+        return;
+    }
     let usable = bounds.right - bounds.left - unsafe { GetSystemMetrics(SM_CXVSCROLL) };
     let action_width = usable * 36 / 100;
     let keyboard_width = usable * 32 / 100;
