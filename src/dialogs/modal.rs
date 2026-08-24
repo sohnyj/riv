@@ -37,5 +37,6 @@ pub fn run_modal(
 /// Dialog state stored at DWLP_USER by WM_INITDIALOG.
 pub fn state_mut<State>(dialog: HWND) -> Option<&'static mut State> {
     let pointer = unsafe { GetWindowLongPtrW(dialog, DWLP_USER) } as *mut State;
+    // Synchronous notifications and nested modals re-enter for a second &mut; end the borrow first.
     unsafe { pointer.as_mut() }
 }
