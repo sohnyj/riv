@@ -118,9 +118,10 @@ unsafe extern "system" fn keyboard_procedure(
             }
             if let Ok(listbox) = unsafe { GetDlgItem(Some(dialog), IDC_CAPTURE_KEY_LIST) } {
                 let procedure = key_list_procedure as *const core::ffi::c_void;
-                let original =
-                    unsafe { SetWindowLongPtrW(listbox, GWLP_WNDPROC, procedure as isize) };
+                // The original procedure is stored before the swap, so the subclass never reads it unset.
+                let original = unsafe { GetWindowLongPtrW(listbox, GWLP_WNDPROC) };
                 unsafe { SetWindowLongPtrW(listbox, GWLP_USERDATA, original) };
+                unsafe { SetWindowLongPtrW(listbox, GWLP_WNDPROC, procedure as isize) };
             }
             if let Ok(field) = unsafe { GetDlgItem(Some(dialog), IDC_CAPTURE_KEY_FIELD) } {
                 let _ = unsafe { SetFocus(Some(field)) };
