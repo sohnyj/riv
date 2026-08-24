@@ -89,6 +89,7 @@ pub fn delete_file(path: &Path, permanent: bool) -> Result<()> {
     unsafe {
         let operation: IFileOperation =
             CoCreateInstance(&FileOperation, None, CLSCTX_INPROC_SERVER)?;
+        // No FOF_NOERRORUI: the shell's own error dialog is the failure surface.
         let mut flags = FOF_NOCONFIRMATION | FOF_SILENT;
         if !permanent {
             flags |= FOF_ALLOWUNDO;
