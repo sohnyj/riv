@@ -1866,25 +1866,25 @@ fn rename_current_file(application: &mut Application, window: HWND) {
 }
 
 fn toggle_fullscreen(application: &mut Application, window: HWND) {
-    unsafe {
-        if let Some(restore) = application.fullscreen_restore.take() {
-            let style = GetWindowLongPtrW(window, GWL_STYLE) as u32;
-            SetWindowLongPtrW(window, GWL_STYLE, (style | WS_OVERLAPPEDWINDOW.0) as isize);
-            restore.put_back(window);
-        } else {
-            application.fullscreen_restore = Some(WindowRestore::capture(window));
+    if let Some(restore) = application.fullscreen_restore.take() {
+        let style = unsafe { GetWindowLongPtrW(window, GWL_STYLE) } as u32;
+        unsafe { SetWindowLongPtrW(window, GWL_STYLE, (style | WS_OVERLAPPEDWINDOW.0) as isize) };
+        restore.put_back(window);
+    } else {
+        application.fullscreen_restore = Some(WindowRestore::capture(window));
 
-            let monitor = MonitorFromWindow(window, MONITOR_DEFAULTTONEAREST);
-            let mut monitor_info = MONITORINFO {
-                cbSize: size_of::<MONITORINFO>() as u32,
-                ..Default::default()
-            };
-            let _ = GetMonitorInfoW(monitor, &raw mut monitor_info);
-            let bounds = monitor_info.rcMonitor;
+        let monitor = unsafe { MonitorFromWindow(window, MONITOR_DEFAULTTONEAREST) };
+        let mut monitor_info = MONITORINFO {
+            cbSize: size_of::<MONITORINFO>() as u32,
+            ..Default::default()
+        };
+        let _ = unsafe { GetMonitorInfoW(monitor, &raw mut monitor_info) };
+        let bounds = monitor_info.rcMonitor;
 
-            let style = GetWindowLongPtrW(window, GWL_STYLE) as u32;
-            SetWindowLongPtrW(window, GWL_STYLE, (style & !WS_OVERLAPPEDWINDOW.0) as isize);
-            let _ = SetWindowPos(
+        let style = unsafe { GetWindowLongPtrW(window, GWL_STYLE) } as u32;
+        unsafe { SetWindowLongPtrW(window, GWL_STYLE, (style & !WS_OVERLAPPEDWINDOW.0) as isize) };
+        let _ = unsafe {
+            SetWindowPos(
                 window,
                 Some(HWND_TOP),
                 bounds.left,
@@ -1892,8 +1892,8 @@ fn toggle_fullscreen(application: &mut Application, window: HWND) {
                 bounds.right - bounds.left,
                 bounds.bottom - bounds.top,
                 SWP_FRAMECHANGED,
-            );
-        }
+            )
+        };
     }
     application.update_cursor_autohide(window);
 }
