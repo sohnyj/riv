@@ -22,7 +22,8 @@ pub fn run_modal(
     procedure: DialogProcedure,
     state_pointer: isize,
 ) -> isize {
-    let instance = unsafe { GetModuleHandleW(None) }.unwrap_or_default();
+    let instance =
+        unsafe { GetModuleHandleW(None) }.expect("the module handle of the running module");
     unsafe {
         DialogBoxParamW(
             Some(instance.into()),

@@ -437,7 +437,8 @@ fn ensure_page(state: &mut OptionsState, tab: HWND, index: usize) {
     if !state.pages[index].is_invalid() {
         return;
     }
-    let instance = unsafe { GetModuleHandleW(None) }.unwrap_or_default();
+    let instance =
+        unsafe { GetModuleHandleW(None) }.expect("the module handle of the running module");
     let state_pointer = state as *mut OptionsState as isize;
     let page = unsafe {
         CreateDialogParamW(

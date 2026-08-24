@@ -473,7 +473,8 @@ fn listbox_clear(dialog: HWND) {
 fn ensure_capture_classes() {
     static REGISTER: std::sync::Once = std::sync::Once::new();
     REGISTER.call_once(|| {
-        let instance = unsafe { GetModuleHandleW(None) }.unwrap_or_default();
+        let instance =
+            unsafe { GetModuleHandleW(None) }.expect("the module handle of the running module");
         for (class_name, procedure, style) in [
             (
                 w!("RivKeyCapture"),
