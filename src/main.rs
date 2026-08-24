@@ -518,7 +518,7 @@ impl Application {
         });
         self.output_reconfigure_pending = !reconfigured;
         if reconfigured {
-            let _ = self.apply_renderer_state();
+            self.apply_renderer_state();
         }
         true
     }
@@ -1025,7 +1025,8 @@ impl Application {
             create_device()?,
         )?);
         self.register_upload_device();
-        self.apply_renderer_state()
+        self.apply_renderer_state();
+        Ok(())
     }
 
     /// Reads the current texture back while its device is alive; a removed one falls through.
@@ -1048,9 +1049,9 @@ impl Application {
     }
 
     /// Reapplies the application-held state after a renderer rebuild or reconfigure.
-    fn apply_renderer_state(&mut self) -> Result<()> {
+    fn apply_renderer_state(&mut self) {
         let Some(renderer) = &mut self.renderer else {
-            return Ok(());
+            return;
         };
         renderer.set_sdr_white_boost(self.sdr_white_boost);
         renderer.set_display_headroom(self.display_headroom);
@@ -1071,7 +1072,6 @@ impl Application {
                 self.image_core.reload_current();
             }
         }
-        Ok(())
     }
 
     fn overlay_content(
