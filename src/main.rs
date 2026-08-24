@@ -2255,7 +2255,7 @@ fn peek_except_paint(message: *mut MSG) -> bool {
     }
 }
 
-/// Waits for the frame slot or the queue and reports whether the slot is in hand.
+/// Waits for the frame slot or the queue and reports whether the slot is held.
 fn wait_for_frame_slot(slot_handle: HANDLE) -> bool {
     use windows::Win32::Foundation::{CloseHandle, DUPLICATE_SAME_ACCESS, DuplicateHandle};
     use windows::Win32::System::Threading::GetCurrentProcess;
@@ -2288,12 +2288,12 @@ fn wait_for_frame_slot(slot_handle: HANDLE) -> bool {
         )
     };
     // A queue wake can hide a ready slot: which one the wait reports is undocumented.
-    let slot_in_hand = wake_event != MESSAGE_WAKE
+    let slot_held = wake_event != MESSAGE_WAKE
         || unsafe { WaitForSingleObjectEx(wait_handle, 0, false) } == WAIT_OBJECT_0;
     if duplicated {
         let _ = unsafe { CloseHandle(duplicate) };
     }
-    slot_in_hand
+    slot_held
 }
 
 fn create_main_window(initial_path: Option<&Path>, pending_device: PendingDevice) -> Result<HWND> {

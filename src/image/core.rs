@@ -467,7 +467,7 @@ enum ScanPurpose {
     OpenFirstEntry,
     /// The listing behind a directly opened file; the anchor is already loading.
     CoverAnchor,
-    /// Re-collection of the scope in hand; the old listing serves until this lands.
+    /// Re-collection of the current scope; the old listing serves until this lands.
     Refresh,
 }
 
@@ -755,7 +755,7 @@ impl ImageCore {
         self.spawn_scan(scope);
     }
 
-    /// Re-collects the current scope while the listing in hand stays usable until it lands.
+    /// Re-collects the current scope while the old listing stays usable until it lands.
     fn submit_refresh_scan(&mut self) {
         // A scan already submitted is the newer listing; leave it to arrive.
         if self.listing_scan_pending() {
