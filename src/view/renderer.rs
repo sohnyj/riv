@@ -59,7 +59,7 @@ use std::thread;
 use crate::image::color::{SDR_REFERENCE_WHITE_NITS, nearest_gamut_label};
 use crate::image::decode::{
     DecodedImage, PixelStorage, UploadDevice, UploadedTexture, maximum_resource_bytes,
-    upload_still_texture,
+    try_zeroed_buffer, upload_still_texture,
 };
 use crate::image::gain_map::GainMapMetadata;
 use crate::image::icc;
@@ -1357,7 +1357,8 @@ impl Renderer {
         };
         let staging = staging.ok_or_else(windows::core::Error::empty)?;
         let pitch = image.row_pitch() as usize;
-        let mut pixels = vec![0u8; image.frame_byte_length()];
+        let mut pixels =
+            try_zeroed_buffer(image.frame_byte_length()).ok_or_else(windows::core::Error::empty)?;
         unsafe {
             self.d3d_context.CopyResource(&staging, &uploaded.texture);
             let mut mapped = D3D11_MAPPED_SUBRESOURCE::default();
