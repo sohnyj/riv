@@ -2022,6 +2022,7 @@ impl From<archive_reader::ArchiveError> for DecodeError {
             Self {
                 code: ErrorCode::status(error.code),
                 message: error.message,
+                cancelled: false,
                 store_codec_names: &[],
             }
         }
@@ -2036,6 +2037,7 @@ impl From<curl::NetworkError> for DecodeError {
             Self {
                 code: ErrorCode::status(error.code),
                 message: error.message,
+                cancelled: false,
                 store_codec_names: &[],
             }
         }
@@ -2594,6 +2596,7 @@ mod url_session_state_tests {
     fn decode_error(message: &str) -> DecodeError {
         DecodeError {
             code: ErrorCode::None,
+            cancelled: false,
             message: message.to_string(),
             store_codec_names: &[],
         }
@@ -2676,6 +2679,7 @@ mod url_session_state_tests {
             ItemLocation::Url("ftp://a.com/b.png".to_string()),
             DecodeError {
                 code: ErrorCode::None,
+                cancelled: false,
                 message: "Download failed".to_string(),
                 store_codec_names: &[],
             },
@@ -2693,6 +2697,7 @@ mod url_session_state_tests {
         use windows::Win32::Foundation::WINCODEC_ERR_COMPONENTNOTFOUND;
         let error = |store_codec_names| DecodeError {
             code: ErrorCode::Hresult(WINCODEC_ERR_COMPONENTNOTFOUND.0),
+            cancelled: false,
             message: "component not found".to_string(),
             store_codec_names,
         };

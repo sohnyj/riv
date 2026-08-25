@@ -227,20 +227,23 @@ impl ErrorCode {
 pub struct DecodeError {
     pub code: ErrorCode,
     pub message: String,
+    /// Set from the cancellation flag, never inferred from a code an API can also return.
+    pub cancelled: bool,
     pub store_codec_names: &'static [&'static str],
 }
 
 impl DecodeError {
     pub fn cancelled() -> Self {
         Self {
-            code: ErrorCode::Hresult(E_ABORT.0),
+            code: ErrorCode::None,
             message: "cancelled".to_string(),
+            cancelled: true,
             store_codec_names: &[],
         }
     }
 
     pub fn is_cancelled(&self) -> bool {
-        self.code == ErrorCode::Hresult(E_ABORT.0)
+        self.cancelled
     }
 
     /// True when no decoder recognized the data and no Store codec is named.
@@ -255,8 +258,17 @@ impl From<windows::core::Error> for DecodeError {
         Self {
             code: ErrorCode::Hresult(error.code().0),
             message: error.message(),
+            cancelled: false,
             store_codec_names: &[],
         }
+    }
+}
+
+/// A WIC failure; the cancellation flag says whether riv stopped the work, not the code.
+fn wic_error(error: windows::core::Error, cancellation: &AtomicBool) -> DecodeError {
+    DecodeError {
+        cancelled: cancellation.load(Ordering::Relaxed),
+        ..DecodeError::from(error)
     }
 }
 
@@ -1450,7 +1462,7 @@ fn decode_with_wic(
             _ => decode_single_frame(factory, &decoder, 0, format_name, cancellation),
         }
     })
-    .map_err(DecodeError::from)
+    .map_err(|error| wic_error(error, cancellation))
 }
 
 fn create_wic_decoder(
@@ -1536,7 +1548,8 @@ fn enforce_device_limit(
             cancellation,
         )?;
         Ok((pixels, scaled_width, scaled_height))
-    })?;
+    })
+    .map_err(|error| wic_error(error, cancellation))?;
     frame.pixels = pixels;
     decoded.pixel_width = scaled_width;
     decoded.pixel_height = scaled_height;
@@ -2545,6 +2558,7 @@ pub fn uncoded_error(message: impl std::fmt::Display) -> DecodeError {
     DecodeError {
         code: ErrorCode::None,
         message: message.to_string(),
+        cancelled: false,
         store_codec_names: &[],
     }
 }
@@ -2557,6 +2571,7 @@ pub fn os_error(error: &std::io::Error) -> DecodeError {
             None => ErrorCode::None,
         },
         message: error.to_string(),
+        cancelled: false,
         store_codec_names: &[],
     }
 }
@@ -3791,6 +3806,24 @@ mod premultiplied_conversion_tests {
 }
 
 /// A huge declared acTL num_frames must not drive the reservation.
+#[cfg(test)]
+mod cancellation_tests {
+    use super::*;
+
+    #[test]
+    fn only_the_flag_makes_a_failure_a_cancellation() {
+        let aborted = || windows::core::Error::from_hresult(E_ABORT);
+        // An API is free to return E_ABORT for its own reasons; that is a plain failure.
+        assert!(!DecodeError::from(aborted()).is_cancelled());
+        assert!(!wic_error(aborted(), &AtomicBool::new(false)).is_cancelled());
+        assert!(wic_error(aborted(), &AtomicBool::new(true)).is_cancelled());
+        // A failure of any other code counts once riv asked the work to stop.
+        let other = windows::core::Error::from_hresult(E_FAIL);
+        assert!(wic_error(other, &AtomicBool::new(true)).is_cancelled());
+        assert!(DecodeError::cancelled().is_cancelled());
+    }
+}
+
 #[cfg(test)]
 mod apng_tests {
     use super::*;
