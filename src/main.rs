@@ -1696,7 +1696,7 @@ fn dispatch_action(application: &mut Application, window: HWND, action: Action) 
             application.show_status_text(window, format!("Always on top: {state}"));
             application.request_render(window);
         }
-        Action::Fullscreen => {
+        Action::ToggleFullscreen => {
             toggle_fullscreen(application, window);
             application.request_render(window);
         }

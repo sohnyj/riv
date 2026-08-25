@@ -330,7 +330,7 @@ impl<'a> MenuBuilder<'a> {
         } else {
             "Enter fullscreen"
         };
-        self.append_action_labeled(window, Action::Fullscreen, fullscreen_label)?;
+        self.append_action_labeled(window, Action::ToggleFullscreen, fullscreen_label)?;
         self.append_action(window, Action::AlwaysOnTop)?;
         self.append_submenu(menu, window, "Window", true)?;
         self.append_separator(menu)?;

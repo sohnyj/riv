@@ -178,7 +178,7 @@ const DEFAULT_KEYBOARD: &[(&str, &[&str])] = &[
     ("deletepermanently", &["Shift+Delete", "Ctrl+Shift+D"]),
     ("toggleslideshow", &["S"]),
     ("settings", &["Ctrl+,"]),
-    ("fullscreen", &["F", "F11"]),
+    ("togglefullscreen", &["F", "F11"]),
     ("alwaysontop", &["T"]),
     ("exit", &["Ctrl+W"]),
 ];
@@ -189,7 +189,7 @@ const DEFAULT_MOUSE: &[(&str, &[&str])] = &[
     ("zoomin", &["Ctrl+WheelUp"]),
     ("zoomout", &["Ctrl+WheelDown"]),
     ("togglezoom", &["Double-click"]),
-    ("fullscreen", &["WheelButton"]),
+    ("togglefullscreen", &["WheelButton"]),
 ];
 
 impl Bindings {
@@ -482,7 +482,7 @@ mod normalization_tests {
     fn resolved_bindings_round_trip_and_discard_junk() {
         let overrides = serde_json::json!({
             "nextfile": ["Right", "Ctrl+Ctrl+X", "A".repeat(300)],
-            "fullscreen": ["WheelButton", "Nope"],
+            "togglefullscreen": ["WheelButton", "Nope"],
         });
         let map = overrides.as_object().expect("object");
         assert_eq!(
@@ -490,7 +490,7 @@ mod normalization_tests {
             ["Right", "Ctrl+X"]
         );
         assert_eq!(
-            resolved_mouse_encodings(Some(map), "fullscreen"),
+            resolved_mouse_encodings(Some(map), "togglefullscreen"),
             ["WheelButton"]
         );
     }
@@ -539,7 +539,7 @@ mod normalization_tests {
     fn a_hand_written_list_stops_at_the_maximum() {
         let overrides = serde_json::json!({
             "nextfile": ["Right", "Ctrl+A", "Ctrl+B", "Ctrl+C"],
-            "fullscreen": ["WheelButton", "Ctrl+WheelUp"],
+            "togglefullscreen": ["WheelButton", "Ctrl+WheelUp"],
         });
         let map = overrides.as_object().expect("object");
         assert_eq!(
@@ -547,7 +547,7 @@ mod normalization_tests {
             ["Right", "Ctrl+A", "Ctrl+B"]
         );
         assert_eq!(
-            resolved_mouse_encodings(Some(map), "fullscreen"),
+            resolved_mouse_encodings(Some(map), "togglefullscreen"),
             ["WheelButton"]
         );
         let bindings = Bindings::from_settings(Some(map), Some(map));
