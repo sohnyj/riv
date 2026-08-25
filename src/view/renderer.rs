@@ -1237,6 +1237,7 @@ impl Renderer {
 
     /// The baked rendition wires like a linear FP16 source in the base's primaries.
     fn baked_wiring(state: &GainMapState) -> DecodedImage {
+        // A whole image for nine fields: adopt_image_bitmap takes the same type from the display path.
         let mut wiring = state.base_image.without_pixels();
         wiring.storage = PixelStorage::RgbaHalf;
         wiring.source_primaries = state.base_primaries;
