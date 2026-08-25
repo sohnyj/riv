@@ -10,7 +10,7 @@ use windows::Win32::Graphics::Direct3D11::{
 use windows::Win32::Graphics::Dxgi::Common::{DXGI_FORMAT_R32_FLOAT, DXGI_SAMPLE_DESC};
 use windows::core::Result;
 
-use crate::view::dither::{BLUE_NOISE_SIZE, BLUE_NOISE_TEXELS, DitherMode};
+use crate::view::dither::{BLUE_NOISE_EDGE_TEXELS, BLUE_NOISE_TEXELS, DitherMode};
 use crate::view::pass::ConstantBuffer;
 
 /// DXBC compiled by the build script; the viewer never runs a shader compiler.
@@ -38,8 +38,8 @@ pub struct QuantizePass {
 impl QuantizePass {
     pub fn new(device: &ID3D11Device) -> Result<Self> {
         let noise_description = D3D11_TEXTURE2D_DESC {
-            Width: BLUE_NOISE_SIZE,
-            Height: BLUE_NOISE_SIZE,
+            Width: BLUE_NOISE_EDGE_TEXELS,
+            Height: BLUE_NOISE_EDGE_TEXELS,
             MipLevels: 1,
             ArraySize: 1,
             Format: DXGI_FORMAT_R32_FLOAT,
@@ -53,7 +53,7 @@ impl QuantizePass {
         };
         let noise_data = D3D11_SUBRESOURCE_DATA {
             pSysMem: BLUE_NOISE_TEXELS.as_ptr().cast(),
-            SysMemPitch: BLUE_NOISE_SIZE * 4,
+            SysMemPitch: BLUE_NOISE_EDGE_TEXELS * 4,
             ..Default::default()
         };
         let mut copy_shader = None;

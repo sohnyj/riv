@@ -1,6 +1,6 @@
 //! Output-dither settings and inputs for the quantize pass; the math lives in the HLSL.
 
-pub const BLUE_NOISE_SIZE: u32 = 64;
+pub const BLUE_NOISE_EDGE_TEXELS: u32 = 64;
 
 /// Single-channel f32 texels; the build script runs the void-and-cluster construction.
 pub const BLUE_NOISE_TEXELS: &[u8] = include_bytes!(concat!(env!("OUT_DIR"), "/blue_noise.bin"));
@@ -39,7 +39,7 @@ mod blue_noise_tests {
 
     #[test]
     fn the_built_matrix_is_a_permutation_of_all_ranks() {
-        let cell_count = (BLUE_NOISE_SIZE * BLUE_NOISE_SIZE) as usize;
+        let cell_count = (BLUE_NOISE_EDGE_TEXELS * BLUE_NOISE_EDGE_TEXELS) as usize;
         assert_eq!(BLUE_NOISE_TEXELS.len(), cell_count * size_of::<f32>());
         let mut seen = vec![false; cell_count];
         for texel in BLUE_NOISE_TEXELS.as_chunks::<{ size_of::<f32>() }>().0 {
