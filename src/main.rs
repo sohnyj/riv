@@ -2169,6 +2169,18 @@ fn main() -> Result<()> {
         );
         return Ok(());
     }
+    if settings::settings_document_is_unreadable()
+        && !dialogs::message::confirm_message(
+            None,
+            APPLICATION_NAME,
+            "Settings can't be read.",
+            "Starting with defaults overwrites the settings file the next time settings are saved.",
+            "Start with defaults",
+            "Exit",
+        )
+    {
+        return Ok(());
+    }
 
     window::menu_theme::enable_dark_menus();
     // Per-thread state the dialogs paint through; without it every paint rebuilds it.

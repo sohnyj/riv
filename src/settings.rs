@@ -695,6 +695,17 @@ fn object_section<'a>(
         .expect("section inserted as an object above")
 }
 
+/// True when the settings file is there but unusable; loading it starts from defaults instead.
+pub fn settings_document_is_unreadable() -> bool {
+    match std::fs::read_to_string(settings_path()) {
+        Ok(text) => {
+            !serde_json::from_str::<Value>(&text).is_ok_and(|document| document.is_object())
+        }
+        // A missing file is the ordinary first run; any other error is a file that will not open.
+        Err(error) => error.kind() != std::io::ErrorKind::NotFound,
+    }
+}
+
 fn read_document(path: &Path) -> Value {
     std::fs::read_to_string(path)
         .ok()
