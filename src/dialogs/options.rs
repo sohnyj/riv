@@ -26,9 +26,9 @@ use windows::Win32::UI::Input::KeyboardAndMouse::{EnableWindow, VK_SPACE};
 use windows::Win32::UI::WindowsAndMessaging::{
     CB_ADDSTRING, CB_GETCURSEL, CB_SETCURSEL, CreateDialogParamW, DestroyWindow, EndDialog,
     GetClientRect, GetDlgItem, GetDlgItemInt, GetMessagePos, GetSystemMetrics, MapDialogRect,
-    SM_CXVSCROLL, SW_HIDE, SW_SHOW, SWP_NOACTIVATE, SendMessageW, SetDlgItemTextW,
-    SetWindowLongPtrW, SetWindowPos, ShowWindow, WM_APP, WM_COMMAND, WM_DESTROY, WM_DRAWITEM,
-    WM_INITDIALOG, WM_NOTIFY,
+    SM_CXVSCROLL, SW_HIDE, SW_SHOW, SWP_NOACTIVATE, SendDlgItemMessageW, SendMessageW,
+    SetDlgItemTextW, SetWindowLongPtrW, SetWindowPos, ShowWindow, WM_APP, WM_COMMAND, WM_DESTROY,
+    WM_DRAWITEM, WM_INITDIALOG, WM_NOTIFY,
 };
 
 use windows::core::HSTRING;
@@ -1535,10 +1535,9 @@ fn combo_select(page: HWND, control: i32, index: u32) {
     }
 }
 
+/// Only CBN_SELCHANGE calls this, so the combo exists and its selection is never CB_ERR.
 fn combo_selection(page: HWND, control: i32) -> u32 {
-    unsafe { GetDlgItem(Some(page), control) }
-        .map(|combo| unsafe { SendMessageW(combo, CB_GETCURSEL, None, None).0.max(0) as u32 })
-        .unwrap_or(0)
+    unsafe { SendDlgItemMessageW(page, control, CB_GETCURSEL, WPARAM(0), LPARAM(0)) }.0 as u32
 }
 
 fn set_check(page: HWND, control: i32, checked: bool) {
