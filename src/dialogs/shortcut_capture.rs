@@ -315,7 +315,7 @@ fn listbox_item_text(listbox: HWND, item_index: u32) -> Vec<u16> {
             Some(LPARAM(text.as_mut_ptr() as isize)),
         )
     };
-    text.truncate(usize::try_from(copied.0).unwrap_or(0).min(length));
+    text.truncate(usize::try_from(copied.0).unwrap_or(0));
     text
 }
 
@@ -392,7 +392,7 @@ fn erase_below_last_item(listbox: HWND, device: HDC) {
     let count = unsafe { SendMessageW(listbox, LB_GETCOUNT, None, None) }.0;
     let top = unsafe { SendMessageW(listbox, LB_GETTOPINDEX, None, None) }.0;
     let height = unsafe { SendMessageW(listbox, LB_GETITEMHEIGHT, None, None) }.0;
-    client.top = ((count - top).max(0) * height) as i32;
+    client.top = ((count - top) * height) as i32;
     if client.top < client.bottom {
         unsafe { FillRect(device, &raw const client, GetSysColorBrush(COLOR_WINDOW)) };
     }
