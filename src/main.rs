@@ -1868,12 +1868,12 @@ fn toggle_fullscreen(application: &mut Application, window: HWND) {
         application.fullscreen_restore = Some(WindowRestore::capture(window));
 
         let monitor = unsafe { MonitorFromWindow(window, MONITOR_DEFAULTTONEAREST) };
-        let mut monitor_info = MONITORINFO {
+        let mut monitor_information = MONITORINFO {
             cbSize: size_of::<MONITORINFO>() as u32,
             ..Default::default()
         };
-        let _ = unsafe { GetMonitorInfoW(monitor, &raw mut monitor_info) };
-        let bounds = monitor_info.rcMonitor;
+        let _ = unsafe { GetMonitorInfoW(monitor, &raw mut monitor_information) };
+        let bounds = monitor_information.rcMonitor;
 
         let style = unsafe { GetWindowLongPtrW(window, GWL_STYLE) } as u32;
         unsafe { SetWindowLongPtrW(window, GWL_STYLE, (style & !WS_OVERLAPPEDWINDOW.0) as isize) };

@@ -379,17 +379,17 @@ fn capacity_for_height(usable_height: i32, row_height: i32) -> usize {
 /// Names the display shows with the taskbar and the title bar left clear.
 pub fn playlist_capacity(window: HWND) -> usize {
     let monitor = unsafe { MonitorFromWindow(window, MONITOR_DEFAULTTONEAREST) };
-    let mut monitor_info = MONITORINFO {
+    let mut monitor_information = MONITORINFO {
         cbSize: size_of::<MONITORINFO>() as u32,
         ..Default::default()
     };
     // Without a measurement, guess low so the menu still fits a small display.
-    if !unsafe { GetMonitorInfoW(monitor, &raw mut monitor_info) }.as_bool() {
+    if !unsafe { GetMonitorInfoW(monitor, &raw mut monitor_information) }.as_bool() {
         return UNMEASURED_CAPACITY;
     }
     let dpi = crate::window::geometry::dpi_for_window(window);
     // The work area already excludes the taskbar.
-    let work_height = monitor_info.rcWork.bottom - monitor_info.rcWork.top;
+    let work_height = monitor_information.rcWork.bottom - monitor_information.rcWork.top;
     capacity_for_height(work_height - title_bar_height(dpi), menu_row_height(dpi))
 }
 
