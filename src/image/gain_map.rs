@@ -276,9 +276,12 @@ fn mp_entry_list(reader: &MpfReader) -> Option<MpEntryList> {
         if byte_count < MP_ENTRY_SIZE {
             return None;
         }
+        let offset = reader.read_u32(entry + 8)? as usize;
+        // The declared size is a claim; the entries still have to sit inside the file.
+        let available = reader.file.len().saturating_sub(reader.header + offset);
         return Some(MpEntryList {
-            offset: reader.read_u32(entry + 8)? as usize,
-            count: byte_count / MP_ENTRY_SIZE,
+            offset,
+            count: byte_count.min(available) / MP_ENTRY_SIZE,
         });
     }
     None
@@ -479,6 +482,31 @@ mod tests {
 
     const REQUIRED: &str =
         "hdrgm:Version=\"1.0\" hdrgm:GainMapMax=\"4.709\" hdrgm:HDRCapacityMax=\"4.709\"";
+
+    #[test]
+    fn a_declared_entry_count_cannot_outrun_the_file() {
+        let gain_map = gain_map_jpeg(REQUIRED);
+        let mut file = ultra_hdr_file(&gain_map);
+        let header = file
+            .windows(4)
+            .position(|window| window == b"MM\x00\x2A")
+            .unwrap();
+        // The index claims four gigabytes of entries in a file of a few kilobytes.
+        file[header + 14..header + 18].copy_from_slice(&u32::MAX.to_be_bytes());
+        let reader = MpfReader {
+            file: &file,
+            header,
+            little_endian: false,
+        };
+        let entries = mp_entry_list(&reader).expect("entry list");
+        assert!(
+            entries.count <= file.len() / MP_ENTRY_SIZE,
+            "{}",
+            entries.count
+        );
+        // The entries that are really there still parse.
+        assert!(find_ultra_hdr(&file).is_some());
+    }
 
     #[test]
     fn finds_gain_map_and_metadata_defaults() {
