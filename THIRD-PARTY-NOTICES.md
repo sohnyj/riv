@@ -204,7 +204,7 @@ The `windows*` crates are Copyright (c) Microsoft Corporation.
 | read-fonts | 0.41.0 | MIT OR Apache-2.0 |
 | resvg | 0.48.1 | Apache-2.0 OR MIT |
 | rgb | 0.8.53 | MIT |
-| roxmltree | 0.20.0, 0.21.1 | MIT OR Apache-2.0 |
+| roxmltree | 0.21.1 | MIT OR Apache-2.0 |
 | serde_core | 1.0.229 | MIT OR Apache-2.0 |
 | serde_json | 1.0.151 | MIT OR Apache-2.0 |
 | simd-adler32 | 0.3.10 | MIT |
