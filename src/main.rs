@@ -315,14 +315,12 @@ fn create_renderer(
     device: GraphicsDevice,
 ) -> Result<Renderer> {
     let (width, height) = client_size(window);
-    let (target_nits, full_frame_nits) = capabilities.tone_map_targets();
     Renderer::new(
         window,
         width.max(1),
         height.max(1),
         output_mode(capabilities, display_profile),
-        target_nits,
-        full_frame_nits,
+        capabilities.display_luminances(),
         device,
     )
 }
@@ -478,11 +476,11 @@ impl Application {
             }
             stale = true;
         }
-        let (target_nits, full_frame_nits) = capabilities.tone_map_targets();
+        let luminances = capabilities.display_luminances();
         if self
             .renderer
             .as_mut()
-            .is_some_and(|renderer| renderer.set_tone_map_target(target_nits, full_frame_nits))
+            .is_some_and(|renderer| renderer.set_tone_map_target(luminances))
         {
             stale = true;
         }
@@ -510,12 +508,11 @@ impl Application {
             return false;
         }
         self.adopt_display_capabilities(capabilities);
-        let (target_nits, full_frame_nits) = capabilities.tone_map_targets();
-        let reconfigured = self.renderer.as_mut().is_some_and(|renderer| {
-            renderer
-                .reconfigure_output(mode, target_nits, full_frame_nits)
-                .is_ok()
-        });
+        let luminances = capabilities.display_luminances();
+        let reconfigured = self
+            .renderer
+            .as_mut()
+            .is_some_and(|renderer| renderer.reconfigure_output(mode, luminances).is_ok());
         self.output_reconfigure_pending = !reconfigured;
         if reconfigured {
             self.apply_renderer_state();

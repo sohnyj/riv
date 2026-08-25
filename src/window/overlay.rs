@@ -496,14 +496,12 @@ pub fn build_info_text(
         metrics.push(format!("Content peak: {peak:.0} nits"));
         if let Some(tone_map) = tone_map {
             if tone_map.hdr_display {
-                metrics.push(format!(
-                    "Display peak: {:.0} nits",
-                    tone_map.display_peak_nits
-                ));
-                metrics.push(format!(
-                    "Display full: {:.0} nits",
-                    tone_map.display_full_frame_nits
-                ));
+                if let Some(peak) = tone_map.display_peak_nits {
+                    metrics.push(format!("Display peak: {peak:.0} nits"));
+                }
+                if let Some(full_frame) = tone_map.display_full_frame_nits {
+                    metrics.push(format!("Display full: {full_frame:.0} nits"));
+                }
             } else if peak > color::SDR_REFERENCE_WHITE_NITS {
                 metrics.push(format!("Tone map: {:.0} nits", tone_map.output_target_nits));
             }
@@ -1040,8 +1038,8 @@ mod info_text_tests {
         };
         let tone_map = ToneMapLuminances {
             hdr_display: true,
-            display_peak_nits: 600.0,
-            display_full_frame_nits: 400.0,
+            display_peak_nits: Some(600.0),
+            display_full_frame_nits: Some(400.0),
             output_target_nits: 500.0,
         };
         let text = build_info_text(
@@ -1068,6 +1066,38 @@ mod info_text_tests {
     }
 
     #[test]
+    fn an_unreported_display_limit_leaves_its_line_out() {
+        let image = DecodedImage {
+            peak_luminance_nits: Some(1000.0),
+            ..image("EXR", PixelStorage::RgbaHalf, 16)
+        };
+        let tone_map = ToneMapLuminances {
+            hdr_display: true,
+            display_peak_nits: None,
+            display_full_frame_nits: Some(400.0),
+            output_target_nits: 600.0,
+        };
+        let text = build_info_text(
+            "a.exr",
+            "C:\\a.exr",
+            &image,
+            ItemMetadata {
+                file_size: 100,
+                ..ItemMetadata::default()
+            },
+            "HDR10",
+            "Bilinear",
+            "None",
+            Some(tone_map),
+            false,
+            "SDR",
+            "sRGB",
+        );
+        assert!(!text.contains("Display peak"), "{text}");
+        assert!(text.contains("Display full: 400 nits"), "{text}");
+    }
+
+    #[test]
     fn an_sdr_display_shows_the_tone_map_target() {
         let image = DecodedImage {
             peak_luminance_nits: Some(1000.0),
@@ -1075,8 +1105,8 @@ mod info_text_tests {
         };
         let tone_map = ToneMapLuminances {
             hdr_display: false,
-            display_peak_nits: 203.0,
-            display_full_frame_nits: 203.0,
+            display_peak_nits: None,
+            display_full_frame_nits: None,
             output_target_nits: 203.0,
         };
         let text = build_info_text(

@@ -108,12 +108,7 @@ struct ModeEffects {
     white_level_effect: Option<ID2D1Effect>,
 }
 
-/// The tone-map peak, and the full-frame limit shown only in the overlay.
-#[derive(Clone, Copy)]
-struct DisplayLuminances {
-    peak_nits: f32,
-    full_frame_nits: f32,
-}
+use crate::image::color::DisplayLuminances;
 
 #[derive(Clone, PartialEq)]
 pub struct OutputMode {
@@ -177,8 +172,9 @@ impl ScalingFilter {
 #[derive(Clone, Copy, PartialEq)]
 pub struct ToneMapLuminances {
     pub hdr_display: bool,
-    pub display_peak_nits: f32,
-    pub display_full_frame_nits: f32,
+    /// None where the display reported nothing; the overlay drops the line rather than guess.
+    pub display_peak_nits: Option<f32>,
+    pub display_full_frame_nits: Option<f32>,
     pub output_target_nits: f32,
 }
 
@@ -214,9 +210,7 @@ pub struct Renderer {
     /// The mode as built, so a caller can compare against a fresh display query.
     output_mode: OutputMode,
     backbuffer_format: DXGI_FORMAT,
-    tone_map_target_nits: f32,
-    /// Display's sustained full-frame luminance, shown in the overlay diagnostics.
-    display_full_frame_nits: f32,
+    luminances: DisplayLuminances,
     present_target: PresentTarget,
     d3d_device: ID3D11Device,
     /// Incremented per build; worker textures from other generations never wrap here.
@@ -478,14 +472,9 @@ impl Renderer {
         width: u32,
         height: u32,
         mode: OutputMode,
-        tone_map_target_nits: f32,
-        full_frame_nits: f32,
+        luminances: DisplayLuminances,
         device: GraphicsDevice,
     ) -> Result<Self> {
-        let luminances = DisplayLuminances {
-            peak_nits: tone_map_target_nits,
-            full_frame_nits,
-        };
         // A failed first build retries without the quantize pass, never blocking launch.
         Self::build(
             window,
@@ -674,8 +663,7 @@ impl Renderer {
     ) -> Result<Self> {
         let is_sdr_wide_gamut = mode.is_sdr_wide_gamut();
         let is_hdr_output = mode.hdr;
-        let tone_map_target_nits = luminances.peak_nits;
-        let full_frame_nits = luminances.full_frame_nits;
+        let tone_map_target_nits = luminances.target_nits;
         let GraphicsDevice {
             device: d3d_device,
             context: d3d_context,
@@ -797,8 +785,7 @@ impl Renderer {
                 .fetch_add(1, std::sync::atomic::Ordering::Relaxed),
             upload_maximum_frame_bytes,
             backbuffer_format,
-            tone_map_target_nits,
-            display_full_frame_nits: full_frame_nits,
+            luminances,
             present_target,
             d3d_device,
             d3d_context,
@@ -850,9 +837,9 @@ impl Renderer {
     pub fn tone_map_luminances(&self) -> ToneMapLuminances {
         ToneMapLuminances {
             hdr_display: self.is_hdr_output(),
-            display_peak_nits: self.tone_map_target_nits,
-            display_full_frame_nits: self.display_full_frame_nits,
-            output_target_nits: self.tone_map_target_nits,
+            display_peak_nits: self.luminances.reported_peak_nits,
+            display_full_frame_nits: self.luminances.reported_full_frame_nits,
+            output_target_nits: self.luminances.target_nits,
         }
     }
 
@@ -1076,8 +1063,7 @@ impl Renderer {
     pub fn reconfigure_output(
         &mut self,
         mode: OutputMode,
-        tone_map_target_nits: f32,
-        full_frame_nits: f32,
+        luminances: DisplayLuminances,
     ) -> Result<()> {
         let is_sdr_wide_gamut = mode.is_sdr_wide_gamut();
         let is_hdr_output = mode.hdr;
@@ -1090,8 +1076,7 @@ impl Renderer {
                 is_sdr_wide_gamut,
                 self.output_mode.display_profile.as_deref(),
             );
-        self.tone_map_target_nits = tone_map_target_nits;
-        self.display_full_frame_nits = full_frame_nits;
+        self.luminances = luminances;
 
         // Release every backbuffer reference ahead of ResizeBuffers.
         unsafe { self.d2d_context.SetTarget(None) };
@@ -1134,7 +1119,7 @@ impl Renderer {
             &self.d2d_context,
             is_hdr_output,
             is_sdr_wide_gamut,
-            tone_map_target_nits,
+            luminances.target_nits,
             self.scrgb_color_context.as_ref(),
             self.sdr_destination_context(),
         );
@@ -1263,14 +1248,11 @@ impl Renderer {
     }
 
     /// True when the stored display luminances changed (overlay, next rewire).
-    pub fn set_tone_map_target(&mut self, nits: f32, full_frame_nits: f32) -> bool {
-        if (nits - self.tone_map_target_nits).abs() < f32::EPSILON
-            && (full_frame_nits - self.display_full_frame_nits).abs() < f32::EPSILON
-        {
+    pub fn set_tone_map_target(&mut self, luminances: DisplayLuminances) -> bool {
+        if self.luminances == luminances {
             return false;
         }
-        self.tone_map_target_nits = nits;
-        self.display_full_frame_nits = full_frame_nits;
+        self.luminances = luminances;
         true
     }
 
@@ -1543,7 +1525,7 @@ impl Renderer {
                 if !input_set {
                     return;
                 }
-                let output_maximum = self.tone_map_target_nits;
+                let output_maximum = self.luminances.target_nits;
                 let output_set = unsafe {
                     tone_map_effect.SetValue(
                         D2D1_HDRTONEMAP_PROP_OUTPUT_MAX_LUMINANCE.0 as u32,
@@ -1560,7 +1542,7 @@ impl Renderer {
                 // Reinterpret scene-referred white as display-referred, then re-encode to sRGB.
                 tone_mapped.and_then(|tone_mapped| {
                     let normalize = self.mode_effects.tone_map_normalize_effect.as_ref()?;
-                    let display_white = self.tone_map_target_nits.min(input_maximum);
+                    let display_white = self.luminances.target_nits.min(input_maximum);
                     unsafe {
                         normalize.SetValue(
                             D2D1_WHITELEVELADJUSTMENT_PROP_OUTPUT_WHITE_LEVEL.0 as u32,

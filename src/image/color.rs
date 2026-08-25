@@ -126,6 +126,15 @@ const SDR_TONE_MAP_TARGET_NITS: f32 = 203.0;
 /// HDR tone-map target when the monitor reports no peak luminance.
 const HDR_PEAK_FALLBACK_NITS: f32 = 600.0;
 
+/// What the tone map aims at, kept apart from what the display actually reported.
+#[derive(Clone, Copy, PartialEq)]
+pub struct DisplayLuminances {
+    pub target_nits: f32,
+    /// None where the display reported nothing; the overlay says nothing rather than the fallback.
+    pub reported_peak_nits: Option<f32>,
+    pub reported_full_frame_nits: Option<f32>,
+}
+
 impl DisplayCapabilities {
     /// Matches DISPLAYCONFIG_ADVANCED_COLOR_MODE (SDR/WCG/HDR) from the existing signals.
     pub fn color_mode_label(&self) -> &'static str {
@@ -138,20 +147,18 @@ impl DisplayCapabilities {
         }
     }
 
-    /// The tone-map target and paired full-frame limit for this display.
-    pub fn tone_map_targets(&self) -> (f32, f32) {
-        let target = if self.hdr {
-            self.maximum_luminance_nits
-                .unwrap_or(HDR_PEAK_FALLBACK_NITS)
-        } else {
-            SDR_TONE_MAP_TARGET_NITS
-        };
-        let full_frame = if self.hdr {
-            self.maximum_full_frame_luminance_nits.unwrap_or(target)
-        } else {
-            target
-        };
-        (target, full_frame)
+    /// The tone-map target, and the limits this display reported for the overlay to state.
+    pub fn display_luminances(&self) -> DisplayLuminances {
+        let reported_peak_nits = self.maximum_luminance_nits.filter(|_| self.hdr);
+        DisplayLuminances {
+            target_nits: if self.hdr {
+                reported_peak_nits.unwrap_or(HDR_PEAK_FALLBACK_NITS)
+            } else {
+                SDR_TONE_MAP_TARGET_NITS
+            },
+            reported_peak_nits,
+            reported_full_frame_nits: self.maximum_full_frame_luminance_nits.filter(|_| self.hdr),
+        }
     }
 
     /// Display headroom over current SDR white for gain map weighting, capped by the sustained full-frame limit; None without a peak report.
