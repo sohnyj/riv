@@ -184,7 +184,7 @@ fn segment_payloads(jpeg: &[u8]) -> Vec<(u8, Range<usize>)> {
 
 const MPF_IDENTIFIER: &[u8] = b"MPF\0";
 const MP_ENTRY_TAG: u16 = 0xB002;
-const MP_ENTRY_SIZE: usize = 16;
+const MP_ENTRY_BYTES: usize = 16;
 
 /// TIFF-order reads anchored at the MP header, in the index's declared endianness.
 struct MpfReader<'bytes> {
@@ -241,7 +241,7 @@ fn mpf_secondary_ranges(file: &[u8]) -> Vec<Range<usize>> {
             continue;
         };
         for index in 0..entries.count {
-            let entry = entries.offset + index * MP_ENTRY_SIZE;
+            let entry = entries.offset + index * MP_ENTRY_BYTES;
             let (Some(size), Some(offset)) =
                 (reader.read_u32(entry + 4), reader.read_u32(entry + 8))
             else {
@@ -273,7 +273,7 @@ fn mp_entry_list(reader: &MpfReader) -> Option<MpEntryList> {
             continue;
         }
         let byte_count = reader.read_u32(entry + 4)? as usize;
-        if byte_count < MP_ENTRY_SIZE {
+        if byte_count < MP_ENTRY_BYTES {
             return None;
         }
         let offset = reader.read_u32(entry + 8)? as usize;
@@ -281,7 +281,7 @@ fn mp_entry_list(reader: &MpfReader) -> Option<MpEntryList> {
         let available = reader.file.len().saturating_sub(reader.header + offset);
         return Some(MpEntryList {
             offset,
-            count: byte_count.min(available) / MP_ENTRY_SIZE,
+            count: byte_count.min(available) / MP_ENTRY_BYTES,
         });
     }
     None
@@ -472,7 +472,7 @@ mod tests {
             .unwrap();
         let gain_map_offset = (file.len() - header) as u32;
         let payload_start = header - MPF_IDENTIFIER.len() + entries_placeholder;
-        let second_entry = payload_start + MP_ENTRY_SIZE;
+        let second_entry = payload_start + MP_ENTRY_BYTES;
         file[second_entry + 4..second_entry + 8]
             .copy_from_slice(&(gain_map.len() as u32).to_be_bytes());
         file[second_entry + 8..second_entry + 12].copy_from_slice(&gain_map_offset.to_be_bytes());
@@ -500,7 +500,7 @@ mod tests {
         };
         let entries = mp_entry_list(&reader).expect("entry list");
         assert!(
-            entries.count <= file.len() / MP_ENTRY_SIZE,
+            entries.count <= file.len() / MP_ENTRY_BYTES,
             "{}",
             entries.count
         );
