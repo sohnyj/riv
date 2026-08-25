@@ -152,7 +152,14 @@ pub fn download(
                 )),
             ));
         }
-        body.extend_from_slice(&block[..read_bytes]);
+        let chunk = &block[..read_bytes];
+        if body.try_reserve(chunk.len()).is_err() {
+            return Err(kill_child(
+                child,
+                NetworkError::new("Download is too large to fit in memory"),
+            ));
+        }
+        body.extend_from_slice(chunk);
         progress(body.len() as u64);
     }
     drop(stdout);

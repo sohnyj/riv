@@ -234,7 +234,13 @@ impl Reader<'_> {
                     MAXIMUM_MEMBER_BYTES >> 30
                 )));
             }
-            contents.extend_from_slice(&block[..read_bytes as usize]);
+            let chunk = &block[..read_bytes as usize];
+            if contents.try_reserve(chunk.len()).is_err() {
+                return Err(ArchiveError::new(
+                    "Archive member is too large to fit in memory",
+                ));
+            }
+            contents.extend_from_slice(chunk);
         }
     }
 
