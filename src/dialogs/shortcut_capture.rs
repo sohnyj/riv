@@ -34,9 +34,9 @@ use crate::dialogs::resource::{
 use crate::dialogs::modal::{DWLP_USER, IDCANCEL, IDOK, state_mut};
 use crate::window::message::{high_word, high_word_signed, low_word, point_from_packed};
 
-const WM_RIV_KEY_CAPTURED: u32 = WM_APP + 0x40;
+const WM_RIV_KEYBOARD_CAPTURED: u32 = WM_APP + 0x40;
 const WM_RIV_MOUSE_CAPTURED: u32 = WM_APP + 0x41;
-const WM_RIV_KEY_REMOVE: u32 = WM_APP + 0x42;
+const WM_RIV_KEYBOARD_REMOVE: u32 = WM_APP + 0x42;
 
 const REMOVE_ICON_RED: COLORREF = COLORREF(0x001C_2BC4); // BGR of #C42B1C
 
@@ -128,7 +128,7 @@ unsafe extern "system" fn keyboard_procedure(
             }
             0
         }
-        WM_RIV_KEY_CAPTURED => {
+        WM_RIV_KEYBOARD_CAPTURED => {
             let modifiers = high_word(wparam.0) as u8;
             let virtual_key = low_word(wparam.0) as u16;
             if let Some(sequence) = bindings::format_key_sequence(modifiers, virtual_key)
@@ -145,7 +145,7 @@ unsafe extern "system" fn keyboard_procedure(
             }
             1
         }
-        WM_RIV_KEY_REMOVE => {
+        WM_RIV_KEYBOARD_REMOVE => {
             if let Some(state) = state_mut::<KeyboardCaptureState>(dialog) {
                 let index = wparam.0;
                 if index < state.sequences.len() {
@@ -431,7 +431,7 @@ unsafe extern "system" fn key_list_procedure(
                     unsafe {
                         SendMessageW(
                             dialog,
-                            WM_RIV_KEY_REMOVE,
+                            WM_RIV_KEYBOARD_REMOVE,
                             Some(WPARAM(selected as usize)),
                             None,
                         )
@@ -477,8 +477,8 @@ fn ensure_capture_classes() {
             unsafe { GetModuleHandleW(None) }.expect("the module handle of the running module");
         for (class_name, procedure, style) in [
             (
-                w!("RivKeyCapture"),
-                key_field_procedure as unsafe extern "system" fn(_, _, _, _) -> _,
+                w!("RivKeyboardCapture"),
+                keyboard_field_procedure as unsafe extern "system" fn(_, _, _, _) -> _,
                 Default::default(),
             ),
             (w!("RivMouseCapture"), mouse_field_procedure, CS_DBLCLKS),
@@ -544,7 +544,7 @@ fn is_modifier_key(virtual_key: u16) -> bool {
     .contains(&virtual_key)
 }
 
-unsafe extern "system" fn key_field_procedure(
+unsafe extern "system" fn keyboard_field_procedure(
     field: HWND,
     message: u32,
     wparam: WPARAM,
@@ -564,7 +564,7 @@ unsafe extern "system" fn key_field_procedure(
                 let packed = ((current_modifiers() as usize) << 16) | virtual_key as usize;
                 if let Ok(parent) = unsafe { GetParent(field) } {
                     unsafe {
-                        SendMessageW(parent, WM_RIV_KEY_CAPTURED, Some(WPARAM(packed)), None)
+                        SendMessageW(parent, WM_RIV_KEYBOARD_CAPTURED, Some(WPARAM(packed)), None)
                     };
                 }
             }
