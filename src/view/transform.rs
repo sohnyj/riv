@@ -204,7 +204,7 @@ impl ViewTransform {
         let mut origin_x = translate_x - center_x * scale_x * cosine + center_y * scale_y * sine;
         let mut origin_y = translate_y - center_x * scale_x * sine - center_y * scale_y * cosine;
 
-        // Snap the origin so the texel grid lands on device pixels.
+        // Snap the origin so the texel grid aligns with device pixels.
         if (self.scale - 1.0).abs() < f32::EPSILON {
             origin_x = origin_x.round();
             origin_y = origin_y.round();

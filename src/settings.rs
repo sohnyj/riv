@@ -281,7 +281,7 @@ pub struct SettingsFile {
     path: PathBuf,
     document: Value,
     pub options: Options,
-    /// ASCII-lowercased path keys dropped this session; the exit merge must not resurrect them.
+    /// ASCII-lowercased path keys dropped this session; the exit merge must not bring them back.
     removed_recent_keys: HashSet<String>,
 }
 

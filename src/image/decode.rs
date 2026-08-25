@@ -447,7 +447,7 @@ type MagicSignature = &'static [(usize, &'static [u8])];
 const AVIF_STILL_BRAND: &[u8; 4] = b"avif";
 const AVIF_SEQUENCE_BRAND: &[u8; 4] = b"avis";
 
-/// Format names shared by a registry entry and its animated twin; the name is the Type sort key.
+/// Format names shared by a registry entry and its animated form; the name is the Type sort key.
 const WEBP_NAME: &str = "WebP";
 const AVIF_NAME: &str = "AVIF";
 
@@ -1868,7 +1868,7 @@ pub fn upload_still_texture(
     })
 }
 
-/// Uploads the gain map plane; None quietly keeps the base SDR rendition.
+/// Uploads the gain map plane; None keeps the base SDR rendition.
 fn upload_gain_map_texture(
     upload_device: &UploadDevice,
     plane: &crate::image::gain_map::GainMapPlane,
@@ -3320,7 +3320,7 @@ mod descriptor_probe_tests {
 
     #[test]
     fn an_avis_brand_routes_to_the_sequence_decoder() {
-        // The avis brand can ride as major or compatible, on either an avif or a mif1 major.
+        // The avis brand can appear as major or compatible, on either an avif or a mif1 major.
         for header in [
             ftyp_header(b"avis", &[b"avif", b"avis"]),
             ftyp_header(b"avif", &[b"avif", b"avis"]),
@@ -3866,7 +3866,7 @@ mod decoded_weight_tests {
 
     #[test]
     fn an_oversized_single_downscales_before_weighing() {
-        // 17000x6000 exceeds the texture limit; the decode lands at 16384x5782.
+        // 17000x6000 exceeds the texture limit; the decode produces 16384x5782.
         let expected = 16384u64 * (6000 * 16384 / 17000) * 8;
         assert_eq!(decoded_weight(17000, 6000, 8, 1), expected);
     }

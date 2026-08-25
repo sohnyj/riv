@@ -898,7 +898,7 @@ mod heif_range_tests {
         let table = full_range_expansion(10);
         assert_eq!(table[0], 0);
         assert_eq!(table[1023], u16::MAX);
-        // Scaling, not a shift: half the source range lands on half the full range.
+        // Scaling, not a shift: half the source range maps to half the full range.
         assert_eq!(table[512], 32800);
         assert!(table.windows(2).take(1024).all(|pair| pair[0] <= pair[1]));
     }
@@ -1105,7 +1105,7 @@ mod avif_sequence_tests {
         std::fs::read("test/animated_avif.avif").expect("run test/make_animation_avif.py first")
     }
 
-    /// The fixture is high-quality YUV, not lossless, so flat colors land within a few codes.
+    /// The fixture is high-quality YUV, not lossless, so flat colors stay within a few codes.
     fn assert_pixel_near(actual: [u8; 4], expected: [u8; 4]) {
         for (channel, (actual_code, expected_code)) in actual.iter().zip(expected).enumerate() {
             assert!(

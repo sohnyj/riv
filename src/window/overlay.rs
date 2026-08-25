@@ -695,7 +695,7 @@ pub fn build_file_summary_text(
             binary_size_text(metadata.file_size)
         ));
     }
-    // Date taken identifies the photograph; the file's own time stands in when there is none.
+    // Date taken identifies the photograph; without one the file's own time is shown.
     let taken = image.and_then(|image| image.exif.as_ref()?.date_taken);
     if let Some(datetime) = taken.and_then(format_local_datetime) {
         lines.push(format!("{DATE_TAKEN_LABEL}{datetime}"));

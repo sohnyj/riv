@@ -1065,7 +1065,7 @@ impl Application {
                 .and_then(|current| current.texture.as_ref());
             let applied = renderer.set_image(&image.frames[frame_index].pixels, texture, image);
             if applied.is_err() {
-                // Neither texture nor pixels on hand; the file is the master copy.
+                // Neither texture nor pixels are held; the file is the only copy left.
                 self.image_core.reload_current();
             }
         }
@@ -2719,7 +2719,7 @@ extern "system" fn window_procedure(
             }
             LRESULT(0)
         }
-        // Bindings run in the message loop, so an unbound key lands here and Alt keys fall through.
+        // Bindings run in the message loop, so an unbound key reaches here and Alt keys fall through.
         WM_KEYDOWN => LRESULT(0),
         // Swallow Alt+chars consumed by bindings; DefWindowProc would beep.
         WM_SYSCHAR => {

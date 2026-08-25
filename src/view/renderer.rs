@@ -894,13 +894,13 @@ impl Renderer {
 
     /// Whether this source profile, or untagged sRGB, is already the SDR destination space.
     fn is_destination_space(&self, icc_profile: Option<&[u8]>) -> bool {
-        // Only a context riv managed to build stands in as the destination; the rest read sRGB.
+        // Only a context riv managed to build is used as the destination; the rest read sRGB.
         let destination = self
             .display_color_context
             .as_ref()
             .and(self.output_mode.display_profile.as_deref());
         match (icc_profile, destination) {
-            // Untagged stands for sRGB, so one side present means that side must be sRGB.
+            // Untagged means sRGB, so one side present means that side must be sRGB.
             (None, None) => true,
             (None, Some(profile)) | (Some(profile), None) => icc::is_srgb(profile),
             (Some(source), Some(display)) => icc::same_space(source, display),

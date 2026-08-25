@@ -31,7 +31,7 @@ mod dialog_tests {
     fn dialog_round_trips_the_entered_url() {
         let driver = std::thread::spawn(|| {
             use windows::Win32::UI::WindowsAndMessaging::{FindWindowW, PostMessageW};
-            // 15s to ride out a cold wine start; the E2E smoke test waits as long.
+            // 15s to cover a cold wine start; the E2E smoke test waits as long.
             for _ in 0..300 {
                 std::thread::sleep(std::time::Duration::from_millis(50));
                 // The window is findable by its title before the template builds its controls.

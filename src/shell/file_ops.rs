@@ -42,7 +42,7 @@ pub fn confirm_delete(window: HWND, details: &str, permanent: bool) -> DeleteCon
     } else {
         "Move this file to the Recycle Bin?"
     };
-    // The question rides in the content: a main instruction would enlarge and color it.
+    // The question goes in the content: a main instruction would enlarge and color it.
     let content = HSTRING::from(format!("{question}\n\n{details}"));
     let verification = w!("Don't ask again");
     let buttons = [

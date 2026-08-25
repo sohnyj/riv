@@ -360,7 +360,7 @@ pub struct DisplayGamut {
 }
 
 impl DisplayGamut {
-    /// Nearest known gamut by primary distance; the tell is whether it is wider than sRGB.
+    /// Nearest known gamut by primary distance; what matters is whether it is wider than sRGB.
     pub fn label(&self) -> &'static str {
         nearest_gamut_label([self.red, self.green, self.blue])
     }

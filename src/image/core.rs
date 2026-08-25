@@ -362,7 +362,7 @@ impl CacheEntry {
         }
     }
 
-    /// Cached pixels stand for a file of this size and modification time, nothing else.
+    /// Cached pixels belong to a file of this size and modification time, nothing else.
     fn matches(&self, metadata: ItemMetadata) -> bool {
         self.metadata == metadata
     }
@@ -467,7 +467,7 @@ enum ScanPurpose {
     OpenFirstEntry,
     /// The listing behind a directly opened file; the anchor is already loading.
     CoverAnchor,
-    /// Re-collection of the current scope; the old listing serves until this lands.
+    /// Re-collection of the current scope; the old listing serves until this one arrives.
     Refresh,
 }
 
@@ -476,7 +476,7 @@ pub struct ScannedListing {
     scope: ListingScope,
     sort_mode: SortMode,
     sort_descending: bool,
-    /// Directories always land Ok; archives can fail to enumerate or hold no images.
+    /// Directories always report Ok; archives can fail to enumerate or hold no images.
     result: Result<Vec<ListingEntry>, DecodeError>,
 }
 
@@ -762,7 +762,7 @@ impl ImageCore {
         self.spawn_scan(scope);
     }
 
-    /// Re-collects the current scope while the old listing stays usable until it lands.
+    /// Re-collects the current scope while the old listing stays usable until it arrives.
     fn submit_refresh_scan(&mut self) {
         // A scan already submitted is the newer listing; leave it to arrive.
         if self.listing_scan_pending() {
@@ -1702,7 +1702,7 @@ fn playlist_window_start(total: usize, anchor: Option<usize>, capacity: usize) -
 fn anchor_start(anchor: AnchorIndex, forward: bool) -> Option<isize> {
     match anchor {
         AnchorIndex::Listed(index) => Some(index as isize),
-        // A missing anchor sits between two entries, so both directions land next to it.
+        // A missing anchor sits between two entries, so both directions stop next to it.
         AnchorIndex::Missing(index) => Some(index as isize - isize::from(forward)),
         AnchorIndex::Unlisted => None,
     }
@@ -2175,7 +2175,7 @@ fn worker_loop(shared: &PoolShared, window: isize) {
     }
 }
 
-/// Header-only weight probe on a worker; the result lands on the listing entry.
+/// Header-only weight probe on a worker; the result is recorded on the listing entry.
 fn run_probe_job(job: &DecodeJob, window: isize) {
     let (cancelled, weight) = if job.cancellation.load(Ordering::Relaxed) {
         (true, None)
@@ -2337,7 +2337,7 @@ mod preload_geometry_tests {
         let targets: Vec<usize> = preload_offsets(backward, forward)
             .filter_map(|offset| index_at_offset(anchor, offset, 100, false))
             .collect();
-        // Forward lands on the entry that took the place, backward on the one before it.
+        // Forward goes to the entry that took the place, backward to the one before it.
         assert_eq!(targets, [10, 11, 12, 9]);
     }
 
@@ -2378,7 +2378,7 @@ mod preload_geometry_tests {
     #[test]
     fn eviction_keeps_wrapped_preload_targets() {
         let (backward, forward, _) = PRELOAD_SPECIFICATIONS[1];
-        // Five looping entries: +3 lands at ring offset -2 yet stays a target.
+        // Five looping entries: +3 wraps to ring offset -2 yet stays a target.
         let priorities = preload_priorities(AnchorIndex::Listed(0), backward, forward, 5, true);
         assert_eq!(priorities[&3], 3);
         assert_eq!(priorities[&4], 4);
@@ -2404,7 +2404,7 @@ mod budget_selection_tests {
 
     #[test]
     fn an_oversized_candidate_is_skipped_not_a_stopping_point() {
-        // The big +1 stays out, the cheap items behind it still land.
+        // The big +1 stays out, the cheap items behind it still fit.
         assert_eq!(
             fits_in_budget(0, 500, &[800, 200, 200, 200]),
             [false, true, true, false]
@@ -2829,7 +2829,7 @@ mod listing_scan_tests {
         let mut core = core();
         core.rescan_folder(&directory);
         core.load_path(&second);
-        assert!(core.has_pending_display()); // the decode has not landed yet
+        assert!(core.has_pending_display()); // the decode has not arrived yet
         assert_eq!(core.listing_position(), Some((2, 2)));
         let _ = std::fs::remove_dir_all(&directory);
     }
