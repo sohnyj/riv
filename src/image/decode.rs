@@ -199,9 +199,33 @@ impl DecodedImage {
     }
 }
 
+/// A failure code and the notation its source counts in.
+#[derive(Clone, Copy, PartialEq)]
+pub enum ErrorCode {
+    /// The message carries the whole reason.
+    None,
+    /// A Windows HRESULT, which the platform documents in hexadecimal.
+    Hresult(i32),
+    /// An exit status or errno, which the tool that returned it documents in decimal.
+    Status(i32),
+    /// An OS error the io message already names: matched against, never written a second time.
+    Os(i32),
+}
+
+impl ErrorCode {
+    /// A status a source reports as zero when it has none to give.
+    pub fn status(value: i32) -> Self {
+        if value == 0 {
+            Self::None
+        } else {
+            Self::Status(value)
+        }
+    }
+}
+
 #[derive(Clone)]
 pub struct DecodeError {
-    pub code: i32,
+    pub code: ErrorCode,
     pub message: String,
     pub store_codec_names: &'static [&'static str],
 }
@@ -209,26 +233,27 @@ pub struct DecodeError {
 impl DecodeError {
     pub fn cancelled() -> Self {
         Self {
-            code: E_ABORT.0,
+            code: ErrorCode::Hresult(E_ABORT.0),
             message: "cancelled".to_string(),
             store_codec_names: &[],
         }
     }
 
     pub fn is_cancelled(&self) -> bool {
-        self.code == E_ABORT.0
+        self.code == ErrorCode::Hresult(E_ABORT.0)
     }
 
     /// True when no decoder recognized the data and no Store codec is named.
     pub fn is_unrecognized_format(&self) -> bool {
-        self.code == WINCODEC_ERR_COMPONENTNOTFOUND.0 && self.store_codec_names.is_empty()
+        self.code == ErrorCode::Hresult(WINCODEC_ERR_COMPONENTNOTFOUND.0)
+            && self.store_codec_names.is_empty()
     }
 }
 
 impl From<windows::core::Error> for DecodeError {
     fn from(error: windows::core::Error) -> Self {
         Self {
-            code: error.code().0,
+            code: ErrorCode::Hresult(error.code().0),
             message: error.message(),
             store_codec_names: &[],
         }
@@ -859,10 +884,11 @@ impl DecodeInput<'_> {
 }
 
 /// Failures the Store hint can remedy: the codec is absent, or registered but broken.
-fn is_missing_codec_error(code: i32) -> bool {
-    code == WINCODEC_ERR_COMPONENTNOTFOUND.0
-        || code == WINCODEC_ERR_COMPONENTINITIALIZEFAILURE.0
-        || code == MF_E_TOPO_CODEC_NOT_FOUND.0
+fn is_missing_codec_error(code: ErrorCode) -> bool {
+    matches!(code, ErrorCode::Hresult(value)
+        if value == WINCODEC_ERR_COMPONENTNOTFOUND.0
+            || value == WINCODEC_ERR_COMPONENTINITIALIZEFAILURE.0
+            || value == MF_E_TOPO_CODEC_NOT_FOUND.0)
 }
 
 /// Attaches the gain map, or leaves both fields absent so damage reads as a plain file.
@@ -2517,8 +2543,20 @@ fn source_size(source: &IWICBitmapSource) -> WindowsResult<(u32, u32)> {
 /// Code 0 means "no code", not a real HRESULT; the error overlay omits it.
 pub fn uncoded_error(message: impl std::fmt::Display) -> DecodeError {
     DecodeError {
-        code: 0,
+        code: ErrorCode::None,
         message: message.to_string(),
+        store_codec_names: &[],
+    }
+}
+
+/// An io failure, whose message already names the OS error the code is kept for.
+pub fn os_error(error: &std::io::Error) -> DecodeError {
+    DecodeError {
+        code: match error.raw_os_error() {
+            Some(value) => ErrorCode::Os(value),
+            None => ErrorCode::None,
+        },
+        message: error.to_string(),
         store_codec_names: &[],
     }
 }

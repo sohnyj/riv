@@ -21,7 +21,7 @@ use windows_numerics::Vector2;
 use crate::dialogs::about::{TITLE_FONT_FAMILY, TITLE_POINT_SIZE};
 use crate::image::color;
 use crate::image::core::ItemMetadata;
-use crate::image::decode::{DecodedImage, PixelStorage};
+use crate::image::decode::{DecodedImage, ErrorCode, PixelStorage};
 use crate::view::renderer::ToneMapLuminances;
 
 /// Lucida Console design metrics: ascent 1616/2048 em, natural line exactly 1 em.
@@ -630,7 +630,7 @@ fn capitalized(text: &str) -> String {
 pub fn build_error_text(
     file_name: &str,
     message: &str,
-    code: i32,
+    code: ErrorCode,
     store_codec_names: &[&str],
 ) -> String {
     let reason = if message.is_empty() {
@@ -638,13 +638,14 @@ pub fn build_error_text(
     } else {
         capitalized(message.trim())
     };
-    // Code 0 is "no code", not an HRESULT; a line that ends in one needs no period.
-    let reason = if code != 0 {
-        format!("{reason} (Error 0x{code:08X})")
-    } else if reason.ends_with('.') {
-        reason
-    } else {
-        format!("{reason}.")
+    // A line that ends in a code needs no period.
+    let reason = match code {
+        ErrorCode::Hresult(value) => format!("{reason} (Error 0x{value:08X})"),
+        ErrorCode::Status(value) => format!("{reason} (Error {value})"),
+        // An io message ends in its own "(os error N)", which is this line's code.
+        ErrorCode::Os(_) => reason,
+        ErrorCode::None if reason.ends_with('.') => reason,
+        ErrorCode::None => format!("{reason}."),
     };
     // With no file name to head it, the reason stands alone.
     let mut text = if file_name.is_empty() {
@@ -1254,15 +1255,20 @@ mod error_text_tests {
 
     #[test]
     fn an_empty_name_drops_its_line() {
-        let text = build_error_text("", "No URL in the clipboard", 0, &[]);
+        let text = build_error_text("", "No URL in the clipboard", ErrorCode::None, &[]);
         assert_eq!(text, "No URL in the clipboard.");
     }
 
     #[test]
-    fn code_zero_drops_the_error_suffix() {
-        let uncoded = build_error_text("a.png", "Unsupported URL protocol", 0, &[]);
+    fn a_codeless_failure_drops_the_error_suffix() {
+        let uncoded = build_error_text("a.png", "Unsupported URL protocol", ErrorCode::None, &[]);
         assert_eq!(uncoded, "Can't open a.png\nUnsupported URL protocol.");
-        let coded = build_error_text("a.png", "No image at this URL", 0x88982F50u32 as i32, &[]);
+        let coded = build_error_text(
+            "a.png",
+            "No image at this URL",
+            ErrorCode::Hresult(0x88982F50u32 as i32),
+            &[],
+        );
         assert_eq!(
             coded,
             "Can't open a.png\nNo image at this URL (Error 0x88982F50)"
@@ -1270,21 +1276,40 @@ mod error_text_tests {
     }
 
     #[test]
+    fn each_code_takes_the_notation_of_its_source() {
+        let status = build_error_text("a.png", "Download failed", ErrorCode::Status(22), &[]);
+        assert_eq!(status, "Can't open a.png\nDownload failed (Error 22)");
+        // The io message already ends in "(os error 2)"; a second code would repeat it.
+        let os = build_error_text(
+            "a.png",
+            "The file is missing. (os error 2)",
+            ErrorCode::Os(2),
+            &[],
+        );
+        assert_eq!(os, "Can't open a.png\nThe file is missing. (os error 2)");
+    }
+
+    #[test]
     fn a_lowercase_reason_becomes_a_sentence() {
-        let text = build_error_text("a.exr", "invalid data window", 0, &[]);
+        let text = build_error_text("a.exr", "invalid data window", ErrorCode::None, &[]);
         assert_eq!(text, "Can't open a.exr\nInvalid data window.");
     }
 
     #[test]
     fn store_codecs_are_named_together() {
-        let single = build_error_text("a.jxl", "decode failed", 0, &["JPEG XL Image Extension"]);
+        let single = build_error_text(
+            "a.jxl",
+            "decode failed",
+            ErrorCode::None,
+            &["JPEG XL Image Extension"],
+        );
         assert!(single.ends_with(
             "\nInstall \"JPEG XL Image Extension\" (Microsoft Corporation)\nfrom the Microsoft Store to view this file."
         ));
         let paired = build_error_text(
             "a.avif",
             "decode failed",
-            0,
+            ErrorCode::None,
             &["HEIF Image Extension", "AV1 Video Extension"],
         );
         assert!(paired.ends_with(

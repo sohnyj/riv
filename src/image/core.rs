@@ -16,7 +16,7 @@ use windows::core::HSTRING;
 
 use crate::archive::reader as archive_reader;
 use crate::image::decode::{
-    self, DecodeError, DecodedImage, UploadDevice, UploadedTexture, upload_still_texture,
+    self, DecodeError, DecodedImage, ErrorCode, UploadDevice, UploadedTexture, upload_still_texture,
 };
 use crate::network::curl;
 use crate::window::message::post_boxed;
@@ -706,11 +706,7 @@ impl ImageCore {
             Err(error) => {
                 self.request = ViewRequest::Failed(
                     ItemLocation::File(path.to_path_buf()),
-                    DecodeError {
-                        code: error.raw_os_error().unwrap_or(0),
-                        message: error.to_string(),
-                        store_codec_names: &[],
-                    },
+                    decode::os_error(&error),
                 );
                 return LoadOutcome::Failed;
             }
@@ -942,14 +938,7 @@ impl ImageCore {
                     modified: file.modified().ok(),
                 },
                 Err(error) => {
-                    self.request = ViewRequest::Failed(
-                        location.clone(),
-                        DecodeError {
-                            code: error.raw_os_error().unwrap_or(0),
-                            message: error.to_string(),
-                            store_codec_names: &[],
-                        },
-                    );
+                    self.request = ViewRequest::Failed(location.clone(), decode::os_error(&error));
                     // The wait this request dropped may still hold a decode; the sweep ends it.
                     self.refresh_preload();
                     return LoadOutcome::Failed;
@@ -1174,7 +1163,10 @@ impl ImageCore {
         let Some((location, error)) = self.request.failure() else {
             return false;
         };
-        if !matches!(error.code, ERROR_FILE_NOT_FOUND | ERROR_PATH_NOT_FOUND) {
+        if !matches!(
+            error.code,
+            ErrorCode::Os(ERROR_FILE_NOT_FOUND | ERROR_PATH_NOT_FOUND)
+        ) {
             return false;
         }
         let Ok(path) = std::path::absolute(path) else {
@@ -2028,7 +2020,7 @@ impl From<archive_reader::ArchiveError> for DecodeError {
             Self::cancelled()
         } else {
             Self {
-                code: error.code,
+                code: ErrorCode::status(error.code),
                 message: error.message,
                 store_codec_names: &[],
             }
@@ -2042,7 +2034,7 @@ impl From<curl::NetworkError> for DecodeError {
             Self::cancelled()
         } else {
             Self {
-                code: error.code,
+                code: ErrorCode::status(error.code),
                 message: error.message,
                 store_codec_names: &[],
             }
@@ -2601,7 +2593,7 @@ mod url_session_state_tests {
 
     fn decode_error(message: &str) -> DecodeError {
         DecodeError {
-            code: 0,
+            code: ErrorCode::None,
             message: message.to_string(),
             store_codec_names: &[],
         }
@@ -2683,7 +2675,7 @@ mod url_session_state_tests {
         core.request = ViewRequest::Failed(
             ItemLocation::Url("ftp://a.com/b.png".to_string()),
             DecodeError {
-                code: 0,
+                code: ErrorCode::None,
                 message: "Download failed".to_string(),
                 store_codec_names: &[],
             },
@@ -2700,7 +2692,7 @@ mod url_session_state_tests {
     fn unrecognized_url_bytes_read_as_no_image() {
         use windows::Win32::Foundation::WINCODEC_ERR_COMPONENTNOTFOUND;
         let error = |store_codec_names| DecodeError {
-            code: WINCODEC_ERR_COMPONENTNOTFOUND.0,
+            code: ErrorCode::Hresult(WINCODEC_ERR_COMPONENTNOTFOUND.0),
             message: "component not found".to_string(),
             store_codec_names,
         };
