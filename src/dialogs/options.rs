@@ -506,8 +506,8 @@ fn fit_page_controls(page: HWND, stretch: i32, follow_right_edge: i32) {
     let mut template = RECT {
         left: 0,
         top: 0,
-        right: PAGE_TEMPLATE_WIDTH,
-        bottom: PAGE_TEMPLATE_HEIGHT,
+        right: PAGE_TEMPLATE_WIDTH_DIALOG_UNITS,
+        bottom: PAGE_TEMPLATE_HEIGHT_DIALOG_UNITS,
     };
     let mut client = RECT::default();
     if unsafe { MapDialogRect(page, &raw mut template) }.is_err()
