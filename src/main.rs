@@ -2018,7 +2018,7 @@ fn show_menu(application: &mut Application, window: HWND, x: i32, y: i32, target
 }
 
 /// Bindings are the accelerator table: a key they take never turns into a character.
-fn consume_key_binding(message: &MSG) -> bool {
+fn consume_keyboard_binding(message: &MSG) -> bool {
     if message.message != WM_KEYDOWN && message.message != WM_SYSKEYDOWN {
         return false;
     }
@@ -2243,7 +2243,7 @@ fn run_message_loop(window: HWND) {
 
 /// Bindings are checked first, and a key they take never reaches translation or the window.
 fn deliver_message(message: &MSG) {
-    if consume_key_binding(message) {
+    if consume_keyboard_binding(message) {
         return;
     }
     let _ = unsafe { TranslateMessage(message) };

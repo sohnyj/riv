@@ -121,7 +121,7 @@ impl MouseBase {
     }
 }
 
-struct KeyBinding {
+struct KeyboardBinding {
     modifiers: u8,
     virtual_key: u16,
     action: Action,
@@ -134,7 +134,7 @@ struct MouseBinding {
 }
 
 pub struct Bindings {
-    keyboard: Vec<KeyBinding>,
+    keyboard: Vec<KeyboardBinding>,
     mouse: Vec<MouseBinding>,
 }
 
@@ -204,7 +204,7 @@ impl Bindings {
             parse_keyboard_sequence,
         )
         .into_iter()
-        .map(|((modifiers, virtual_key), action)| KeyBinding {
+        .map(|((modifiers, virtual_key), action)| KeyboardBinding {
             modifiers,
             virtual_key,
             action,
