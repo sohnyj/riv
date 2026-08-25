@@ -376,3 +376,52 @@ impl Action {
         }
     }
 }
+
+#[cfg(test)]
+mod action_table_tests {
+    use super::*;
+
+    /// The variant spelling has no run-time form, so the table is read as source text.
+    #[test]
+    fn every_row_spells_its_action_the_same_way_three_times() {
+        let table = include_str!("actions.rs")
+            .split_once("const ACTION_TABLE")
+            .expect("table declaration")
+            .1
+            .split_once("\n];")
+            .expect("table end")
+            .0;
+        let rows: Vec<(&str, &str, &str)> = table
+            .split("Action::")
+            .skip(1)
+            .filter_map(|row| {
+                let (variant, rest) = row.split_once(',')?;
+                let (name, rest) = quoted(rest)?;
+                let (label, _) = quoted(rest)?;
+                Some((variant, name, label))
+            })
+            .collect();
+        assert_eq!(rows.len(), Action::all_bindable().count());
+        let differing: Vec<_> = rows
+            .iter()
+            .filter(|(variant, name, label)| {
+                let folded = variant.to_lowercase();
+                folded != *name || folded != letters(label)
+            })
+            .collect();
+        assert!(differing.is_empty(), "variant, name, label: {differing:?}");
+    }
+
+    fn quoted(text: &str) -> Option<(&str, &str)> {
+        text.split_once('"')?.1.split_once('"')
+    }
+
+    /// A label's spacing and its ellipsis are not part of the word.
+    fn letters(label: &str) -> String {
+        label
+            .to_lowercase()
+            .chars()
+            .filter(char::is_ascii_alphanumeric)
+            .collect()
+    }
+}
