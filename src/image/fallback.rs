@@ -241,7 +241,10 @@ unsafe extern "C" {
 
 /// Header-only data window size; the decode is always RGBA half.
 pub fn probe_exr_dimensions(path: &Path) -> Option<(u32, u32)> {
-    let wide_path = HSTRING::from(path);
+    probe_exr_wide_dimensions(&HSTRING::from(path))
+}
+
+fn probe_exr_wide_dimensions(wide_path: &HSTRING) -> Option<(u32, u32)> {
     let mut width: c_int = 0;
     let mut height: c_int = 0;
     let status = unsafe { riv_exr_probe(wide_path.as_ptr(), &raw mut width, &raw mut height) };
@@ -261,7 +264,7 @@ pub fn decode_exr(path: &Path, format_name: &'static str) -> Result<DecodedImage
     let wide_path = HSTRING::from(path);
     decode_exr_with(
         format_name,
-        probe_exr_dimensions(path),
+        probe_exr_wide_dimensions(&wide_path),
         |pixels, capacity, width, height, message, error_capacity| unsafe {
             riv_exr_decode_into(
                 wide_path.as_ptr(),
