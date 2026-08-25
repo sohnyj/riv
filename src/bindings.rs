@@ -201,7 +201,7 @@ impl Bindings {
             DEFAULT_KEYBOARD,
             keyboard_overrides,
             MAXIMUM_KEYBOARD_SEQUENCES,
-            parse_key_sequence,
+            parse_keyboard_sequence,
         )
         .into_iter()
         .map(|((modifiers, virtual_key), action)| KeyBinding {
@@ -264,7 +264,7 @@ pub fn default_mouse_encodings(action_name: &str) -> &'static [&'static str] {
 }
 
 /// None for keys that cannot round-trip through the parser.
-pub fn format_key_sequence(modifiers: u8, virtual_key: u16) -> Option<String> {
+pub fn format_keyboard_sequence(modifiers: u8, virtual_key: u16) -> Option<String> {
     let base = key_name_from_virtual_key(virtual_key)?;
     Some(format!("{}{base}", modifier_prefix(modifiers)))
 }
@@ -297,8 +297,8 @@ pub fn resolved_keyboard_sequences(
     )
     .into_iter()
     .filter_map(|sequence| {
-        let (modifiers, virtual_key) = parse_key_sequence(sequence)?;
-        format_key_sequence(modifiers, virtual_key)
+        let (modifiers, virtual_key) = parse_keyboard_sequence(sequence)?;
+        format_keyboard_sequence(modifiers, virtual_key)
     })
     .collect()
 }
@@ -386,7 +386,7 @@ fn string_list(value: &Value) -> Vec<&str> {
         .unwrap_or_default()
 }
 
-fn parse_key_sequence(sequence: &str) -> Option<(u8, u16)> {
+fn parse_keyboard_sequence(sequence: &str) -> Option<(u8, u16)> {
     let mut modifiers = 0u8;
     let mut virtual_key = None;
     for token in sequence.split('+') {
@@ -517,10 +517,10 @@ mod normalization_tests {
         // An unparseable default drops silently; a non-canonical one becomes a stored override.
         for (name, sequences) in DEFAULT_KEYBOARD {
             for sequence in *sequences {
-                let (modifiers, virtual_key) =
-                    parse_key_sequence(sequence).unwrap_or_else(|| panic!("{name}: {sequence}"));
+                let (modifiers, virtual_key) = parse_keyboard_sequence(sequence)
+                    .unwrap_or_else(|| panic!("{name}: {sequence}"));
                 assert_eq!(
-                    format_key_sequence(modifiers, virtual_key).as_deref(),
+                    format_keyboard_sequence(modifiers, virtual_key).as_deref(),
                     Some(*sequence),
                     "{name}"
                 );

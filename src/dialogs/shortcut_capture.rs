@@ -1,4 +1,4 @@
-//! Shortcut capture dialogs: raw key sequences and click-to-record mouse bindings.
+//! Shortcut capture dialogs: raw keyboard sequences and click-to-record mouse bindings.
 
 use windows::Win32::Foundation::{COLORREF, HWND, LPARAM, LRESULT, RECT, WPARAM};
 use windows::Win32::Graphics::Gdi::{
@@ -117,7 +117,7 @@ unsafe extern "system" fn keyboard_procedure(
                 listbox_add(dialog, sequence);
             }
             if let Ok(listbox) = unsafe { GetDlgItem(Some(dialog), IDC_CAPTURE_KEYBOARD_LIST) } {
-                let procedure = key_list_procedure as *const core::ffi::c_void;
+                let procedure = keyboard_list_procedure as *const core::ffi::c_void;
                 // The original procedure is stored before the swap, so the subclass never reads it unset.
                 let original = unsafe { GetWindowLongPtrW(listbox, GWLP_WNDPROC) };
                 unsafe { SetWindowLongPtrW(listbox, GWLP_USERDATA, original) };
@@ -131,7 +131,7 @@ unsafe extern "system" fn keyboard_procedure(
         WM_RIV_KEYBOARD_CAPTURED => {
             let modifiers = high_word(wparam.0) as u8;
             let virtual_key = low_word(wparam.0) as u16;
-            if let Some(sequence) = bindings::format_key_sequence(modifiers, virtual_key)
+            if let Some(sequence) = bindings::format_keyboard_sequence(modifiers, virtual_key)
                 && let Some(state) = state_mut::<KeyboardCaptureState>(dialog)
                 && !state.sequences.contains(&sequence)
             {
@@ -398,7 +398,7 @@ fn erase_below_last_item(listbox: HWND, device: HDC) {
     }
 }
 
-unsafe extern "system" fn key_list_procedure(
+unsafe extern "system" fn keyboard_list_procedure(
     listbox: HWND,
     message: u32,
     wparam: WPARAM,
