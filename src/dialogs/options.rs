@@ -708,13 +708,13 @@ fn apply_page_command(
             options.background_color_enabled = is_checked(page, control);
             sync_background_color_button(state, page);
         }
-        (IDC_WINDOW_TITLEBAR_MODE, CBN_SELCHANGE) => {
+        (IDC_WINDOW_TITLE_BAR_TEXT, CBN_SELCHANGE) => {
             options.title_bar_text = combo_selection(page, control);
         }
-        (IDC_IMAGE_FITMODE, CBN_SELCHANGE) => {
+        (IDC_IMAGE_FIT_MODE, CBN_SELCHANGE) => {
             options.fit_mode = combo_selection(page, control);
         }
-        (IDC_WINDOW_SAVE_POSITION, BN_CLICKED) => {
+        (IDC_WINDOW_REMEMBER_WINDOW_PLACEMENT, BN_CLICKED) => {
             options.remember_window_placement = is_checked(page, control);
         }
         (IDC_WINDOW_CONTROL_DRAG, BN_CLICKED) => {
@@ -761,13 +761,13 @@ fn apply_page_command(
                 MAXIMUM_SLIDESHOW_INTERVAL_SECONDS,
             );
         }
-        (IDC_MISCELLANEOUS_AFTER_DELETE, CBN_SELCHANGE) => {
+        (IDC_MISCELLANEOUS_AFTER_DELETION, CBN_SELCHANGE) => {
             options.after_deletion = combo_selection(page, control);
         }
         (IDC_MISCELLANEOUS_ASK_DELETE, BN_CLICKED) => {
             options.ask_delete = is_checked(page, control)
         }
-        (IDC_MISCELLANEOUS_CONTENT_DETECTION, BN_CLICKED) => {
+        (IDC_MISCELLANEOUS_DETECT_FORMAT_BY_CONTENT, BN_CLICKED) => {
             options.detect_format_by_content = is_checked(page, control);
         }
         (IDC_MISCELLANEOUS_REMEMBER_RECENTS, BN_CLICKED) => {
@@ -804,7 +804,7 @@ fn apply_page_command(
 
 fn initialize_window_page(state: &OptionsState) {
     let page = state.pages[WINDOW_PAGE];
-    combo_fill(page, IDC_WINDOW_TITLEBAR_MODE, &TITLE_BAR_TEXT_CHOICES);
+    combo_fill(page, IDC_WINDOW_TITLE_BAR_TEXT, &TITLE_BAR_TEXT_CHOICES);
 }
 
 fn initialize_image_page(state: &OptionsState) {
@@ -821,7 +821,7 @@ fn initialize_image_page(state: &OptionsState) {
     );
     combo_fill(
         page,
-        IDC_IMAGE_FITMODE,
+        IDC_IMAGE_FIT_MODE,
         &FitMode::IN_SETTING_ORDER.map(FitMode::description),
     );
     combo_fill(page, IDC_IMAGE_PRELOADING, &PRELOADING_CHOICES);
@@ -851,7 +851,7 @@ fn initialize_miscellaneous_page(state: &OptionsState) {
     );
     combo_fill(
         page,
-        IDC_MISCELLANEOUS_AFTER_DELETE,
+        IDC_MISCELLANEOUS_AFTER_DELETION,
         &AFTER_DELETION_CHOICES,
     );
     if let Ok(spin) = unsafe { GetDlgItem(Some(page), IDC_MISCELLANEOUS_SLIDESHOW_INTERVAL_SPIN) } {
@@ -912,12 +912,12 @@ fn sync_window_page(state: &OptionsState) {
     );
     combo_select(
         window_page,
-        IDC_WINDOW_TITLEBAR_MODE,
+        IDC_WINDOW_TITLE_BAR_TEXT,
         options.title_bar_text,
     );
     set_check(
         window_page,
-        IDC_WINDOW_SAVE_POSITION,
+        IDC_WINDOW_REMEMBER_WINDOW_PLACEMENT,
         options.remember_window_placement,
     );
     set_check(
@@ -938,7 +938,7 @@ fn sync_image_page(state: &OptionsState) {
     let image_page = state.pages[IMAGE_PAGE];
     combo_select(image_page, IDC_IMAGE_SCALING, options.scaling_filter);
     combo_select(image_page, IDC_IMAGE_DITHER, options.dither_mode);
-    combo_select(image_page, IDC_IMAGE_FITMODE, options.fit_mode);
+    combo_select(image_page, IDC_IMAGE_FIT_MODE, options.fit_mode);
     combo_select(image_page, IDC_IMAGE_PRELOADING, options.preloading);
     set_check(image_page, IDC_IMAGE_CURSOR_ZOOM, options.cursor_zoom);
     set_check(
@@ -980,7 +980,7 @@ fn sync_miscellaneous_page(state: &OptionsState) {
     );
     combo_select(
         miscellaneous_page,
-        IDC_MISCELLANEOUS_AFTER_DELETE,
+        IDC_MISCELLANEOUS_AFTER_DELETION,
         options.after_deletion,
     );
     set_check(
@@ -990,7 +990,7 @@ fn sync_miscellaneous_page(state: &OptionsState) {
     );
     set_check(
         miscellaneous_page,
-        IDC_MISCELLANEOUS_CONTENT_DETECTION,
+        IDC_MISCELLANEOUS_DETECT_FORMAT_BY_CONTENT,
         options.detect_format_by_content,
     );
     set_check(

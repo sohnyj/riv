@@ -27,8 +27,8 @@ use windows::core::{HSTRING, w};
 
 use crate::bindings::{self, MouseBase, current_modifiers};
 use crate::dialogs::resource::{
-    IDC_CAPTURE_KEY_CLEAR, IDC_CAPTURE_KEY_FIELD, IDC_CAPTURE_KEY_LIST, IDC_CAPTURE_MOUSE_CLEAR,
-    IDC_CAPTURE_MOUSE_FIELD, IDD_CAPTURE_KEYBOARD, IDD_CAPTURE_MOUSE,
+    IDC_CAPTURE_KEYBOARD_CLEAR, IDC_CAPTURE_KEYBOARD_FIELD, IDC_CAPTURE_KEYBOARD_LIST,
+    IDC_CAPTURE_MOUSE_CLEAR, IDC_CAPTURE_MOUSE_FIELD, IDD_CAPTURE_KEYBOARD, IDD_CAPTURE_MOUSE,
 };
 
 use crate::dialogs::modal::{DWLP_USER, IDCANCEL, IDOK, state_mut};
@@ -116,14 +116,14 @@ unsafe extern "system" fn keyboard_procedure(
             for sequence in &state.sequences {
                 listbox_add(dialog, sequence);
             }
-            if let Ok(listbox) = unsafe { GetDlgItem(Some(dialog), IDC_CAPTURE_KEY_LIST) } {
+            if let Ok(listbox) = unsafe { GetDlgItem(Some(dialog), IDC_CAPTURE_KEYBOARD_LIST) } {
                 let procedure = key_list_procedure as *const core::ffi::c_void;
                 // The original procedure is stored before the swap, so the subclass never reads it unset.
                 let original = unsafe { GetWindowLongPtrW(listbox, GWLP_WNDPROC) };
                 unsafe { SetWindowLongPtrW(listbox, GWLP_USERDATA, original) };
                 unsafe { SetWindowLongPtrW(listbox, GWLP_WNDPROC, procedure as isize) };
             }
-            if let Ok(field) = unsafe { GetDlgItem(Some(dialog), IDC_CAPTURE_KEY_FIELD) } {
+            if let Ok(field) = unsafe { GetDlgItem(Some(dialog), IDC_CAPTURE_KEYBOARD_FIELD) } {
                 let _ = unsafe { SetFocus(Some(field)) };
             }
             0
@@ -157,7 +157,7 @@ unsafe extern "system" fn keyboard_procedure(
         }
         WM_DRAWITEM => {
             let draw = unsafe { &*(lparam.0 as *const DRAWITEMSTRUCT) };
-            if draw.CtlID == IDC_CAPTURE_KEY_LIST as u32 {
+            if draw.CtlID == IDC_CAPTURE_KEYBOARD_LIST as u32 {
                 draw_sequence_item(draw);
                 return 1;
             }
@@ -166,7 +166,7 @@ unsafe extern "system" fn keyboard_procedure(
         WM_COMMAND => {
             let command = low_word(wparam.0) as i32;
             match command {
-                IDC_CAPTURE_KEY_CLEAR => {
+                IDC_CAPTURE_KEYBOARD_CLEAR => {
                     if let Some(state) = state_mut::<KeyboardCaptureState>(dialog) {
                         state.sequences.clear();
                         listbox_clear(dialog);
@@ -445,7 +445,7 @@ unsafe extern "system" fn key_list_procedure(
 }
 
 fn listbox_add(dialog: HWND, text: &str) {
-    if let Ok(listbox) = unsafe { GetDlgItem(Some(dialog), IDC_CAPTURE_KEY_LIST) } {
+    if let Ok(listbox) = unsafe { GetDlgItem(Some(dialog), IDC_CAPTURE_KEYBOARD_LIST) } {
         let wide = HSTRING::from(text);
         unsafe {
             SendMessageW(
@@ -459,13 +459,13 @@ fn listbox_add(dialog: HWND, text: &str) {
 }
 
 fn listbox_remove(dialog: HWND, index: usize) {
-    if let Ok(listbox) = unsafe { GetDlgItem(Some(dialog), IDC_CAPTURE_KEY_LIST) } {
+    if let Ok(listbox) = unsafe { GetDlgItem(Some(dialog), IDC_CAPTURE_KEYBOARD_LIST) } {
         unsafe { SendMessageW(listbox, LB_DELETESTRING, Some(WPARAM(index)), None) };
     }
 }
 
 fn listbox_clear(dialog: HWND) {
-    if let Ok(listbox) = unsafe { GetDlgItem(Some(dialog), IDC_CAPTURE_KEY_LIST) } {
+    if let Ok(listbox) = unsafe { GetDlgItem(Some(dialog), IDC_CAPTURE_KEYBOARD_LIST) } {
         unsafe { SendMessageW(listbox, LB_RESETCONTENT, None, None) };
     }
 }
