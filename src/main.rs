@@ -2170,10 +2170,8 @@ fn main() -> Result<()> {
         && !dialogs::message::confirm_message(
             None,
             APPLICATION_NAME,
-            "Settings can't be read.",
+            "Settings can't be read. Start with default settings?",
             "Starting with defaults overwrites the settings file the next time settings are saved.",
-            "Start with defaults",
-            "Exit",
         )
     {
         return Ok(());

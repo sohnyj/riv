@@ -5,9 +5,10 @@ use windows::Win32::UI::Controls::{
     TASKDIALOG_BUTTON, TASKDIALOG_FLAGS, TASKDIALOGCONFIG, TDF_ALLOW_DIALOG_CANCELLATION,
     TDF_POSITION_RELATIVE_TO_WINDOW, TaskDialogIndirect,
 };
-use windows::core::{HSTRING, PCWSTR};
+use windows::Win32::UI::WindowsAndMessaging::{IDNO, IDYES};
+use windows::core::{HSTRING, PCWSTR, w};
 
-use crate::dialogs::modal::{IDCANCEL, IDOK};
+use crate::dialogs::modal::IDOK;
 
 /// The dismiss label every plain failure dialog passes.
 pub const CLOSE_BUTTON: &str = "Close";
@@ -41,27 +42,18 @@ pub fn show_message(owner: Option<HWND>, title: &str, headline: &str, detail: &s
     let _ = unsafe { TaskDialogIndirect(&raw const configuration, None, None, None) };
 }
 
-/// Two-button dialog defaulting to the rejecting answer; true when the accepting one was pressed.
-pub fn confirm_message(
-    owner: Option<HWND>,
-    title: &str,
-    headline: &str,
-    detail: &str,
-    accept_button: &str,
-    reject_button: &str,
-) -> bool {
+/// Yes/No question defaulting to No, which the dismissals answer with; true when Yes was pressed.
+pub fn confirm_message(owner: Option<HWND>, title: &str, question: &str, detail: &str) -> bool {
     let title = HSTRING::from(title);
-    let text = HSTRING::from(format!("{headline}\n\n{detail}"));
-    let accept_text = HSTRING::from(accept_button);
-    let reject_text = HSTRING::from(reject_button);
+    let text = HSTRING::from(format!("{question}\n\n{detail}"));
     let buttons = [
         TASKDIALOG_BUTTON {
-            nButtonID: IDOK as i32,
-            pszButtonText: PCWSTR(accept_text.as_ptr()),
+            nButtonID: IDYES.0,
+            pszButtonText: w!("Yes"),
         },
         TASKDIALOG_BUTTON {
-            nButtonID: IDCANCEL as i32,
-            pszButtonText: PCWSTR(reject_text.as_ptr()),
+            nButtonID: IDNO.0,
+            pszButtonText: w!("No"),
         },
     ];
     let placement = match owner {
@@ -76,11 +68,11 @@ pub fn confirm_message(
         pszContent: PCWSTR(text.as_ptr()),
         cButtons: buttons.len() as u32,
         pButtons: buttons.as_ptr(),
-        nDefaultButton: IDCANCEL as i32,
+        nDefaultButton: IDNO.0,
         ..Default::default()
     };
-    let mut pressed = IDCANCEL as i32;
+    let mut pressed = IDNO.0;
     let shown =
         unsafe { TaskDialogIndirect(&raw const configuration, Some(&raw mut pressed), None, None) };
-    shown.is_ok() && pressed == IDOK as i32
+    shown.is_ok() && pressed == IDYES.0
 }
