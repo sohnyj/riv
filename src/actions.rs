@@ -144,13 +144,13 @@ const ACTION_TABLE: &[(Action, &str, &str, ActionRequirement)] = &[
     (
         Action::PreviousFile,
         "previousfile",
-        "Previous",
+        "Previous file",
         ActionRequirement::NavigationTargets,
     ),
     (
         Action::NextFile,
         "nextfile",
-        "Next",
+        "Next file",
         ActionRequirement::NavigationTargets,
     ),
     (
