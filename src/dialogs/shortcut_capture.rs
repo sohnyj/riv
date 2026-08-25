@@ -586,9 +586,9 @@ unsafe extern "system" fn key_field_procedure(
             if focused {
                 let prefix = bindings::modifier_prefix(current_modifiers());
                 if prefix.is_empty() {
-                    paint_field(field, "Press a key combination…", true);
+                    paint_field(field, "Press a key combination...", true);
                 } else {
-                    paint_field(field, &format!("{prefix}…"), false);
+                    paint_field(field, &format!("{prefix}..."), false);
                 }
             } else {
                 paint_field(field, "Click here to capture", true);
