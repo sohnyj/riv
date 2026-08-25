@@ -54,6 +54,8 @@ use crate::window::message::{high_word, low_word, point_from_packed};
 pub const WM_APP_OPTIONS_APPLIED: u32 = WM_APP + 5;
 
 pub struct AppliedOptions {
+    /// This dialog owns a failure the main window reports: it is the window in front.
+    pub dialog: HWND,
     pub options: Options,
     pub keyboard: Vec<(String, Vec<String>)>,
     pub mouse: Vec<(String, Vec<String>)>,
@@ -567,6 +569,7 @@ fn apply(state: &mut OptionsState) {
         state.start_menu_saved = start_menu::shortcut_exists();
     }
     let payload = AppliedOptions {
+        dialog: state.dialog,
         options: state.transient_options.clone(),
         keyboard: state
             .transient_shortcuts

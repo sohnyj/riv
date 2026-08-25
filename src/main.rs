@@ -2598,14 +2598,25 @@ extern "system" fn window_procedure(
             }) else {
                 return LRESULT(0);
             };
+            let mut save_error = None;
             if let Some(application) = application_from_window(window) {
                 application.settings.set_options(&payload.options);
                 application
                     .settings
                     .set_binding_overrides(&payload.keyboard, &payload.mouse);
-                let _ = application.settings.save_merging_recents();
+                save_error = application.settings.save_merging_recents().err();
                 application.apply_options(window);
                 application.request_render(window);
+            }
+            // The dialog pumps messages, so the borrow above ends before it opens.
+            if let Some(error) = save_error {
+                dialogs::message::show_message(
+                    Some(payload.dialog),
+                    "Settings",
+                    "Settings can't be saved.",
+                    &error.to_string(),
+                    dialogs::message::CLOSE_BUTTON,
+                );
             }
             LRESULT(0)
         }
