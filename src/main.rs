@@ -1708,12 +1708,9 @@ fn dispatch_action(application: &mut Application, window: HWND, action: Action) 
                 .settings
                 .last_file_dialog_directory()
                 .map(str::to_owned);
-            let mut paths = open_dialog::show(window, last_directory.as_deref()).into_iter();
-            let first = paths.next();
-            for rest in paths {
-                open_in_new_window(&rest);
-            }
-            if let Some(first) = first
+            let paths = open_dialog::show(window, last_directory.as_deref());
+            open_others_in_new_windows(window, &paths);
+            if let Some(first) = paths.first()
                 && let Some(application) = application_from_window(window)
             {
                 if let Some(parent) = first.parent() {
@@ -1721,7 +1718,7 @@ fn dispatch_action(application: &mut Application, window: HWND, action: Action) 
                         .settings
                         .set_last_file_dialog_directory(&parent.to_string_lossy());
                 }
-                open_external_path(application, window, &first);
+                open_external_path(application, window, first);
             }
         }
         Action::OpenUrl => {
@@ -2359,9 +2356,37 @@ fn create_main_window(initial_path: Option<&Path>, pending_device: PendingDevice
     Ok(window)
 }
 
-fn open_in_new_window(path: &Path) {
+fn open_in_new_window(path: &Path) -> std::io::Result<()> {
     let executable = std::env::current_exe().expect("the running module always has a path");
-    let _ = std::process::Command::new(executable).arg(path).spawn();
+    std::process::Command::new(executable).arg(path).spawn()?;
+    Ok(())
+}
+
+/// Opens everything after the first path in its own window; one dialog reports what never started.
+fn open_others_in_new_windows(window: HWND, paths: &[PathBuf]) {
+    let mut failures = 0;
+    let mut first_failure = None;
+    for path in paths.iter().skip(1) {
+        if let Err(error) = open_in_new_window(path) {
+            failures += 1;
+            first_failure.get_or_insert(error);
+        }
+    }
+    let Some(error) = first_failure else {
+        return;
+    };
+    let headline = if failures == 1 {
+        "Can't open the other file."
+    } else {
+        "Can't open the other files."
+    };
+    dialogs::message::show_message(
+        Some(window),
+        "Open",
+        headline,
+        &error.to_string(),
+        dialogs::message::CLOSE_BUTTON,
+    );
 }
 
 /// TokenElevation misreports admin accounts with UAC off; check the elevation type.
@@ -2557,9 +2582,7 @@ extern "system" fn window_procedure(
             else {
                 return LRESULT(0);
             };
-            for rest in paths.iter().skip(1) {
-                open_in_new_window(rest);
-            }
+            open_others_in_new_windows(window, &paths);
             if let Some(application) = application_from_window(window)
                 && let Some(first) = paths.first()
             {
