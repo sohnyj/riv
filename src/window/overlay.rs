@@ -29,9 +29,8 @@ const FONT_ASCENT_RATIO: f32 = 1616.0 / 2048.0;
 /// Roomier than the font's tight single-em natural line.
 const LINE_SPACING_RATIO: f32 = 1.3;
 
-/// Unscaled text sizes of the info panel and the centered messages.
-const PANEL_FONT_SIZE: f32 = 14.0;
-const CENTERED_FONT_SIZE: f32 = 16.0;
+const PANEL_FONT_LOGICAL_PIXEL_SIZE: f32 = 14.0;
+const CENTERED_FONT_LOGICAL_PIXEL_SIZE: f32 = 16.0;
 
 /// Field labels the info panel and the delete-confirmation summary spell alike.
 const FORMAT_LABEL: &str = "Format: ";
@@ -42,10 +41,10 @@ const DATE_MODIFIED_LABEL: &str = "Date modified: ";
 /// Separates the info panel's sections; sized to the longest field label ("Advanced color:").
 const SECTION_DIVIDER: &str = "───────────────";
 
-const PANEL_MARGIN: f32 = 12.0;
-const PANEL_PADDING_X: f32 = 12.0;
-const PANEL_PADDING_Y: f32 = 8.0;
-const PANEL_CORNER_RADIUS: f32 = 8.0;
+const PANEL_MARGIN_LOGICAL_PIXELS: f32 = 12.0;
+const PANEL_PADDING_X_LOGICAL_PIXELS: f32 = 12.0;
+const PANEL_PADDING_Y_LOGICAL_PIXELS: f32 = 8.0;
+const PANEL_CORNER_RADIUS_LOGICAL_PIXELS: f32 = 8.0;
 const PANEL_BACKGROUND: D2D1_COLOR_F = D2D1_COLOR_F {
     r: 0.0,
     g: 0.0,
@@ -283,8 +282,10 @@ impl Overlay {
         viewport_width: f32,
         output_color_target: color::OutputColorTarget,
     ) -> Result<()> {
-        let wrap_width =
-            (viewport_width - (PANEL_MARGIN * 2.0 + PANEL_PADDING_X * 2.0) * self.scale).max(0.0);
+        let wrap_width = (viewport_width
+            - (PANEL_MARGIN_LOGICAL_PIXELS * 2.0 + PANEL_PADDING_X_LOGICAL_PIXELS * 2.0)
+                * self.scale)
+            .max(0.0);
         let cached = shaped_text(
             &mut self.layouts[placement.cache_slot()],
             &self.dwrite_factory,
@@ -294,9 +295,9 @@ impl Overlay {
             f32::MAX,
         )?;
         let metrics = cached.metrics;
-        let padding_x = PANEL_PADDING_X * self.scale;
-        let padding_y = PANEL_PADDING_Y * self.scale;
-        let margin = PANEL_MARGIN * self.scale;
+        let padding_x = PANEL_PADDING_X_LOGICAL_PIXELS * self.scale;
+        let padding_y = PANEL_PADDING_Y_LOGICAL_PIXELS * self.scale;
+        let margin = PANEL_MARGIN_LOGICAL_PIXELS * self.scale;
         let width = metrics.width + padding_x * 2.0;
         let left = match placement {
             PanelPlacement::TopLeft => margin,
@@ -310,8 +311,8 @@ impl Overlay {
                 right: left + width,
                 bottom: top + metrics.height + padding_y * 2.0,
             },
-            radiusX: PANEL_CORNER_RADIUS * self.scale,
-            radiusY: PANEL_CORNER_RADIUS * self.scale,
+            radiusX: PANEL_CORNER_RADIUS_LOGICAL_PIXELS * self.scale,
+            radiusY: PANEL_CORNER_RADIUS_LOGICAL_PIXELS * self.scale,
         };
         let brushes = brushes_for(&mut self.brushes, context, output_color_target)?;
         unsafe {
@@ -339,11 +340,11 @@ impl Overlay {
         content: &OverlayContent,
         boxed: bool,
     ) -> Result<()> {
-        let padding_x = PANEL_PADDING_X * self.scale;
-        let padding_y = PANEL_PADDING_Y * self.scale;
+        let padding_x = PANEL_PADDING_X_LOGICAL_PIXELS * self.scale;
+        let padding_y = PANEL_PADDING_Y_LOGICAL_PIXELS * self.scale;
         // The box must fit the viewport, so boxed text wraps inside the margins.
         let inset = if boxed {
-            (PANEL_MARGIN * self.scale + padding_x).min(viewport_width / 2.0)
+            (PANEL_MARGIN_LOGICAL_PIXELS * self.scale + padding_x).min(viewport_width / 2.0)
         } else {
             0.0
         };
@@ -370,8 +371,8 @@ impl Overlay {
                     right: inset + metrics.left + metrics.width + padding_x,
                     bottom: metrics.top + metrics.height + padding_y,
                 },
-                radiusX: PANEL_CORNER_RADIUS * self.scale,
-                radiusY: PANEL_CORNER_RADIUS * self.scale,
+                radiusX: PANEL_CORNER_RADIUS_LOGICAL_PIXELS * self.scale,
+                radiusY: PANEL_CORNER_RADIUS_LOGICAL_PIXELS * self.scale,
             };
             unsafe { context.FillRoundedRectangle(&raw const panel, &brushes.panel_background) };
         }
@@ -407,8 +408,8 @@ fn create_text_formats(
             w!("en-us"),
         )
     };
-    let text_format = create_format(PANEL_FONT_SIZE)?;
-    let centered_format = create_format(CENTERED_FONT_SIZE)?;
+    let text_format = create_format(PANEL_FONT_LOGICAL_PIXEL_SIZE)?;
+    let centered_format = create_format(CENTERED_FONT_LOGICAL_PIXEL_SIZE)?;
     // The About title's point size, to pixels at the D2D 96 DPI baseline.
     let wordmark_format = create_format(TITLE_POINT_SIZE as f32 * 96.0 / 72.0)?;
     for format in [&centered_format, &wordmark_format] {
@@ -424,8 +425,8 @@ fn create_text_formats(
         let baseline = scaled * FONT_ASCENT_RATIO + (line - scaled) / 2.0;
         unsafe { format.SetLineSpacing(DWRITE_LINE_SPACING_METHOD_UNIFORM, line, baseline) }
     };
-    set_line_spacing(&text_format, PANEL_FONT_SIZE)?;
-    set_line_spacing(&centered_format, CENTERED_FONT_SIZE)?;
+    set_line_spacing(&text_format, PANEL_FONT_LOGICAL_PIXEL_SIZE)?;
+    set_line_spacing(&centered_format, CENTERED_FONT_LOGICAL_PIXEL_SIZE)?;
     Ok((text_format, centered_format, wordmark_format))
 }
 
