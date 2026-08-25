@@ -1912,14 +1912,13 @@ fn show_menu(application: &mut Application, window: HWND, x: i32, y: i32, target
     let (recent_names, recent_paths): (Vec<String>, Vec<String>) =
         application.settings.recent_files().into_iter().unzip();
     let open_with_target = application.image_core.current_file().map(Path::to_path_buf);
-    let (open_with_names, open_with_executables): (Vec<String>, Vec<String>) = application
-        .current_open_with_list()
-        .map_or_else(Default::default, |list| {
-            list.items
-                .iter()
-                .map(|item| (item.display_name.clone(), item.executable_path.clone()))
-                .unzip()
-        });
+    let open_with_list = application.current_open_with_list();
+    let open_with_executables: Vec<String> = open_with_list.map_or_else(Vec::new, |list| {
+        list.items
+            .iter()
+            .map(|item| item.executable_path.clone())
+            .collect()
+    });
     let state = MenuState {
         requirements: SatisfiedRequirements::evaluate(|requirement| {
             application.requirement_satisfied(requirement)
@@ -1945,17 +1944,13 @@ fn show_menu(application: &mut Application, window: HWND, x: i32, y: i32, target
         fullscreen: application.fullscreen_restore.is_some(),
         slideshow_active: application.slideshow_item_shown_at.is_some(),
         recent_names,
-        open_with_items: application
-            .current_open_with_list()
-            .map_or_else(Vec::new, |list| {
-                list.items
-                    .iter()
-                    .map(|item| item.display_name.clone())
-                    .collect()
-            }),
-        open_with_has_default: application
-            .current_open_with_list()
-            .is_some_and(|list| list.has_default),
+        open_with_items: open_with_list.map_or_else(Vec::new, |list| {
+            list.items
+                .iter()
+                .map(|item| item.display_name.clone())
+                .collect()
+        }),
+        open_with_has_default: open_with_list.is_some_and(|list| list.has_default),
         shortcuts: Action::all_bindable()
             .filter_map(|action| {
                 bindings::menu_shortcut_text(
@@ -1985,7 +1980,10 @@ fn show_menu(application: &mut Application, window: HWND, x: i32, y: i32, target
                 if let (Some(path), Some(executable)) =
                     (open_with_target, open_with_executables.get(index))
                 {
-                    let name = open_with_names.get(index).map_or("the app", String::as_str);
+                    let name = state
+                        .open_with_items
+                        .get(index)
+                        .map_or("the app", String::as_str);
                     match open_with::invoke(&path, executable) {
                         open_with::InvokeOutcome::Invoked => {}
                         open_with::InvokeOutcome::HandlerMissing => {
