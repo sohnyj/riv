@@ -1408,7 +1408,8 @@ fn subresolution_source(
     if cancellation.load(Ordering::Relaxed) {
         return Err(E_ABORT.into());
     }
-    let mut pixels = vec![0u8; stride as usize * height as usize];
+    let mut pixels = try_zeroed_buffer(stride as usize * height as usize)
+        .ok_or_else(|| windows::core::Error::from_hresult(E_OUTOFMEMORY))?;
     unsafe {
         transform.CopyPixels(
             std::ptr::null(),
@@ -2723,6 +2724,13 @@ fn pixels_to_premultiplied_bgra_into(
     output: &mut Vec<u8>,
 ) -> Result<(), DecodeError> {
     let pixel_count = width as usize * height as usize;
+    // Reserved in place, because the frames share one region buffer.
+    if output
+        .try_reserve_exact((pixel_count * 4).saturating_sub(output.len()))
+        .is_err()
+    {
+        return Err(uncoded_error("APNG is too large to fit in memory"));
+    }
     output.resize(pixel_count * 4, 0);
     match color_type {
         png::ColorType::Rgba => {
@@ -2941,7 +2949,15 @@ fn copy_pixels_into(
 ) -> WindowsResult<()> {
     const STRIP_ROWS: u32 = 256;
     let stride = width * bytes_per_pixel;
-    pixels.resize(stride as usize * height as usize, 0);
+    // Reserved in place, because an animation reuses this buffer across frames.
+    let needed = stride as usize * height as usize;
+    if pixels
+        .try_reserve_exact(needed.saturating_sub(pixels.len()))
+        .is_err()
+    {
+        return Err(E_OUTOFMEMORY.into());
+    }
+    pixels.resize(needed, 0);
     let mut row = 0;
     while row < height {
         if cancellation.load(Ordering::Relaxed) {

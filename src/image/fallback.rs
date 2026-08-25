@@ -580,11 +580,14 @@ fn decode_heif_primary_image(
     let icc_profile = {
         let profile_bytes = unsafe { heif_image_handle_get_raw_color_profile_size(handle) };
         if profile_bytes > 0 {
-            let mut buffer = vec![0u8; profile_bytes];
-            unsafe { heif_image_handle_get_raw_color_profile(handle, buffer.as_mut_ptr().cast()) }
+            try_zeroed_buffer(profile_bytes).and_then(|mut buffer| {
+                unsafe {
+                    heif_image_handle_get_raw_color_profile(handle, buffer.as_mut_ptr().cast())
+                }
                 .into_result()
                 .ok()
                 .map(|()| Arc::from(buffer))
+            })
         } else {
             None
         }
