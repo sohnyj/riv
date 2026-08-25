@@ -182,18 +182,18 @@ The `windows*` crates are Copyright (c) Microsoft Corporation.
 | bitflags | 2.13.1 | MIT OR Apache-2.0 |
 | bytemuck | 1.25.2 | Zlib OR Apache-2.0 OR MIT |
 | cfg-if | 1.0.4 | MIT OR Apache-2.0 |
-| crc32fast | 1.5.0 | MIT OR Apache-2.0 |
+| crc32fast | 1.5.1 | MIT OR Apache-2.0 |
 | data-url | 0.3.2 | MIT OR Apache-2.0 |
 | fdeflate | 0.3.7 | MIT OR Apache-2.0 |
 | flate2 | 1.1.9 | MIT OR Apache-2.0 |
 | float-cmp | 0.9.0 | MIT |
-| font-types | 0.12.2 | MIT OR Apache-2.0 |
+| font-types | 0.12.4 | MIT OR Apache-2.0 |
 | fontdb | 0.24.0 | MIT |
 | harfrust | 0.12.0 | MIT |
 | imagesize | 0.15.0 | MIT |
 | itoa | 1.0.18 | MIT OR Apache-2.0 |
 | kurbo | 0.13.1 | Apache-2.0 OR MIT |
-| log | 0.4.33 | MIT OR Apache-2.0 |
+| log | 0.4.34 | MIT OR Apache-2.0 |
 | memchr | 2.8.3 | Unlicense OR MIT |
 | memmap2 | 0.9.11 | MIT OR Apache-2.0 |
 | miniz_oxide | 0.8.9 | MIT OR Zlib OR Apache-2.0 |
