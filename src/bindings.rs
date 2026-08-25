@@ -157,7 +157,7 @@ const DEFAULT_KEYBOARD: &[(&str, &[&str])] = &[
     ("decreasespeed", &["["]),
     ("increasespeed", &["]"]),
     ("resetspeed", &["\\"]),
-    ("showfileinfo", &["I", "Tab"]),
+    ("information", &["I", "Tab"]),
     ("reload", &["Ctrl+R", "F5"]),
     ("togglefitmode", &["V"]),
     ("preservezoom", &["Z"]),

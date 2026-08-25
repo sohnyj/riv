@@ -165,11 +165,11 @@ struct Application {
     gesture_zoom_distance: Option<f32>,
     gesture_pan_point: Option<(i32, i32)>,
     overlay: Overlay,
-    show_file_info: bool,
+    show_information: bool,
     status_text: Option<StatusText>,
-    /// Memoized info panel text, rebuilt only when a display input changes.
-    info_text_cache: Option<InfoTextCache>,
-    /// Advanced-color state and EDID gamut for the info overlay; refreshed on display change.
+    /// Memoized information panel text, rebuilt only when a display input changes.
+    information_text_cache: Option<InformationTextCache>,
+    /// Advanced-color state and EDID gamut for the information overlay; refreshed on display change.
     display_labels: DisplayLabels,
     /// The last title set, so unchanged rebuilds skip the caption write.
     window_title: String,
@@ -281,8 +281,8 @@ impl WindowRestore {
     }
 }
 
-/// Memoized info panel text and the display inputs it was built from.
-struct InfoTextCache {
+/// Memoized information panel text and the display inputs it was built from.
+struct InformationTextCache {
     location: ItemLocation,
     image_id: usize,
     output_label: String,
@@ -395,9 +395,9 @@ impl Application {
             gesture_zoom_distance: None,
             gesture_pan_point: None,
             overlay: Overlay::new()?,
-            show_file_info: false,
+            show_information: false,
             status_text: None,
-            info_text_cache: None,
+            information_text_cache: None,
             display_labels: DisplayLabels::new(&capabilities, gamut),
             window_title: APPLICATION_NAME.to_string(),
             current_monitor: unsafe { MonitorFromWindow(window, MONITOR_DEFAULTTONEAREST) },
@@ -1093,11 +1093,12 @@ impl Application {
             });
         let centered_message = error_text.is_some() || download_text.is_some();
         // One overlay at a time: the panel yields to the pill and to a centered message.
-        let info_text = if self.show_file_info && self.status_text.is_none() && !centered_message {
-            self.cached_info_text(frame)
-        } else {
-            None
-        };
+        let information_text =
+            if self.show_information && self.status_text.is_none() && !centered_message {
+                self.cached_information_text(frame)
+            } else {
+                None
+            };
         let brightness = 0.299 * background.r + 0.587 * background.g + 0.114 * background.b;
         // The wordmark marks a truly empty window, never a load still running.
         let show_wordmark =
@@ -1105,7 +1106,7 @@ impl Application {
         OverlayContent {
             error_text,
             download_text,
-            info_text,
+            information_text,
             status_text: self
                 .status_text
                 .as_ref()
@@ -1116,7 +1117,7 @@ impl Application {
         }
     }
 
-    fn cached_info_text(&mut self, frame: Option<FrameDecision>) -> Option<Rc<str>> {
+    fn cached_information_text(&mut self, frame: Option<FrameDecision>) -> Option<Rc<str>> {
         let output_label = self
             .renderer
             .as_ref()
@@ -1132,7 +1133,7 @@ impl Application {
         let metadata = self.image_core.current_item_metadata()?;
         let current = self.image_core.current.as_ref()?;
         let image_id = Arc::as_ptr(&current.image) as usize;
-        let reuse = self.info_text_cache.as_ref().is_some_and(|cache| {
+        let reuse = self.information_text_cache.as_ref().is_some_and(|cache| {
             cache.location == current.location
                 && cache.image_id == image_id
                 && cache.output_label == output_label
@@ -1144,7 +1145,7 @@ impl Application {
         });
         if !reuse {
             let display_description = self.display_labels.display_description();
-            let text = overlay::build_info_text(
+            let text = overlay::build_information_text(
                 &current.location.display_name(),
                 &current.location.display_text(),
                 &current.image,
@@ -1158,7 +1159,7 @@ impl Application {
                 &display_description,
             );
             let location = current.location.clone();
-            self.info_text_cache = Some(InfoTextCache {
+            self.information_text_cache = Some(InformationTextCache {
                 location,
                 image_id,
                 output_label: output_label.to_owned(),
@@ -1170,7 +1171,7 @@ impl Application {
                 text: Rc::from(text),
             });
         }
-        self.info_text_cache
+        self.information_text_cache
             .as_ref()
             .map(|cache| Rc::clone(&cache.text))
     }
@@ -1599,12 +1600,12 @@ fn dispatch_action(application: &mut Application, window: HWND, action: Action) 
             application.show_status_text(window, format!("Preserve zoom: {state}"));
             application.request_render(window);
         }
-        Action::ShowFileInfo => {
+        Action::Information => {
             // Any pill masks the panel; one press reveals it rather than toggling off unseen.
             if application.status_text.take().is_some() {
-                application.show_file_info = true;
+                application.show_information = true;
             } else {
-                application.show_file_info = !application.show_file_info;
+                application.show_information = !application.show_information;
             }
             application.request_render(window);
         }
@@ -1923,7 +1924,7 @@ fn show_menu(application: &mut Application, window: HWND, x: i32, y: i32, target
         requirements: SatisfiedRequirements::evaluate(|requirement| {
             application.requirement_satisfied(requirement)
         }),
-        file_info_shown: application.show_file_info,
+        information_shown: application.show_information,
         loop_enabled: application.settings.options.loop_within_folder,
         playlist_names: playlist_locations
             .iter()

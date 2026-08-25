@@ -32,7 +32,7 @@ pub enum MenuSelection {
 
 pub struct MenuState {
     pub requirements: SatisfiedRequirements,
-    pub file_info_shown: bool,
+    pub information_shown: bool,
     pub loop_enabled: bool,
     pub playlist_names: Vec<String>,
     /// Absolute index of the first shown name; doubles as the count hidden before it.
@@ -132,7 +132,7 @@ impl<'a> MenuBuilder<'a> {
             flags |= MF_GRAYED | MF_DISABLED;
         }
         let checked = match action {
-            Action::ShowFileInfo => self.state.file_info_shown,
+            Action::Information => self.state.information_shown,
             Action::Loop => self.state.loop_enabled,
             Action::PreserveZoom => self.state.preserve_zoom,
             Action::AlwaysOnTop => self.state.always_on_top,
@@ -284,7 +284,7 @@ impl<'a> MenuBuilder<'a> {
         )?;
         self.append_separator(menu)?;
 
-        self.append_action(menu, Action::ShowFileInfo)?;
+        self.append_action(menu, Action::Information)?;
         self.append_action(menu, Action::Reload)?;
         self.append_separator(menu)?;
 
@@ -443,7 +443,7 @@ mod menu_structure_tests {
                     ActionRequirement::NavigationTargets | ActionRequirement::RecentFiles
                 )
             }),
-            file_info_shown: false,
+            information_shown: false,
             loop_enabled: true,
             playlist_names: Vec::new(),
             playlist_first_index: 0,
@@ -691,7 +691,7 @@ mod menu_structure_tests {
             "Loop",
             "Playback",
             "", // separator
-            "Show file info",
+            "Information",
             "Reload",
             "", // separator
             "View",

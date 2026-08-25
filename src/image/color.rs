@@ -111,7 +111,7 @@ pub fn perceptual_quantizer_nits(code: f32) -> f32 {
 #[derive(Clone, Copy)]
 pub struct DisplayCapabilities {
     pub hdr: bool,
-    /// Wire depth of the display path, shown in the info panel; never picks formats.
+    /// Wire depth of the display path, shown in the information panel; never picks formats.
     pub bits_per_color: u32,
     pub maximum_luminance_nits: Option<f32>,
     pub maximum_full_frame_luminance_nits: Option<f32>,
@@ -328,7 +328,7 @@ fn capabilities_from(information: Option<&AdvancedColorInfo>, window: HWND) -> D
     }
 }
 
-/// Advanced-color mode, EDID gamut label, and wire depth of the display, for the info overlay.
+/// Advanced-color mode, EDID gamut label, and wire depth of the display, for the information overlay.
 #[derive(Clone, Copy, PartialEq)]
 pub struct DisplayLabels {
     pub color_mode: &'static str,

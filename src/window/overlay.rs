@@ -1,4 +1,4 @@
-//! DirectWrite overlays: info panel, status pill, centered error text.
+//! DirectWrite overlays: information panel, status pill, centered error text.
 
 use std::rc::Rc;
 use std::time::{SystemTime, UNIX_EPOCH};
@@ -32,13 +32,13 @@ const LINE_SPACING_RATIO: f32 = 1.3;
 const PANEL_FONT_LOGICAL_PIXEL_SIZE: f32 = 14.0;
 const CENTERED_FONT_LOGICAL_PIXEL_SIZE: f32 = 16.0;
 
-/// Field labels the info panel and the delete-confirmation summary spell alike.
+/// Field labels the information panel and the delete-confirmation summary spell alike.
 const FORMAT_LABEL: &str = "Format: ";
 const SIZE_LABEL: &str = "Size: ";
 const DATE_TAKEN_LABEL: &str = "Date taken: ";
 const DATE_MODIFIED_LABEL: &str = "Date modified: ";
 
-/// Separates the info panel's sections; sized to the longest field label ("Advanced color:").
+/// Separates the information panel's sections; sized to the longest field label ("Advanced color:").
 const SECTION_DIVIDER: &str = "───────────────";
 
 const PANEL_MARGIN_LOGICAL_PIXELS: f32 = 12.0;
@@ -68,7 +68,7 @@ pub struct OverlayContent {
     pub error_text: Option<String>,
     /// Centered like an error while a remote image downloads (no image is up then).
     pub download_text: Option<String>,
-    pub info_text: Option<Rc<str>>,
+    pub information_text: Option<Rc<str>>,
     pub status_text: Option<String>,
     /// Centered "riv" wordmark for the empty-window state.
     pub show_wordmark: bool,
@@ -91,7 +91,7 @@ impl PanelPlacement {
     }
 }
 
-/// One cache slot per shaped text: the info panel, the status pill, a message, the wordmark.
+/// One cache slot per shaped text: the information panel, the status pill, a message, the wordmark.
 const SHAPED_TEXT_SLOTS: usize = 4;
 const CENTERED_MESSAGE_SLOT: usize = 2;
 const WORDMARK_SLOT: usize = 3;
@@ -229,10 +229,10 @@ impl Overlay {
         content: &OverlayContent,
     ) -> Result<()> {
         let output_color_target = content.output_color_target;
-        if let Some(info_text) = &content.info_text {
+        if let Some(information_text) = &content.information_text {
             self.draw_panel(
                 context,
-                info_text,
+                information_text,
                 PanelPlacement::TopLeft,
                 viewport_width,
                 output_color_target,
@@ -431,7 +431,7 @@ fn create_text_formats(
 }
 
 #[expect(clippy::too_many_arguments)]
-pub fn build_info_text(
+pub fn build_information_text(
     file_name: &str,
     location_text: &str,
     image: &DecodedImage,
@@ -936,7 +936,7 @@ mod datetime_tests {
 }
 
 #[cfg(test)]
-mod info_text_tests {
+mod information_text_tests {
     use std::sync::Arc;
 
     use super::*;
@@ -973,7 +973,7 @@ mod info_text_tests {
     #[test]
     fn bit_depth_always_appears() {
         let image = image("PNG", PixelStorage::Bgra8, 8);
-        let text = build_info_text(
+        let text = build_information_text(
             "a.png",
             "C:\\a.png",
             &image,
@@ -995,7 +995,7 @@ mod info_text_tests {
     #[test]
     fn color_profile_line_reports_the_tag_state() {
         let mut image = image("PNG", PixelStorage::Bgra8, 8);
-        let untagged = build_info_text(
+        let untagged = build_information_text(
             "a.png",
             "C:\\a.png",
             &image,
@@ -1013,7 +1013,7 @@ mod info_text_tests {
         );
         assert!(untagged.contains("Color profile: None"));
         image.icc_profile = Some(Arc::from(&[0u8; 4][..]));
-        let unparsable = build_info_text(
+        let unparsable = build_information_text(
             "a.png",
             "C:\\a.png",
             &image,
@@ -1044,7 +1044,7 @@ mod info_text_tests {
             display_full_frame_nits: Some(400.0),
             output_target_nits: 500.0,
         };
-        let text = build_info_text(
+        let text = build_information_text(
             "a.exr",
             "C:\\a.exr",
             &image,
@@ -1079,7 +1079,7 @@ mod info_text_tests {
             display_full_frame_nits: Some(400.0),
             output_target_nits: 600.0,
         };
-        let text = build_info_text(
+        let text = build_information_text(
             "a.exr",
             "C:\\a.exr",
             &image,
@@ -1111,7 +1111,7 @@ mod info_text_tests {
             display_full_frame_nits: None,
             output_target_nits: 203.0,
         };
-        let text = build_info_text(
+        let text = build_information_text(
             "a.exr",
             "C:\\a.exr",
             &image,

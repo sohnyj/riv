@@ -23,7 +23,7 @@ impl DitherMode {
             .unwrap_or(Self::None)
     }
 
-    /// Name for the info panel.
+    /// Name for the information panel.
     pub fn description(self) -> &'static str {
         match self {
             Self::None => "None",

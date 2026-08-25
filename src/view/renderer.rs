@@ -124,7 +124,7 @@ impl OutputMode {
     }
 }
 
-/// The scaling-filter setting: the D2D interpolation and its info-panel label.
+/// The scaling-filter setting: the D2D interpolation and its information-panel label.
 #[derive(Clone, Copy)]
 pub enum ScalingFilter {
     Nearest,
@@ -168,7 +168,7 @@ impl ScalingFilter {
     }
 }
 
-/// Tone-map luminances for the info overlay (nits).
+/// Tone-map luminances for the information overlay (nits).
 #[derive(Clone, Copy, PartialEq)]
 pub struct ToneMapLuminances {
     pub hdr_display: bool,
@@ -239,7 +239,7 @@ pub struct Renderer {
     destination_gamut_label: Option<&'static str>,
     /// Nearest gamut label of a tagged source; None when untagged (output names the gamut only).
     source_gamut_label: Option<&'static str>,
-    /// Cached backbuffer label for the info overlay, refreshed on format/mode/gamut change.
+    /// Cached backbuffer label for the information overlay, refreshed on format/mode/gamut change.
     output_label: String,
     source_icc_profile: Option<Arc<[u8]>>,
     source_color_context: Option<ID2D1ColorContext>,
@@ -833,7 +833,7 @@ impl Renderer {
         &self.output_mode
     }
 
-    /// Tone-map luminances for the info overlay: display caps and the output target.
+    /// Tone-map luminances for the information overlay: display caps and the output target.
     pub fn tone_map_luminances(&self) -> ToneMapLuminances {
         ToneMapLuminances {
             hdr_display: self.is_hdr_output(),
@@ -853,7 +853,7 @@ impl Renderer {
         self.backbuffer_format == SCRGB_BACKBUFFER_FORMAT
     }
 
-    /// Active backbuffer, for the info overlay. ACM-off SDR names the gamut it maps into.
+    /// Active backbuffer, for the information overlay. ACM-off SDR names the gamut it maps into.
     pub fn output_label(&self) -> &str {
         &self.output_label
     }
@@ -1589,7 +1589,7 @@ impl Renderer {
         }
     }
 
-    /// Decides the frame's placement and quantization; the info panel reads it.
+    /// Decides the frame's placement and quantization; the information panel reads it.
     pub fn decide_frame(
         &mut self,
         matrix: [f32; 6],
