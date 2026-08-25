@@ -1314,7 +1314,7 @@ impl Application {
                 .as_ref()
                 .is_some_and(|current| current.image.frames.len() > 1),
             ActionRequirement::NavigationTargets => self.image_core.has_navigation_targets(),
-            ActionRequirement::RecentFiles => !self.settings.recent_files().is_empty(),
+            ActionRequirement::RecentFiles => self.settings.has_recent_files(),
         }
     }
 

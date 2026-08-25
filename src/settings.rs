@@ -453,6 +453,15 @@ impl SettingsFile {
         files
     }
 
+    /// Whether the list holds anything, for callers that would drop the list they built.
+    pub fn has_recent_files(&self) -> bool {
+        self.document
+            .get(SECTION_RECENTS)
+            .and_then(|recents| recents.get(KEY_RECENT_FILES))
+            .and_then(Value::as_array)
+            .is_some_and(|list| !list.is_empty())
+    }
+
     /// Fold other instances' recents back in (union, this session first) before writing.
     pub fn save_merging_recents(&mut self) -> std::io::Result<()> {
         if self.options.remember_recents {
@@ -527,7 +536,7 @@ impl SettingsFile {
     }
 
     pub fn clear_recent_files(&mut self) {
-        if !self.recent_files().is_empty() {
+        if self.has_recent_files() {
             self.set_recent_files(&[]);
         }
     }
