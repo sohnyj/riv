@@ -411,9 +411,9 @@ pub struct ImageCore {
     upload_device_generation: Option<u64>,
     cache: HashMap<ItemLocation, CacheEntry>,
     pub current: Option<CurrentImage>,
-    /// Preload polarity: the deeper reach aims along the navigation direction.
+    /// The deeper preload reach aims along this direction.
     navigating_backward: bool,
-    /// Consecutive steps against the polarity; the second one flips it.
+    /// Consecutive steps against that direction; the second one flips it.
     opposite_steps: u32,
     releaser: ImageReleaser,
     /// Listing scan submitted (folder or archive), awaiting its ScannedListing.
@@ -552,7 +552,7 @@ impl ImageCore {
         }
     }
 
-    /// Aims the preload polarity at a declared direction (slideshow start).
+    /// Aims the preload at a declared direction (slideshow start).
     pub fn set_navigation_direction(&mut self, backward: bool) {
         self.navigating_backward = backward;
         self.opposite_steps = 0;
@@ -565,7 +565,7 @@ impl ImageCore {
         self.opposite_steps = 0;
     }
 
-    /// Jumps declare their direction; steps flip the polarity on the second one in a row.
+    /// Jumps declare their direction; steps flip it on the second one in a row.
     fn record_navigation(&mut self, command: NavigationCommand) {
         match command {
             NavigationCommand::First => {
@@ -1085,7 +1085,7 @@ impl ImageCore {
         {
             return None;
         }
-        self.opposite_steps = 0; // a jump keeps the polarity but breaks the run
+        self.opposite_steps = 0; // a jump keeps the direction but breaks the run
         Some(self.load_item(target))
     }
 
@@ -3005,7 +3005,7 @@ mod listing_scan_tests {
     }
 }
 
-/// Preload polarity follows the navigation direction with a one-step grace.
+/// The preload reach follows the navigation direction with a one-step grace.
 #[cfg(test)]
 mod navigation_direction_tests {
     use super::*;
