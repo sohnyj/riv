@@ -1,4 +1,4 @@
-//! IFileOpenDialog wrapper; filters derive from the decoder registry plus archive extensions.
+//! IFileOpenDialog access; filters derive from the decoder registry plus archive extensions.
 
 use std::path::PathBuf;
 
