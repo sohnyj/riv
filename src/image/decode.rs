@@ -2190,7 +2190,7 @@ fn icc_profile_bytes(
         if profile_byte_count == 0 {
             continue;
         }
-        let mut buffer = vec![0u8; profile_byte_count as usize];
+        let mut buffer = try_zeroed_buffer(profile_byte_count as usize)?;
         let mut written = 0u32;
         unsafe { context.GetProfileBytes(&mut buffer, &raw mut written) }.ok()?;
         buffer.truncate(written as usize);
