@@ -715,7 +715,7 @@ fn apply_page_command(
             options.fit_mode = combo_selection(page, control);
         }
         (IDC_WINDOW_SAVE_POSITION, BN_CLICKED) => {
-            options.remember_window_size_and_position = is_checked(page, control);
+            options.remember_window_placement = is_checked(page, control);
         }
         (IDC_WINDOW_CONTROL_DRAG, BN_CLICKED) => {
             options.control_drag_window = is_checked(page, control);
@@ -918,7 +918,7 @@ fn sync_window_page(state: &OptionsState) {
     set_check(
         window_page,
         IDC_WINDOW_SAVE_POSITION,
-        options.remember_window_size_and_position,
+        options.remember_window_placement,
     );
     set_check(
         window_page,

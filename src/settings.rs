@@ -26,7 +26,7 @@ const KEY_BACKGROUND_COLOR_ENABLED: &str = "backgroundcolorenabled";
 const KEY_BACKGROUND_COLOR: &str = "backgroundcolor";
 const KEY_TITLE_BAR_TEXT: &str = "titlebartext";
 const KEY_CONTROL_DRAG_WINDOW: &str = "ctrldragwindow";
-const KEY_REMEMBER_WINDOW_SIZE_AND_POSITION: &str = "rememberwindowsizeandposition";
+const KEY_REMEMBER_WINDOW_PLACEMENT: &str = "rememberwindowplacement";
 const KEY_HIDE_CURSOR_FULLSCREEN: &str = "hidecursorfullscreen";
 const KEY_SCALING_FILTER: &str = "scaling";
 const KEY_FIT_MODE: &str = "fitmode";
@@ -51,16 +51,16 @@ const SECTION_OPTIONS: &str = "options";
 const SECTION_RECENTS: &str = "recents";
 const SECTION_KEYBOARD_BINDINGS: &str = "keyboardbindings";
 const SECTION_MOUSE_BINDINGS: &str = "mousebindings";
-const SECTION_WINDOW_GEOMETRY: &str = "windowgeometry";
+const SECTION_WINDOW_PLACEMENT: &str = "windowplacement";
 const KEY_RECENT_FILES: &str = "recentfiles";
 const KEY_RECENT_FILE_NAME: &str = "name";
 const KEY_RECENT_FILE_PATH: &str = "path";
 const KEY_LAST_FILE_DIALOG_DIRECTORY: &str = "lastfiledialogdirectory";
-const KEY_GEOMETRY_X: &str = "x";
-const KEY_GEOMETRY_Y: &str = "y";
-const KEY_GEOMETRY_WIDTH: &str = "width";
-const KEY_GEOMETRY_HEIGHT: &str = "height";
-const KEY_GEOMETRY_MAXIMIZED: &str = "maximized";
+const KEY_PLACEMENT_X: &str = "x";
+const KEY_PLACEMENT_Y: &str = "y";
+const KEY_PLACEMENT_WIDTH: &str = "width";
+const KEY_PLACEMENT_HEIGHT: &str = "height";
+const KEY_PLACEMENT_MAXIMIZED: &str = "maximized";
 
 /// Combo rows in stored order; the index is read back by `Application::window_title`.
 pub const TITLE_BAR_TEXT_CHOICES: [&str; 4] = [
@@ -82,7 +82,7 @@ pub struct Options {
     pub background_color: (u8, u8, u8),
     pub title_bar_text: u32,
     pub control_drag_window: bool,
-    pub remember_window_size_and_position: bool,
+    pub remember_window_placement: bool,
     pub hide_cursor_fullscreen: bool,
     pub scaling_filter: u32,
     pub fit_mode: u32,
@@ -110,7 +110,7 @@ impl Default for Options {
             background_color: DEFAULT_BACKGROUND_COLOR,
             title_bar_text: 1,
             control_drag_window: true,
-            remember_window_size_and_position: true,
+            remember_window_placement: true,
             hide_cursor_fullscreen: true,
             scaling_filter: 1,
             fit_mode: 0,
@@ -183,9 +183,9 @@ impl Options {
                 default.title_bar_text,
             ),
             control_drag_window: boolean(KEY_CONTROL_DRAG_WINDOW, default.control_drag_window),
-            remember_window_size_and_position: boolean(
-                KEY_REMEMBER_WINDOW_SIZE_AND_POSITION,
-                default.remember_window_size_and_position,
+            remember_window_placement: boolean(
+                KEY_REMEMBER_WINDOW_PLACEMENT,
+                default.remember_window_placement,
             ),
             hide_cursor_fullscreen: boolean(
                 KEY_HIDE_CURSOR_FULLSCREEN,
@@ -391,28 +391,28 @@ impl SettingsFile {
         }
     }
 
-    pub fn window_geometry(&self) -> Option<(i32, i32, i32, i32, bool)> {
-        let geometry = self.document.get(SECTION_WINDOW_GEOMETRY)?;
+    pub fn window_placement(&self) -> Option<(i32, i32, i32, i32, bool)> {
+        let placement = self.document.get(SECTION_WINDOW_PLACEMENT)?;
         // A stored value past i32 drops the restore instead of wrapping into it.
         let read = |key: &str| {
-            geometry
+            placement
                 .get(key)?
                 .as_i64()
                 .and_then(|value| i32::try_from(value).ok())
         };
         Some((
-            read(KEY_GEOMETRY_X)?,
-            read(KEY_GEOMETRY_Y)?,
-            read(KEY_GEOMETRY_WIDTH).filter(|width| *width > 0)?,
-            read(KEY_GEOMETRY_HEIGHT).filter(|height| *height > 0)?,
-            geometry
-                .get(KEY_GEOMETRY_MAXIMIZED)
+            read(KEY_PLACEMENT_X)?,
+            read(KEY_PLACEMENT_Y)?,
+            read(KEY_PLACEMENT_WIDTH).filter(|width| *width > 0)?,
+            read(KEY_PLACEMENT_HEIGHT).filter(|height| *height > 0)?,
+            placement
+                .get(KEY_PLACEMENT_MAXIMIZED)
                 .and_then(Value::as_bool)
                 .unwrap_or(false),
         ))
     }
 
-    pub fn set_window_geometry(
+    pub fn set_window_placement(
         &mut self,
         x: i32,
         y: i32,
@@ -421,13 +421,13 @@ impl SettingsFile {
         maximized: bool,
     ) {
         document_object(&mut self.document).insert(
-            SECTION_WINDOW_GEOMETRY.to_string(),
+            SECTION_WINDOW_PLACEMENT.to_string(),
             serde_json::json!({
-                KEY_GEOMETRY_X: x,
-                KEY_GEOMETRY_Y: y,
-                KEY_GEOMETRY_WIDTH: width,
-                KEY_GEOMETRY_HEIGHT: height,
-                KEY_GEOMETRY_MAXIMIZED: maximized,
+                KEY_PLACEMENT_X: x,
+                KEY_PLACEMENT_Y: y,
+                KEY_PLACEMENT_WIDTH: width,
+                KEY_PLACEMENT_HEIGHT: height,
+                KEY_PLACEMENT_MAXIMIZED: maximized,
             }),
         );
     }
@@ -574,9 +574,9 @@ fn write_options(document: &mut Value, options: &Options) {
             Value::Bool(default.control_drag_window),
         ),
         (
-            KEY_REMEMBER_WINDOW_SIZE_AND_POSITION,
-            Value::Bool(options.remember_window_size_and_position),
-            Value::Bool(default.remember_window_size_and_position),
+            KEY_REMEMBER_WINDOW_PLACEMENT,
+            Value::Bool(options.remember_window_placement),
+            Value::Bool(default.remember_window_placement),
         ),
         (
             KEY_HIDE_CURSOR_FULLSCREEN,
@@ -818,7 +818,7 @@ mod option_bounds_tests {
 }
 
 #[cfg(test)]
-mod geometry_bounds_tests {
+mod window_placement_bounds_tests {
     use super::*;
 
     fn settings_with(document: serde_json::Value) -> SettingsFile {
@@ -831,18 +831,18 @@ mod geometry_bounds_tests {
     }
 
     #[test]
-    fn geometry_past_i32_drops_the_restore_instead_of_wrapping() {
-        let stored = settings_with(serde_json::json!({ "windowgeometry": {
+    fn a_placement_past_i32_drops_the_restore_instead_of_wrapping() {
+        let stored = settings_with(serde_json::json!({ "windowplacement": {
             "x": 100, "y": -200, "width": 640, "height": 480, "maximized": true } }));
-        assert_eq!(stored.window_geometry(), Some((100, -200, 640, 480, true)));
+        assert_eq!(stored.window_placement(), Some((100, -200, 640, 480, true)));
         // 2^32 used to fold to x = 0 and restore a place never saved.
-        let wrapped = settings_with(serde_json::json!({ "windowgeometry": {
+        let wrapped = settings_with(serde_json::json!({ "windowplacement": {
             "x": 4_294_967_296i64, "y": 0, "width": 640, "height": 480 } }));
-        assert_eq!(wrapped.window_geometry(), None);
+        assert_eq!(wrapped.window_placement(), None);
         // 2^32 + 1 used to fold to width 1 and pass the positive filter.
-        let folded = settings_with(serde_json::json!({ "windowgeometry": {
+        let folded = settings_with(serde_json::json!({ "windowplacement": {
             "x": 0, "y": 0, "width": 4_294_967_297i64, "height": 480 } }));
-        assert_eq!(folded.window_geometry(), None);
+        assert_eq!(folded.window_placement(), None);
     }
 }
 

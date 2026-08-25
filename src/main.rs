@@ -149,7 +149,7 @@ struct Application {
     always_on_top: bool,
     fullscreen_restore: Option<WindowRestore>,
     /// The window's last visible placement, for a close that comes while it is minimized.
-    remembered_geometry: Option<WindowRestore>,
+    remembered_window_placement: Option<WindowRestore>,
     sdr_white_boost: f32,
     /// Display peak over SDR white for the gain map weight; None keeps the base rendition.
     display_headroom: Option<f32>,
@@ -381,7 +381,7 @@ impl Application {
             preserve_zoom: false,
             always_on_top: false,
             fullscreen_restore: None,
-            remembered_geometry: None,
+            remembered_window_placement: None,
             sdr_white_boost: 1.0,
             display_headroom: None,
             pan_drag_position: None,
@@ -606,11 +606,11 @@ impl Application {
         };
     }
 
-    fn restore_window_geometry(&mut self, window: HWND) {
-        if !self.settings.options.remember_window_size_and_position {
+    fn restore_window_placement(&mut self, window: HWND) {
+        if !self.settings.options.remember_window_placement {
             return;
         }
-        let Some((x, y, width, height, maximized)) = self.settings.window_geometry() else {
+        let Some((x, y, width, height, maximized)) = self.settings.window_placement() else {
             return;
         };
         self.show_maximized = maximized;
@@ -645,27 +645,27 @@ impl Application {
         };
     }
 
-    /// Keeps the visible geometry, which an iconic window can no longer report.
-    fn remember_geometry(&mut self, window: HWND) {
+    /// Keeps the visible placement, which an iconic window can no longer report.
+    fn remember_window_placement(&mut self, window: HWND) {
         if self.fullscreen_restore.is_some() {
-            return; // fullscreen already holds the geometry to come back to
+            return; // fullscreen already holds the placement to come back to
         }
         let restore = WindowRestore::capture(window);
         if !restore.minimized() {
-            self.remembered_geometry = Some(restore);
+            self.remembered_window_placement = Some(restore);
         }
     }
 
     fn save_on_exit(&mut self, window: HWND) {
-        if self.settings.options.remember_window_size_and_position {
+        if self.settings.options.remember_window_placement {
             let restore = self
                 .fullscreen_restore
-                .or(self.remembered_geometry)
+                .or(self.remembered_window_placement)
                 .unwrap_or_else(|| WindowRestore::capture(window));
             // Nothing is written before the window has been visible somewhere.
             if !restore.minimized() {
                 let bounds = restore.saved_bounds();
-                self.settings.set_window_geometry(
+                self.settings.set_window_placement(
                     bounds.left,
                     bounds.top,
                     bounds.right - bounds.left,
@@ -2351,7 +2351,7 @@ fn create_main_window(initial_path: Option<&Path>, pending_device: PendingDevice
         };
     }
     if let Some(application) = application_from_window(window) {
-        application.restore_window_geometry(window);
+        application.restore_window_placement(window);
         application.refresh_title_bar_theme(window);
         application.drop_target = drag_drop::register(window).ok();
         application.update_window_title(window);
@@ -2510,7 +2510,7 @@ extern "system" fn window_procedure(
                     application.render(window);
                     let _ = unsafe { ValidateRect(Some(window), None) };
                 }
-                application.remember_geometry(window);
+                application.remember_window_placement(window);
             }
             LRESULT(0)
         }
@@ -2869,7 +2869,7 @@ extern "system" fn window_procedure(
         }
         WM_MOVE => {
             if let Some(application) = application_from_window(window) {
-                application.remember_geometry(window);
+                application.remember_window_placement(window);
                 // Display-bound state re-evaluates only on a monitor change, not on every drag move.
                 if application.update_current_monitor(window) {
                     // The output may be rebuilt, so this drag has to draw again after all.
