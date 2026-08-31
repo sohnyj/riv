@@ -5,7 +5,7 @@ inputs:
   llvm-version:
     description: LLVM version every caller builds with.
     required: false
-    default: "22"
+    default: "23"
   xwin-version:
     description: xwin version every caller builds against.
     required: false
