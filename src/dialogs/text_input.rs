@@ -4,8 +4,8 @@ use windows::Win32::Foundation::{HWND, LPARAM, WPARAM};
 use windows::Win32::UI::Controls::EM_SETSEL;
 use windows::Win32::UI::Input::KeyboardAndMouse::SetFocus;
 use windows::Win32::UI::WindowsAndMessaging::{
-    EndDialog, GetDlgItem, GetWindowTextLengthW, GetWindowTextW, SendMessageW, SetDlgItemTextW,
-    SetWindowLongPtrW, WM_COMMAND, WM_INITDIALOG,
+    EndDialog, GetDlgItem, SendDlgItemMessageW, SendMessageW, SetDlgItemTextW, SetWindowLongPtrW,
+    WM_COMMAND, WM_GETTEXT, WM_GETTEXTLENGTH, WM_INITDIALOG,
 };
 use windows::core::HSTRING;
 
@@ -76,14 +76,30 @@ unsafe extern "system" fn dialog_procedure(
             match command {
                 IDOK => {
                     if let Some(state) = crate::dialogs::modal::state_mut::<TextInputState>(dialog)
-                        && let Ok(edit) = unsafe { GetDlgItem(Some(dialog), IDC_TEXT_INPUT) }
                     {
                         // Sized per read, so a long URL survives whole instead of truncating.
-                        let length = unsafe { GetWindowTextLengthW(edit) };
-                        let mut buffer = vec![0u16; length as usize + 1];
-                        let written = unsafe { GetWindowTextW(edit, &mut buffer) };
-                        state.accepted_text =
-                            Some(String::from_utf16_lossy(&buffer[..written as usize]));
+                        let length = unsafe {
+                            SendDlgItemMessageW(
+                                dialog,
+                                IDC_TEXT_INPUT,
+                                WM_GETTEXTLENGTH,
+                                WPARAM(0),
+                                LPARAM(0),
+                            )
+                        }
+                        .0 as usize;
+                        let mut buffer = vec![0u16; length + 1];
+                        let written = unsafe {
+                            SendDlgItemMessageW(
+                                dialog,
+                                IDC_TEXT_INPUT,
+                                WM_GETTEXT,
+                                WPARAM(buffer.len()),
+                                LPARAM(buffer.as_mut_ptr() as isize),
+                            )
+                        }
+                        .0 as usize;
+                        state.accepted_text = Some(String::from_utf16_lossy(&buffer[..written]));
                     }
                     let _ = unsafe { EndDialog(dialog, IDOK as isize) };
                     1
