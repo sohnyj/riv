@@ -669,6 +669,7 @@ impl Application {
                 );
             }
         }
+        // The window is closing, so the failure has nowhere to show; the settings dialog reports it.
         let _ = self.settings.save_merging_recents();
     }
 
