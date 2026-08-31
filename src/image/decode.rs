@@ -795,6 +795,7 @@ fn webp_has_animation_flag(header: &[u8]) -> bool {
 
 fn png_has_animation_control(header: &[u8]) -> bool {
     let mut offset = 8; // past the PNG signature
+    // A forged length pushes the offset at most one chunk past the header; usize holds it on x64.
     while let Some(chunk_header) = header.get(offset..offset + 8) {
         let length = u32::from_be_bytes(chunk_header[..4].try_into().unwrap()) as usize;
         let chunk_type = &chunk_header[4..8];
