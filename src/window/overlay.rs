@@ -264,7 +264,7 @@ impl Overlay {
             // The wordmark is a mark, not a message; it stays unboxed.
             self.draw_centered_text(
                 context,
-                "riv",
+                crate::APPLICATION_NAME,
                 viewport_width,
                 viewport_height,
                 content,
