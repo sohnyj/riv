@@ -1405,7 +1405,7 @@ fn tree_set_state_image(tree: HWND, item: HTREEITEM, state_image: isize) {
     let update = TVITEMEXW {
         mask: TVIF_STATE,
         hItem: item,
-        state: (state_image as u32) << 12,
+        state: (state_image as u32) << STATE_IMAGE_SHIFT,
         stateMask: TVIS_STATEIMAGEMASK.0,
         ..Default::default()
     };
