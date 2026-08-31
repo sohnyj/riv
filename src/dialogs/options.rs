@@ -501,7 +501,7 @@ fn show_page(dialog: HWND, selected: isize) {
 }
 
 /// The tab's inner area runs a little wider than the authored template size.
-fn fit_page_controls(page: HWND, stretch: i32, follow_right_edge: i32) {
+fn fit_page_controls(page: HWND, stretched_control: i32, right_following_control: i32) {
     // Both measurements must be taken here: the page carries its final font and DPI now.
     let mut template = RECT {
         left: 0,
@@ -536,8 +536,8 @@ fn fit_page_controls(page: HWND, stretch: i32, follow_right_edge: i32) {
             )
         };
     };
-    place(stretch, 0, widen, heighten);
-    place(follow_right_edge, widen, 0, 0);
+    place(stretched_control, 0, widen, heighten);
+    place(right_following_control, widen, 0, 0);
 }
 
 fn update_buttons(state: &OptionsState) {
