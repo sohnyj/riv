@@ -3203,3 +3203,217 @@ mod playlist_window_tests {
         assert_eq!(window.hidden_after, 75);
     }
 }
+
+#[cfg(test)]
+mod sort_mode_tests {
+    use super::*;
+
+    fn sorted_names(sort_mode: SortMode, sort_descending: bool) -> Vec<String> {
+        let entry = |name: &str,
+                     file_size: u64,
+                     modified_seconds: u64,
+                     created_seconds: u64,
+                     format_name: &'static str| ListingEntry {
+            location: ItemLocation::File(PathBuf::from(format!("C:\\p\\{name}"))),
+            wide_name: HSTRING::from(name),
+            file_size,
+            modified: UNIX_EPOCH + std::time::Duration::from_secs(modified_seconds),
+            created: UNIX_EPOCH + std::time::Duration::from_secs(created_seconds),
+            format_name,
+            weight: DecodedWeight::Unknown,
+        };
+        let mut entries = vec![
+            entry("b2.png", 30, 3, 97, "PNG"),
+            entry("b10.jpg", 20, 2, 98, "JPEG"),
+            entry("a1.png", 30, 1, 99, "PNG"),
+        ];
+        let options = CoreOptions {
+            sort_mode,
+            sort_descending,
+            preloading_mode: 1,
+            loop_within_folder: true,
+            skip_hidden: true,
+            detect_format_by_content: false,
+        };
+        sort_entries(&mut entries, &options);
+        entries
+            .iter()
+            .map(|entry| entry.wide_name.to_string())
+            .collect()
+    }
+
+    #[test]
+    fn each_mode_orders_and_ties_break_on_natural_names() {
+        assert_eq!(
+            sorted_names(SortMode::Name, false),
+            ["a1.png", "b2.png", "b10.jpg"]
+        );
+        assert_eq!(
+            sorted_names(SortMode::Modified, false),
+            ["b2.png", "b10.jpg", "a1.png"]
+        );
+        assert_eq!(
+            sorted_names(SortMode::Created, false),
+            ["a1.png", "b10.jpg", "b2.png"]
+        );
+        // The two 30-byte files tie and fall back to the natural name order.
+        assert_eq!(
+            sorted_names(SortMode::Size, false),
+            ["a1.png", "b2.png", "b10.jpg"]
+        );
+        assert_eq!(
+            sorted_names(SortMode::Type, false),
+            ["b10.jpg", "a1.png", "b2.png"]
+        );
+    }
+
+    #[test]
+    fn descending_reverses_the_whole_order() {
+        assert_eq!(
+            sorted_names(SortMode::Name, true),
+            ["b10.jpg", "b2.png", "a1.png"]
+        );
+        assert_eq!(
+            sorted_names(SortMode::Modified, true),
+            ["a1.png", "b10.jpg", "b2.png"]
+        );
+    }
+}
+
+#[cfg(test)]
+mod listing_inclusion_tests {
+    use super::*;
+    use windows::Win32::Storage::FileSystem::SetFileAttributesW;
+
+    fn listing_options() -> CoreOptions {
+        CoreOptions {
+            sort_mode: SortMode::Name,
+            sort_descending: false,
+            preloading_mode: 1,
+            loop_within_folder: true,
+            skip_hidden: true,
+            detect_format_by_content: false,
+        }
+    }
+
+    fn names(directory: &Path, options: &CoreOptions) -> Vec<String> {
+        scan_folder(directory, options)
+            .iter()
+            .map(|entry| entry.wide_name.to_string())
+            .collect()
+    }
+
+    #[test]
+    fn hidden_and_metadata_files_follow_their_options() {
+        let directory = fixture_directory("riv-inclusion-hidden", &["a.png", "._b.png"]);
+        std::fs::write(directory.join("hidden.png"), b"listing only").expect("hidden file");
+        unsafe {
+            SetFileAttributesW(
+                &HSTRING::from(directory.join("hidden.png").as_path()),
+                FILE_ATTRIBUTE_HIDDEN,
+            )
+        }
+        .expect("set hidden");
+        assert_eq!(names(&directory, &listing_options()), ["a.png"]);
+        let mut shown = listing_options();
+        shown.skip_hidden = false;
+        // The macOS metadata prefix stays out regardless of the option.
+        assert_eq!(names(&directory, &shown), ["a.png", "hidden.png"]);
+        let _ = std::fs::remove_dir_all(&directory);
+    }
+
+    #[test]
+    fn content_detection_admits_a_disguised_image() {
+        let directory = fixture_directory("riv-inclusion-content", &["a.png"]);
+        let mut disguised = b"\x89PNG\r\n\x1a\n".to_vec();
+        disguised.extend_from_slice(&[0; 8]);
+        std::fs::write(directory.join("image.dat"), &disguised).expect("disguised file");
+        assert_eq!(names(&directory, &listing_options()), ["a.png"]);
+        let mut detecting = listing_options();
+        detecting.detect_format_by_content = true;
+        assert_eq!(names(&directory, &detecting), ["a.png", "image.dat"]);
+        let _ = std::fs::remove_dir_all(&directory);
+    }
+}
+
+#[cfg(test)]
+mod preload_cache_tests {
+    use super::*;
+
+    fn cache_entry(preview: bool) -> CacheEntry {
+        let image = decode::DecodedImage {
+            width: 1,
+            height: 1,
+            pixel_width: 1,
+            pixel_height: 1,
+            format_name: "PNG",
+            icc_profile: None,
+            exif: None,
+            storage: decode::PixelStorage::Bgra8,
+            source_bits_per_channel: 8,
+            peak_luminance_nits: None,
+            source_primaries: None,
+            frames: vec![decode::Frame {
+                pixels: vec![0; 4],
+                delay_milliseconds: 0,
+            }],
+            frames_truncated: false,
+            gain_map: None,
+            gain_map_plane: None,
+        };
+        CacheEntry {
+            metadata: ItemMetadata::default(),
+            preview,
+            image: Arc::new(image),
+            texture: None,
+        }
+    }
+
+    #[test]
+    fn the_budget_counts_previews_full_and_submissions() {
+        let mut core = core_with_files(3, None);
+        core.entries[0].weight = DecodedWeight::Known(1_000);
+        core.entries[2].weight = DecodedWeight::Known(50);
+        let preview_location = core.entries[0].location.clone();
+        let plain_location = core.entries[1].location.clone();
+        let submitted_location = core.entries[2].location.clone();
+        core.cache.insert(preview_location, cache_entry(true));
+        core.cache.insert(plain_location, cache_entry(false));
+        core.submitted_decodes
+            .insert(submitted_location, Arc::new(AtomicBool::new(false)));
+        // A preview weighs its full decode; the plain entry its pixels; the submission its claim.
+        assert_eq!(core.occupied_bytes(), 1_000 + 4 + 50);
+    }
+
+    #[test]
+    fn speculation_waits_for_the_display_and_an_error_anchor_does_not() {
+        let mut core = core_with_files(5, Some(2));
+        core.refresh_preload();
+        // The pending item is not on screen yet, so nothing speculates.
+        assert!(core.submitted_probes.is_empty());
+        assert!(core.submitted_decodes.is_empty());
+        core.request = ViewRequest::Failed(
+            core.entries[2].location.clone(),
+            decode::uncoded_error("test"),
+        );
+        core.refresh_preload();
+        // An error anchor keeps nobody waiting; its targets probe at once.
+        assert!(!core.submitted_probes.is_empty());
+    }
+
+    #[test]
+    fn mode_zero_drains_the_cache_and_range_exit_drops_entries() {
+        let mut core = core_with_files(10, Some(5));
+        let near = core.entries[6].location.clone();
+        let far = core.entries[0].location.clone();
+        core.cache.insert(near.clone(), cache_entry(false));
+        core.cache.insert(far.clone(), cache_entry(false));
+        core.refresh_preload();
+        // The budget is a ceiling, not a quota: leaving the range drops the entry regardless.
+        assert!(core.cache.contains_key(&near));
+        assert!(!core.cache.contains_key(&far));
+        core.options.preloading_mode = 0;
+        core.refresh_preload();
+        assert!(core.cache.is_empty());
+    }
+}
