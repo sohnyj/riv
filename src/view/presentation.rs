@@ -53,7 +53,7 @@ pub struct CompositionPresenter {
     buffers: Vec<BufferSlot>,
     next_buffer_index: usize,
     /// Format, size, and count of the current ring, so an unchanged target skips reallocation.
-    allocated: Option<(DXGI_FORMAT, (u32, u32), usize)>,
+    allocated_ring: Option<(DXGI_FORMAT, (u32, u32), usize)>,
     _composition_device: IDCompositionDevice,
     _composition_target: IDCompositionTarget,
     _composition_visual: IDCompositionVisual,
@@ -147,7 +147,7 @@ impl CompositionPresenter {
                 surface_handle,
                 buffers: Vec::new(),
                 next_buffer_index: 0,
-                allocated: None,
+                allocated_ring: None,
                 _composition_device: device,
                 _composition_target: target,
                 _composition_visual: visual,
@@ -172,12 +172,12 @@ impl CompositionPresenter {
         size: (u32, u32),
         count: usize,
     ) -> Result<()> {
-        if self.allocated == Some((format, size, count)) {
+        if self.allocated_ring == Some((format, size, count)) {
             return Ok(());
         }
-        self.allocated = None;
+        self.allocated_ring = None;
         self.allocate_buffers(d3d_device, format, size, count)?;
-        self.allocated = Some((format, size, count));
+        self.allocated_ring = Some((format, size, count));
         Ok(())
     }
 
