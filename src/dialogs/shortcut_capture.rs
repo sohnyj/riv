@@ -16,12 +16,12 @@ use windows::Win32::UI::WindowsAndMessaging::{
     CS_DBLCLKS, CallWindowProcW, DLGC_WANTALLKEYS, DefWindowProcW, EndDialog, GWLP_USERDATA,
     GWLP_WNDPROC, GetClientRect, GetDlgItem, GetParent, GetWindowLongPtrW, LB_ADDSTRING,
     LB_DELETESTRING, LB_GETCOUNT, LB_GETCURSEL, LB_GETITEMHEIGHT, LB_GETITEMRECT, LB_GETTEXT,
-    LB_GETTEXTLEN, LB_GETTOPINDEX, LB_RESETCONTENT, RegisterClassExW, SendMessageW,
-    SetWindowLongPtrW, SetWindowTextW, WM_APP, WM_COMMAND, WM_DRAWITEM, WM_ERASEBKGND,
-    WM_GETDLGCODE, WM_INITDIALOG, WM_KEYDOWN, WM_KEYUP, WM_KILLFOCUS, WM_LBUTTONDBLCLK,
-    WM_LBUTTONDOWN, WM_MBUTTONDBLCLK, WM_MBUTTONDOWN, WM_MOUSEWHEEL, WM_PAINT, WM_SETFOCUS,
-    WM_SETFONT, WM_SYSCHAR, WM_SYSKEYDOWN, WM_SYSKEYUP, WM_XBUTTONDBLCLK, WM_XBUTTONDOWN,
-    WNDCLASSEXW, WNDPROC,
+    LB_GETTEXTLEN, LB_GETTOPINDEX, LB_RESETCONTENT, RegisterClassExW, SendDlgItemMessageW,
+    SendMessageW, SetWindowLongPtrW, SetWindowTextW, WM_APP, WM_COMMAND, WM_DRAWITEM,
+    WM_ERASEBKGND, WM_GETDLGCODE, WM_INITDIALOG, WM_KEYDOWN, WM_KEYUP, WM_KILLFOCUS,
+    WM_LBUTTONDBLCLK, WM_LBUTTONDOWN, WM_MBUTTONDBLCLK, WM_MBUTTONDOWN, WM_MOUSEWHEEL, WM_PAINT,
+    WM_SETFOCUS, WM_SETFONT, WM_SYSCHAR, WM_SYSKEYDOWN, WM_SYSKEYUP, WM_XBUTTONDBLCLK,
+    WM_XBUTTONDOWN, WNDCLASSEXW, WNDPROC,
 };
 use windows::core::{HSTRING, w};
 
@@ -445,29 +445,40 @@ unsafe extern "system" fn keyboard_list_procedure(
 }
 
 fn listbox_add(dialog: HWND, text: &str) {
-    if let Ok(listbox) = unsafe { GetDlgItem(Some(dialog), IDC_CAPTURE_KEYBOARD_LIST) } {
-        let wide = HSTRING::from(text);
-        unsafe {
-            SendMessageW(
-                listbox,
-                LB_ADDSTRING,
-                Some(WPARAM(0)),
-                Some(LPARAM(wide.as_ptr() as isize)),
-            )
-        };
-    }
+    let wide = HSTRING::from(text);
+    unsafe {
+        SendDlgItemMessageW(
+            dialog,
+            IDC_CAPTURE_KEYBOARD_LIST,
+            LB_ADDSTRING,
+            WPARAM(0),
+            LPARAM(wide.as_ptr() as isize),
+        )
+    };
 }
 
 fn listbox_remove(dialog: HWND, index: usize) {
-    if let Ok(listbox) = unsafe { GetDlgItem(Some(dialog), IDC_CAPTURE_KEYBOARD_LIST) } {
-        unsafe { SendMessageW(listbox, LB_DELETESTRING, Some(WPARAM(index)), None) };
-    }
+    unsafe {
+        SendDlgItemMessageW(
+            dialog,
+            IDC_CAPTURE_KEYBOARD_LIST,
+            LB_DELETESTRING,
+            WPARAM(index),
+            LPARAM(0),
+        )
+    };
 }
 
 fn listbox_clear(dialog: HWND) {
-    if let Ok(listbox) = unsafe { GetDlgItem(Some(dialog), IDC_CAPTURE_KEYBOARD_LIST) } {
-        unsafe { SendMessageW(listbox, LB_RESETCONTENT, None, None) };
-    }
+    unsafe {
+        SendDlgItemMessageW(
+            dialog,
+            IDC_CAPTURE_KEYBOARD_LIST,
+            LB_RESETCONTENT,
+            WPARAM(0),
+            LPARAM(0),
+        )
+    };
 }
 
 fn ensure_capture_classes() {
