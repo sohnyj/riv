@@ -818,6 +818,90 @@ mod option_bounds_tests {
 }
 
 #[cfg(test)]
+mod option_round_trip_tests {
+    use super::*;
+
+    #[test]
+    fn every_field_is_read_back_as_written() {
+        // A full literal: a new field fails here at compile time, a missing write row at run time.
+        let stored = Options {
+            background_color_enabled: true,
+            background_color: (0x11, 0x22, 0x33),
+            title_bar_text: 2,
+            control_drag_window: false,
+            remember_window_placement: false,
+            hide_cursor_fullscreen: false,
+            scaling_filter: 2,
+            fit_mode: 1,
+            zoom_step_percent: 50,
+            dither_mode: 0,
+            fractional_wheel_zoom: false,
+            cursor_zoom: false,
+            sort_files_by: 2,
+            sort_descending: true,
+            preloading: 2,
+            loop_within_folder: false,
+            slideshow_direction: 0,
+            slideshow_interval_seconds: 10,
+            after_deletion: 0,
+            ask_delete: false,
+            detect_format_by_content: true,
+            remember_recents: false,
+            skip_hidden: false,
+        };
+        let mut document = serde_json::json!({});
+        write_options(&mut document, &stored);
+        let read = Options::from_document(&document);
+        assert_eq!(
+            read.background_color_enabled,
+            stored.background_color_enabled
+        );
+        assert_eq!(read.background_color, stored.background_color);
+        assert_eq!(read.title_bar_text, stored.title_bar_text);
+        assert_eq!(read.control_drag_window, stored.control_drag_window);
+        assert_eq!(
+            read.remember_window_placement,
+            stored.remember_window_placement
+        );
+        assert_eq!(read.hide_cursor_fullscreen, stored.hide_cursor_fullscreen);
+        assert_eq!(read.scaling_filter, stored.scaling_filter);
+        assert_eq!(read.fit_mode, stored.fit_mode);
+        assert_eq!(read.zoom_step_percent, stored.zoom_step_percent);
+        assert_eq!(read.dither_mode, stored.dither_mode);
+        assert_eq!(read.fractional_wheel_zoom, stored.fractional_wheel_zoom);
+        assert_eq!(read.cursor_zoom, stored.cursor_zoom);
+        assert_eq!(read.sort_files_by, stored.sort_files_by);
+        assert_eq!(read.sort_descending, stored.sort_descending);
+        assert_eq!(read.preloading, stored.preloading);
+        assert_eq!(read.loop_within_folder, stored.loop_within_folder);
+        assert_eq!(read.slideshow_direction, stored.slideshow_direction);
+        assert_eq!(
+            read.slideshow_interval_seconds,
+            stored.slideshow_interval_seconds
+        );
+        assert_eq!(read.after_deletion, stored.after_deletion);
+        assert_eq!(read.ask_delete, stored.ask_delete);
+        assert_eq!(
+            read.detect_format_by_content,
+            stored.detect_format_by_content
+        );
+        assert_eq!(read.remember_recents, stored.remember_recents);
+        assert_eq!(read.skip_hidden, stored.skip_hidden);
+    }
+
+    #[test]
+    fn default_values_write_no_keys() {
+        let mut document = serde_json::json!({});
+        write_options(&mut document, &Options::default());
+        let options = document
+            .get("options")
+            .and_then(Value::as_object)
+            .expect("options object");
+        assert!(options.is_empty());
+    }
+}
+
+#[cfg(test)]
 mod window_placement_bounds_tests {
     use super::*;
 
