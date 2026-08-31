@@ -209,11 +209,15 @@ impl Reader<'_> {
         declared_bytes: Option<u64>,
         cancellation: &AtomicBool,
     ) -> Result<Vec<u8>, ArchiveError> {
-        let mut contents = Vec::with_capacity(
-            declared_bytes
-                .unwrap_or(0)
-                .min(MAXIMUM_MEMBER_RESERVATION_BYTES) as usize,
-        );
+        let mut contents = Vec::new();
+        let reservation_bytes = declared_bytes
+            .unwrap_or(0)
+            .min(MAXIMUM_MEMBER_RESERVATION_BYTES) as usize;
+        if contents.try_reserve_exact(reservation_bytes).is_err() {
+            return Err(ArchiveError::new(
+                "Archive member is too large to fit in memory",
+            ));
+        }
         let mut block = vec![0u8; READ_BLOCK_BYTES];
         loop {
             if cancellation.load(Ordering::Relaxed) {
