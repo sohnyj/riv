@@ -28,7 +28,7 @@ fn lock_sent() -> std::sync::MutexGuard<'static, HashMap<usize, (u32, TypeId)>> 
     SENT_PAYLOADS.lock().expect("payload registry poisoned")
 }
 
-/// Posts an owned payload; reclaims it when the message cannot be delivered.
+/// Posts an owned payload; a refused post reclaims it, an undispatched one lasts until exit.
 pub fn post_boxed<T: 'static>(window: isize, message: u32, payload: Box<T>) {
     let pointer = Box::into_raw(payload);
     record_sent::<T>(pointer as usize, message);
