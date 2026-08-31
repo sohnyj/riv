@@ -246,7 +246,7 @@ pub struct Renderer {
     linear_source_primaries: Option<[[f32; 2]; 3]>,
     linear_source_context: Option<ID2D1ColorContext>,
     image_display_size: (f32, f32),
-    image_pixel_size: (f32, f32),
+    image_pixel_size: (u32, u32),
     /// Set when the pump already waited for the next frame's present-queue room.
     frame_slot_held: bool,
     /// Created on the first gain map bake, so images without one allocate nothing.
@@ -812,7 +812,7 @@ impl Renderer {
             linear_source_primaries: None,
             linear_source_context: None,
             image_display_size: (0.0, 0.0),
-            image_pixel_size: (0.0, 0.0),
+            image_pixel_size: (0, 0),
             frame_slot_held: false,
             gain_pass: None,
             gain_state: None,
@@ -1386,7 +1386,7 @@ impl Renderer {
 
     fn adopt_image_bitmap(&mut self, bitmap: ID2D1Bitmap1, image: &DecodedImage) {
         self.image_display_size = (image.width as f32, image.height as f32);
-        self.image_pixel_size = (image.pixel_width as f32, image.pixel_height as f32);
+        self.image_pixel_size = (image.pixel_width, image.pixel_height);
         self.image_storage = image.storage;
         self.image_source_bits_per_channel = image.source_bits_per_channel;
         self.rewire_effect_chain(
@@ -1408,7 +1408,7 @@ impl Renderer {
         let Some(bitmap) = &self.image else {
             return Err(windows::core::Error::empty());
         };
-        let pitch = self.image_pixel_size.0 as u32 * self.image_storage.bytes_per_pixel();
+        let pitch = self.image_pixel_size.0 * self.image_storage.bytes_per_pixel();
         // CopyFromMemory reads the whole bitmap, so a short frame buffer must not reach it.
         if pixels.len() != pitch as usize * self.image_pixel_size.1 as usize {
             return Err(windows::core::Error::empty());
@@ -1598,8 +1598,8 @@ impl Renderer {
         // The gain rendition settles first, so the decision and the panel see it.
         self.refresh_gain_bake();
         // DrawImage has no destination rect; fold the display scale into the matrix.
-        let scale_x = self.image_display_size.0 / self.image_pixel_size.0.max(1.0);
-        let scale_y = self.image_display_size.1 / self.image_pixel_size.1.max(1.0);
+        let scale_x = self.image_display_size.0 / (self.image_pixel_size.0.max(1) as f32);
+        let scale_y = self.image_display_size.1 / (self.image_pixel_size.1.max(1) as f32);
         let transform = Matrix3x2 {
             M11: matrix[0] * scale_x,
             M12: matrix[1] * scale_x,
@@ -1612,7 +1612,7 @@ impl Renderer {
         let identity_placement = if matrix[1] == 0.0 && matrix[2] == 0.0 {
             Self::is_pixel_identity(transform.M11, transform.M22, transform.M31, transform.M32)
         } else if matrix[0] == 0.0 && matrix[3] == 0.0 {
-            let source_height = self.image_pixel_size.1.round();
+            let source_height = self.image_pixel_size.1 as f32;
             Self::is_pixel_identity(
                 -transform.M21,
                 transform.M12,
@@ -1712,8 +1712,8 @@ impl Renderer {
                         let destination = D2D_RECT_F {
                             left: 0.0,
                             top: 0.0,
-                            right: self.image_pixel_size.0,
-                            bottom: self.image_pixel_size.1,
+                            right: self.image_pixel_size.0 as f32,
+                            bottom: self.image_pixel_size.1 as f32,
                         };
                         self.d2d_context.DrawBitmap(
                             image,
