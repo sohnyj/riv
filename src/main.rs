@@ -1438,6 +1438,7 @@ fn core_options(options: &Options) -> CoreOptions {
 
 fn client_size(window: HWND) -> (u32, u32) {
     let mut bounds = RECT::default();
+    // A failed query reads as an empty client area, which every caller skips or clamps.
     let _ = unsafe { GetClientRect(window, &raw mut bounds) };
     (
         (bounds.right - bounds.left) as u32,
