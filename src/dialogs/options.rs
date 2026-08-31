@@ -451,7 +451,7 @@ fn ensure_page(state: &mut OptionsState, tab: HWND, index: usize) {
             LPARAM(state_pointer),
         )
     }
-    .unwrap_or_default();
+    .expect("settings page creation failed");
     let area = page_area(state.dialog, tab);
     let _ = unsafe {
         SetWindowPos(
