@@ -1957,9 +1957,11 @@ impl DecodePool {
     }
 
     fn set_upload_device(&self, upload_device: Option<UploadDevice>) {
-        if let Ok(mut slot) = self.shared.upload_device.lock() {
-            *slot = upload_device;
-        }
+        *self
+            .shared
+            .upload_device
+            .lock()
+            .expect("upload device lock poisoned") = upload_device;
     }
 
     fn submit(
@@ -2154,7 +2156,11 @@ fn worker_loop(shared: &PoolShared, window: isize) {
         }
         .map(Arc::new);
         let texture = result.as_ref().ok().and_then(|image| {
-            let upload_device = shared.upload_device.lock().ok()?.clone()?;
+            let upload_device = shared
+                .upload_device
+                .lock()
+                .expect("upload device lock poisoned")
+                .clone()?;
             upload_still_texture(&upload_device, image)
         });
         // The texture is the only copy: the decode buffer frees here at the source.
