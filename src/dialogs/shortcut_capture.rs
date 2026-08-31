@@ -111,7 +111,7 @@ unsafe extern "system" fn keyboard_procedure(
     match message {
         WM_INITDIALOG => {
             unsafe { SetWindowLongPtrW(dialog, DWLP_USER, lparam.0) };
-            crate::dialogs::geometry::center_on_owner(dialog);
+            crate::dialogs::placement::center_on_owner(dialog);
             let state = unsafe { &*(lparam.0 as *const KeyboardCaptureState) };
             for sequence in &state.sequences {
                 listbox_add(dialog, sequence);
@@ -221,7 +221,7 @@ unsafe extern "system" fn mouse_procedure(
     match message {
         WM_INITDIALOG => {
             unsafe { SetWindowLongPtrW(dialog, DWLP_USER, lparam.0) };
-            crate::dialogs::geometry::center_on_owner(dialog);
+            crate::dialogs::placement::center_on_owner(dialog);
             let state = unsafe { &*(lparam.0 as *const MouseCaptureState) };
             set_mouse_field_text(dialog, state.binding.as_deref());
             1

@@ -2315,7 +2315,7 @@ mod step_index_tests {
 }
 
 #[cfg(test)]
-mod preload_geometry_tests {
+mod preload_plan_tests {
     use super::*;
 
     fn offsets(mode: usize) -> Vec<isize> {

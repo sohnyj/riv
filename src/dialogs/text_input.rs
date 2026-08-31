@@ -53,7 +53,7 @@ unsafe extern "system" fn dialog_procedure(
     match message {
         WM_INITDIALOG => {
             unsafe { SetWindowLongPtrW(dialog, DWLP_USER, lparam.0) };
-            crate::dialogs::geometry::center_on_owner(dialog);
+            crate::dialogs::placement::center_on_owner(dialog);
             let state = unsafe { &*(lparam.0 as *const TextInputState) };
             unsafe {
                 let _ = SetDlgItemTextW(dialog, IDC_TEXT_INPUT, &state.initial_text);

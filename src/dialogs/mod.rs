@@ -1,10 +1,10 @@
 pub mod about;
-pub mod geometry;
 pub mod message;
 pub mod modal;
 pub mod open_url;
 pub mod options;
 pub mod paint;
+pub mod placement;
 pub mod rename;
 pub mod resource;
 pub mod shortcut_capture;

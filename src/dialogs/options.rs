@@ -343,7 +343,7 @@ unsafe extern "system" fn frame_procedure(
 
 fn initialize_frame(state: &mut OptionsState) {
     let dialog = state.dialog;
-    crate::dialogs::geometry::center_on_owner(dialog);
+    crate::dialogs::placement::center_on_owner(dialog);
     let Ok(tab) = (unsafe { GetDlgItem(Some(dialog), IDC_OPTIONS_TAB) }) else {
         return;
     };
@@ -384,7 +384,7 @@ fn initialize_frame(state: &mut OptionsState) {
 /// Where a page sits inside the tab, in the frame's coordinates.
 fn page_area(dialog: HWND, tab: HWND) -> RECT {
     // TCM_ADJUSTRECT only insets, so it reads the same before or after the mapping.
-    let mut area = crate::dialogs::geometry::control_bounds(dialog, tab).unwrap_or_default();
+    let mut area = crate::dialogs::placement::control_bounds(dialog, tab).unwrap_or_default();
     unsafe {
         SendMessageW(
             tab,
@@ -521,7 +521,7 @@ fn fit_page_controls(page: HWND, stretched_control: i32, right_following_control
         let Ok(handle) = (unsafe { GetDlgItem(Some(page), control) }) else {
             return;
         };
-        let Some(bounds) = crate::dialogs::geometry::control_bounds(page, handle) else {
+        let Some(bounds) = crate::dialogs::placement::control_bounds(page, handle) else {
             return;
         };
         let _ = unsafe {

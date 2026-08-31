@@ -40,7 +40,7 @@ impl AboutFonts {
 pub fn initialize_page(page: HWND) -> AboutFonts {
     let version = HSTRING::from(concat!("version ", env!("CARGO_PKG_VERSION")));
     let _ = unsafe { SetDlgItemTextW(page, IDC_ABOUT_VERSION, &version) };
-    let dpi = crate::window::geometry::dpi_for_window(page) as i32;
+    let dpi = crate::window::dpi::dpi_for_window(page) as i32;
     let fonts = AboutFonts {
         title: create_font(TITLE_POINT_SIZE, dpi),
         version: create_font(VERSION_POINT_SIZE, dpi),
@@ -80,7 +80,7 @@ fn layout_centered(page: HWND) {
         let Ok(control) = (unsafe { GetDlgItem(Some(page), id) }) else {
             return;
         };
-        let Some(bounds) = crate::dialogs::geometry::control_bounds(page, control) else {
+        let Some(bounds) = crate::dialogs::placement::control_bounds(page, control) else {
             return;
         };
         placements.push((id, control, bounds.top, bounds.bottom - bounds.top));

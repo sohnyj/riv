@@ -2460,7 +2460,7 @@ extern "system" fn window_procedure(
             // Without this the window shrinks until only the caption and its buttons are left.
             let (client_width, client_height) = MINIMUM_CLIENT_LOGICAL_PIXELS;
             if let Some((width, height)) =
-                window::geometry::window_size_for_client(window, client_width, client_height)
+                window::dpi::window_size_for_client(window, client_width, client_height)
             {
                 let information = unsafe { &mut *(lparam.0 as *mut MINMAXINFO) };
                 information.ptMinTrackSize.x = width;
