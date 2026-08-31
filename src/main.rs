@@ -2802,6 +2802,7 @@ extern "system" fn window_procedure(
                     && !unsafe { IsZoomed(window) }.as_bool();
                 if move_window {
                     let _ = unsafe { ReleaseCapture() };
+                    // The application borrow ended above: this send runs the system move loop, which re-enters.
                     unsafe {
                         SendMessageW(
                             window,
