@@ -138,3 +138,63 @@ mod payload_tests {
         );
     }
 }
+
+#[cfg(test)]
+mod wm_app_number_tests {
+    /// New files declaring WM_APP messages must be listed here; the scan cannot discover them.
+    const SOURCES: [(&str, &str); 6] = [
+        ("main.rs", include_str!("../main.rs")),
+        ("image/core.rs", include_str!("../image/core.rs")),
+        ("shell/drag_drop.rs", include_str!("../shell/drag_drop.rs")),
+        ("shell/open_with.rs", include_str!("../shell/open_with.rs")),
+        ("dialogs/options.rs", include_str!("../dialogs/options.rs")),
+        (
+            "dialogs/shortcut_capture.rs",
+            include_str!("../dialogs/shortcut_capture.rs"),
+        ),
+    ];
+
+    fn declared_numbers() -> Vec<(String, String, u32)> {
+        let mut declarations = Vec::new();
+        for (file, source) in SOURCES {
+            for line in source.lines() {
+                let Some((head, tail)) = line.split_once("= WM_APP + ") else {
+                    continue;
+                };
+                let name = head
+                    .split(':')
+                    .next()
+                    .and_then(|declared| declared.split_whitespace().last())
+                    .expect("a constant name precedes the value")
+                    .to_string();
+                let value = tail.trim().trim_end_matches(';');
+                let number = match value.strip_prefix("0x") {
+                    Some(hex) => u32::from_str_radix(hex, 16),
+                    None => value.parse(),
+                }
+                .expect("a WM_APP offset is a number literal");
+                declarations.push((file.to_string(), name, number));
+            }
+        }
+        declarations
+    }
+
+    #[test]
+    fn every_message_number_is_distinct() {
+        let declarations = declared_numbers();
+        for (file, _) in SOURCES {
+            assert!(
+                declarations.iter().any(|(source, _, _)| source == file),
+                "the scan found nothing in {file}; drop it from SOURCES or fix the parse"
+            );
+        }
+        for (index, (file, name, number)) in declarations.iter().enumerate() {
+            for (other_file, other_name, other_number) in &declarations[index + 1..] {
+                assert!(
+                    number != other_number,
+                    "{name} ({file}) and {other_name} ({other_file}) share WM_APP + {number}"
+                );
+            }
+        }
+    }
+}
