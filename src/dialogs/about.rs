@@ -151,6 +151,7 @@ fn open_link(url_wide: &[u16]) {
         .position(|unit| *unit == 0)
         .unwrap_or(url_wide.len());
     let url = HSTRING::from_wide(&url_wide[..length]);
+    // A failure shows the shell's own error UI; the app has nothing to add.
     unsafe { ShellExecuteW(None, w!("open"), &url, None, None, SW_SHOWNORMAL) };
 }
 

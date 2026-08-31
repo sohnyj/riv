@@ -121,6 +121,7 @@ pub fn show_open_with_dialog(window: HWND, path: &Path) {
         pcszClass: PCWSTR::null(),
         oaifInFlags: OAIF_EXEC | OAIF_ALLOW_REGISTRATION,
     };
+    // A failure shows the shell's own error UI; the app has nothing to add.
     let _ = unsafe { SHOpenWithDialog(Some(window), &raw const information) };
 }
 

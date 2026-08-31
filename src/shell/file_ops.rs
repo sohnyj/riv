@@ -18,6 +18,7 @@ use windows::core::{HSTRING, PCWSTR, Result, w};
 
 pub fn show_in_explorer(path: &Path) {
     let argument = HSTRING::from(format!("/select,\"{}\"", path.display()));
+    // A failure shows the shell's own error UI; the app has nothing to add.
     unsafe {
         ShellExecuteW(
             None,
