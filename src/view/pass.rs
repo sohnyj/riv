@@ -1,4 +1,4 @@
-//! Shared machinery of the fullscreen passes: constant upload and the draw protocol.
+//! Constant upload and the draw protocol shared by the fullscreen passes.
 
 use std::marker::PhantomData;
 
