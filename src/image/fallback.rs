@@ -248,7 +248,8 @@ fn probe_exr_wide_dimensions(wide_path: &HSTRING) -> Option<(u32, u32)> {
     let mut width: c_int = 0;
     let mut height: c_int = 0;
     let status = unsafe { riv_exr_probe(wide_path.as_ptr(), &raw mut width, &raw mut height) };
-    (status == 0).then_some((width as u32, height as u32))
+    // A contract-breaking negative extent must not sign-wrap the cast; the HEIF path checks too.
+    (status == 0 && width > 0 && height > 0).then_some((width as u32, height as u32))
 }
 
 pub fn probe_exr_bytes_dimensions(bytes: &[u8]) -> Option<(u32, u32)> {
@@ -257,7 +258,7 @@ pub fn probe_exr_bytes_dimensions(bytes: &[u8]) -> Option<(u32, u32)> {
     let status = unsafe {
         riv_exr_probe_memory(bytes.as_ptr(), bytes.len(), &raw mut width, &raw mut height)
     };
-    (status == 0).then_some((width as u32, height as u32))
+    (status == 0 && width > 0 && height > 0).then_some((width as u32, height as u32))
 }
 
 pub fn decode_exr(path: &Path, format_name: &'static str) -> Result<DecodedImage, DecodeError> {
