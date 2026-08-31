@@ -856,14 +856,14 @@ pub fn probe_avif_sequence_dimensions(bytes: &[u8]) -> Option<(u32, u32)> {
     if context.is_null() {
         return None;
     }
-    let geometry = avif_sequence_track(context, bytes)
+    let dimensions = avif_sequence_track(context, bytes)
         .ok()
         .map(|(track, width, height)| {
             unsafe { heif_track_release(track) };
             (width, height)
         });
     unsafe { heif_context_free(context) };
-    geometry
+    dimensions
 }
 
 #[cfg(test)]
@@ -1157,7 +1157,7 @@ mod avif_sequence_tests {
 
     #[test]
     #[ignore = "needs test/ fixtures"]
-    fn the_probe_reports_the_track_geometry() {
+    fn the_probe_reports_the_track_dimensions() {
         assert_eq!(
             probe_avif_sequence_dimensions(&fixture_bytes()),
             Some((64, 32))
