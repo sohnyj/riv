@@ -79,13 +79,12 @@ impl IDropTarget_Impl for DropTarget_Impl {
     ) -> Result<()> {
         let accepts = has_paths(data_object.as_ref());
         self.accepts_current_drag.set(accepts);
-        unsafe {
-            *effect = if accepts {
-                DROPEFFECT_COPY
-            } else {
-                DROPEFFECT_NONE
-            };
-        }
+        let drop_effect = if accepts {
+            DROPEFFECT_COPY
+        } else {
+            DROPEFFECT_NONE
+        };
+        unsafe { *effect = drop_effect };
         Ok(())
     }
 
@@ -95,13 +94,12 @@ impl IDropTarget_Impl for DropTarget_Impl {
         _point: &POINTL,
         effect: *mut DROPEFFECT,
     ) -> Result<()> {
-        unsafe {
-            *effect = if self.accepts_current_drag.get() {
-                DROPEFFECT_COPY
-            } else {
-                DROPEFFECT_NONE
-            };
-        }
+        let drop_effect = if self.accepts_current_drag.get() {
+            DROPEFFECT_COPY
+        } else {
+            DROPEFFECT_NONE
+        };
+        unsafe { *effect = drop_effect };
         Ok(())
     }
 

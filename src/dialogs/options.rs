@@ -956,16 +956,17 @@ fn sync_miscellaneous_page(state: &OptionsState) {
         IDC_MISCELLANEOUS_SORT,
         options.sort_files_by,
     );
+    let sort_direction_control = if options.sort_descending {
+        IDC_MISCELLANEOUS_DESCENDING
+    } else {
+        IDC_MISCELLANEOUS_ASCENDING
+    };
     let _ = unsafe {
         CheckRadioButton(
             miscellaneous_page,
             IDC_MISCELLANEOUS_ASCENDING,
             IDC_MISCELLANEOUS_DESCENDING,
-            if options.sort_descending {
-                IDC_MISCELLANEOUS_DESCENDING
-            } else {
-                IDC_MISCELLANEOUS_ASCENDING
-            },
+            sort_direction_control,
         )
     };
     set_check(

@@ -725,25 +725,25 @@ impl Renderer {
         let present_target = match composition {
             Some(presenter) => PresentTarget::Composition(presenter),
             None => {
+                let description = DXGI_SWAP_CHAIN_DESC1 {
+                    Width: width,
+                    Height: height,
+                    Format: backbuffer_format,
+                    SampleDesc: DXGI_SAMPLE_DESC {
+                        Count: 1,
+                        Quality: 0,
+                    },
+                    BufferUsage: DXGI_USAGE_RENDER_TARGET_OUTPUT,
+                    BufferCount: PRESENTATION_BUFFER_COUNT as u32,
+                    Scaling: DXGI_SCALING_STRETCH,
+                    SwapEffect: DXGI_SWAP_EFFECT_FLIP_DISCARD,
+                    AlphaMode: DXGI_ALPHA_MODE_IGNORE,
+                    Flags: SWAP_CHAIN_FLAGS.0 as u32,
+                    ..Default::default()
+                };
                 let swap_chain = unsafe {
                     let adapter = dxgi_device.GetAdapter()?;
                     let factory: IDXGIFactory2 = adapter.GetParent()?;
-                    let description = DXGI_SWAP_CHAIN_DESC1 {
-                        Width: width,
-                        Height: height,
-                        Format: backbuffer_format,
-                        SampleDesc: DXGI_SAMPLE_DESC {
-                            Count: 1,
-                            Quality: 0,
-                        },
-                        BufferUsage: DXGI_USAGE_RENDER_TARGET_OUTPUT,
-                        BufferCount: PRESENTATION_BUFFER_COUNT as u32,
-                        Scaling: DXGI_SCALING_STRETCH,
-                        SwapEffect: DXGI_SWAP_EFFECT_FLIP_DISCARD,
-                        AlphaMode: DXGI_ALPHA_MODE_IGNORE,
-                        Flags: SWAP_CHAIN_FLAGS.0 as u32,
-                        ..Default::default()
-                    };
                     factory.CreateSwapChainForHwnd(
                         &d3d_device,
                         window,

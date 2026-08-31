@@ -518,17 +518,18 @@ fn paint_field(field: HWND, text: &str, hint: bool) {
     let mut paint = PAINTSTRUCT::default();
     let target = unsafe { BeginPaint(field, &raw mut paint) };
     let bounds = paint.rcPaint;
-    crate::dialogs::paint::draw_buffered(target, bounds, |device| unsafe {
-        FillRect(device, &raw const bounds, GetSysColorBrush(COLOR_WINDOW));
+    crate::dialogs::paint::draw_buffered(target, bounds, |device| {
+        unsafe { FillRect(device, &raw const bounds, GetSysColorBrush(COLOR_WINDOW)) };
         let font = field_font(field);
         if !font.is_invalid() {
-            SelectObject(device, font.into());
+            unsafe { SelectObject(device, font.into()) };
         }
-        let color = COLORREF(GetSysColor(if hint {
+        let text_color = if hint {
             COLOR_GRAYTEXT
         } else {
             COLOR_WINDOWTEXT
-        }));
+        };
+        let color = COLORREF(unsafe { GetSysColor(text_color) });
         let mut wide: Vec<u16> = text.encode_utf16().collect();
         draw_field_text(device, bounds, &mut wide, color);
     });

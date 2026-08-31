@@ -332,14 +332,13 @@ impl Application {
         pending_device: PendingDevice,
     ) -> Result<Self> {
         // The watcher's change events arrive only while this thread runs a dispatcher queue.
-        let dispatcher_queue_controller = unsafe {
-            CreateDispatcherQueueController(DispatcherQueueOptions {
-                dwSize: size_of::<DispatcherQueueOptions>() as u32,
-                threadType: DQTYPE_THREAD_CURRENT,
-                apartmentType: DQTAT_COM_NONE,
-            })
-        }
-        .ok();
+        let dispatcher_queue_options = DispatcherQueueOptions {
+            dwSize: size_of::<DispatcherQueueOptions>() as u32,
+            threadType: DQTYPE_THREAD_CURRENT,
+            apartmentType: DQTAT_COM_NONE,
+        };
+        let dispatcher_queue_controller =
+            unsafe { CreateDispatcherQueueController(dispatcher_queue_options) }.ok();
         let display_watcher = color::DisplayWatcher::new(window, WM_APP_ADVANCED_COLOR_CHANGED);
         let theme_watcher = dwm::ThemeWatcher::new(window, WM_APP_SYSTEM_COLORS_CHANGED);
         let settings = SettingsFile::load();
@@ -594,16 +593,12 @@ impl Application {
             return;
         }
         self.window_shown = true;
-        let _ = unsafe {
-            ShowWindow(
-                window,
-                if self.show_maximized {
-                    SW_SHOWMAXIMIZED
-                } else {
-                    SW_SHOW
-                },
-            )
+        let show_command = if self.show_maximized {
+            SW_SHOWMAXIMIZED
+        } else {
+            SW_SHOW
         };
+        let _ = unsafe { ShowWindow(window, show_command) };
     }
 
     fn restore_window_placement(&mut self, window: HWND) {
