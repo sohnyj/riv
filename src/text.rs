@@ -40,3 +40,50 @@ pub fn natural_order(a: &HSTRING, b: &HSTRING) -> std::cmp::Ordering {
 pub fn natural_order_text(a: &str, b: &str) -> std::cmp::Ordering {
     natural_order(&HSTRING::from(a), &HSTRING::from(b))
 }
+
+#[cfg(test)]
+mod path_text_tests {
+    use super::*;
+    use std::os::windows::ffi::OsStrExt;
+    use std::path::Path;
+
+    #[test]
+    fn wide_paths_keep_unpaired_surrogates() {
+        let units: Vec<u16> = "C:\\pictures\\a".encode_utf16().chain([0xD800]).collect();
+        let path = path_from_wide(&units);
+        let round_trip: Vec<u16> = path.as_os_str().encode_wide().collect();
+        assert_eq!(round_trip, units);
+    }
+
+    #[test]
+    fn a_root_path_has_no_file_name() {
+        assert_eq!(file_name_text(Path::new("C:\\")), "");
+        assert_eq!(file_name_text(Path::new("C:\\a\\b.jpg")), "b.jpg");
+    }
+
+    #[test]
+    fn extensions_fold_to_lowercase_without_the_dot() {
+        assert_eq!(
+            lowercase_extension(Path::new("a.JPG")).as_deref(),
+            Some("jpg")
+        );
+        assert_eq!(
+            lowercase_extension(Path::new("archive.tar.GZ")).as_deref(),
+            Some("gz")
+        );
+        assert_eq!(lowercase_extension(Path::new("noextension")), None);
+    }
+}
+
+#[cfg(test)]
+mod natural_order_tests {
+    use super::*;
+    use std::cmp::Ordering;
+
+    #[test]
+    fn digit_runs_compare_as_numbers() {
+        assert_eq!(natural_order_text("file2", "file10"), Ordering::Less);
+        assert_eq!(natural_order_text("file10", "file2"), Ordering::Greater);
+        assert_eq!(natural_order_text("file2", "file2"), Ordering::Equal);
+    }
+}
