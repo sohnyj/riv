@@ -1405,7 +1405,11 @@ fn subresolution_source(
     let mut format = unsafe { frame.GetPixelFormat()? };
     unsafe { transform.GetClosestPixelFormat(&mut format)? };
     let bits_per_pixel = pixel_format_bits_per_pixel(factory, &format)?;
-    let stride = (width * bits_per_pixel).div_ceil(8);
+    // u64: the codec owns both factors, and a wrapped stride would size the buffer to match.
+    let Ok(stride) = u32::try_from((u64::from(width) * u64::from(bits_per_pixel)).div_ceil(8))
+    else {
+        return Ok(None);
+    };
     if cancellation.load(Ordering::Relaxed) {
         return Err(E_ABORT.into());
     }
