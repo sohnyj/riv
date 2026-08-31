@@ -567,7 +567,7 @@ fn decode_heif_primary_image(
 ) -> Result<DecodedImage, DecodeError> {
     let handle = heif_primary_handle(context, bytes)?;
 
-    // PQ/HLG survives only a 16-bit request; libheif converts no transfer function.
+    // PQ/HLG is kept only by a 16-bit request; libheif converts no transfer function.
     let hdr_encoding = heif_hdr_encoding(handle);
     let (chroma, storage) = heif_pixel_target(hdr_encoding);
     let mut image: *mut HeifImage = std::ptr::null_mut();

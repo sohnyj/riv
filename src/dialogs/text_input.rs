@@ -77,7 +77,7 @@ unsafe extern "system" fn dialog_procedure(
                 IDOK => {
                     if let Some(state) = crate::dialogs::modal::state_mut::<TextInputState>(dialog)
                     {
-                        // Sized per read, so a long URL survives whole instead of truncating.
+                        // Sized per read, so a long URL is read whole instead of truncated.
                         let length = unsafe {
                             SendDlgItemMessageW(
                                 dialog,

@@ -807,7 +807,7 @@ impl ImageCore {
         }
         let arriving: HashSet<&ItemLocation> =
             incoming.iter().map(|entry| &entry.location).collect();
-        // The nearest surviving predecessor keeps the place where it was, additions included.
+        // The nearest predecessor still in the new listing keeps its place, additions included.
         let predecessor = self.entries[..index]
             .iter()
             .rev()
@@ -900,7 +900,7 @@ impl ImageCore {
 
     /// Opens a remote image as a standalone item (no listing, no navigation).
     pub fn load_url(&mut self, url: &str) -> LoadOutcome {
-        // Even a failed attempt leaves the single-item state; no listing survives.
+        // Even a failed attempt leaves the single-item state; no listing remains.
         self.entries = Vec::new();
         self.listing_scope = None;
         self.pending_scan = None;
@@ -2357,7 +2357,7 @@ mod preload_geometry_tests {
     fn eviction_prefers_forward_over_backward_within_the_preload_targets() {
         let (backward, forward, _) = PRELOAD_SPECIFICATIONS[1];
         let priorities = preload_priorities(AnchorIndex::Listed(10), backward, forward, 100, false);
-        // The anchor survives longest, then +1..+3, then -1.
+        // The anchor is evicted last, after +1..+3, then -1 before those.
         assert_eq!(priorities[&10], 0);
         assert_eq!(priorities[&11], 1);
         assert_eq!(priorities[&12], 2);
