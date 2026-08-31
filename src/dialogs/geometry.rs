@@ -30,7 +30,6 @@ fn clamp_to_work_area(x: i32, y: i32, width: i32, height: i32) -> (i32, i32) {
     )
 }
 
-/// Center a dialog within its owner window.
 pub fn center_on_owner(dialog: HWND) {
     use windows::Win32::UI::WindowsAndMessaging::{
         GetParent, SWP_NOACTIVATE, SWP_NOSIZE, SWP_NOZORDER, SetWindowPos,
