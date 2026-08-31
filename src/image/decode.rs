@@ -2970,8 +2970,9 @@ fn copy_pixels_into(
             Width: width as i32,
             Height: rows as i32,
         };
-        let start = (row * stride) as usize;
-        let end = start + (rows * stride) as usize;
+        // In usize: an animation frame past 4 GiB would wrap a u32 row offset.
+        let start = row as usize * stride as usize;
+        let end = start + rows as usize * stride as usize;
         unsafe { source.CopyPixels(&raw const rectangle, stride, &mut pixels[start..end])? };
         row += rows;
     }
