@@ -275,7 +275,7 @@ mod zoom_limit_tests {
     }
 
     #[test]
-    fn zoom_steps_land_exactly_on_the_boundaries() {
+    fn zoom_steps_stop_exactly_on_the_boundaries() {
         let mut transform = transform_at(4.5);
         transform.zoom(1.25, None, VIEWPORT, PLAIN_IMAGE);
         assert_eq!(transform.scale, MAXIMUM_ZOOM);

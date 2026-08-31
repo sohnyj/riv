@@ -2291,7 +2291,7 @@ mod step_index_tests {
     }
 
     #[test]
-    fn a_missing_anchor_lands_on_both_adjacent_entries() {
+    fn a_missing_anchor_steps_to_both_adjacent_entries() {
         assert_eq!(step_index(AnchorIndex::Missing(2), 1, 4, false), Some(2));
         assert_eq!(step_index(AnchorIndex::Missing(2), -1, 4, false), Some(1));
         // The place after the last entry: forward runs out, backward keeps the last one.
@@ -2395,7 +2395,7 @@ mod budget_selection_tests {
     use super::*;
 
     #[test]
-    fn candidates_land_in_priority_order_while_they_fit() {
+    fn candidates_are_accepted_in_priority_order_while_they_fit() {
         assert_eq!(
             fits_in_budget(0, 1000, &[400, 400, 400]),
             [true, true, false]

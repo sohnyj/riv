@@ -360,7 +360,7 @@ mod mtime_tests {
     // libarchive returns the declared size verbatim; the cap must hold.
     #[test]
     #[ignore = "needs archiveint.dll and test/fixture_zip_declared_1gib.zip"]
-    fn a_member_declaring_a_huge_size_is_handled_gracefully() {
+    fn a_member_declaring_a_huge_size_errors_instead_of_reserving() {
         let cancellation = AtomicBool::new(false);
         let result = read_member(
             Path::new("test/fixture_zip_declared_1gib.zip"),
