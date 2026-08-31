@@ -3821,7 +3821,6 @@ mod premultiplied_conversion_tests {
     }
 }
 
-/// A huge declared acTL num_frames must not drive the reservation.
 #[cfg(test)]
 mod cancellation_tests {
     use super::*;

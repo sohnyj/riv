@@ -62,7 +62,7 @@ const KEY_PLACEMENT_WIDTH: &str = "width";
 const KEY_PLACEMENT_HEIGHT: &str = "height";
 const KEY_PLACEMENT_MAXIMIZED: &str = "maximized";
 
-/// Combo rows in stored order; the index is read back by `Application::window_title`.
+/// Combo rows in stored order; the index is read back by `Application::update_window_title`.
 pub const TITLE_BAR_TEXT_CHOICES: [&str; 4] = [
     "App name",
     "File name",
