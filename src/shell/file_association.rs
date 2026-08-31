@@ -190,11 +190,52 @@ mod reversibility_tests {
     // One test, not several: the steps share the wine prefix's HKCU and parallel runs would race.
     #[test]
     fn registration_reclaims_without_leftovers() {
+        // Foreign data on the shared extension key; the reclaim must leave it standing.
+        let foreign_progids = format!("{CLASSES_KEY}\\.rivtesta\\{OPEN_WITH_PROGIDS}");
+        registry_set_string(&foreign_progids, "Other.App", "");
+        registry_set_string(
+            &format!("{CLASSES_KEY}\\.rivtesta"),
+            "Content Type",
+            "image/test",
+        );
+
         let both = vec![".rivtesta".to_string(), ".rivtestb".to_string()];
         set_file_associations(&both);
         let mut registered = registered_extensions();
         registered.sort();
         assert_eq!(registered, both);
+
+        let executable = std::env::current_exe()
+            .expect("the running module always has a path")
+            .to_string_lossy()
+            .into_owned();
+        let progid_key = classes_progid_key();
+        assert_eq!(
+            registry_read_string(&format!("{progid_key}\\DefaultIcon"), ""),
+            Some(format!("\"{executable}\",0"))
+        );
+        assert_eq!(
+            registry_read_string(&format!("{progid_key}\\shell\\open\\command"), ""),
+            Some(format!("\"{executable}\" \"%1\""))
+        );
+        // No friendly type name: the ProgID default value stays unwritten.
+        assert!(registry_read_string(&progid_key, "").is_none());
+        assert_eq!(
+            registry_read_string(&capabilities_key(), "ApplicationName").as_deref(),
+            Some("riv")
+        );
+        assert_eq!(
+            registry_read_string(&capabilities_key(), "ApplicationDescription").as_deref(),
+            Some("riv image viewer")
+        );
+        assert_eq!(
+            registry_read_string(REGISTERED_APPLICATIONS_KEY, crate::APPLICATION_NAME),
+            Some(capabilities_key())
+        );
+        assert_eq!(
+            registry_read_string(&extension_open_with_progids_key(".rivtesta"), PROGID).as_deref(),
+            Some("")
+        );
 
         set_file_associations(&both[..1]);
         assert_eq!(registered_extensions(), vec![".rivtesta".to_string()]);
@@ -210,17 +251,26 @@ mod reversibility_tests {
         assert!(
             registry_read_string(REGISTERED_APPLICATIONS_KEY, crate::APPLICATION_NAME).is_none()
         );
-        for extension in [".rivtesta", ".rivtestb"] {
-            assert!(
-                CURRENT_USER
-                    .open(extension_open_with_progids_key(extension))
-                    .is_err()
-            );
-            assert!(
-                CURRENT_USER
-                    .open(format!("{CLASSES_KEY}\\{extension}"))
-                    .is_err()
-            );
-        }
+        // The clean extension is pruned whole; the shared one keeps the foreign data only.
+        assert!(
+            CURRENT_USER
+                .open(extension_open_with_progids_key(".rivtestb"))
+                .is_err()
+        );
+        assert!(
+            CURRENT_USER
+                .open(format!("{CLASSES_KEY}\\.rivtestb"))
+                .is_err()
+        );
+        assert!(registry_read_string(&foreign_progids, PROGID).is_none());
+        assert_eq!(
+            registry_read_string(&foreign_progids, "Other.App").as_deref(),
+            Some("")
+        );
+        assert_eq!(
+            registry_read_string(&format!("{CLASSES_KEY}\\.rivtesta"), "Content Type").as_deref(),
+            Some("image/test")
+        );
+        registry_delete_tree(&format!("{CLASSES_KEY}\\.rivtesta"));
     }
 }
