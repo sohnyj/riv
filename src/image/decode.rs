@@ -145,7 +145,7 @@ impl DecodedImage {
         frames + plane
     }
 
-    /// Bytes per row of a frame; the D3D pitch and the buffer stride alike.
+    /// Bytes per row (D3D pitch and buffer stride); every producer caps width, so u32 cannot wrap.
     pub fn row_pitch(&self) -> u32 {
         self.pixel_width * self.storage.bytes_per_pixel()
     }
@@ -2246,7 +2246,7 @@ fn frame_metadata(frame: &IWICBitmapFrameDecode) -> FrameMetadata {
     let query = |name: PCWSTR| reader.as_ref().and_then(|reader| query_u32(reader, name));
 
     let delay_milliseconds = query(w!("/grctlext/Delay"))
-        .map(|centiseconds| centiseconds * 10)
+        .map(|centiseconds| centiseconds.saturating_mul(10))
         .filter(|milliseconds| *milliseconds >= 20)
         .unwrap_or(DEFAULT_FRAME_DELAY_MILLISECONDS);
     FrameMetadata {
@@ -2546,7 +2546,8 @@ fn query_filetime(reader: &IWICMetadataQueryReader, name: PCWSTR) -> Option<std:
     let intervals =
         (u64::from(file_time.dwHighDateTime) << 32) | u64::from(file_time.dwLowDateTime);
     let unix_intervals = intervals.checked_sub(FILETIME_UNIX_EPOCH)?;
-    Some(std::time::UNIX_EPOCH + std::time::Duration::from_nanos(unix_intervals * 100))
+    // A forged far-future date would wrap the nanosecond product; no line beats a wrong one.
+    Some(std::time::UNIX_EPOCH + std::time::Duration::from_nanos(unix_intervals.checked_mul(100)?))
 }
 
 fn query_u32(reader: &IWICMetadataQueryReader, name: PCWSTR) -> Option<u32> {
@@ -2848,6 +2849,7 @@ fn svg_raster_geometry(tree: &resvg::usvg::Tree) -> Option<(u32, u32, f32)> {
     }
     let target = largest_monitor_long_side().min(MAXIMUM_TEXTURE_DIMENSION) as f32;
     let scale = target / size.width().max(size.height());
+    // The scale normalizes the product to the target; max(1.0) also turns an infinite size's NaN into 1.
     let pixel_width = (size.width() * scale).round().max(1.0) as u32;
     let pixel_height = (size.height() * scale).round().max(1.0) as u32;
     Some((pixel_width, pixel_height, scale))
