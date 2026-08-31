@@ -101,6 +101,41 @@ const APPLICATION_NAME: &str = "riv";
 /// One-line description the Start Menu shortcut and the registry capabilities share.
 const APPLICATION_DESCRIPTION: &str = "riv image viewer";
 
+/// The title-bar text setting: what `update_window_title` composes for the caption.
+#[derive(Clone, Copy)]
+pub enum TitleBarText {
+    ApplicationName,
+    FileName,
+    PositionAndFileName,
+    PositionAndFolderFileName,
+}
+
+impl TitleBarText {
+    /// Stored order: the settings value is a position here, and so is the combo row.
+    pub const IN_SETTING_ORDER: [Self; 4] = [
+        Self::ApplicationName,
+        Self::FileName,
+        Self::PositionAndFileName,
+        Self::PositionAndFolderFileName,
+    ];
+
+    pub fn from_setting(value: u32) -> Self {
+        Self::IN_SETTING_ORDER
+            .get(value as usize)
+            .copied()
+            .unwrap_or(Self::FileName)
+    }
+
+    pub fn description(self) -> &'static str {
+        match self {
+            Self::ApplicationName => "App name",
+            Self::FileName => "File name",
+            Self::PositionAndFileName => "[N/N] File name",
+            Self::PositionAndFolderFileName => "[N/N] Folder\\File name",
+        }
+    }
+}
+
 /// Build 22631, the first release with the in-box libarchive; the name is its dialog wording.
 const MINIMUM_WINDOWS_VERSION: OsVersion = OsVersion::new(10, 0, 0, 22631);
 const MINIMUM_WINDOWS_VERSION_NAME: &str = "Windows 11 23H2";
@@ -683,17 +718,18 @@ impl Application {
             let file_name = anchor
                 .map(|location| location.display_name())
                 .filter(|name| !name.is_empty());
-            match (self.settings.options.title_bar_text, file_name) {
-                (0, _) | (_, None) => APPLICATION_NAME.to_string(),
-                (2, Some(name)) => self.prefix_with_position(name),
-                (3, Some(name)) => {
+            let title_bar_text = TitleBarText::from_setting(self.settings.options.title_bar_text);
+            match (title_bar_text, file_name) {
+                (TitleBarText::ApplicationName, _) | (_, None) => APPLICATION_NAME.to_string(),
+                (TitleBarText::FileName, Some(name)) => name,
+                (TitleBarText::PositionAndFileName, Some(name)) => self.prefix_with_position(name),
+                (TitleBarText::PositionAndFolderFileName, Some(name)) => {
                     let body = match anchor.and_then(|location| location.folder_name()) {
                         Some(folder) => format!("{folder}\\{name}"),
                         None => name,
                     };
                     self.prefix_with_position(body)
                 }
-                (_, Some(name)) => name,
             }
         };
         if title == self.window_title {

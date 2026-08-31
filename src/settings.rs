@@ -62,13 +62,6 @@ const KEY_PLACEMENT_WIDTH: &str = "width";
 const KEY_PLACEMENT_HEIGHT: &str = "height";
 const KEY_PLACEMENT_MAXIMIZED: &str = "maximized";
 
-/// Combo rows in stored order; the index is read back by `Application::update_window_title`.
-pub const TITLE_BAR_TEXT_CHOICES: [&str; 4] = [
-    "App name",
-    "File name",
-    "[N/N] File name",
-    "[N/N] Folder\\File name",
-];
 /// The index is a row of `PRELOAD_SPECIFICATIONS`.
 pub const PRELOADING_CHOICES: [&str; 3] = ["Disabled", "Nearby", "Extended"];
 /// The index is read back by `Options::slideshow_backward`.
@@ -179,7 +172,7 @@ impl Options {
                 .unwrap_or(default.background_color),
             title_bar_text: choice(
                 KEY_TITLE_BAR_TEXT,
-                TITLE_BAR_TEXT_CHOICES.len(),
+                crate::TitleBarText::IN_SETTING_ORDER.len(),
                 default.title_bar_text,
             ),
             control_drag_window: boolean(KEY_CONTROL_DRAG_WINDOW, default.control_drag_window),

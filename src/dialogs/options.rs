@@ -43,7 +43,7 @@ use crate::image::core::SortMode;
 use crate::settings::{
     AFTER_DELETION_CHOICES, MAXIMUM_SLIDESHOW_INTERVAL_SECONDS, MAXIMUM_ZOOM_STEP_PERCENT,
     MINIMUM_SLIDESHOW_INTERVAL_SECONDS, MINIMUM_ZOOM_STEP_PERCENT, Options, PRELOADING_CHOICES,
-    SLIDESHOW_DIRECTION_CHOICES, SettingsFile, TITLE_BAR_TEXT_CHOICES,
+    SLIDESHOW_DIRECTION_CHOICES, SettingsFile,
 };
 use crate::shell::{file_association, start_menu};
 use crate::view::dither::DitherMode;
@@ -804,7 +804,11 @@ fn apply_page_command(
 
 fn initialize_window_page(state: &OptionsState) {
     let page = state.pages[WINDOW_PAGE];
-    combo_fill(page, IDC_WINDOW_TITLE_BAR_TEXT, &TITLE_BAR_TEXT_CHOICES);
+    combo_fill(
+        page,
+        IDC_WINDOW_TITLE_BAR_TEXT,
+        &crate::TitleBarText::IN_SETTING_ORDER.map(crate::TitleBarText::description),
+    );
 }
 
 fn initialize_image_page(state: &OptionsState) {
