@@ -966,3 +966,203 @@ mod recents_save_tests {
         assert!(saved.get("recents").is_none());
     }
 }
+
+#[cfg(test)]
+mod stored_key_tests {
+    use super::*;
+
+    #[test]
+    fn a_hand_written_document_reads_every_documented_key() {
+        // Literal spellings: the round-trip tests share constants, so only this catches a rename.
+        let document = serde_json::json!({ "options": {
+            "backgroundcolorenabled": true,
+            "backgroundcolor": "#112233",
+            "titlebartext": 2,
+            "ctrldragwindow": false,
+            "rememberwindowplacement": false,
+            "hidecursorfullscreen": false,
+            "scaling": 2,
+            "fitmode": 1,
+            "zoomstep": 50,
+            "dither": 0,
+            "fractionalwheelzoom": false,
+            "cursorzoom": false,
+            "sortfilesby": 2,
+            "sortdescending": true,
+            "preloading": 2,
+            "loopwithinfolder": false,
+            "slideshowdirection": 0,
+            "slideshowinterval": 10,
+            "afterdeletion": 0,
+            "askdelete": false,
+            "detectformatbycontent": true,
+            "rememberrecents": false,
+            "skiphidden": false,
+        }});
+        let expected = Options {
+            background_color_enabled: true,
+            background_color: (0x11, 0x22, 0x33),
+            title_bar_text: 2,
+            control_drag_window: false,
+            remember_window_placement: false,
+            hide_cursor_fullscreen: false,
+            scaling_filter: 2,
+            fit_mode: 1,
+            zoom_step_percent: 50,
+            dither_mode: 0,
+            fractional_wheel_zoom: false,
+            cursor_zoom: false,
+            sort_files_by: 2,
+            sort_descending: true,
+            preloading: 2,
+            loop_within_folder: false,
+            slideshow_direction: 0,
+            slideshow_interval_seconds: 10,
+            after_deletion: 0,
+            ask_delete: false,
+            detect_format_by_content: true,
+            remember_recents: false,
+            skip_hidden: false,
+        };
+        assert!(Options::from_document(&document) == expected);
+    }
+
+    #[test]
+    fn defaults_match_the_documented_values() {
+        let expected = Options {
+            background_color_enabled: false,
+            background_color: (0x21, 0x21, 0x21),
+            title_bar_text: 1,
+            control_drag_window: true,
+            remember_window_placement: true,
+            hide_cursor_fullscreen: true,
+            scaling_filter: 1,
+            fit_mode: 0,
+            zoom_step_percent: 25,
+            dither_mode: 2,
+            fractional_wheel_zoom: true,
+            cursor_zoom: true,
+            sort_files_by: 0,
+            sort_descending: false,
+            preloading: 1,
+            loop_within_folder: true,
+            slideshow_direction: 1,
+            slideshow_interval_seconds: 5,
+            after_deletion: 1,
+            ask_delete: true,
+            detect_format_by_content: false,
+            remember_recents: true,
+            skip_hidden: true,
+        };
+        assert!(Options::default() == expected);
+    }
+
+    #[test]
+    fn renamed_keys_read_as_defaults() {
+        let document = serde_json::json!({ "options": {
+            "scalefactor": 3,
+            "slideshowtimer": 9,
+            "allowmimecontentdetection": true,
+            "saverecents": false,
+            "filteringenabled": 3,
+            "loopfoldersenabled": false,
+            "fractionalzoom": false,
+        }});
+        assert!(Options::from_document(&document) == Options::default());
+    }
+
+    #[test]
+    fn binding_sections_read_by_their_stored_names() {
+        let settings = SettingsFile {
+            path: PathBuf::new(),
+            document: serde_json::json!({
+                "keyboardbindings": { "reload": ["F5"] },
+                "mousebindings": { "togglezoom": ["Double-click"] },
+            }),
+            options: Options::default(),
+            removed_recent_keys: HashSet::new(),
+        };
+        assert!(
+            settings
+                .keyboard_bindings()
+                .is_some_and(|map| map.contains_key("reload"))
+        );
+        assert!(
+            settings
+                .mouse_bindings()
+                .is_some_and(|map| map.contains_key("togglezoom"))
+        );
+    }
+}
+
+#[cfg(test)]
+mod recent_files_tests {
+    use super::*;
+
+    fn in_memory() -> SettingsFile {
+        SettingsFile {
+            path: PathBuf::new(),
+            document: serde_json::json!({}),
+            options: Options::default(),
+            removed_recent_keys: HashSet::new(),
+        }
+    }
+
+    #[test]
+    fn recents_keep_ten_newest_without_duplicates() {
+        let mut settings = in_memory();
+        for index in 0..12 {
+            settings.add_recent_file(Path::new(&format!("C:\\p\\{index}.png")));
+        }
+        let files = settings.recent_files();
+        assert_eq!(files.len(), MAXIMUM_RECENT_FILES);
+        assert_eq!(files[0].1, "C:\\p\\11.png");
+        // A re-added path moves to the front once, compared without case.
+        settings.add_recent_file(Path::new("C:\\P\\9.PNG"));
+        let files = settings.recent_files();
+        assert_eq!(files.len(), MAXIMUM_RECENT_FILES);
+        assert_eq!(files[0].1, "C:\\P\\9.PNG");
+        let copies = files
+            .iter()
+            .filter(|(_, path)| path.eq_ignore_ascii_case("C:\\p\\9.png"))
+            .count();
+        assert_eq!(copies, 1);
+        // Re-adding the head is a no-op that keeps the stored spelling.
+        settings.add_recent_file(Path::new("C:\\p\\9.png"));
+        assert_eq!(settings.recent_files()[0].1, "C:\\P\\9.PNG");
+    }
+
+    #[test]
+    fn a_hand_edited_list_truncates_on_read() {
+        let entries: Vec<Value> = (0..12)
+            .map(|index| serde_json::json!({ "name": format!("{index}.png"), "path": format!("C:\\p\\{index}.png") }))
+            .collect();
+        let mut settings = in_memory();
+        settings.document = serde_json::json!({ "recents": { "recentfiles": entries } });
+        assert_eq!(settings.recent_files().len(), MAXIMUM_RECENT_FILES);
+    }
+
+    #[test]
+    fn the_exit_merge_unions_without_bringing_back_removals() {
+        let path = std::env::temp_dir().join("riv-recents-merge.json");
+        let disk = serde_json::json!({ "recents": { "recentfiles": [
+            { "name": "a.png", "path": "C:\\d\\a.png" },
+            { "name": "b.png", "path": "C:\\d\\b.png" },
+        ]}});
+        std::fs::write(&path, serde_json::to_string(&disk).expect("serialize")).expect("write");
+        let mut settings = in_memory();
+        settings.path = path.clone();
+        settings.add_recent_file(Path::new("C:\\d\\c.png"));
+        settings.add_recent_file(Path::new("C:\\d\\B.png"));
+        settings.remove_recent_file(Path::new("C:\\d\\a.png"));
+        settings.save_merging_recents().expect("save");
+        let saved = read_document(&path);
+        let _ = std::fs::remove_file(&path);
+        let paths: Vec<String> = recent_files_of(&saved)
+            .into_iter()
+            .map(|(_, stored)| stored)
+            .collect();
+        // This session first, the disk's b folded into the session's B, the removed a gone.
+        assert_eq!(paths, ["C:\\d\\B.png", "C:\\d\\c.png"]);
+    }
+}
