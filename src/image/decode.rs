@@ -2187,14 +2187,16 @@ fn icc_profile_bytes(
             continue;
         }
         let mut profile_byte_count = 0u32;
-        // A failed size query skips this context only; another context may still carry a profile.
+        // A failed query skips this context only; another context may still carry a profile.
         let _ = unsafe { context.GetProfileBytes(&mut [], &raw mut profile_byte_count) };
         if profile_byte_count == 0 {
             continue;
         }
         let mut buffer = try_zeroed_buffer(profile_byte_count as usize)?;
         let mut written = 0u32;
-        unsafe { context.GetProfileBytes(&mut buffer, &raw mut written) }.ok()?;
+        if unsafe { context.GetProfileBytes(&mut buffer, &raw mut written) }.is_err() {
+            continue;
+        }
         buffer.truncate(written as usize);
         return Some(Arc::from(buffer));
     }
