@@ -563,3 +563,141 @@ mod normalization_tests {
         );
     }
 }
+
+#[cfg(test)]
+mod default_table_tests {
+    use super::*;
+
+    fn rendered(table: &[(&str, &[&str])]) -> String {
+        table
+            .iter()
+            .map(|(name, entries)| format!("{name}={}\n", entries.join(",")))
+            .collect()
+    }
+
+    #[test]
+    fn the_keyboard_defaults_match_the_documented_table() {
+        assert_eq!(
+            rendered(DEFAULT_KEYBOARD),
+            "open=Ctrl+O\n\
+             pasteurl=Ctrl+V\n\
+             playlist=E\n\
+             loop=L\n\
+             firstfile=Home\n\
+             previousfile=Left\n\
+             nextfile=Right\n\
+             lastfile=End\n\
+             pause=spacebar\n\
+             previousframe=B\n\
+             nextframe=N\n\
+             decreasespeed=[\n\
+             increasespeed=]\n\
+             resetspeed=\\\n\
+             information=I,Tab\n\
+             reload=Ctrl+R,F5\n\
+             togglefitmode=V\n\
+             preservezoom=Z\n\
+             zoomin=Up\n\
+             zoomout=Down\n\
+             togglezoom=Enter\n\
+             panup=Ctrl+Up\n\
+             pandown=Ctrl+Down\n\
+             panleft=Ctrl+Left\n\
+             panright=Ctrl+Right\n\
+             rotateleft=Shift+Left\n\
+             rotateright=Shift+Right\n\
+             mirror=Shift+M\n\
+             flip=Shift+F\n\
+             showinexplorer=Ctrl+E\n\
+             rename=R,F2\n\
+             delete=Delete,Ctrl+D\n\
+             deletepermanently=Shift+Delete,Ctrl+Shift+D\n\
+             toggleslideshow=S\n\
+             settings=Ctrl+,\n\
+             togglefullscreen=F,F11\n\
+             alwaysontop=T\n\
+             exit=Ctrl+W\n"
+        );
+    }
+
+    #[test]
+    fn the_mouse_defaults_match_the_documented_table() {
+        assert_eq!(
+            rendered(DEFAULT_MOUSE),
+            "previousfile=WheelUp\n\
+             nextfile=WheelDown\n\
+             zoomin=Ctrl+WheelUp\n\
+             zoomout=Ctrl+WheelDown\n\
+             togglezoom=Double-click\n\
+             togglefullscreen=WheelButton\n"
+        );
+    }
+
+    #[test]
+    fn no_two_defaults_share_a_chord() {
+        let mut chords = std::collections::HashSet::new();
+        for (name, sequences) in DEFAULT_KEYBOARD {
+            for sequence in *sequences {
+                let chord = parse_keyboard_sequence(sequence).expect("default parses");
+                assert!(chords.insert(chord), "{name}: {sequence} is bound twice");
+            }
+        }
+        let mut encodings = std::collections::HashSet::new();
+        for (name, entries) in DEFAULT_MOUSE {
+            for encoding in *entries {
+                let (modifiers, base) = parse_mouse_encoding(encoding).expect("default parses");
+                assert!(
+                    encodings.insert((modifiers, base.index())),
+                    "{name}: {encoding} is bound twice"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn escape_and_openurl_stay_unbound() {
+        // Esc must reach the fullscreen exit; a default on it would swallow that.
+        assert!(default_keyboard_sequences("openurl").is_empty());
+        assert!(Bindings::from_settings(None, None).escape_is_unbound());
+        let overrides = serde_json::json!({ "exit": ["Esc"] });
+        let bindings = Bindings::from_settings(overrides.as_object(), None);
+        assert!(!bindings.escape_is_unbound());
+    }
+
+    #[test]
+    fn the_menu_column_shows_the_first_keyboard_sequence_only() {
+        assert_eq!(
+            menu_shortcut_text(None, "togglefullscreen").as_deref(),
+            Some("F")
+        );
+        assert_eq!(menu_shortcut_text(None, "openurl"), None);
+        let overrides = serde_json::json!({ "reload": [] });
+        assert_eq!(menu_shortcut_text(overrides.as_object(), "reload"), None);
+    }
+}
+
+#[cfg(test)]
+mod mouse_base_tests {
+    use super::*;
+
+    #[test]
+    fn bases_round_trip_their_index_and_name() {
+        for base in MouseBase::all() {
+            assert!(MouseBase::from_index(base.index()) == Some(base));
+            assert!(MouseBase::from_name(base.name()) == Some(base));
+        }
+        assert_eq!(MouseBase::all().count(), 6);
+        // Retired spellings are not aliases.
+        assert!(MouseBase::from_name("Middle").is_none());
+        assert!(parse_mouse_encoding("Double+Left").is_none());
+    }
+
+    #[test]
+    fn wheel_and_x_buttons_read_their_message_fields() {
+        use windows::Win32::UI::WindowsAndMessaging::{XBUTTON1, XBUTTON2};
+        assert!(MouseBase::from_wheel_delta(120) == MouseBase::WheelUp);
+        assert!(MouseBase::from_wheel_delta(-120) == MouseBase::WheelDown);
+        assert!(MouseBase::from_xbutton_flags(XBUTTON1) == MouseBase::Back);
+        assert!(MouseBase::from_xbutton_flags(XBUTTON2) == MouseBase::Forward);
+    }
+}
