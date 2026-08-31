@@ -423,7 +423,7 @@ fn parse_hdrgm(xml: &str) -> Option<GainMapMetadata> {
 }
 
 #[cfg(test)]
-mod tests {
+mod metadata_tests {
     use super::*;
 
     fn xmp_packet(attributes: &str) -> String {
