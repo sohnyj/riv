@@ -182,3 +182,45 @@ pub fn set_file_associations(extensions: &[String]) {
     }
     unsafe { SHChangeNotify(SHCNE_ASSOCCHANGED, SHCNF_IDLIST, None, None) };
 }
+
+#[cfg(test)]
+mod reversibility_tests {
+    use super::*;
+
+    // One test, not several: the steps share the wine prefix's HKCU and parallel runs would race.
+    #[test]
+    fn registration_reclaims_without_leftovers() {
+        let both = vec![".rivtesta".to_string(), ".rivtestb".to_string()];
+        set_file_associations(&both);
+        let mut registered = registered_extensions();
+        registered.sort();
+        assert_eq!(registered, both);
+
+        set_file_associations(&both[..1]);
+        assert_eq!(registered_extensions(), vec![".rivtesta".to_string()]);
+        assert!(
+            CURRENT_USER
+                .open(extension_open_with_progids_key(".rivtestb"))
+                .is_err()
+        );
+
+        set_file_associations(&[]);
+        assert!(CURRENT_USER.open(APPLICATION_ROOT_KEY).is_err());
+        assert!(CURRENT_USER.open(classes_progid_key()).is_err());
+        assert!(
+            registry_read_string(REGISTERED_APPLICATIONS_KEY, crate::APPLICATION_NAME).is_none()
+        );
+        for extension in [".rivtesta", ".rivtestb"] {
+            assert!(
+                CURRENT_USER
+                    .open(extension_open_with_progids_key(extension))
+                    .is_err()
+            );
+            assert!(
+                CURRENT_USER
+                    .open(format!("{CLASSES_KEY}\\{extension}"))
+                    .is_err()
+            );
+        }
+    }
+}
