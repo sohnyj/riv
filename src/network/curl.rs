@@ -178,7 +178,9 @@ pub fn download(
             .to_string();
         return Err(NetworkError {
             message,
-            code: status.code().unwrap_or(0),
+            code: status
+                .code()
+                .expect("exit codes are always present on Windows"),
             cancelled: false,
         });
     }
