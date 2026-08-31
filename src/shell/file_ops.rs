@@ -37,6 +37,12 @@ pub struct DeleteConfirmation {
 
 /// `details` carries the file facts, one per line, the first being the name.
 pub fn confirm_delete(window: HWND, details: &str, permanent: bool) -> DeleteConfirmation {
+    // The title names the action, so the two delete actions title themselves apart.
+    let title = if permanent {
+        w!("Delete permanently")
+    } else {
+        w!("Delete")
+    };
     let question = if permanent {
         "Permanently delete this file?"
     } else {
@@ -59,7 +65,7 @@ pub fn confirm_delete(window: HWND, details: &str, permanent: bool) -> DeleteCon
         cbSize: size_of::<TASKDIALOGCONFIG>() as u32,
         hwndParent: window,
         dwFlags: TDF_ALLOW_DIALOG_CANCELLATION | TDF_POSITION_RELATIVE_TO_WINDOW,
-        pszWindowTitle: w!("Delete"),
+        pszWindowTitle: title,
         pszContent: PCWSTR(content.as_ptr()),
         cButtons: buttons.len() as u32,
         pButtons: buttons.as_ptr(),
