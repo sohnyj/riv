@@ -40,7 +40,7 @@ const WM_RIV_KEYBOARD_REMOVE: u32 = WM_APP + 0x42;
 
 const REMOVE_ICON_RED: COLORREF = COLORREF(0x001C_2BC4); // BGR of #C42B1C
 
-/// Unbound-field placeholder; the paint handler recovers it by string comparison.
+/// Unbound-field placeholder; the field procedure's paint branch recovers it by string comparison.
 const NO_BINDING_TEXT: &str = "None";
 
 /// WM_RIV_MOUSE_CAPTURED wparam layout: modifiers above this shift, the base index below.

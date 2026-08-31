@@ -60,7 +60,7 @@ pub unsafe fn take_boxed<T: 'static>(message: u32, lparam: LPARAM) -> Option<Box
     Some(unsafe { Box::from_raw(pointer as *mut T) })
 }
 
-/// Sends a borrowed payload, readable by the handler for the length of the call.
+/// Sends a borrowed payload, readable by the window procedure for the length of the call.
 pub fn send_borrowed<T: 'static>(window: HWND, message: u32, payload: &T) -> LRESULT {
     let pointer = std::ptr::from_ref(payload) as usize;
     record_sent::<T>(pointer, message);
@@ -76,7 +76,7 @@ pub unsafe fn borrowed_payload<'payload, T: 'static>(
     lparam: LPARAM,
 ) -> Option<&'payload T> {
     let pointer = lparam.0 as usize;
-    // The sender's stack owns the value only during the send; the reference must not outlive the handler.
+    // The sender's stack owns the value only during the send; the reference must not outlive that call.
     was_sent::<T>(pointer, message).then(|| unsafe { &*(pointer as *const T) })
 }
 
