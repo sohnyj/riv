@@ -36,8 +36,8 @@ Formats that need a codec extension from the Microsoft Store:
 | Format | Store extension | Notes |
 |---|---|---|
 | JPEG XL | JPEG XL Image Extension (Microsoft Corporation) | HDR / Tone map |
-| AVIF | HEIF Image Extension + AV1 Video Extension (Microsoft Corporation) | HDR / Tone map; Still only |
-| WebP | WebP Image Extensions (Microsoft Corporation) | Still only |
+| AVIF | HEIF Image Extension + AV1 Video Extension (Microsoft Corporation) | HDR / Tone map |
+| WebP | WebP Image Extensions (Microsoft Corporation) | |
 | Camera RAW | Raw Image Extension (Microsoft Corporation) | |
 
 **These extensions are free and need no sign-in.**
@@ -89,21 +89,24 @@ zip, 7z, rar, tar, and cbz / cbr / cb7 / cbt.
 The build cross-compiles from Linux (tested on WSL) to `x86_64-pc-windows-msvc`.
 
 Prerequisites:
-
-- Rust with the `x86_64-pc-windows-msvc` target.
-- LLVM 23: `clang, clang-cl, lld-link, llvm-lib, llvm-rc, llvm-mt`.
-  Older releases can fail on the MSVC STL in the xwin splat.
-- A Windows CRT + SDK splat from [xwin](https://github.com/Jake-Shadle/xwin)
-  in `~/.xwin` (override the location with `XWIN_ROOT`).
 - `CMake`, `Ninja`, `Meson`, and `NASM`, for static codec dependencies.
 - `Wine`, for the tests and for compiling the HLSL shaders.
+- LLVM 23: `clang, clang-cl, lld-link, llvm-lib, llvm-rc, llvm-mt`.
+- Rust with the `x86_64-pc-windows-msvc` target.
+- A Windows CRT + SDK splat from [xwin](https://github.com/Jake-Shadle/xwin)
+  in `~/.xwin` (override the location with `XWIN_ROOT`).
 
-Ubuntu 26.04 packages (LLVM 23 comes from [apt.llvm.org](https://apt.llvm.org/)):
+Ubuntu 26.04 packages:
+
+```sh
+sudo apt-get install cmake ninja-build meson nasm wine git
+```
+
+LLVM 23 from [apt.llvm.org](https://apt.llvm.org/):
 
 ```sh
 wget -qO llvm.sh https://apt.llvm.org/llvm.sh
 sudo bash llvm.sh 23
-sudo apt-get install cmake ninja-build meson nasm wine git
 ```
 
 LLVM tools on PATH:
