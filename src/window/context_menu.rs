@@ -236,7 +236,7 @@ impl<'a> MenuBuilder<'a> {
             self.append_separator(open_with)?;
         }
         self.append_action(open_with, Action::OtherApplication)?;
-        // No on-disk file (archive member or URL) means nothing to hand off.
+        // No on-disk file (archive member or URL) means nothing another application could open.
         self.append_submenu(
             menu,
             open_with,
@@ -476,7 +476,7 @@ mod menu_structure_tests {
 
     #[test]
     fn open_with_follows_the_on_disk_file() {
-        assert!(!submenu_is_grayed(state(), "Open with")); // a plain file can hand off
+        assert!(!submenu_is_grayed(state(), "Open with")); // a plain file can go to another application
         let mut without_file = state();
         without_file
             .requirements
