@@ -75,9 +75,19 @@ fn create_presentation_factory(d3d_device: &ID3D11Device) -> Option<IPresentatio
         *const GUID,
         *mut *mut core::ffi::c_void,
     ) -> HRESULT;
-    let module = unsafe { LoadLibraryW(w!("dcomp.dll")) }.ok()?;
-    let address = unsafe { GetProcAddress(module, s!("CreatePresentationFactory")) }?;
-    let create: CreatePresentationFactoryFunction = unsafe { std::mem::transmute(address) };
+    // Resolved once: every renderer rebuild makes a presenter, and the module never unloads.
+    static ENTRY_POINT: std::sync::OnceLock<Option<CreatePresentationFactoryFunction>> =
+        std::sync::OnceLock::new();
+    let create = (*ENTRY_POINT.get_or_init(|| {
+        let module = unsafe { LoadLibraryW(w!("dcomp.dll")) }.ok()?;
+        let address = unsafe { GetProcAddress(module, s!("CreatePresentationFactory")) }?;
+        Some(unsafe {
+            std::mem::transmute::<
+                unsafe extern "system" fn() -> isize,
+                CreatePresentationFactoryFunction,
+            >(address)
+        })
+    }))?;
     let mut pointer: *mut core::ffi::c_void = core::ptr::null_mut();
     unsafe {
         create(
