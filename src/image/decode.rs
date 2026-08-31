@@ -3996,3 +3996,74 @@ mod gain_map_decode_tests {
         assert_eq!(decoded.pixel_bytes(), decoded.frame_byte_length());
     }
 }
+
+#[cfg(test)]
+mod webp_refinement_tests {
+    use super::*;
+
+    fn webp_header(flags: u8) -> Vec<u8> {
+        let mut header = Vec::new();
+        header.extend_from_slice(b"RIFF");
+        header.extend_from_slice(&[0x24, 0, 0, 0]);
+        header.extend_from_slice(b"WEBP");
+        header.extend_from_slice(b"VP8X");
+        header.extend_from_slice(&[10, 0, 0, 0]);
+        header.push(flags);
+        header.extend_from_slice(&[0; 9]);
+        header
+    }
+
+    #[test]
+    fn an_animation_flag_routes_to_the_demuxer() {
+        // WIC renders an animated WebP as a still, so this routing is what animates it.
+        let descriptor =
+            descriptor_for_bytes(&webp_header(0x02), Some("webp")).expect("descriptor");
+        assert!(matches!(descriptor.adapter, Adapter::WebPAnimation));
+        assert!(matches!(descriptor.semantics, FrameSemantics::Animation));
+    }
+
+    #[test]
+    fn a_still_webp_stays_with_wic() {
+        let descriptor =
+            descriptor_for_bytes(&webp_header(0x00), Some("webp")).expect("descriptor");
+        assert!(!matches!(descriptor.adapter, Adapter::WebPAnimation));
+    }
+}
+
+#[cfg(test)]
+mod extension_table_tests {
+    use super::*;
+
+    #[test]
+    fn retired_extensions_stay_out_of_the_listing() {
+        for retired in ["jfif", "hdp", "pbm", "pgm", "ppm", "xbm", "xpm", "tga"] {
+            assert!(
+                format_name_for_extension(retired).is_none(),
+                "{retired} crept back into the extension table"
+            );
+        }
+        assert_eq!(format_name_for_extension("jpg"), Some("JPEG"));
+        assert_eq!(format_name_for_extension("jxr"), Some("JPEG XR"));
+        assert_eq!(format_name_for_extension("wdp"), Some("JPEG XR"));
+    }
+}
+
+#[cfg(test)]
+mod store_codec_error_tests {
+    use super::*;
+
+    #[test]
+    fn exactly_the_three_missing_codec_results_ask_for_the_store() {
+        assert!(is_missing_codec_error(ErrorCode::Hresult(
+            WINCODEC_ERR_COMPONENTNOTFOUND.0
+        )));
+        assert!(is_missing_codec_error(ErrorCode::Hresult(
+            WINCODEC_ERR_COMPONENTINITIALIZEFAILURE.0
+        )));
+        assert!(is_missing_codec_error(ErrorCode::Hresult(
+            MF_E_TOPO_CODEC_NOT_FOUND.0
+        )));
+        assert!(!is_missing_codec_error(ErrorCode::Hresult(E_ABORT.0)));
+        assert!(!is_missing_codec_error(ErrorCode::None));
+    }
+}
