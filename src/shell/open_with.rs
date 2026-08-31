@@ -43,10 +43,11 @@ fn enumerate(extension: String) -> OpenWithList {
         .expect("the running module always has a path")
         .to_string_lossy()
         .into_owned();
-    let default_executable = default_executable_for(&extension).unwrap_or_default();
+    let dotted_extension = HSTRING::from(format!(".{extension}"));
+    let default_executable = default_executable_for(&dotted_extension).unwrap_or_default();
 
     // Packaged apps have no readable file path, so only riv itself is filtered out.
-    for handler in handlers_for(&extension) {
+    for handler in handlers_for(&dotted_extension) {
         let Some(executable_path) = handler_executable_path(&handler) else {
             continue;
         };
@@ -92,7 +93,8 @@ pub fn invoke(path: &Path, executable_path: &str) -> InvokeOutcome {
     let Some(extension) = crate::text::lowercase_extension(path) else {
         return InvokeOutcome::HandlerMissing;
     };
-    for handler in handlers_for(&extension) {
+    let dotted_extension = HSTRING::from(format!(".{extension}"));
+    for handler in handlers_for(&dotted_extension) {
         if handler_executable_path(&handler)
             .is_some_and(|name| name.eq_ignore_ascii_case(executable_path))
         {
@@ -122,9 +124,9 @@ pub fn show_open_with_dialog(window: HWND, path: &Path) {
     let _ = unsafe { SHOpenWithDialog(Some(window), &raw const information) };
 }
 
-fn handlers_for(extension: &str) -> Vec<IAssocHandler> {
-    let extension = HSTRING::from(format!(".{extension}"));
-    let Ok(enumerator) = (unsafe { SHAssocEnumHandlers(&extension, ASSOC_FILTER_RECOMMENDED) })
+fn handlers_for(dotted_extension: &HSTRING) -> Vec<IAssocHandler> {
+    let Ok(enumerator) =
+        (unsafe { SHAssocEnumHandlers(dotted_extension, ASSOC_FILTER_RECOMMENDED) })
     else {
         return Vec::new();
     };
@@ -152,15 +154,14 @@ fn handler_ui_name(handler: &IAssocHandler) -> Option<String> {
         .map(crate::text::take_task_memory_string)
 }
 
-fn default_executable_for(extension: &str) -> Option<String> {
-    let extension = HSTRING::from(format!(".{extension}"));
+fn default_executable_for(dotted_extension: &HSTRING) -> Option<String> {
     let mut buffer = [0u16; 1024];
     let mut length = buffer.len() as u32;
     let status = unsafe {
         AssocQueryStringW(
             ASSOCF_INIT_IGNOREUNKNOWN,
             ASSOCSTR_EXECUTABLE,
-            &extension,
+            dotted_extension,
             PCWSTR::null(),
             Some(windows::core::PWSTR(buffer.as_mut_ptr())),
             &raw mut length,
