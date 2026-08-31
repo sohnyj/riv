@@ -195,6 +195,9 @@ const PRELOAD_SPECIFICATIONS: [(usize, usize, u64); 3] = [
     (2, 6, 2 * 1024 * 1024 * 1024),
 ];
 
+// The loader validates the stored index against the choice list, so the rows must stay paired.
+const _: () = assert!(PRELOAD_SPECIFICATIONS.len() == crate::settings::PRELOADING_CHOICES.len());
+
 #[derive(Clone, PartialEq)]
 pub struct CoreOptions {
     pub sort_mode: SortMode,
@@ -595,8 +598,7 @@ impl ImageCore {
 
     /// Preload distances and budget, aimed along the current navigation direction.
     fn preload_plan(&self) -> (usize, usize, u64) {
-        let (backward, forward, budget) =
-            PRELOAD_SPECIFICATIONS[self.options.preloading_mode.min(2)];
+        let (backward, forward, budget) = PRELOAD_SPECIFICATIONS[self.options.preloading_mode];
         if self.navigating_backward {
             (forward, backward, budget)
         } else {
