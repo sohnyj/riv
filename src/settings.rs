@@ -393,11 +393,18 @@ impl SettingsFile {
                 .as_i64()
                 .and_then(|value| i32::try_from(value).ok())
         };
+        let x = read(KEY_PLACEMENT_X)?;
+        let y = read(KEY_PLACEMENT_Y)?;
+        let width = read(KEY_PLACEMENT_WIDTH).filter(|width| *width > 0)?;
+        let height = read(KEY_PLACEMENT_HEIGHT).filter(|height| *height > 0)?;
+        // The consumer builds x + width edges, so a sum past i32 drops the restore too.
+        x.checked_add(width)?;
+        y.checked_add(height)?;
         Some((
-            read(KEY_PLACEMENT_X)?,
-            read(KEY_PLACEMENT_Y)?,
-            read(KEY_PLACEMENT_WIDTH).filter(|width| *width > 0)?,
-            read(KEY_PLACEMENT_HEIGHT).filter(|height| *height > 0)?,
+            x,
+            y,
+            width,
+            height,
             placement
                 .get(KEY_PLACEMENT_MAXIMIZED)
                 .and_then(Value::as_bool)
@@ -920,6 +927,17 @@ mod window_placement_bounds_tests {
         let folded = settings_with(serde_json::json!({ "windowplacement": {
             "x": 0, "y": 0, "width": 4_294_967_297i64, "height": 480 } }));
         assert_eq!(folded.window_placement(), None);
+    }
+
+    #[test]
+    fn a_placement_sum_past_i32_drops_the_restore() {
+        // Each field fits i32, but the right edge x + width the consumer builds does not.
+        let summed = settings_with(serde_json::json!({ "windowplacement": {
+            "x": 2_000_000_000, "y": 0, "width": 2_000_000_000, "height": 480 } }));
+        assert_eq!(summed.window_placement(), None);
+        let summed_vertical = settings_with(serde_json::json!({ "windowplacement": {
+            "x": 0, "y": 2_000_000_000, "width": 640, "height": 2_000_000_000 } }));
+        assert_eq!(summed_vertical.window_placement(), None);
     }
 }
 
