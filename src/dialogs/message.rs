@@ -13,6 +13,10 @@ use crate::dialogs::modal::IDOK;
 /// The dismiss label every plain failure dialog passes.
 pub const CLOSE_BUTTON: &str = "Close";
 
+/// The confirmation pair; the delete confirmation shares this vocabulary.
+pub const YES_BUTTON: PCWSTR = w!("Yes");
+pub const NO_BUTTON: PCWSTR = w!("No");
+
 /// One-message task dialog titled after the action; the headline leads the message.
 pub fn show_message(owner: Option<HWND>, title: &str, headline: &str, detail: &str, button: &str) {
     let title = HSTRING::from(title);
@@ -49,11 +53,11 @@ pub fn confirm_message(owner: Option<HWND>, title: &str, question: &str, detail:
     let buttons = [
         TASKDIALOG_BUTTON {
             nButtonID: IDYES.0,
-            pszButtonText: w!("Yes"),
+            pszButtonText: YES_BUTTON,
         },
         TASKDIALOG_BUTTON {
             nButtonID: IDNO.0,
-            pszButtonText: w!("No"),
+            pszButtonText: NO_BUTTON,
         },
     ];
     let placement = match owner {

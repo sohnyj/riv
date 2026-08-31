@@ -54,11 +54,11 @@ pub fn confirm_delete(window: HWND, details: &str, permanent: bool) -> DeleteCon
     let buttons = [
         TASKDIALOG_BUTTON {
             nButtonID: IDYES.0,
-            pszButtonText: w!("Yes"),
+            pszButtonText: crate::dialogs::message::YES_BUTTON,
         },
         TASKDIALOG_BUTTON {
             nButtonID: IDNO.0,
-            pszButtonText: w!("No"),
+            pszButtonText: crate::dialogs::message::NO_BUTTON,
         },
     ];
     let mut configuration = TASKDIALOGCONFIG {
