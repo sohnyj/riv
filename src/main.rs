@@ -1228,7 +1228,10 @@ impl Application {
             } = color::display_color(self.display_watcher.as_ref(), window);
             let _ = self.reconfigure_display_output(&capabilities, display_profile, true);
         }
-        let viewport = self.viewport(window);
+        let viewport = Size {
+            width: width as f32,
+            height: height as f32,
+        };
         let image = self.image_size();
         self.view_transform.synchronize(viewport, image);
         let matrix = self.view_transform.matrix(viewport, image);

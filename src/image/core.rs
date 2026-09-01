@@ -1539,16 +1539,10 @@ impl ImageCore {
             }
         }
         // The cached rasters expire with the weights; a revisit rasterizes at the new size.
-        let stale: Vec<ItemLocation> = self
-            .cache
-            .keys()
-            .filter(|location| display_sized(location))
-            .cloned()
-            .collect();
-        for location in stale {
-            if let Some(entry) = self.cache.remove(&location) {
-                self.releaser.release(entry.image);
-            }
+        let cache = &mut self.cache;
+        let releaser = &self.releaser;
+        for (_, entry) in cache.extract_if(|location, _| display_sized(location)) {
+            releaser.release(entry.image);
         }
         // The one on screen re-rasterizes now; a URL waits for reload, its only outlet.
         if self.request.pending().is_none()

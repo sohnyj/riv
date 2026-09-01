@@ -44,7 +44,7 @@ fn enumerate(extension: String) -> OpenWithList {
         .to_string_lossy()
         .into_owned();
     let dotted_extension = HSTRING::from(format!(".{extension}"));
-    let default_executable = default_executable_for(&dotted_extension).unwrap_or_default();
+    let default_executable = default_executable_for(&dotted_extension);
 
     // Packaged apps have no readable file path, so only riv itself is filtered out.
     for handler in handlers_for(&dotted_extension) {
@@ -61,19 +61,15 @@ fn enumerate(extension: String) -> OpenWithList {
         });
     }
     items.sort_by(|a, b| crate::text::natural_order_text(&a.display_name, &b.display_name));
-    let default_index = (!default_executable.is_empty())
-        .then(|| {
-            items.iter().position(|item| {
-                item.executable_path
-                    .eq_ignore_ascii_case(&default_executable)
-            })
-        })
-        .flatten();
-    let mut has_default = false;
+    let default_index = default_executable.as_deref().and_then(|executable| {
+        items
+            .iter()
+            .position(|item| item.executable_path.eq_ignore_ascii_case(executable))
+    });
+    let has_default = default_index.is_some();
     if let Some(index) = default_index {
         let default_item = items.remove(index);
         items.insert(0, default_item);
-        has_default = true;
     }
     OpenWithList {
         extension,

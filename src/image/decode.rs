@@ -827,8 +827,7 @@ fn descriptor_for_path(path: &Path) -> Option<&'static FormatDescriptor> {
             None => descriptor,
         });
     }
-    let header = read_header(path)?;
-    descriptor_for_magic(&header).map(|descriptor| refine_by_content(descriptor, &header))
+    descriptor_for_content(path)
 }
 
 fn descriptor_for_bytes(
@@ -1297,7 +1296,7 @@ fn decode_raw_preview(
     format_name: &'static str,
     cancellation: &AtomicBool,
 ) -> Option<DecodedImage> {
-    let decoded = with_wic_factory(|factory| {
+    with_wic_factory(|factory| {
         let decoder = create_wic_decoder(factory, &DecodeInput::File(path))?;
         let preview =
             unsafe { decoder.GetPreview() }.or_else(|_| unsafe { decoder.GetThumbnail() })?;
@@ -1338,8 +1337,7 @@ fn decode_raw_preview(
             gain_map_plane: None,
         })
     })
-    .ok()?;
-    Some(decoded)
+    .ok()
 }
 
 /// Preview request: a quarter for float sources, half for the rest, capped near the monitor.
@@ -1372,7 +1370,7 @@ fn decode_subresolution_preview(
     format_name: &'static str,
     cancellation: &AtomicBool,
 ) -> Option<DecodedImage> {
-    let decoded = with_wic_factory(|factory| {
+    with_wic_factory(|factory| {
         let decoder = create_wic_decoder(factory, &DecodeInput::File(path))?;
         let frame = unsafe { decoder.GetFrame(0)? };
         let Some(scaled) = subresolution_source(factory, &frame, cancellation)? else {
@@ -1381,8 +1379,7 @@ fn decode_subresolution_preview(
         decode_frame_source(factory, &frame, scaled, format_name, cancellation).map(Some)
     })
     .ok()
-    .flatten()?;
-    Some(decoded)
+    .flatten()
 }
 
 /// Sub-resolution copy through the decoder's native scaler; None when the decoder cannot scale.
