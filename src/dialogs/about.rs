@@ -87,7 +87,8 @@ fn layout_centered(page: HWND) {
     }
 
     let block_top = placements[0].2;
-    let block_bottom = placements.last().map_or(block_top, |row| row.2 + row.3);
+    let last_row = &placements[placements.len() - 1];
+    let block_bottom = last_row.2 + last_row.3;
     let offset = (height - (block_bottom - block_top)) / 2 - block_top;
 
     for (id, control, top, row_height) in placements {

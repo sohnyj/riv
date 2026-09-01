@@ -614,12 +614,7 @@ fn append_exif_lines(lines: &mut Vec<String>, exif: &crate::image::decode::ExifM
 
 fn trim_number(value: f64, decimals: usize) -> String {
     let text = format!("{value:.decimals$}");
-    let trimmed = text.trim_end_matches('0').trim_end_matches('.');
-    if trimmed.is_empty() || trimmed == "-" {
-        "0".to_string()
-    } else {
-        trimmed.to_string()
-    }
+    text.trim_end_matches('0').trim_end_matches('.').to_string()
 }
 
 /// Reasons reach the overlay from Rust, Win32 and the C shims, so it makes the sentence.
