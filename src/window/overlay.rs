@@ -454,9 +454,11 @@ pub fn build_information_text(
         PixelStorage::Bgra8 => format!("{}-bit", image.source_bits_per_channel),
     };
 
+    // The name is its own section, so the joining below rules a divider under it.
+    let name = vec![file_name.to_string()];
+
     // File: the file's own identity, always present so navigation stays steady.
     let mut file = vec![
-        file_name.to_string(),
         format!("{FORMAT_LABEL}{}", image.format_name),
         resolution_text(image),
         format!("Ratio: {}", format_aspect_ratio(image.width, image.height)),
@@ -519,7 +521,7 @@ pub fn build_information_text(
         append_exif_lines(&mut exif, exif_metadata);
     }
 
-    let sections = [file, display, render, metrics, exif]
+    let sections = [name, file, display, render, metrics, exif]
         .into_iter()
         .filter(|section| !section.is_empty());
     let mut lines = Vec::new();
