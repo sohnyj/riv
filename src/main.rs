@@ -98,8 +98,8 @@ const APPLICATION_ICON_ID: PCWSTR = PCWSTR(std::ptr::without_provenance(1));
 /// The app name: the window class, the bare window title, and the startup error title.
 const APPLICATION_NAME: &str = "riv";
 
-/// One-line description the Start Menu shortcut and the registry capabilities share.
-const APPLICATION_DESCRIPTION: &str = "riv image viewer";
+/// Shortcut and registry capability description; Cargo.toml owns the wording.
+const APPLICATION_DESCRIPTION: &str = env!("CARGO_PKG_DESCRIPTION");
 
 /// The title-bar text setting: what `update_window_title` composes for the caption.
 #[derive(Clone, Copy)]

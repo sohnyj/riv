@@ -77,7 +77,7 @@ fn main() {
             "  BEGIN\n",
             "    BLOCK \"040904B0\"\n", // en-US, Unicode
             "  BEGIN\n",
-            "      VALUE \"FileDescription\", \"riv image viewer\"\n",
+            "      VALUE \"FileDescription\", \"{description}\"\n",
             "      VALUE \"FileVersion\", \"{version}\"\n",
             "      VALUE \"ProductName\", \"riv\"\n",
             "      VALUE \"ProductVersion\", \"{version}\"\n",
@@ -94,6 +94,7 @@ fn main() {
         manifest = processed_manifest.display(),
         numeric = numeric,
         version = version,
+        description = env::var("CARGO_PKG_DESCRIPTION").unwrap(),
     );
     std::fs::write(&generated_source, generated).expect("generated rc writable");
 
