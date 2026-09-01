@@ -69,12 +69,11 @@ configure_and_install() { # <directory> [extra cmake args...]
         -DCMAKE_BUILD_TYPE=Release \
         -DCMAKE_C_FLAGS_RELEASE="/clang:-O3 /clang:-flto=thin /DNDEBUG" \
         -DCMAKE_CXX_FLAGS_RELEASE="/clang:-O3 /clang:-flto=thin /DNDEBUG" \
-        -DCMAKE_TOOLCHAIN_FILE="$ROOT/toolchain-clang-cl.cmake" \
-        -DCMAKE_INSTALL_PREFIX="$PREFIX" \
         -DCMAKE_FIND_ROOT_PATH="$PREFIX" \
-        -DCMAKE_PREFIX_PATH="$PREFIX" \
-        -DCMAKE_POLICY_DEFAULT_CMP0091=NEW \
+        -DCMAKE_INSTALL_PREFIX="$PREFIX" \
         -DCMAKE_MSVC_RUNTIME_LIBRARY=MultiThreaded \
+        -DCMAKE_PREFIX_PATH="$PREFIX" \
+        -DCMAKE_TOOLCHAIN_FILE="$ROOT/toolchain-clang-cl.cmake" \
         -DBUILD_SHARED_LIBS=OFF \
         "$@"
     ninja -C "build/$directory" install
@@ -133,8 +132,9 @@ ninja -C build/dav1d install
 
 # libheif (HEIF runtime fallback + AVIF sequences on the dav1d above)
 (
-    export CFLAGS="-DLIBDE265_STATIC_BUILD"
-    export CXXFLAGS="-DLIBDE265_STATIC_BUILD"
+    # The CRT defines take the banner's own switches for the strcpy/unlink deprecations.
+    export CFLAGS="-DLIBDE265_STATIC_BUILD -D_CRT_SECURE_NO_WARNINGS -D_CRT_NONSTDC_NO_DEPRECATE"
+    export CXXFLAGS="-DLIBDE265_STATIC_BUILD -D_CRT_SECURE_NO_WARNINGS -D_CRT_NONSTDC_NO_DEPRECATE"
     # find_library looks for *.lib only, so the meson archive is pinned directly.
     configure_and_install libheif \
         -DBUILD_TESTING=OFF \
@@ -147,34 +147,39 @@ ninja -C build/dav1d install
         -DWITH_EXAMPLES=OFF \
         -DWITH_GDK_PIXBUF=OFF \
         -DWITH_LIBDE265=ON \
+        -DWITH_OpenH264_DECODER=OFF \
+        -DWITH_X264=OFF \
         -DWITH_X265=OFF
 )
 
 # Imath + libdeflate (OpenEXR dependencies)
 configure_and_install imath \
     -DBUILD_TESTING=OFF \
+    -DCMAKE_POLICY_DEFAULT_CMP0091=NEW \
     -DIMATH_INSTALL_PKG_CONFIG=ON \
     -DPYTHON=OFF
 
 configure_and_install libdeflate \
+    -DCMAKE_POLICY_DEFAULT_CMP0091=NEW \
+    -DLIBDEFLATE_BUILD_GZIP=OFF \
     -DLIBDEFLATE_BUILD_SHARED_LIB=OFF \
     -DLIBDEFLATE_BUILD_STATIC_LIB=ON \
-    -DLIBDEFLATE_BUILD_GZIP=OFF \
     -DLIBDEFLATE_BUILD_TESTS=OFF
 
-# OpenEXR: its CMake adds a /MP that clang-cl ignores and reports once per file
+# OpenEXR: clang-cl ignores its /MP and warns per file; the C core's Interlocked pointer sign is benign on LLP64
 (
-    export CFLAGS="-Wno-unused-command-line-argument"
+    export CFLAGS="-Wno-unused-command-line-argument -Wno-pointer-sign"
     export CXXFLAGS="-Wno-unused-command-line-argument"
     configure_and_install openexr \
         -DBUILD_TESTING=OFF \
+        -DCMAKE_POLICY_DEFAULT_CMP0091=NEW \
         -DOPENEXR_BUILD_EXAMPLES=OFF \
         -DOPENEXR_BUILD_TOOLS=OFF \
-        -DOPENEXR_INSTALL_PKG_CONFIG=ON \
-        -DOPENEXR_INSTALL_TOOLS=OFF \
-        -DOPENEXR_FORCE_INTERNAL_IMATH=OFF \
+        -DOPENEXR_ENABLE_THREADING=ON \
         -DOPENEXR_FORCE_INTERNAL_DEFLATE=OFF \
-        -DOPENEXR_ENABLE_THREADING=ON
+        -DOPENEXR_FORCE_INTERNAL_IMATH=OFF \
+        -DOPENEXR_INSTALL_PKG_CONFIG=ON \
+        -DOPENEXR_INSTALL_TOOLS=OFF
 )
 
 # EXR and HEIF shims
@@ -182,12 +187,11 @@ cmake -S shim -B build/shim -G Ninja \
     -DCMAKE_BUILD_TYPE=Release \
     -DCMAKE_C_FLAGS_RELEASE="/clang:-O3 /clang:-flto=thin /DNDEBUG" \
     -DCMAKE_CXX_FLAGS_RELEASE="/clang:-O3 /clang:-flto=thin /DNDEBUG" \
-    -DCMAKE_TOOLCHAIN_FILE="$ROOT/toolchain-clang-cl.cmake" \
-    -DCMAKE_INSTALL_PREFIX="$PREFIX" \
     -DCMAKE_FIND_ROOT_PATH="$PREFIX" \
+    -DCMAKE_INSTALL_PREFIX="$PREFIX" \
+    -DCMAKE_MSVC_RUNTIME_LIBRARY=MultiThreaded \
     -DCMAKE_PREFIX_PATH="$PREFIX" \
-    -DCMAKE_POLICY_DEFAULT_CMP0091=NEW \
-    -DCMAKE_MSVC_RUNTIME_LIBRARY=MultiThreaded
+    -DCMAKE_TOOLCHAIN_FILE="$ROOT/toolchain-clang-cl.cmake"
 ninja -C build/shim install
 
 echo "fallback codecs installed to $PREFIX"
