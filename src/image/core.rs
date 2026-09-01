@@ -2790,10 +2790,12 @@ mod listing_scan_tests {
     fn a_dropped_anchor_keeps_its_place_through_a_synchronous_rescan() {
         let directory = fixture_directory("riv-rescan-anchor", &["1.png", "2.png", "3.png"]);
         let mut core = core();
-        core.load_path(&directory.join("2.png"));
-        let scan = ScannedListing::of(ListingScope::Directory(directory.clone()), &core.options);
-        core.install_listing_scan(scan);
+        core.rescan_folder(&directory);
         assert_eq!(core.entries.len(), 3);
+        let anchor =
+            ItemLocation::File(std::path::absolute(directory.join("2.png")).expect("absolute"));
+        // Anchored without a decode: a worker holding the file open would race the removal.
+        core.request = ViewRequest::Pending(anchor);
         // The viewed file drops out when an options change re-collects the listing.
         std::fs::remove_file(directory.join("2.png")).expect("remove");
         core.rescan_listing();
