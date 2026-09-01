@@ -228,8 +228,8 @@ struct Application {
     drop_target: Option<IDropTarget>,
     /// One list per extension seen this session; handler registration is per extension.
     open_with_lists: HashMap<String, OpenWithList>,
-    /// Extension whose enumeration is running; at most one runs at a time.
-    open_with_pending_extension: Option<String>,
+    /// Whether an enumeration is running; at most one runs at a time.
+    open_with_enumeration_pending: bool,
 }
 
 /// A status pill: Timed auto-expires, Sticky holds until the image or playback changes.
@@ -445,7 +445,7 @@ impl Application {
             animation: None,
             drop_target: None,
             open_with_lists: HashMap::new(),
-            open_with_pending_extension: None,
+            open_with_enumeration_pending: false,
         };
         application.adopt_display_capabilities(&capabilities);
         if let Some(renderer) = &mut application.renderer {
@@ -482,7 +482,7 @@ impl Application {
 
     /// Derives the two capability mirrors the renderer setters read; every display path adopts here.
     fn adopt_display_capabilities(&mut self, capabilities: &color::DisplayCapabilities) {
-        self.sdr_white_boost = capabilities.sdr_white_boost_for(capabilities.hdr);
+        self.sdr_white_boost = capabilities.output_sdr_white_boost();
         self.display_headroom = capabilities.gain_map_headroom();
     }
 
@@ -1315,12 +1315,10 @@ impl Application {
         else {
             return;
         };
-        if self.open_with_lists.contains_key(&extension)
-            || self.open_with_pending_extension.is_some()
-        {
+        if self.open_with_lists.contains_key(&extension) || self.open_with_enumeration_pending {
             return;
         }
-        self.open_with_pending_extension = Some(extension.clone());
+        self.open_with_enumeration_pending = true;
         open_with::enumerate_in_background(window, extension);
     }
 
@@ -2744,7 +2742,7 @@ extern "system" fn window_procedure(
                 return LRESULT(0);
             };
             if let Some(application) = application_from_window(window) {
-                application.open_with_pending_extension = None;
+                application.open_with_enumeration_pending = false;
                 application
                     .open_with_lists
                     .insert(list.extension.clone(), *list);

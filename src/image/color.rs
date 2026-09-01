@@ -174,13 +174,9 @@ impl DisplayCapabilities {
         Some(ceiling / (SDR_REFERENCE_WHITE_NITS * self.sdr_white_boost.max(0.01)))
     }
 
-    /// SDR white boost for the given output; 1.0 outside HDR (ACM output is display-referred).
-    pub fn sdr_white_boost_for(&self, hdr_output: bool) -> f32 {
-        if hdr_output {
-            self.sdr_white_boost
-        } else {
-            1.0
-        }
+    /// SDR white boost for this display's output; 1.0 outside HDR (ACM output is display-referred).
+    pub fn output_sdr_white_boost(&self) -> f32 {
+        if self.hdr { self.sdr_white_boost } else { 1.0 }
     }
 }
 
@@ -255,7 +251,7 @@ pub fn display_color(watcher: Option<&DisplayWatcher>, window: HWND) -> DisplayC
 
 /// The ICC profile Windows associates with the window's monitor.
 fn monitor_device_profile(window: HWND) -> Option<Vec<u8>> {
-    for_window_display_path(window, display_path_profile)
+    display_path_profile(&window_display_path(window)?)
 }
 
 /// The display path's default ICC profile, in the scope the display currently uses.
@@ -421,11 +417,8 @@ fn gamut_from(information: &AdvancedColorInfo) -> Option<DisplayGamut> {
     gamut.is_known().then_some(gamut)
 }
 
-/// Applies `read` to the active display path driving `window`'s monitor.
-fn for_window_display_path<T>(
-    window: HWND,
-    read: impl Fn(&DISPLAYCONFIG_PATH_INFO) -> Option<T>,
-) -> Option<T> {
+/// The active display path driving `window`'s monitor.
+fn window_display_path(window: HWND) -> Option<DISPLAYCONFIG_PATH_INFO> {
     let monitor = unsafe { MonitorFromWindow(window, MONITOR_DEFAULTTONEAREST) };
     let mut monitor_information = MONITORINFOEXW::default();
     monitor_information.monitorInfo.cbSize = size_of::<MONITORINFOEXW>() as u32;
@@ -485,7 +478,7 @@ fn for_window_display_path<T>(
         {
             continue;
         }
-        return read(path);
+        return Some(*path);
     }
     None
 }

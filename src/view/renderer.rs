@@ -56,7 +56,7 @@ use windows_numerics::{Matrix3x2, Vector2};
 use std::sync::Arc;
 use std::thread;
 
-use crate::image::color::{SDR_REFERENCE_WHITE_NITS, nearest_gamut_label};
+use crate::image::color::{DisplayLuminances, SDR_REFERENCE_WHITE_NITS, nearest_gamut_label};
 use crate::image::decode::{
     DecodedImage, PixelStorage, UploadDevice, UploadedTexture, maximum_resource_bytes,
     try_zeroed_buffer, upload_still_texture,
@@ -107,8 +107,6 @@ struct ModeEffects {
     output_color_management_effect: Option<ID2D1Effect>,
     white_level_effect: Option<ID2D1Effect>,
 }
-
-use crate::image::color::DisplayLuminances;
 
 #[derive(Clone, PartialEq)]
 pub struct OutputMode {
@@ -844,7 +842,7 @@ impl Renderer {
     }
 
     /// The SDR output is advanced-color FP16 scRGB, wide gamut handed to DWM.
-    pub fn is_sdr_wide_gamut(&self) -> bool {
+    fn is_sdr_wide_gamut(&self) -> bool {
         self.output_mode.is_sdr_wide_gamut()
     }
 
@@ -863,7 +861,7 @@ impl Renderer {
         self.output_label = if self.backbuffer_format == SCRGB_BACKBUFFER_FORMAT {
             "FP16 scRGB".to_string()
         } else {
-            self.sdr_output_label("8-bit")
+            self.sdr_output_label()
         };
     }
 
@@ -915,11 +913,11 @@ impl Renderer {
     }
 
     /// SDR output label; ACM-off profile mapping appends the destination gamut.
-    fn sdr_output_label(&self, bits: &str) -> String {
+    fn sdr_output_label(&self) -> String {
         let destination = self.destination_gamut_label.unwrap_or("sRGB");
         match self.source_gamut_label {
-            Some(source) if source != destination => format!("{bits} {source} in {destination}"),
-            _ => format!("{bits} {destination}"),
+            Some(source) if source != destination => format!("8-bit {source} in {destination}"),
+            _ => format!("8-bit {destination}"),
         }
     }
 
@@ -1096,11 +1094,8 @@ impl Renderer {
             // The pass depends only on the (unchanged) device, so keep it across reconfigures.
             self.quantize_pass = QuantizePass::new(&self.d3d_device).ok();
         }
-        let backbuffer_format = match &mut self.present_target {
-            PresentTarget::Composition(presenter) => {
-                presenter.set_color_space(color_space)?;
-                format
-            }
+        match &mut self.present_target {
+            PresentTarget::Composition(presenter) => presenter.set_color_space(color_space)?,
             PresentTarget::SwapChain { swap_chain, .. } => {
                 unsafe { swap_chain.ResizeBuffers(0, 0, 0, format, SWAP_CHAIN_FLAGS) }?;
                 if let Ok(swap_chain3) = swap_chain.cast::<IDXGISwapChain3>() {
@@ -1111,9 +1106,8 @@ impl Renderer {
                         let _ = declare_color_space(&swap_chain3, SDR_BACKBUFFER_COLOR_SPACE);
                     }
                 }
-                format
             }
-        };
+        }
 
         let mode_effects = Self::create_mode_effects(
             &self.d2d_context,
@@ -1124,7 +1118,7 @@ impl Renderer {
             self.sdr_destination_context(),
         );
         self.mode_effects = mode_effects;
-        self.backbuffer_format = backbuffer_format;
+        self.backbuffer_format = format;
         self.refresh_output_label();
         self.create_target()
     }
