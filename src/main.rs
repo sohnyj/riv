@@ -920,9 +920,11 @@ impl Application {
         self.request_render(window);
     }
 
+    /// Owns the pill's repaint; callers repaint again only for a view change of their own.
     fn show_status_text(&mut self, window: HWND, text: String) {
         self.status_text = Some(StatusText::Timed(text));
         unsafe { SetTimer(Some(window), STATUS_TEXT_TIMER, 1000, None) };
+        self.request_render(window);
     }
 
     /// Drops any status pill; moving to another item ends its context.
@@ -997,7 +999,6 @@ impl Application {
             self.slideshow_item_shown_at = Some(std::time::Instant::now());
             self.keep_system_awake(true);
             self.show_status_text(window, "Slideshow: On".to_string());
-            self.request_render(window);
         }
     }
 
@@ -1031,7 +1032,6 @@ impl Application {
             let _ = unsafe { KillTimer(Some(window), SLIDESHOW_TIMER) };
             self.keep_system_awake(false);
             self.show_status_text(window, "Slideshow: Off".to_string());
-            self.request_render(window);
         }
     }
 
@@ -1632,7 +1632,6 @@ fn dispatch_action(application: &mut Application, window: HWND, action: Action) 
                 "Off"
             };
             application.show_status_text(window, format!("Preserve zoom: {state}"));
-            application.request_render(window);
         }
         Action::Information => {
             // Any pill masks the panel; one press reveals it rather than toggling off unseen.
@@ -1728,7 +1727,6 @@ fn dispatch_action(application: &mut Application, window: HWND, action: Action) 
                 )
             };
             application.show_status_text(window, format!("Always on top: {state}"));
-            application.request_render(window);
         }
         Action::ToggleFullscreen => {
             toggle_fullscreen(application, window);
@@ -1801,7 +1799,6 @@ fn dispatch_action(application: &mut Application, window: HWND, action: Action) 
                 animation.adjust_speed(action == Action::IncreaseSpeed);
                 let text = format!("Speed: {}%", animation.speed_percent());
                 application.show_status_text(window, text);
-                application.request_render(window);
             }
         }
         Action::ResetSpeed => {
@@ -1809,7 +1806,6 @@ fn dispatch_action(application: &mut Application, window: HWND, action: Action) 
                 animation.reset_speed();
                 let text = format!("Speed: {}%", animation.speed_percent());
                 application.show_status_text(window, text);
-                application.request_render(window);
             }
         }
         Action::Settings => {
