@@ -20,6 +20,12 @@ pub fn create_vertex_shader(device: &ID3D11Device) -> Result<ID3D11VertexShader>
     Ok(vertex_shader.expect("CreateVertexShader succeeded without shader"))
 }
 
+pub fn create_pixel_shader(device: &ID3D11Device, shader: &[u8]) -> Result<ID3D11PixelShader> {
+    let mut pixel_shader = None;
+    unsafe { device.CreatePixelShader(shader, None, Some(&raw mut pixel_shader))? };
+    Ok(pixel_shader.expect("CreatePixelShader succeeded without shader"))
+}
+
 /// A dynamic buffer and the one Constants layout its ByteWidth was sized for.
 pub struct ConstantBuffer<Constants> {
     buffer: ID3D11Buffer,

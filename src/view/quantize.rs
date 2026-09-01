@@ -56,15 +56,9 @@ impl QuantizePass {
             SysMemPitch: BLUE_NOISE_EDGE_TEXELS * 4,
             ..Default::default()
         };
-        let mut copy_shader = None;
-        let mut ordered_shader = None;
-        let mut fruit_shader = None;
         let mut noise_texture = None;
         let mut blue_noise_view = None;
         unsafe {
-            device.CreatePixelShader(COPY_SHADER, None, Some(&raw mut copy_shader))?;
-            device.CreatePixelShader(ORDERED_SHADER, None, Some(&raw mut ordered_shader))?;
-            device.CreatePixelShader(FRUIT_SHADER, None, Some(&raw mut fruit_shader))?;
             device.CreateTexture2D(
                 &raw const noise_description,
                 Some(&raw const noise_data),
@@ -79,9 +73,9 @@ impl QuantizePass {
         }
         Ok(Self {
             vertex_shader: crate::view::pass::create_vertex_shader(device)?,
-            copy_shader: copy_shader.expect("CreatePixelShader succeeded without shader"),
-            ordered_shader: ordered_shader.expect("CreatePixelShader succeeded without shader"),
-            fruit_shader: fruit_shader.expect("CreatePixelShader succeeded without shader"),
+            copy_shader: crate::view::pass::create_pixel_shader(device, COPY_SHADER)?,
+            ordered_shader: crate::view::pass::create_pixel_shader(device, ORDERED_SHADER)?,
+            fruit_shader: crate::view::pass::create_pixel_shader(device, FRUIT_SHADER)?,
             constant_buffer: crate::view::pass::create_constant_buffer::<QuantizationConstants>(
                 device,
             )?,

@@ -55,15 +55,13 @@ impl GainMapPass {
             AddressW: D3D11_TEXTURE_ADDRESS_CLAMP,
             ..Default::default()
         };
-        let mut pixel_shader = None;
         let mut sampler = None;
         unsafe {
-            device.CreatePixelShader(GAIN_APPLY_SHADER, None, Some(&raw mut pixel_shader))?;
             device.CreateSamplerState(&raw const sampler_description, Some(&raw mut sampler))?;
         }
         Ok(Self {
             vertex_shader: crate::view::pass::create_vertex_shader(device)?,
-            pixel_shader: pixel_shader.expect("CreatePixelShader succeeded without shader"),
+            pixel_shader: crate::view::pass::create_pixel_shader(device, GAIN_APPLY_SHADER)?,
             constant_buffer: crate::view::pass::create_constant_buffer::<GainConstants>(device)?,
             sampler: sampler.expect("CreateSamplerState succeeded without sampler"),
         })
