@@ -2011,10 +2011,8 @@ fn show_menu(application: &mut Application, window: HWND, x: i32, y: i32, target
                 if let (Some(path), Some(executable)) =
                     (open_with_target, open_with_executables.get(index))
                 {
-                    let name = state
-                        .open_with_items
-                        .get(index)
-                        .map_or("the app", String::as_str);
+                    // Names and executables snapshot the same list, so this index holds a name too.
+                    let name = state.open_with_items[index].as_str();
                     match open_with::invoke(&path, executable) {
                         open_with::InvokeOutcome::Invoked => {}
                         open_with::InvokeOutcome::HandlerMissing => {
