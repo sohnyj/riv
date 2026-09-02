@@ -10,25 +10,31 @@ use windows::Win32::UI::Controls::{
     TDF_POSITION_RELATIVE_TO_WINDOW, TaskDialogIndirect,
 };
 use windows::Win32::UI::Shell::{
-    FOF_ALLOWUNDO, FOF_NOCONFIRMATION, FOF_SILENT, FileOperation, IFileOperation, IShellItem,
-    SHCreateItemFromParsingName, ShellExecuteW,
+    FOF_ALLOWUNDO, FOF_NOCONFIRMATION, FOF_SILENT, FileOperation, IFileOperation, ILFree,
+    IShellItem, SHCreateItemFromParsingName, SHOpenFolderAndSelectItems, SHParseDisplayName,
 };
-use windows::Win32::UI::WindowsAndMessaging::{IDCANCEL, IDNO, IDYES, SW_SHOWNORMAL};
+use windows::Win32::UI::WindowsAndMessaging::{IDCANCEL, IDNO, IDYES};
 use windows::core::{HSTRING, PCWSTR, Result, w};
 
-pub fn show_in_explorer(path: &Path) {
-    let argument = HSTRING::from(format!("/select,\"{}\"", path.display()));
-    // A failure shows the shell's own error UI; the app has nothing to add.
-    unsafe {
-        ShellExecuteW(
-            None,
-            w!("open"),
-            w!("explorer.exe"),
-            &argument,
-            None,
-            SW_SHOWNORMAL,
-        )
-    };
+pub fn show_in_explorer(window: HWND, path: &Path) {
+    if let Err(error) = select_in_explorer(path) {
+        crate::dialogs::message::show_message(
+            Some(window),
+            "Show in Explorer",
+            "Can't show the file in Explorer.",
+            &error.to_string(),
+            crate::dialogs::message::CLOSE_BUTTON,
+        );
+    }
+}
+
+fn select_in_explorer(path: &Path) -> Result<()> {
+    let mut item_list = std::ptr::null_mut();
+    unsafe { SHParseDisplayName(&HSTRING::from(path), None, &raw mut item_list, 0, None) }?;
+    // With no item array, the folder argument names the item to select in its parent.
+    let selected = unsafe { SHOpenFolderAndSelectItems(item_list, None, 0) };
+    unsafe { ILFree(Some(item_list)) };
+    selected
 }
 
 pub struct DeleteConfirmation {

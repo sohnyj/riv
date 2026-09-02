@@ -1761,8 +1761,12 @@ fn dispatch_action(application: &mut Application, window: HWND, action: Action) 
         Action::PasteUrl => paste_open_url(application, window),
         Action::ShowInExplorer => {
             // The ContainingFile requirement keeps URL items out of here.
-            if let Some(file) = application.image_core.current_containing_file() {
-                file_ops::show_in_explorer(file);
+            let file = application
+                .image_core
+                .current_containing_file()
+                .map(Path::to_path_buf);
+            if let Some(file) = file {
+                file_ops::show_in_explorer(window, &file);
             }
         }
         Action::Delete | Action::DeletePermanently => {
