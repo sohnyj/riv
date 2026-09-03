@@ -93,7 +93,7 @@ Prerequisites:
 - `Wine`, for the tests and for compiling the HLSL shaders.
 - LLVM 23: `clang, clang-cl, lld-link, llvm-lib, llvm-rc, llvm-mt`.
 - Rust with the `x86_64-pc-windows-msvc` target.
-- A Windows CRT + SDK splat from [xwin](https://github.com/Jake-Shadle/xwin)
+- A Windows CRT + SDK splat from xwin
   in `~/.xwin` (override the location with `XWIN_ROOT`).
 
 Ubuntu 26.04 packages:
@@ -115,17 +115,29 @@ LLVM tools on PATH:
 export PATH="/usr/lib/llvm-23/bin:$PATH"
 ```
 
-Rust and xwin:
+Rust:
 
 ```sh
 curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh
 rustup target add x86_64-pc-windows-msvc
+```
+
+[xwin](https://github.com/Jake-Shadle/xwin):
+
+```sh
 cargo install xwin
 xwin --accept-license splat --output ~/.xwin
 ```
 
+Static build of the C/C++ codecs:
+
 ```sh
-./deps/build_deps.sh   # static build of the C/C++ codecs
+./deps/build_deps.sh
+```
+
+Build:
+
+```sh
 cargo build --release
 ```
 
