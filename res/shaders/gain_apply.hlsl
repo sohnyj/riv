@@ -1,8 +1,4 @@
-// Ultra HDR gain application: base x 2^(boost x W) into a linear FP16 target.
-//
-// The base texel is sRGB-encoded BGRA; the gain map holds the encoded recovery
-// (ISO 21496-1 lineage). The SDR white boost is folded in so the output is
-// absolute scene-referred linear (1.0 = 80 nits), like every other FP16 source.
+// Ultra HDR gain application: sRGB base x 2^(boost x W), SDR white boost folded in, to linear FP16 (1.0 = 80 nits).
 
 Texture2D base_texture : register(t0);
 Texture2D gain_texture : register(t1);

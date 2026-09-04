@@ -324,7 +324,7 @@ fn capabilities_from(information: Option<&AdvancedColorInfo>, window: HWND) -> D
     }
 }
 
-/// Advanced-color mode, EDID gamut label, and wire depth of the display, for the information overlay.
+/// Advanced-color mode, gamut label, and wire depth of the display, for the information overlay.
 #[derive(Clone, Copy, PartialEq)]
 pub struct DisplayLabels {
     pub color_mode: &'static str,
@@ -347,7 +347,7 @@ impl DisplayLabels {
     }
 }
 
-/// The display's color primaries (CIE xy), from EDID; for the WCG diagnostic overlay.
+/// The display's color primaries (CIE xy) as the advanced-color snapshot reports them; for the WCG overlay.
 #[derive(Clone, Copy)]
 pub struct DisplayGamut {
     pub red: [f32; 2],
@@ -361,7 +361,7 @@ impl DisplayGamut {
         nearest_gamut_label([self.red, self.green, self.blue])
     }
 
-    /// True when EDID carried real chromaticities rather than zeros.
+    /// True when the snapshot carried real chromaticities rather than zeros.
     pub fn is_known(&self) -> bool {
         [self.red, self.green, self.blue]
             .iter()

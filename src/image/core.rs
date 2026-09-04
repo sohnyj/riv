@@ -345,26 +345,6 @@ struct CacheEntry {
 }
 
 impl CacheEntry {
-    /// A textured entry keeps no pixels: the texture is the only copy.
-    fn new(
-        metadata: ItemMetadata,
-        preview: bool,
-        image: Arc<DecodedImage>,
-        texture: Option<UploadedTexture>,
-    ) -> Self {
-        let image = if texture.is_some() && image.pixel_bytes() > 0 {
-            Arc::new(image.without_pixels())
-        } else {
-            image
-        };
-        Self {
-            metadata,
-            preview,
-            image,
-            texture,
-        }
-    }
-
     /// Cached pixels belong to a file of this size and modification time, nothing else.
     fn matches(&self, metadata: ItemMetadata) -> bool {
         self.metadata == metadata
@@ -1290,12 +1270,12 @@ impl ImageCore {
         {
             self.cache_image(
                 completion.location.clone(),
-                CacheEntry::new(
-                    completion.metadata,
-                    true,
-                    image.clone(),
-                    completion.texture.clone(),
-                ),
+                CacheEntry {
+                    metadata: completion.metadata,
+                    preview: true,
+                    image: image.clone(),
+                    texture: completion.texture.clone(),
+                },
             );
             if is_pending {
                 // Waited on: show it, then submit the full decode it precedes.
@@ -1318,12 +1298,12 @@ impl ImageCore {
                 self.record_arrived_weight(&completion.location, &image);
                 self.cache_image(
                     completion.location.clone(),
-                    CacheEntry::new(
-                        completion.metadata,
-                        false,
-                        image.clone(),
-                        completion.texture.clone(),
-                    ),
+                    CacheEntry {
+                        metadata: completion.metadata,
+                        preview: false,
+                        image: image.clone(),
+                        texture: completion.texture.clone(),
+                    },
                 );
                 if is_pending {
                     self.show_image(CurrentImage {

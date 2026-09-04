@@ -1684,9 +1684,10 @@ fn dispatch_action(application: &mut Application, window: HWND, action: Action) 
         }
         // The action owns the axis and the sign; this caller sets the distance.
         Action::PanUp | Action::PanDown | Action::PanLeft | Action::PanRight => {
-            if let Some((x, y)) = action.pan_direction() {
-                application.pan_by(window, x * PAN_STEP_PIXELS, y * PAN_STEP_PIXELS);
-            }
+            let (x, y) = action
+                .pan_direction()
+                .expect("the pan actions carry a direction");
+            application.pan_by(window, x * PAN_STEP_PIXELS, y * PAN_STEP_PIXELS);
         }
         Action::RotateRight | Action::RotateLeft => {
             let step = if action == Action::RotateRight { 1 } else { -1 };
