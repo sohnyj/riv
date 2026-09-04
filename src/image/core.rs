@@ -1869,13 +1869,17 @@ fn scan_folder(directory: &Path, options: &CoreOptions) -> Vec<ListingEntry> {
         }
         let path = entry.path();
         let format_name = crate::text::lowercase_extension(Path::new(&file_name))
-            .and_then(|extension| decode::format_name_for_extension(&extension));
-        let included = format_name.is_some()
-            || (options.detect_format_by_content
-                && decode::descriptor_for_content(&path).is_some());
-        if !included {
+            .and_then(|extension| decode::format_name_for_extension(&extension))
+            .or_else(|| {
+                options
+                    .detect_format_by_content
+                    .then(|| decode::descriptor_for_content(&path))
+                    .flatten()
+                    .map(|descriptor| descriptor.name)
+            });
+        let Some(format_name) = format_name else {
             continue;
-        }
+        };
         let wide_name = HSTRING::from(&file_name);
         entries.push(ListingEntry {
             location: ItemLocation::File(path),
@@ -1883,7 +1887,7 @@ fn scan_folder(directory: &Path, options: &CoreOptions) -> Vec<ListingEntry> {
             file_size: metadata.len(),
             modified: metadata.modified().unwrap_or(UNIX_EPOCH),
             created: metadata.created().unwrap_or(UNIX_EPOCH),
-            format_name: format_name.unwrap_or(""),
+            format_name,
             weight: DecodedWeight::Unknown,
         });
     }

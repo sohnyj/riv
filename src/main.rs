@@ -1257,8 +1257,7 @@ impl Application {
             return;
         };
         if renderer.render(decision, clear_color, draw).is_err() {
-            // Device or presentation loss: drop the renderer, rebuild once and retry.
-            self.renderer = None;
+            // Device or presentation loss: rebuild once (reading the texture back first) and retry.
             if self.rebuild_renderer(window).is_ok()
                 && let Some(renderer) = &mut self.renderer
             {
@@ -1530,9 +1529,17 @@ fn execute_navigation(
     command: NavigationCommand,
 ) -> bool {
     let load_outcome = application.image_core.navigate(command);
+    complete_navigation(application, window, load_outcome)
+}
+
+/// Shows the navigated item; a manual or auto move restarts the slideshow interval for it.
+fn complete_navigation(
+    application: &mut Application,
+    window: HWND,
+    load_outcome: Option<LoadOutcome>,
+) -> bool {
     let navigated = apply_navigation_outcome(application, window, load_outcome);
     if navigated && application.slideshow_item_shown_at.is_some() {
-        // A manual or auto move restarts the interval so the new item gets a full turn.
         application.restart_slideshow_timer(window);
     }
     navigated
@@ -2059,7 +2066,7 @@ fn show_menu(application: &mut Application, window: HWND, x: i32, y: i32, target
                 let load_outcome = playlist_locations
                     .get(slot)
                     .and_then(|location| application.image_core.navigate_to_location(location));
-                apply_navigation_outcome(application, window, load_outcome);
+                complete_navigation(application, window, load_outcome);
             }
         }
     }
@@ -2249,7 +2256,13 @@ fn main() -> Result<()> {
     let class_atom = unsafe { RegisterClassExW(&raw const window_class) };
     assert!(class_atom != 0, "RegisterClassExW failed");
 
-    let window = create_main_window(argument_path.as_deref(), pending_device)?;
+    let window = match create_main_window(argument_path.as_deref(), pending_device) {
+        Ok(window) => window,
+        Err(error) => {
+            fail_fast_dialog("The window couldn't be created.", &error.to_string());
+            return Err(error);
+        }
+    };
 
     run_message_loop(window);
     dialogs::paint::end_buffered_painting();

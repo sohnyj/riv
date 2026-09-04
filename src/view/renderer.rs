@@ -219,6 +219,8 @@ pub struct Renderer {
     d2d_context: ID2D1DeviceContext,
     /// Fullscreen quantizing copy from the UNORM16 scene to the 8-bit backbuffer.
     quantize_pass: Option<QuantizePass>,
+    /// False when the first build only succeeded without the pass; a reconfigure must not bring it back.
+    quantize_pass_allowed: bool,
     scene_shader_resource_view: Option<ID3D11ShaderResourceView>,
     backbuffer_render_target_view: Option<ID3D11RenderTargetView>,
     backbuffer_size: (u32, u32),
@@ -789,6 +791,7 @@ impl Renderer {
             d3d_context,
             d2d_context,
             quantize_pass,
+            quantize_pass_allowed: with_quantize_pass,
             scene_shader_resource_view: None,
             backbuffer_render_target_view: None,
             backbuffer_size: (width, height),
@@ -1088,7 +1091,8 @@ impl Renderer {
         if format == SCRGB_BACKBUFFER_FORMAT {
             // FP16 leaves quantization to DWM.
             self.quantize_pass = None;
-        } else if self.quantize_pass.is_none()
+        } else if self.quantize_pass_allowed
+            && self.quantize_pass.is_none()
             && unsafe { self.d2d_context.IsDxgiFormatSupported(SCENE_TEXTURE_FORMAT) }.as_bool()
         {
             // The pass depends only on the (unchanged) device, so keep it across reconfigures.
