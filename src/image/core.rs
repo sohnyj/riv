@@ -188,7 +188,7 @@ impl ListingScope {
     }
 }
 
-/// Preload mode 0/1/2 -> (backward distance, forward distance, cache budget in bytes).
+/// Preload mode 0/1/2 -> (distance against the navigation direction, distance along it, cache budget in bytes).
 const PRELOAD_SPECIFICATIONS: [(usize, usize, u64); 3] = [
     (0, 0, 0),
     (1, 3, 1024 * 1024 * 1024),
@@ -596,13 +596,14 @@ impl ImageCore {
         }
     }
 
-    /// Preload distances and budget, aimed along the current navigation direction.
-    fn preload_plan(&self) -> (usize, usize, u64) {
-        let (backward, forward, budget) = PRELOAD_SPECIFICATIONS[self.options.preloading_mode];
-        if self.navigating_backward {
-            (forward, backward, budget)
-        } else {
-            (backward, forward, budget)
+    fn preload_plan(&self) -> PreloadPlan {
+        let (behind, ahead, budget) = PRELOAD_SPECIFICATIONS[self.options.preloading_mode];
+        let direction = if self.navigating_backward { -1 } else { 1 };
+        PreloadPlan {
+            direction,
+            ahead,
+            behind,
+            budget,
         }
     }
 
@@ -1143,12 +1144,12 @@ impl ImageCore {
         Some(restored)
     }
 
-    /// Replaces the displayed image, freeing the outgoing buffer off the UI thread.
     /// Frees an image reference off the UI thread: the last reference of a large buffer takes tens of milliseconds.
     pub fn release_image(&self, image: Arc<DecodedImage>) {
         self.releaser.release(image);
     }
 
+    /// Replaces the displayed image, freeing the outgoing buffer off the UI thread.
     fn show_image(&mut self, current: CurrentImage) {
         if let Some(previous) = self.current.take() {
             self.releaser.release(previous.image);
@@ -1421,28 +1422,27 @@ impl ImageCore {
                 .as_ref()
                 .is_none_or(|current| current.location != *pending)
         });
-        let (backward, forward, budget) = self.preload_plan();
+        let plan = self.preload_plan();
         // Candidates in priority order; a missing anchor still names adjacent entries.
-        let length = self.entries.len();
-        let anchor = self.anchor_index();
-        let candidates: Vec<usize> = preload_offsets(backward, forward)
-            .filter_map(|offset| {
-                index_at_offset(anchor, offset, length, self.options.loop_within_folder)
-            })
-            .collect();
+        let candidates = preload_candidates(
+            self.anchor_index(),
+            plan,
+            self.entries.len(),
+            self.options.loop_within_folder,
+        );
         let mut targets: HashSet<ItemLocation> = candidates
             .iter()
             .map(|&index| self.entries[index].location.clone())
             .collect();
         targets.extend(self.navigation_anchor().cloned());
-        if backward == 0 && forward == 0 {
+        if plan.ahead == 0 && plan.behind == 0 {
             for (_, entry) in self.cache.drain() {
                 self.releaser.release(entry.image);
             }
         } else {
             self.drop_entries_outside(&targets);
             if !awaiting_first_view {
-                self.submit_preload_decodes(&candidates, budget);
+                self.submit_preload_decodes(&candidates, plan.budget);
             }
         }
         self.cancel_decodes_outside(&targets);
@@ -1626,9 +1626,13 @@ impl ImageCore {
 
     /// Cancels queued or running decodes and probes outside the preload targets.
     fn cancel_decodes_outside(&mut self, targets: &HashSet<ItemLocation>) {
-        for location in self.pool.remove_queued_except(targets) {
-            self.submitted_decodes.remove(&location);
-            self.submitted_probes.remove(&location);
+        // By kind: a queued probe must not unregister a running decode of the same item.
+        for (location, kind) in self.pool.remove_queued_except(targets) {
+            if kind == JobKind::Probe {
+                self.submitted_probes.remove(&location);
+            } else {
+                self.submitted_decodes.remove(&location);
+            }
         }
         for (location, cancellation) in self.submitted_decodes.iter().chain(&self.submitted_probes)
         {
@@ -1649,21 +1653,20 @@ impl ImageCore {
 
     /// Evicts entries in reverse preload priority until within budget.
     fn evict_cache(&mut self) {
-        let (backward, forward, budget) = self.preload_plan();
+        let plan = self.preload_plan();
         // Sum first: the usual answer is "within budget", and ranking clones and walks per key.
         let mut total: u64 = self
             .cache
             .iter()
             .map(|(location, entry)| self.cached_weight(location, entry))
             .sum();
-        if total <= budget {
+        if total <= plan.budget {
             return;
         }
         let anchor = self.navigation_anchor();
         let priorities = preload_priorities(
             self.anchor_index(),
-            backward,
-            forward,
+            plan,
             self.entries.len(),
             self.options.loop_within_folder,
         );
@@ -1684,7 +1687,7 @@ impl ImageCore {
             .collect();
         ranked.sort_by_key(|(_, _, key)| std::cmp::Reverse(*key));
         for (location, cost, _) in ranked {
-            if total <= budget {
+            if total <= plan.budget {
                 break;
             }
             if let Some(entry) = self.cache.remove(&location) {
@@ -1736,9 +1739,39 @@ fn index_at_offset(
     }
 }
 
-/// Preload targets in priority order: forward first, nearest first.
-fn preload_offsets(backward: usize, forward: usize) -> impl Iterator<Item = isize> {
-    (1..=forward as isize).chain((1..=backward as isize).map(|step| -step))
+/// Preload reach along and against the navigation direction, and the sign that direction takes.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+struct PreloadPlan {
+    /// +1 navigating forward, -1 backward: offsets along the direction carry this sign.
+    direction: isize,
+    ahead: usize,
+    behind: usize,
+    budget: u64,
+}
+
+/// Preload offsets in priority order: along the navigation direction first, nearest first.
+fn preload_offsets(plan: PreloadPlan) -> impl Iterator<Item = isize> {
+    (1..=plan.ahead as isize)
+        .map(move |step| step * plan.direction)
+        .chain((1..=plan.behind as isize).map(move |step| -step * plan.direction))
+}
+
+/// Candidate indices in priority order; on a looping list two offsets can share an index, and the nearer keeps it.
+fn preload_candidates(
+    anchor: AnchorIndex,
+    plan: PreloadPlan,
+    length: usize,
+    loop_enabled: bool,
+) -> Vec<usize> {
+    let mut candidates = Vec::new();
+    for index in preload_offsets(plan)
+        .filter_map(|offset| index_at_offset(anchor, offset, length, loop_enabled))
+    {
+        if !candidates.contains(&index) {
+            candidates.push(index);
+        }
+    }
+    candidates
 }
 
 /// Marks candidate weights that fit, in order; a misfit is skipped, not a stop.
@@ -1781,8 +1814,7 @@ fn step_index(anchor: AnchorIndex, direction: isize, length: usize, looped: bool
 /// Entry index -> preload priority (anchor 0, then submission order); shared with eviction.
 fn preload_priorities(
     anchor: AnchorIndex,
-    backward: usize,
-    forward: usize,
+    plan: PreloadPlan,
     length: usize,
     loop_enabled: bool,
 ) -> HashMap<usize, usize> {
@@ -1790,10 +1822,11 @@ fn preload_priorities(
         AnchorIndex::Listed(index) => HashMap::from([(index, 0)]),
         AnchorIndex::Missing(_) | AnchorIndex::Unlisted => HashMap::new(),
     };
-    for (rank, offset) in preload_offsets(backward, forward).enumerate() {
-        if let Some(index) = index_at_offset(anchor, offset, length, loop_enabled) {
-            priorities.entry(index).or_insert(rank + 1);
-        }
+    for (rank, index) in preload_candidates(anchor, plan, length, loop_enabled)
+        .into_iter()
+        .enumerate()
+    {
+        priorities.insert(index, rank + 1);
     }
     priorities
 }
@@ -2009,14 +2042,17 @@ impl DecodePool {
     }
 
     /// Removes queued jobs outside the relevant set; running jobs are unaffected.
-    fn remove_queued_except(&self, relevant: &HashSet<ItemLocation>) -> Vec<ItemLocation> {
+    fn remove_queued_except(
+        &self,
+        relevant: &HashSet<ItemLocation>,
+    ) -> Vec<(ItemLocation, JobKind)> {
         let mut queue = self.shared.queue.lock().expect("decode queue poisoned");
         let mut removed = Vec::new();
         queue.retain(|job| {
             if relevant.contains(&job.location) {
                 true
             } else {
-                removed.push(job.location.clone());
+                removed.push((job.location.clone(), job.kind));
                 false
             }
         });
@@ -2332,45 +2368,81 @@ mod step_index_tests {
 mod preload_plan_tests {
     use super::*;
 
-    fn offsets(mode: usize) -> Vec<isize> {
-        let (backward, forward, _) = PRELOAD_SPECIFICATIONS[mode];
-        preload_offsets(backward, forward).collect()
+    fn plan(mode: usize, direction: isize) -> PreloadPlan {
+        let (behind, ahead, budget) = PRELOAD_SPECIFICATIONS[mode];
+        PreloadPlan {
+            direction,
+            ahead,
+            behind,
+            budget,
+        }
+    }
+
+    fn offsets(mode: usize, direction: isize) -> Vec<isize> {
+        preload_offsets(plan(mode, direction)).collect()
     }
 
     #[test]
     fn offsets_run_forward_before_backward() {
-        assert!(offsets(0).is_empty());
-        assert_eq!(offsets(1), [1, 2, 3, -1]);
-        assert_eq!(offsets(2), [1, 2, 3, 4, 5, 6, -1, -2]);
+        assert!(offsets(0, 1).is_empty());
+        assert_eq!(offsets(1, 1), [1, 2, 3, -1]);
+        assert_eq!(offsets(2, 1), [1, 2, 3, 4, 5, 6, -1, -2]);
+    }
+
+    #[test]
+    fn offsets_follow_the_navigation_direction_when_it_is_backward() {
+        assert_eq!(offsets(1, -1), [-1, -2, -3, 1]);
+        assert_eq!(offsets(2, -1), [-1, -2, -3, -4, -5, -6, 1, 2]);
+    }
+
+    #[test]
+    fn wrapped_offsets_name_each_index_once() {
+        let forward = plan(1, 1);
+        assert_eq!(
+            preload_candidates(AnchorIndex::Listed(0), forward, 2, true),
+            [1]
+        );
+        assert_eq!(
+            preload_candidates(AnchorIndex::Listed(0), forward, 3, true),
+            [1, 2]
+        );
+        assert_eq!(
+            preload_candidates(AnchorIndex::Listed(0), forward, 4, true),
+            [1, 2, 3]
+        );
+        assert_eq!(
+            preload_candidates(AnchorIndex::Listed(0), forward, 5, true),
+            [1, 2, 3, 4]
+        );
+        // Backward from the first entry, the wrap reaches the last entries first.
+        assert_eq!(
+            preload_candidates(AnchorIndex::Listed(0), plan(1, -1), 3, true),
+            [2, 1]
+        );
     }
 
     #[test]
     fn a_missing_anchor_preloads_the_entries_it_sat_between() {
-        let (backward, forward, _) = PRELOAD_SPECIFICATIONS[1];
         let anchor = AnchorIndex::Missing(10);
-        let targets: Vec<usize> = preload_offsets(backward, forward)
-            .filter_map(|offset| index_at_offset(anchor, offset, 100, false))
-            .collect();
+        let targets = preload_candidates(anchor, plan(1, 1), 100, false);
         // Forward goes to the entry that took the place, backward to the one before it.
         assert_eq!(targets, [10, 11, 12, 9]);
     }
 
     #[test]
     fn an_unlisted_anchor_preloads_nothing() {
-        let (backward, forward, _) = PRELOAD_SPECIFICATIONS[1];
         assert_eq!(
             index_at_offset(AnchorIndex::Unlisted, 1, 100, false),
             None,
             "an anchor outside the listing has no adjacent entries to speculate on"
         );
-        let priorities = preload_priorities(AnchorIndex::Unlisted, backward, forward, 100, false);
+        let priorities = preload_priorities(AnchorIndex::Unlisted, plan(1, 1), 100, false);
         assert!(priorities.is_empty());
     }
 
     #[test]
     fn eviction_prefers_forward_over_backward_within_the_preload_targets() {
-        let (backward, forward, _) = PRELOAD_SPECIFICATIONS[1];
-        let priorities = preload_priorities(AnchorIndex::Listed(10), backward, forward, 100, false);
+        let priorities = preload_priorities(AnchorIndex::Listed(10), plan(1, 1), 100, false);
         // The anchor is evicted last, after +1..+3, then -1 before those.
         assert_eq!(priorities[&10], 0);
         assert_eq!(priorities[&11], 1);
@@ -2382,8 +2454,7 @@ mod preload_plan_tests {
 
     #[test]
     fn eviction_drops_outsiders_before_preload_targets() {
-        let (backward, forward, _) = PRELOAD_SPECIFICATIONS[1];
-        let priorities = preload_priorities(AnchorIndex::Listed(10), backward, forward, 100, false);
+        let priorities = preload_priorities(AnchorIndex::Listed(10), plan(1, 1), 100, false);
         // Outside the map, so the eviction key is usize::MAX: they go first.
         assert!(!priorities.contains_key(&8));
         assert!(!priorities.contains_key(&14));
@@ -2391,14 +2462,13 @@ mod preload_plan_tests {
 
     #[test]
     fn eviction_keeps_wrapped_preload_targets() {
-        let (backward, forward, _) = PRELOAD_SPECIFICATIONS[1];
         // Five looping entries: +3 wraps to ring offset -2 yet stays a target.
-        let priorities = preload_priorities(AnchorIndex::Listed(0), backward, forward, 5, true);
+        let priorities = preload_priorities(AnchorIndex::Listed(0), plan(1, 1), 5, true);
         assert_eq!(priorities[&3], 3);
         assert_eq!(priorities[&4], 4);
         assert_eq!(priorities.len(), 5);
         // Three looping entries: +2 claims the slot before -1 revisits it.
-        let priorities = preload_priorities(AnchorIndex::Listed(0), backward, forward, 3, true);
+        let priorities = preload_priorities(AnchorIndex::Listed(0), plan(1, 1), 3, true);
         assert_eq!(priorities[&2], 2);
         assert_eq!(priorities.len(), 3);
     }
@@ -3031,7 +3101,7 @@ mod navigation_direction_tests {
         let mut core = core();
         core.record_navigation(NavigationCommand::Previous);
         assert!(!core.navigating_backward);
-        assert_eq!(core.preload_plan(), (1, 3, 1 << 30));
+        assert_eq!(core.preload_plan().direction, 1);
     }
 
     #[test]
@@ -3040,7 +3110,7 @@ mod navigation_direction_tests {
         core.record_navigation(NavigationCommand::Previous);
         core.record_navigation(NavigationCommand::Previous);
         assert!(core.navigating_backward);
-        assert_eq!(core.preload_plan(), (3, 1, 1 << 30));
+        assert_eq!(core.preload_plan().direction, -1);
         // The way back flips with the same grace.
         core.record_navigation(NavigationCommand::Next);
         assert!(core.navigating_backward);
@@ -3070,9 +3140,9 @@ mod navigation_direction_tests {
     fn a_declared_direction_aims_at_once() {
         let mut core = core();
         core.set_navigation_direction(true);
-        assert_eq!(core.preload_plan(), (3, 1, 1 << 30));
+        assert_eq!(core.preload_plan().direction, -1);
         core.reset_navigation_direction();
-        assert_eq!(core.preload_plan(), (1, 3, 1 << 30));
+        assert_eq!(core.preload_plan().direction, 1);
     }
 }
 
