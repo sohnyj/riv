@@ -286,9 +286,7 @@ unsafe extern "system" fn frame_procedure(
             let command = low_word(wparam.0) as i32;
             match command {
                 command if command == IDOK as i32 => {
-                    if let Some(state) = state_mut(dialog) {
-                        apply(state);
-                    }
+                    apply(dialog);
                     let _ = unsafe { EndDialog(dialog, IDOK as isize) };
                     1
                 }
@@ -297,9 +295,7 @@ unsafe extern "system" fn frame_procedure(
                     1
                 }
                 IDC_APPLY => {
-                    if let Some(state) = state_mut(dialog) {
-                        apply(state);
-                    }
+                    apply(dialog);
                     1
                 }
                 IDC_RESTORE_DEFAULTS => {
@@ -311,6 +307,7 @@ unsafe extern "system" fn frame_procedure(
                     }
                     sync_number_edit(dialog, IMAGE_PAGE);
                     sync_number_edit(dialog, MISCELLANEOUS_PAGE);
+                    sync_background_color_button(dialog);
                     1
                 }
                 _ => 0,
@@ -399,9 +396,13 @@ fn page_area(dialog: HWND, tab: HWND) -> RECT {
 fn select_page(dialog: HWND, tab: HWND, selected: isize) {
     if let Ok(index) = usize::try_from(selected)
         && index < PAGES.len()
-        && let Some(state) = state_mut(dialog)
     {
-        ensure_page(state, tab, index);
+        if let Some(state) = state_mut(dialog) {
+            ensure_page(state, tab, index);
+        }
+        if index == WINDOW_PAGE {
+            sync_background_color_button(dialog);
+        }
     }
     show_page(dialog, selected);
 }
@@ -550,7 +551,11 @@ fn update_buttons(state: &OptionsState) {
     enable(IDC_RESTORE_DEFAULTS, state.differs_from_defaults());
 }
 
-fn apply(state: &mut OptionsState) {
+/// Borrows the state in stages: a failed save opens a modal from the parent inside the send.
+fn apply(dialog: HWND) {
+    let Some(state) = state_mut(dialog) else {
+        return;
+    };
     if !state.is_dirty() {
         return;
     }
@@ -568,8 +573,9 @@ fn apply(state: &mut OptionsState) {
         }
         state.start_menu_saved = start_menu::shortcut_exists();
     }
+    let parent = state.parent;
     let payload = AppliedOptions {
-        dialog: state.dialog,
+        dialog,
         options: state.transient_options.clone(),
         keyboard: state
             .transient_shortcuts
@@ -582,8 +588,11 @@ fn apply(state: &mut OptionsState) {
             .map(|row| (row.action.name().to_string(), row.mouse.clone()))
             .collect(),
     };
-    crate::window::message::send_borrowed(state.parent, WM_APP_OPTIONS_APPLIED, &payload);
-    state.saved_options = state.transient_options.clone();
+    crate::window::message::send_borrowed(parent, WM_APP_OPTIONS_APPLIED, &payload);
+    let Some(state) = state_mut(dialog) else {
+        return;
+    };
+    state.saved_options = payload.options;
     state.saved_shortcuts = state.transient_shortcuts.clone();
     update_buttons(state);
 }
@@ -613,6 +622,14 @@ unsafe extern "system" fn page_procedure(
             if control == IDC_WINDOW_BACKGROUND_COLOR_BUTTON && notification == BN_CLICKED {
                 // Runs a modal that re-enters this procedure; it borrows the state in stages.
                 choose_background_color(page);
+                return 1;
+            }
+            if control == IDC_WINDOW_BACKGROUND_COLOR_ENABLED && notification == BN_CLICKED {
+                // Enabling the swatch repaints it synchronously, so that sync runs after the borrow ends.
+                let dialog = state.dialog;
+                state.transient_options.background_color_enabled = is_checked(page, control);
+                update_buttons(state);
+                sync_background_color_button(dialog);
                 return 1;
             }
             if notification == EN_KILLFOCUS {
@@ -704,10 +721,6 @@ fn apply_page_command(
     let options = &mut state.transient_options;
     let mut handled = true;
     match (control, notification) {
-        (IDC_WINDOW_BACKGROUND_COLOR_ENABLED, BN_CLICKED) => {
-            options.background_color_enabled = is_checked(page, control);
-            sync_background_color_button(state, page);
-        }
         (IDC_WINDOW_TITLE_BAR_TEXT, CBN_SELCHANGE) => {
             options.title_bar_text = combo_selection(page, control);
         }
@@ -934,7 +947,6 @@ fn sync_window_page(state: &OptionsState) {
         IDC_WINDOW_HIDE_CURSOR_FULLSCREEN,
         options.hide_cursor_fullscreen,
     );
-    sync_background_color_button(state, window_page);
 }
 
 fn sync_image_page(state: &OptionsState) {
@@ -1018,12 +1030,22 @@ fn sync_start_menu_page(state: &OptionsState) {
     );
 }
 
-fn sync_background_color_button(state: &OptionsState, page: HWND) {
-    if let Ok(button) = unsafe { GetDlgItem(Some(page), IDC_WINDOW_BACKGROUND_COLOR_BUTTON) } {
-        let _ = unsafe { EnableWindow(button, state.transient_options.background_color_enabled) };
-        // The swatch fills its whole rectangle, so an erase would only flash under it.
-        let _ = unsafe { windows::Win32::Graphics::Gdi::InvalidateRect(Some(button), None, false) };
-    }
+/// Enabling the owner-drawn swatch repaints it synchronously, so callers run this after their borrow ends.
+fn sync_background_color_button(dialog: HWND) {
+    let Some((page, enabled)) = state_mut(dialog).map(|state| {
+        (
+            state.pages[WINDOW_PAGE],
+            state.transient_options.background_color_enabled,
+        )
+    }) else {
+        return;
+    };
+    let Ok(button) = (unsafe { GetDlgItem(Some(page), IDC_WINDOW_BACKGROUND_COLOR_BUTTON) }) else {
+        return;
+    };
+    let _ = unsafe { EnableWindow(button, enabled) };
+    // The swatch fills its whole rectangle, so an erase would only flash under it.
+    let _ = unsafe { windows::Win32::Graphics::Gdi::InvalidateRect(Some(button), None, false) };
 }
 
 /// Packs an (R, G, B) triple into a Win32 COLORREF (0x00BBGGRR).
@@ -1088,9 +1110,11 @@ fn choose_background_color(page: HWND) {
     state.custom_colors = custom_colors;
     if confirmed {
         state.transient_options.background_color = colorref_to_rgb(configuration.rgbResult);
-        sync_background_color_button(state, page);
     }
     update_buttons(state);
+    if confirmed {
+        sync_background_color_button(owner);
+    }
 }
 
 fn initialize_shortcuts_page(state: &OptionsState) {
