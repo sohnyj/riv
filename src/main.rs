@@ -1728,10 +1728,7 @@ fn dispatch_action(application: &mut Application, window: HWND, action: Action) 
             };
             application.show_status_text(window, format!("Always on top: {state}"));
         }
-        Action::ToggleFullscreen => {
-            toggle_fullscreen(application, window);
-            application.request_render(window);
-        }
+        Action::ToggleFullscreen => toggle_fullscreen(window),
         Action::Open => {
             // Owned across the modal: the dialog's loop re-enters and re-borrows settings.
             let last_directory = application
@@ -1857,7 +1854,12 @@ fn delete_current_file(application: &mut Application, window: HWND, permanent: b
     } else {
         NavigationCommand::Next
     };
-    match file_ops::delete_file(&path, permanent) {
+    let deleted = file_ops::delete_file(&path, permanent);
+    // The shell's error dialog pumped messages, so re-fetch instead of reusing the reference across it.
+    let Some(application) = application_from_window(window) else {
+        return;
+    };
+    match deleted {
         Ok(()) => match application
             .image_core
             .remove_deleted_item(&ItemLocation::File(path), preferred)
@@ -1894,7 +1896,10 @@ fn rename_current_file(application: &mut Application, window: HWND) {
     }
 }
 
-fn toggle_fullscreen(application: &mut Application, window: HWND) {
+fn toggle_fullscreen(window: HWND) {
+    let Some(application) = application_from_window(window) else {
+        return;
+    };
     if let Some(restore) = application.fullscreen_restore.take() {
         let style = unsafe { GetWindowLongPtrW(window, GWL_STYLE) } as u32;
         unsafe { SetWindowLongPtrW(window, GWL_STYLE, (style | WS_OVERLAPPEDWINDOW.0) as isize) };
@@ -1924,7 +1929,11 @@ fn toggle_fullscreen(application: &mut Application, window: HWND) {
             )
         };
     }
-    application.update_cursor_autohide(window);
+    // The frame change pumped WM_SIZE, so re-fetch instead of reusing the reference across it.
+    if let Some(application) = application_from_window(window) {
+        application.update_cursor_autohide(window);
+        application.request_render(window);
+    }
 }
 
 fn window_center(window: HWND) -> (i32, i32) {
@@ -2075,8 +2084,7 @@ fn dispatch_key(application: &mut Application, window: HWND, virtual_key: u16) -
         && application.bindings.escape_is_unbound()
         && application.fullscreen_restore.is_some()
     {
-        toggle_fullscreen(application, window);
-        application.request_render(window);
+        toggle_fullscreen(window);
         return true;
     }
     false
@@ -2384,6 +2392,9 @@ fn create_main_window(initial_path: Option<&Path>, pending_device: PendingDevice
     }
     if let Some(application) = application_from_window(window) {
         application.restore_window_placement(window);
+    }
+    // The placement pumped WM_SIZE, so re-fetch instead of reusing the reference across it.
+    if let Some(application) = application_from_window(window) {
         application.refresh_title_bar_theme(window);
         application.drop_target = drag_drop::register(window).ok();
         application.update_window_title(window);
