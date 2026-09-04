@@ -768,7 +768,9 @@ impl Application {
             Some(renderer) => renderer.set_image(&frame.pixels, current.texture.as_ref(), &image),
             None => Err(windows::core::Error::empty()),
         };
-        self.displayed_image = Some(image);
+        if let Some(previous) = self.displayed_image.replace(image) {
+            self.image_core.release_image(previous);
+        }
         if !same_view {
             // Members list the archive itself; URL items stay out of recents.
             if let Some(file) = location.containing_file() {
@@ -845,7 +847,9 @@ impl Application {
         let _ = unsafe { KillTimer(Some(window), ANIMATION_TIMER) };
         self.dismiss_status_text(window);
         self.animation = None;
-        self.displayed_image = None;
+        if let Some(previous) = self.displayed_image.take() {
+            self.image_core.release_image(previous);
+        }
         self.displayed_location = None;
         if let Some(renderer) = &mut self.renderer {
             renderer.clear_image();
@@ -1063,11 +1067,14 @@ impl Application {
         let Some(renderer) = &self.renderer else {
             return;
         };
-        if let Some(restored) = self
+        let Some(restored) = self
             .image_core
             .recover_current_pixels(|texture, image| renderer.read_back_texture(texture, image))
-        {
-            self.displayed_image = Some(restored);
+        else {
+            return;
+        };
+        if let Some(previous) = self.displayed_image.replace(restored) {
+            self.image_core.release_image(previous);
         }
     }
 

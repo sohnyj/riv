@@ -1144,6 +1144,11 @@ impl ImageCore {
     }
 
     /// Replaces the displayed image, freeing the outgoing buffer off the UI thread.
+    /// Frees an image reference off the UI thread: the last reference of a large buffer takes tens of milliseconds.
+    pub fn release_image(&self, image: Arc<DecodedImage>) {
+        self.releaser.release(image);
+    }
+
     fn show_image(&mut self, current: CurrentImage) {
         if let Some(previous) = self.current.take() {
             self.releaser.release(previous.image);
@@ -1245,16 +1250,23 @@ impl ImageCore {
     pub fn on_decode_complete(&mut self, completion: DecodeCompletion) -> Option<LoadOutcome> {
         let is_pending = self.is_pending(&completion.location);
         if matches!(completion.stage, DecodeStage::Preview) {
-            if is_pending && let Ok(image) = completion.result {
-                self.show_image(CurrentImage {
-                    location: completion.location,
-                    image,
-                    texture: completion.texture,
-                    metadata: completion.metadata,
-                });
-                return Some(LoadOutcome::Shown);
-            }
-            return None;
+            return match completion.result {
+                Ok(image) if is_pending => {
+                    self.show_image(CurrentImage {
+                        location: completion.location,
+                        image,
+                        texture: completion.texture,
+                        metadata: completion.metadata,
+                    });
+                    Some(LoadOutcome::Shown)
+                }
+                // No longer waited on: its frame frees off the UI thread like every other image.
+                Ok(image) => {
+                    self.releaser.release(image);
+                    None
+                }
+                Err(_) => None,
+            };
         }
         self.submitted_decodes.remove(&completion.location);
         // A retired generation never wraps and carries no pixels; redo like a cancelled decode.
