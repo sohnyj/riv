@@ -25,11 +25,11 @@ use windows::Win32::UI::Controls::{
 use windows::Win32::UI::HiDpi::GetSystemMetricsForDpi;
 use windows::Win32::UI::Input::KeyboardAndMouse::{EnableWindow, VK_SPACE};
 use windows::Win32::UI::WindowsAndMessaging::{
-    CB_ADDSTRING, CB_GETCURSEL, CB_SETCURSEL, CreateDialogParamW, DestroyWindow, EndDialog,
-    GetClientRect, GetDlgItem, GetDlgItemInt, GetMessagePos, MapDialogRect, SM_CXVSCROLL, SW_HIDE,
-    SW_SHOW, SWP_NOACTIVATE, SendDlgItemMessageW, SendMessageW, SetDlgItemTextW, SetWindowLongPtrW,
-    SetWindowPos, ShowWindow, WM_APP, WM_COMMAND, WM_DESTROY, WM_DRAWITEM, WM_INITDIALOG,
-    WM_NOTIFY,
+    BN_CLICKED, CB_ADDSTRING, CB_GETCURSEL, CB_SETCURSEL, CBN_SELCHANGE, CreateDialogParamW,
+    DestroyWindow, EN_CHANGE, EN_KILLFOCUS, EndDialog, GetClientRect, GetDlgItem, GetDlgItemInt,
+    GetMessagePos, MapDialogRect, SM_CXVSCROLL, SW_HIDE, SW_SHOW, SWP_NOACTIVATE,
+    SendDlgItemMessageW, SendMessageW, SetDlgItemTextW, SetWindowLongPtrW, SetWindowPos,
+    ShowWindow, WM_APP, WM_COMMAND, WM_DESTROY, WM_DRAWITEM, WM_INITDIALOG, WM_NOTIFY,
 };
 
 use windows::core::HSTRING;
@@ -62,12 +62,8 @@ pub struct AppliedOptions {
     pub mouse: Vec<(String, Vec<String>)>,
 }
 
-use crate::dialogs::modal::{DWLP_USER, IDCANCEL, IDOK};
-
-const BN_CLICKED: usize = 0;
-const CBN_SELCHANGE: usize = 1;
-const EN_CHANGE: usize = 0x0300;
-const EN_KILLFOCUS: usize = 0x0200;
+use crate::dialogs::modal::DWLP_USER;
+use crate::dialogs::resource::{IDCANCEL, IDOK};
 
 const GROUP_FLAG: isize = 0x1000_0000;
 
@@ -614,7 +610,7 @@ unsafe extern "system" fn page_procedure(
                 return 0;
             }
             let control = low_word(wparam.0) as i32;
-            let notification = high_word(wparam.0) as usize;
+            let notification = high_word(wparam.0);
             if control == IDC_WINDOW_BACKGROUND_COLOR_BUTTON && notification == BN_CLICKED {
                 // Runs a modal that re-enters this procedure; it borrows the state in stages.
                 choose_background_color(page);
@@ -712,7 +708,7 @@ fn apply_page_command(
     state: &mut OptionsState,
     page: HWND,
     control: i32,
-    notification: usize,
+    notification: u32,
 ) -> isize {
     let options = &mut state.transient_options;
     let mut handled = true;

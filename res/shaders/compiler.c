@@ -5,11 +5,12 @@
 #include <d3dcompiler.h>
 #include <stdio.h>
 #include <stdlib.h>
+#include <string.h>
 
 int main(int argc, char **argv)
 {
-    if (argc != 4) {
-        fprintf(stderr, "usage: shader_compiler <source> <profile> <output>\n");
+    if (argc < 4) {
+        fprintf(stderr, "usage: shader_compiler <source> <profile> <output> [NAME=VALUE...]\n");
         return 2;
     }
     const char *source_path = argv[1];
@@ -31,9 +32,26 @@ int main(int argc, char **argv)
     }
     fclose(source_file);
 
+    // NAME=VALUE arguments become the macro table, which D3DCompile ends on a NULL name.
+    D3D_SHADER_MACRO *defines = calloc((size_t)(argc - 4) + 1, sizeof *defines);
+    if (!defines) {
+        fprintf(stderr, "out of memory\n");
+        return 1;
+    }
+    for (int index = 4; index < argc; index++) {
+        char *separator = strchr(argv[index], '=');
+        if (!separator) {
+            fprintf(stderr, "define without a value: %s\n", argv[index]);
+            return 2;
+        }
+        *separator = '\0';
+        defines[index - 4].Name = argv[index];
+        defines[index - 4].Definition = separator + 1;
+    }
+
     ID3DBlob *code = NULL;
     ID3DBlob *errors = NULL;
-    HRESULT result = D3DCompile(source, (SIZE_T)length, source_path, NULL,
+    HRESULT result = D3DCompile(source, (SIZE_T)length, source_path, defines,
                                 D3D_COMPILE_STANDARD_FILE_INCLUDE, "main", profile,
                                 D3DCOMPILE_OPTIMIZATION_LEVEL3, 0, &code, &errors);
     if (errors) {

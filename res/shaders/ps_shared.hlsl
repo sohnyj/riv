@@ -29,8 +29,8 @@ float ordered_bias(float2 position)
 
 float blue_noise_bias(Texture2D noise, float2 position)
 {
-    float2 pos = frac(position * (1.0 / 64.0));
-    return noise.Load(int3(int2(pos * 64.0), 0)).r;
+    float2 pos = frac(position * (1.0 / BLUE_NOISE_EDGE_TEXELS));
+    return noise.Load(int3(int2(pos * BLUE_NOISE_EDGE_TEXELS), 0)).r;
 }
 
 float3 dither_quantize(float3 color, float bias)

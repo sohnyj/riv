@@ -1128,7 +1128,7 @@ impl Renderer {
     }
 
     pub fn set_sdr_white_boost(&mut self, boost: f32) {
-        self.sdr_white_boost = boost.max(0.01);
+        self.sdr_white_boost = boost;
         if let Some(effect) = &self.mode_effects.white_level_effect {
             let _ = set_white_level_input(effect, SDR_REFERENCE_WHITE_NITS * self.sdr_white_boost);
         }

@@ -171,7 +171,7 @@ impl DisplayCapabilities {
             Some(full_frame) => peak.min(full_frame),
             None => peak,
         };
-        Some(ceiling / (SDR_REFERENCE_WHITE_NITS * self.sdr_white_boost.max(0.01)))
+        Some(ceiling / (SDR_REFERENCE_WHITE_NITS * self.sdr_white_boost))
     }
 
     /// SDR white boost for this display's output; 1.0 outside HDR (ACM output is display-referred).

@@ -61,7 +61,12 @@ fn compile(compiler: &Path, name: &str, profile: &str, output_directory: &Path) 
     let output = output_directory.join(format!("{name}.dxbc"));
     let source_path = PathBuf::from(format!("{SHADER_DIRECTORY}/{source}"));
     let shared_path = PathBuf::from(format!("{SHADER_DIRECTORY}/ps_shared.hlsl"));
-    if !crate::is_stale(&output, &[&source_path, &shared_path, compiler]) {
+    // The blue noise edge reaches the HLSL as a macro, so the table and the shader share one source.
+    let blue_noise_path = PathBuf::from(format!("{SHADER_DIRECTORY}/blue_noise.rs"));
+    if !crate::is_stale(
+        &output,
+        &[&source_path, &shared_path, &blue_noise_path, compiler],
+    ) {
         return;
     }
     let result = Command::new("wine")
@@ -69,6 +74,10 @@ fn compile(compiler: &Path, name: &str, profile: &str, output_directory: &Path) 
         .arg(&source)
         .arg(profile)
         .arg(&output)
+        .arg(format!(
+            "BLUE_NOISE_EDGE_TEXELS={}",
+            crate::blue_noise::SIZE
+        ))
         .current_dir(SHADER_DIRECTORY)
         .env("WINEDEBUG", "-all")
         .output()

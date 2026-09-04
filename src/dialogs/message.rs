@@ -8,7 +8,7 @@ use windows::Win32::UI::Controls::{
 use windows::Win32::UI::WindowsAndMessaging::{IDNO, IDYES};
 use windows::core::{HSTRING, PCWSTR, w};
 
-use crate::dialogs::modal::IDOK;
+use crate::dialogs::resource::IDOK;
 
 /// The dismiss label every plain failure dialog passes.
 pub const CLOSE_BUTTON: &str = "Close";

@@ -13,7 +13,7 @@ pub fn write_table(table: &Path) {
 }
 
 const SIZE_BITS: usize = 6;
-const SIZE: usize = 1 << SIZE_BITS;
+pub const SIZE: usize = 1 << SIZE_BITS;
 const CELL_COUNT: usize = SIZE * SIZE;
 
 fn cell_index(x: usize, y: usize) -> usize {

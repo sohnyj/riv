@@ -9,8 +9,9 @@ use windows::Win32::UI::WindowsAndMessaging::{
 };
 use windows::core::HSTRING;
 
-use crate::dialogs::modal::{DWLP_USER, IDCANCEL, IDOK};
+use crate::dialogs::modal::DWLP_USER;
 use crate::dialogs::resource::IDC_TEXT_INPUT;
+use crate::dialogs::resource::{IDCANCEL, IDOK};
 
 /// One edit line with OK/Cancel; the template carries the title and the width.
 pub struct TextInputRequest<'a> {

@@ -24,6 +24,9 @@ pub const IDD_CAPTURE_MOUSE: u16 = 170;
 pub const IDD_RENAME: u16 = 180;
 pub const IDD_OPEN_URL: u16 = 185;
 
+pub const IDOK: usize = 1;
+pub const IDCANCEL: usize = 2;
+
 /// The single edit field both text input dialogs carry.
 pub const IDC_TEXT_INPUT: i32 = 100;
 
@@ -88,11 +91,7 @@ mod header_mirror_tests {
         let header: Vec<(&str, &str)> = include_str!("../../res/resource.h")
             .lines()
             .filter_map(|line| line.strip_prefix("#define ")?.split_once(' '))
-            .filter(|(name, _)| {
-                name.starts_with("IDD_")
-                    || name.starts_with("IDC_")
-                    || name.starts_with("PAGE_TEMPLATE_")
-            })
+            .filter(|(name, _)| name.starts_with("ID") || name.starts_with("PAGE_TEMPLATE_"))
             .collect();
         let declared: Vec<(&str, &str)> = include_str!("resource.rs")
             .lines()

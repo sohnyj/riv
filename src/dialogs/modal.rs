@@ -8,8 +8,6 @@ use windows::Win32::UI::WindowsAndMessaging::{
 
 use crate::dialogs::resource;
 
-pub const IDOK: usize = 1;
-pub const IDCANCEL: usize = 2;
 /// DWLP_DLGPROC (8) + 8 on x64; windows-rs does not export it.
 pub const DWLP_USER: WINDOW_LONG_PTR_INDEX = WINDOW_LONG_PTR_INDEX(16);
 

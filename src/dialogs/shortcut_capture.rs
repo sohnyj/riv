@@ -31,7 +31,8 @@ use crate::dialogs::resource::{
     IDC_CAPTURE_MOUSE_CLEAR, IDC_CAPTURE_MOUSE_FIELD, IDD_CAPTURE_KEYBOARD, IDD_CAPTURE_MOUSE,
 };
 
-use crate::dialogs::modal::{DWLP_USER, IDCANCEL, IDOK, state_mut};
+use crate::dialogs::modal::{DWLP_USER, state_mut};
+use crate::dialogs::resource::{IDCANCEL, IDOK};
 use crate::window::message::{high_word, high_word_signed, low_word, point_from_packed};
 
 const WM_RIV_KEYBOARD_CAPTURED: u32 = WM_APP + 0x40;
