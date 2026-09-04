@@ -22,13 +22,14 @@ use windows::Win32::UI::Controls::{
     TVM_SETEXTENDEDSTYLE, TVM_SETIMAGELIST, TVM_SETITEMW, TVN_KEYDOWN, TVS_EX_DOUBLEBUFFER,
     TVSIL_STATE, UDM_SETRANGE32,
 };
+use windows::Win32::UI::HiDpi::GetSystemMetricsForDpi;
 use windows::Win32::UI::Input::KeyboardAndMouse::{EnableWindow, VK_SPACE};
 use windows::Win32::UI::WindowsAndMessaging::{
     CB_ADDSTRING, CB_GETCURSEL, CB_SETCURSEL, CreateDialogParamW, DestroyWindow, EndDialog,
-    GetClientRect, GetDlgItem, GetDlgItemInt, GetMessagePos, GetSystemMetrics, MapDialogRect,
-    SM_CXVSCROLL, SW_HIDE, SW_SHOW, SWP_NOACTIVATE, SendDlgItemMessageW, SendMessageW,
-    SetDlgItemTextW, SetWindowLongPtrW, SetWindowPos, ShowWindow, WM_APP, WM_COMMAND, WM_DESTROY,
-    WM_DRAWITEM, WM_INITDIALOG, WM_NOTIFY,
+    GetClientRect, GetDlgItem, GetDlgItemInt, GetMessagePos, MapDialogRect, SM_CXVSCROLL, SW_HIDE,
+    SW_SHOW, SWP_NOACTIVATE, SendDlgItemMessageW, SendMessageW, SetDlgItemTextW, SetWindowLongPtrW,
+    SetWindowPos, ShowWindow, WM_APP, WM_COMMAND, WM_DESTROY, WM_DRAWITEM, WM_INITDIALOG,
+    WM_NOTIFY,
 };
 
 use windows::core::HSTRING;
@@ -1130,7 +1131,9 @@ fn initialize_shortcuts_page(state: &OptionsState) {
     if unsafe { GetClientRect(list, &raw mut bounds) }.is_err() {
         return;
     }
-    let usable = bounds.right - bounds.left - unsafe { GetSystemMetrics(SM_CXVSCROLL) };
+    let scrollbar_width =
+        unsafe { GetSystemMetricsForDpi(SM_CXVSCROLL, crate::window::dpi::dpi_for_window(list)) };
+    let usable = bounds.right - bounds.left - scrollbar_width;
     let action_width = usable * 36 / 100;
     let keyboard_width = usable * 32 / 100;
     let mouse_width = usable - action_width - keyboard_width;

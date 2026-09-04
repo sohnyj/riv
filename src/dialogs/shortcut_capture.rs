@@ -518,6 +518,12 @@ fn paint_field(field: HWND, text: &str, hint: bool) {
     let mut paint = PAINTSTRUCT::default();
     let target = unsafe { BeginPaint(field, &raw mut paint) };
     let bounds = paint.rcPaint;
+    // The text is placed in the client rectangle, so a partial repaint does not shift it.
+    let mut client = RECT::default();
+    if unsafe { GetClientRect(field, &raw mut client) }.is_err() {
+        let _ = unsafe { EndPaint(field, &raw const paint) };
+        return;
+    }
     crate::dialogs::paint::draw_buffered(target, bounds, |device| {
         unsafe { FillRect(device, &raw const bounds, GetSysColorBrush(COLOR_WINDOW)) };
         let font = field_font(field);
@@ -531,7 +537,7 @@ fn paint_field(field: HWND, text: &str, hint: bool) {
         };
         let color = COLORREF(unsafe { GetSysColor(text_color) });
         let mut wide: Vec<u16> = text.encode_utf16().collect();
-        draw_field_text(device, bounds, &mut wide, color);
+        draw_field_text(device, client, &mut wide, color);
     });
     let _ = unsafe { EndPaint(field, &raw const paint) };
 }

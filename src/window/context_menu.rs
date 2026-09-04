@@ -349,7 +349,7 @@ fn menu_row_height(dpi: u32) -> i32 {
 /// The title bar and top frame of a normal window, which the menu leaves clear.
 fn title_bar_height(dpi: u32) -> i32 {
     let mut frame = RECT::default();
-    if unsafe {
+    unsafe {
         AdjustWindowRectExForDpi(
             &raw mut frame,
             WS_OVERLAPPEDWINDOW,
@@ -358,10 +358,7 @@ fn title_bar_height(dpi: u32) -> i32 {
             dpi,
         )
     }
-    .is_err()
-    {
-        return 0;
-    }
+    .expect("the overlapped frame size at a valid DPI");
     -frame.top
 }
 

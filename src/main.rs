@@ -2073,11 +2073,12 @@ fn show_menu(application: &mut Application, window: HWND, x: i32, y: i32, target
 }
 
 /// Bindings are the accelerator table: a key they take never turns into a character.
-fn consume_keyboard_binding(message: &MSG) -> bool {
-    if message.message != WM_KEYDOWN && message.message != WM_SYSKEYDOWN {
+fn consume_keyboard_binding(window: HWND, message: &MSG) -> bool {
+    // Only the main window's keys: another window's USERDATA is not an Application.
+    if message.hwnd != window || (message.message != WM_KEYDOWN && message.message != WM_SYSKEYDOWN)
+    {
         return false;
     }
-    let window = message.hwnd;
     application_from_window(window)
         .is_some_and(|application| dispatch_key(application, window, message.wParam.0 as u16))
 }
@@ -2278,7 +2279,7 @@ fn run_message_loop(window: HWND) {
             if message.message == WM_QUIT {
                 return;
             }
-            deliver_message(&message);
+            deliver_message(window, &message);
         }
         // A handle means the next frame still waits on the frame slot.
         let slot_handle = application_from_window(window)
@@ -2297,13 +2298,13 @@ fn run_message_loop(window: HWND) {
         if message_status.0 <= 0 {
             return;
         }
-        deliver_message(&message);
+        deliver_message(window, &message);
     }
 }
 
 /// Bindings are checked first, and a key they take never reaches translation or the window.
-fn deliver_message(message: &MSG) {
-    if consume_keyboard_binding(message) {
+fn deliver_message(window: HWND, message: &MSG) {
+    if consume_keyboard_binding(window, message) {
         return;
     }
     let _ = unsafe { TranslateMessage(message) };
