@@ -557,6 +557,7 @@ mod menu_structure_tests {
         assert_eq!(bare_label(view, 3), "Zoom in");
         assert_eq!(bare_label(view, 4), "Zoom out");
         assert_eq!(bare_label(view, 5), "Toggle zoom");
+        let _ = unsafe { DestroyMenu(menu) };
 
         let mut height_state = state();
         height_state.fit_height = true;
@@ -564,6 +565,7 @@ mod menu_structure_tests {
         let menu = builder.build().expect("menu builds");
         let view = submenu_by_label(menu, "View");
         assert_eq!(bare_label(view, 0), "Fit width");
+        let _ = unsafe { DestroyMenu(menu) };
     }
 
     #[test]

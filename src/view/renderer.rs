@@ -455,6 +455,13 @@ fn effect_when(
     condition.then(build).flatten()
 }
 
+/// A WhiteLevelAdjustment with its input at SDR reference white; the output defaults to 80.
+fn create_white_level_effect(d2d_context: &ID2D1DeviceContext) -> Option<ID2D1Effect> {
+    let effect = unsafe { d2d_context.CreateEffect(&CLSID_D2D1WhiteLevelAdjustment) }.ok()?;
+    set_white_level_input(&effect, SDR_REFERENCE_WHITE_NITS).ok()?;
+    Some(effect)
+}
+
 /// WhiteLevelAdjustment multiplies by input/output white level.
 fn set_white_level_input(effect: &ID2D1Effect, input_white_nits: f32) -> Result<()> {
     unsafe {
@@ -594,10 +601,7 @@ impl Renderer {
             });
         // A Some tone map already implies SDR output, so later stages key on it alone.
         let tone_map_normalize_effect = effect_when(hdr_tone_map_effect.is_some(), || {
-            let effect =
-                unsafe { d2d_context.CreateEffect(&CLSID_D2D1WhiteLevelAdjustment) }.ok()?;
-            set_white_level_input(&effect, SDR_REFERENCE_WHITE_NITS).ok()?;
-            Some(effect)
+            create_white_level_effect(d2d_context)
         });
         // The FP16 scRGB backbuffer of ACM-on SDR takes the tone-mapped scRGB with no re-encode.
         let output_color_management_effect =
@@ -610,9 +614,7 @@ impl Renderer {
             });
         let white_level_effect =
             effect_when(is_hdr_output && color_management_effect.is_some(), || {
-                let effect =
-                    unsafe { d2d_context.CreateEffect(&CLSID_D2D1WhiteLevelAdjustment) }.ok()?;
-                set_white_level_input(&effect, SDR_REFERENCE_WHITE_NITS).ok()?;
+                let effect = create_white_level_effect(d2d_context)?;
                 unsafe {
                     effect.SetValue(
                         D2D1_WHITELEVELADJUSTMENT_PROP_OUTPUT_WHITE_LEVEL.0 as u32,
@@ -1103,12 +1105,8 @@ impl Renderer {
             PresentTarget::SwapChain { swap_chain, .. } => {
                 unsafe { swap_chain.ResizeBuffers(0, 0, 0, format, SWAP_CHAIN_FLAGS) }?;
                 if let Ok(swap_chain3) = swap_chain.cast::<IDXGISwapChain3>() {
-                    if is_hdr_output || is_sdr_wide_gamut {
-                        let _ = declare_color_space(&swap_chain3, color_space);
-                    } else {
-                        // Undo any FP16 declaration; SDR composition reads sRGB.
-                        let _ = declare_color_space(&swap_chain3, SDR_BACKBUFFER_COLOR_SPACE);
-                    }
+                    // The SDR space also undoes an earlier FP16 declaration.
+                    let _ = declare_color_space(&swap_chain3, color_space);
                 }
             }
         }

@@ -2046,31 +2046,13 @@ impl DecodePool {
 
 impl From<archive_reader::ArchiveError> for DecodeError {
     fn from(error: archive_reader::ArchiveError) -> Self {
-        if error.cancelled {
-            Self::cancelled()
-        } else {
-            Self {
-                code: ErrorCode::status(error.code),
-                message: error.message,
-                cancelled: false,
-                store_codec_names: &[],
-            }
-        }
+        Self::from_status(error.cancelled, error.code, error.message)
     }
 }
 
 impl From<curl::NetworkError> for DecodeError {
     fn from(error: curl::NetworkError) -> Self {
-        if error.cancelled {
-            Self::cancelled()
-        } else {
-            Self {
-                code: ErrorCode::status(error.code),
-                message: error.message,
-                cancelled: false,
-                store_codec_names: &[],
-            }
-        }
+        Self::from_status(error.cancelled, error.code, error.message)
     }
 }
 

@@ -233,6 +233,19 @@ pub struct DecodeError {
 }
 
 impl DecodeError {
+    /// A source's outcome: its cancellation flag decides, then its status and message.
+    pub fn from_status(cancelled: bool, code: i32, message: String) -> Self {
+        if cancelled {
+            return Self::cancelled();
+        }
+        Self {
+            code: ErrorCode::status(code),
+            message,
+            cancelled: false,
+            store_codec_names: &[],
+        }
+    }
+
     pub fn cancelled() -> Self {
         Self {
             code: ErrorCode::None,

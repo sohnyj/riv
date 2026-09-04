@@ -384,6 +384,7 @@ enum HeifImageHandle {}
 enum HeifImage {}
 enum HeifTrack {}
 enum HeifDecodingOptions {}
+enum HeifReadingOptions {}
 
 #[repr(C)]
 struct HeifError {
@@ -431,7 +432,7 @@ unsafe extern "C" {
         context: *mut HeifContext,
         memory: *const c_void,
         size: usize,
-        options: *const HeifDecodingOptions,
+        options: *const HeifReadingOptions,
     ) -> HeifError;
     fn heif_context_get_primary_image_handle(
         context: *mut HeifContext,

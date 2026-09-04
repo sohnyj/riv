@@ -91,7 +91,7 @@ The build cross-compiles from Linux (tested on WSL) to `x86_64-pc-windows-msvc`.
 Prerequisites:
 - `CMake`, `Ninja`, `Meson`, and `NASM`, for static codec dependencies.
 - `Wine`, for the tests and for compiling the HLSL shaders.
-- LLVM 23: `clang, clang-cl, lld-link, llvm-lib, llvm-rc, llvm-mt`.
+- LLVM 23: `clang, clang-cl, lld-link, llvm-lib, llvm-rc, llvm-mt, llvm-strip`.
 - Rust with the `x86_64-pc-windows-msvc` target.
 - A Windows CRT + SDK splat from xwin
   in `~/.xwin` (override the location with `XWIN_ROOT`).
