@@ -113,7 +113,7 @@ struct AssociationGroup {
 }
 
 struct OptionsState {
-    parent: HWND,
+    owner: HWND,
     dialog: HWND,
     pages: [HWND; PAGES.len()],
     saved_options: Options,
@@ -219,12 +219,12 @@ impl OptionsSnapshot {
     }
 }
 
-pub fn show(parent: HWND, snapshot: OptionsSnapshot) {
+pub fn show(owner: HWND, snapshot: OptionsSnapshot) {
     let OptionsSnapshot { options, shortcuts } = snapshot;
     let saved_associations = registered_associations();
     let start_menu_present = start_menu::shortcut_exists();
     let mut state = OptionsState {
-        parent,
+        owner,
         dialog: HWND::default(),
         pages: [HWND::default(); PAGES.len()],
         saved_options: options.clone(),
@@ -241,12 +241,7 @@ pub fn show(parent: HWND, snapshot: OptionsSnapshot) {
         custom_colors: [COLORREF(0x00FF_FFFF); 16],
         about_fonts: about::AboutFonts::default(),
     };
-    crate::dialogs::modal::run_modal(
-        parent,
-        IDD_OPTIONS,
-        frame_procedure,
-        &raw mut state as isize,
-    );
+    crate::dialogs::modal::run_modal(owner, IDD_OPTIONS, frame_procedure, &raw mut state as isize);
 }
 
 fn state_mut(dialog: HWND) -> Option<&'static mut OptionsState> {
@@ -551,7 +546,7 @@ fn update_buttons(state: &OptionsState) {
     enable(IDC_RESTORE_DEFAULTS, state.differs_from_defaults());
 }
 
-/// Borrows the state in stages: a failed save opens a modal from the parent inside the send.
+/// Borrows the state in stages: a failed save opens a modal from the owner inside the send.
 fn apply(dialog: HWND) {
     let Some(state) = state_mut(dialog) else {
         return;
@@ -573,7 +568,7 @@ fn apply(dialog: HWND) {
         }
         state.start_menu_saved = start_menu::shortcut_exists();
     }
-    let parent = state.parent;
+    let owner = state.owner;
     let payload = AppliedOptions {
         dialog,
         options: state.transient_options.clone(),
@@ -588,7 +583,7 @@ fn apply(dialog: HWND) {
             .map(|row| (row.action.name().to_string(), row.mouse.clone()))
             .collect(),
     };
-    crate::window::message::send_borrowed(parent, WM_APP_OPTIONS_APPLIED, &payload);
+    crate::window::message::send_borrowed(owner, WM_APP_OPTIONS_APPLIED, &payload);
     let Some(state) = state_mut(dialog) else {
         return;
     };

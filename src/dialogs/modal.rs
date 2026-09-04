@@ -17,7 +17,7 @@ pub type DialogProcedure = unsafe extern "system" fn(HWND, u32, WPARAM, LPARAM) 
 
 /// Runs a dialog template from the executable's own resources; the DialogBox result.
 pub fn run_modal(
-    parent: HWND,
+    owner: HWND,
     template: u16,
     procedure: DialogProcedure,
     state_pointer: isize,
@@ -28,7 +28,7 @@ pub fn run_modal(
         DialogBoxParamW(
             Some(instance.into()),
             resource::template_name(template),
-            Some(parent),
+            Some(owner),
             Some(procedure),
             LPARAM(state_pointer),
         )

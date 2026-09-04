@@ -31,7 +31,7 @@ pub fn show_in_explorer(window: HWND, path: &Path) {
 fn select_in_explorer(path: &Path) -> Result<()> {
     let mut item_list = std::ptr::null_mut();
     unsafe { SHParseDisplayName(&HSTRING::from(path), None, &raw mut item_list, 0, None) }?;
-    // With no item array, the folder argument names the item to select in its parent.
+    // With no item array, the folder argument names the item to select in its parent folder.
     let selected = unsafe { SHOpenFolderAndSelectItems(item_list, None, 0) };
     unsafe { ILFree(Some(item_list)) };
     selected

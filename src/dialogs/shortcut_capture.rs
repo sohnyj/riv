@@ -47,7 +47,7 @@ const NO_BINDING_TEXT: &str = "None";
 const MOUSE_CAPTURE_MODIFIER_SHIFT: usize = 8;
 
 pub fn capture_keyboard_sequences(
-    parent: HWND,
+    owner: HWND,
     current: &[String],
     taken: &[(&str, &str)],
 ) -> Option<Vec<String>> {
@@ -58,7 +58,7 @@ pub fn capture_keyboard_sequences(
         accepted: false,
     };
     crate::dialogs::modal::run_modal(
-        parent,
+        owner,
         IDD_CAPTURE_KEYBOARD,
         keyboard_procedure,
         &raw mut state as isize,
@@ -67,7 +67,7 @@ pub fn capture_keyboard_sequences(
 }
 
 pub fn capture_mouse_binding(
-    parent: HWND,
+    owner: HWND,
     current: Option<&str>,
     taken: &[(&str, &str)],
 ) -> Option<Vec<String>> {
@@ -78,7 +78,7 @@ pub fn capture_mouse_binding(
         accepted: false,
     };
     crate::dialogs::modal::run_modal(
-        parent,
+        owner,
         IDD_CAPTURE_MOUSE,
         mouse_procedure,
         &raw mut state as isize,
@@ -574,9 +574,9 @@ unsafe extern "system" fn keyboard_field_procedure(
                 let _ = unsafe { InvalidateRect(Some(field), None, false) };
             } else {
                 let packed = ((current_modifiers() as usize) << 16) | virtual_key as usize;
-                if let Ok(parent) = unsafe { GetParent(field) } {
+                if let Ok(dialog) = unsafe { GetParent(field) } {
                     unsafe {
-                        SendMessageW(parent, WM_RIV_KEYBOARD_CAPTURED, Some(WPARAM(packed)), None)
+                        SendMessageW(dialog, WM_RIV_KEYBOARD_CAPTURED, Some(WPARAM(packed)), None)
                     };
                 }
             }
@@ -620,8 +620,8 @@ unsafe extern "system" fn mouse_field_procedure(
     fn notify(field: HWND, base: MouseBase) -> LRESULT {
         let packed = ((current_modifiers() as usize) << MOUSE_CAPTURE_MODIFIER_SHIFT)
             | base.index() as usize;
-        if let Ok(parent) = unsafe { GetParent(field) } {
-            unsafe { SendMessageW(parent, WM_RIV_MOUSE_CAPTURED, Some(WPARAM(packed)), None) };
+        if let Ok(dialog) = unsafe { GetParent(field) } {
+            unsafe { SendMessageW(dialog, WM_RIV_MOUSE_CAPTURED, Some(WPARAM(packed)), None) };
         }
         LRESULT(0)
     }

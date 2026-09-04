@@ -1740,10 +1740,10 @@ fn dispatch_action(application: &mut Application, window: HWND, action: Action) 
             if let Some(first) = paths.first()
                 && let Some(application) = application_from_window(window)
             {
-                if let Some(parent) = first.parent() {
+                if let Some(directory) = first.parent() {
                     application
                         .settings
-                        .set_last_file_dialog_directory(&parent.to_string_lossy());
+                        .set_last_file_dialog_directory(&directory.to_string_lossy());
                 }
                 open_external_path(application, window, first);
             }
