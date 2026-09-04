@@ -937,8 +937,11 @@ fn find_and_decode_gain_map(
     }
     let bytes = input.read_all().ok()?;
     let found = crate::image::gain_map::find_ultra_hdr(&bytes)?;
+    // The gain map carries no orientation of its own; it follows the base frame's.
+    let orientation = declared_orientation(&bytes).ok()?;
     let plane = decode_gain_map_plane(
         bytes.get(found.gain_map_range.clone())?,
+        orientation,
         base_width,
         base_height,
         cancellation,
@@ -946,9 +949,26 @@ fn find_and_decode_gain_map(
     Some((found.metadata, plane))
 }
 
+/// The EXIF orientation the image bytes declare; 1 when they declare none.
+fn declared_orientation(bytes: &[u8]) -> WindowsResult<u32> {
+    with_wic_factory(|factory| {
+        let decoder = create_wic_decoder(
+            factory,
+            &DecodeInput::Memory {
+                bytes,
+                extension: None,
+            },
+        )?;
+        let frame = unsafe { decoder.GetFrame(0)? };
+        let metadata = unsafe { frame.GetMetadataQueryReader() }.ok();
+        Ok(exif_orientation(metadata.as_ref()))
+    })
+}
+
 /// Decodes the gain map JPEG to BGRA, the storage every base frame already uses.
 fn decode_gain_map_plane(
     gain_map_bytes: &[u8],
+    orientation: u32,
     base_width: u32,
     base_height: u32,
     cancellation: &AtomicBool,
@@ -963,6 +983,7 @@ fn decode_gain_map_plane(
         )?;
         let frame = unsafe { decoder.GetFrame(0)? };
         let source = convert_to_pbgra(factory, &frame.cast()?)?;
+        let source = apply_orientation(factory, source, orientation)?;
         let (width, height) = source_size(&source)?;
         // Refused before the copy below allocates the stated size.
         if !crate::image::gain_map::GainMapPlane::size_fits_within(
@@ -1439,15 +1460,18 @@ thread_local! {
 fn with_wic_factory<T>(
     operation: impl FnOnce(&IWICImagingFactory) -> WindowsResult<T>,
 ) -> WindowsResult<T> {
-    WIC_FACTORY.with(|slot| {
+    // Cloned out of the borrow: an operation that calls back in here would otherwise panic on it.
+    let factory = WIC_FACTORY.with(|slot| -> WindowsResult<IWICImagingFactory> {
         let mut slot = slot.borrow_mut();
-        if slot.is_none() {
-            *slot = Some(unsafe {
-                CoCreateInstance(&CLSID_WICImagingFactory, None, CLSCTX_INPROC_SERVER)?
-            });
+        if let Some(factory) = slot.as_ref() {
+            return Ok(factory.clone());
         }
-        operation(slot.as_ref().expect("WIC factory initialized"))
-    })
+        let factory: IWICImagingFactory =
+            unsafe { CoCreateInstance(&CLSID_WICImagingFactory, None, CLSCTX_INPROC_SERVER)? };
+        *slot = Some(factory.clone());
+        Ok(factory)
+    })?;
+    operation(&factory)
 }
 
 fn decode_with_wic(
@@ -2758,6 +2782,26 @@ fn pixels_to_premultiplied_bgra_into(
                 output_pixel[3] = 255;
             }
         }
+        png::ColorType::Grayscale => {
+            for (&gray, output_pixel) in pixels[..pixel_count]
+                .iter()
+                .zip(output.as_chunks_mut::<4>().0)
+            {
+                *output_pixel = [gray, gray, gray, 255];
+            }
+        }
+        png::ColorType::GrayscaleAlpha => {
+            for (source_pixel, output_pixel) in pixels[..pixel_count * 2]
+                .as_chunks::<2>()
+                .0
+                .iter()
+                .zip(output.as_chunks_mut::<4>().0)
+            {
+                let alpha = u16::from(source_pixel[1]);
+                let gray = (u16::from(source_pixel[0]) * alpha / 255) as u8;
+                *output_pixel = [gray, gray, gray, source_pixel[1]];
+            }
+        }
         other => {
             return Err(uncoded_error(format!(
                 "Unsupported PNG color type after normalization: {other:?}"
@@ -3750,6 +3794,42 @@ mod premultiplied_conversion_tests {
     }
 
     #[test]
+    fn grayscale_conversion_replicates_the_gray_channel() {
+        let gray = [0u8, 7, 128, 255];
+        let mut converted = Vec::new();
+        let converted_ok = pixels_to_premultiplied_bgra_into(
+            &gray,
+            png::ColorType::Grayscale,
+            2,
+            2,
+            &mut converted,
+        );
+        assert!(converted_ok.is_ok(), "conversion failed");
+        let expected: Vec<u8> = gray.iter().flat_map(|&g| [g, g, g, 255]).collect();
+        assert_eq!(converted, expected);
+    }
+
+    #[test]
+    fn grayscale_alpha_conversion_premultiplies_like_rgba() {
+        let gray_alpha = [200u8, 255, 200, 128, 200, 0, 9, 3];
+        let mut converted = Vec::new();
+        let converted_ok = pixels_to_premultiplied_bgra_into(
+            &gray_alpha,
+            png::ColorType::GrayscaleAlpha,
+            2,
+            2,
+            &mut converted,
+        );
+        assert!(converted_ok.is_ok(), "conversion failed");
+        let mut expected = Vec::new();
+        for pixel in gray_alpha.as_chunks::<2>().0 {
+            let gray = (u16::from(pixel[0]) * u16::from(pixel[1]) / 255) as u8;
+            expected.extend_from_slice(&[gray, gray, gray, pixel[1]]);
+        }
+        assert_eq!(converted, expected);
+    }
+
+    #[test]
     #[ignore = "manual timing comparison (--nocapture)"]
     fn rgba_conversion_timing() {
         let rgba = random_pixels(1920 * 1080, 17);
@@ -3945,11 +4025,30 @@ mod gain_map_decode_tests {
         let cancellation = AtomicBool::new(false);
         // Control: the same construction decodes when the plane fits the base.
         let small = bmp_with_declared_size(2, 2, &[0u8; 16]);
-        let plane = decode_gain_map_plane(&small, 100, 100, &cancellation);
+        let plane = decode_gain_map_plane(&small, 1, 100, 100, &cancellation);
         assert!(plane.is_some_and(|plane| plane.width == 2 && plane.height == 2));
         // The stated size alone must reject it; the file stays 70 bytes.
         let oversized = bmp_with_declared_size(60000, 60000, &[0u8; 16]);
-        assert!(decode_gain_map_plane(&oversized, 100, 100, &cancellation).is_none());
+        assert!(decode_gain_map_plane(&oversized, 1, 100, 100, &cancellation).is_none());
+    }
+
+    #[test]
+    #[ignore = "wine's WIC flip rotator returns E_NOTIMPL for rotation; run on Windows"]
+    fn the_gain_plane_takes_the_base_orientation() {
+        initialize_com();
+        let cancellation = AtomicBool::new(false);
+        // Two pixels side by side, then the row's two padding bytes.
+        let row = bmp_with_declared_size(2, 1, &[10, 20, 30, 40, 50, 60, 0, 0]);
+        let upright = decode_gain_map_plane(&row, 1, 100, 100, &cancellation).expect("plane");
+        assert_eq!((upright.width, upright.height), (2, 1));
+        assert_eq!(upright.pixels, [10, 20, 30, 255, 40, 50, 60, 255]);
+        // Orientation 6 rotates 90 degrees clockwise: the left pixel ends up on top.
+        let rotated = decode_gain_map_plane(&row, 6, 100, 100, &cancellation).expect("plane");
+        assert_eq!((rotated.width, rotated.height), (1, 2));
+        assert_eq!(rotated.pixels, [10, 20, 30, 255, 40, 50, 60, 255]);
+        // The size rule sees the rotated plane, as it sees the rotated base.
+        assert!(decode_gain_map_plane(&row, 6, 2, 1, &cancellation).is_none());
+        assert!(decode_gain_map_plane(&row, 6, 1, 2, &cancellation).is_some());
     }
 
     #[test]
