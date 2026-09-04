@@ -49,9 +49,7 @@ jobs:
       # carries the release through itself.
       - name: Create the release tag
         if: github.event_name == 'workflow_dispatch'
-        run: |
-          git tag "$RELEASE_TAG"
-          git push origin "$RELEASE_TAG"
+        run: git tag "$RELEASE_TAG"
 
       # The MSVC STL in the xwin splat requires a clang newer than the runner default (STL1000).
       - name: Install the cross toolchain
@@ -101,6 +99,11 @@ jobs:
             git log --format='- %s ([%h](https://github.com/sohnyj/riv/commit/%H))' "${previous:+$previous..}$RELEASE_TAG"
           } > "$RUNNER_TEMP/notes.md"
           cat "$RUNNER_TEMP/notes.md"
+
+      # Pushed only after the build and tests, so a failed run leaves no tag behind.
+      - name: Push the release tag
+        if: github.event_name == 'workflow_dispatch'
+        run: git push origin "$RELEASE_TAG"
 
       - name: Create the draft release
         env:

@@ -1861,7 +1861,7 @@ fn delete_current_file(application: &mut Application, window: HWND, permanent: b
     } else {
         NavigationCommand::Next
     };
-    let deleted = file_ops::delete_file(&path, permanent);
+    let deleted = file_ops::delete_file(window, &path, permanent);
     // The shell's error dialog pumped messages, so re-fetch instead of reusing the reference across it.
     let Some(application) = application_from_window(window) else {
         return;

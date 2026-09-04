@@ -98,10 +98,11 @@ pub fn confirm_delete(window: HWND, details: &str, permanent: bool) -> DeleteCon
     }
 }
 
-pub fn delete_file(path: &Path, permanent: bool) -> Result<()> {
+pub fn delete_file(window: HWND, path: &Path, permanent: bool) -> Result<()> {
     unsafe {
         let operation: IFileOperation =
             CoCreateInstance(&FileOperation, None, CLSCTX_INPROC_SERVER)?;
+        operation.SetOwnerWindow(window)?;
         // No FOF_NOERRORUI: the shell's own error dialog is the failure surface.
         let mut flags = FOF_NOCONFIRMATION | FOF_SILENT;
         if !permanent {
