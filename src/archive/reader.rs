@@ -1,5 +1,6 @@
 //! Safe read-only archive access: enumerate members, extract one to memory.
 
+use std::collections::HashSet;
 use std::ffi::CStr;
 use std::path::Path;
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -7,7 +8,8 @@ use std::time::{Duration, SystemTime, UNIX_EPOCH};
 use windows::core::HSTRING;
 
 use crate::archive::libarchive::{
-    self, ARCHIVE_EOF, ARCHIVE_OK, Api, Archive, ArchiveEntry, FILETYPE_MASK, FILETYPE_REGULAR,
+    self, ARCHIVE_EOF, ARCHIVE_OK, ARCHIVE_WARN, Api, Archive, ArchiveEntry, FILETYPE_MASK,
+    FILETYPE_REGULAR,
 };
 
 /// Extension groups parallel to decode::format_groups.
@@ -87,6 +89,7 @@ impl ArchiveError {
 pub fn enumerate(archive_path: &Path) -> Result<Vec<ArchiveMember>, ArchiveError> {
     let mut reader = Reader::open(archive_path)?;
     let mut members = Vec::new();
+    let mut listed_names = HashSet::new();
     while let Some(entry) = reader.next_header()? {
         if unsafe { (reader.api.entry_is_metadata_encrypted)(entry) } != 0 {
             return Err(ArchiveError::new("Archive metadata is encrypted"));
@@ -99,6 +102,10 @@ pub fn enumerate(archive_path: &Path) -> Result<Vec<ArchiveMember>, ArchiveError
         let Some(name) = entry_name(reader.api, entry) else {
             continue;
         };
+        // A repeated name (an appended tar) lists once; read_member returns that first entry too.
+        if !listed_names.insert(name.clone()) {
+            continue;
+        }
         let uncompressed_bytes = if unsafe { (reader.api.entry_size_is_set)(entry) } != 0 {
             unsafe { (reader.api.entry_size)(entry) }.max(0) as u64
         } else {
@@ -198,7 +205,8 @@ impl Reader<'_> {
     fn next_header(&mut self) -> Result<Option<*mut ArchiveEntry>, ArchiveError> {
         let mut entry: *mut ArchiveEntry = std::ptr::null_mut();
         match unsafe { (self.api.read_next_header)(self.handle, &raw mut entry) } {
-            ARCHIVE_OK => Ok(Some(entry)),
+            // WARN is success with a note (a CRC or name locale mismatch); the entry is valid.
+            ARCHIVE_OK | ARCHIVE_WARN => Ok(Some(entry)),
             ARCHIVE_EOF => Ok(None),
             _ => Err(self.error("Archive header read failed")),
         }

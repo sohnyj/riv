@@ -1,6 +1,6 @@
 //! Runtime binding to the Windows in-box libarchive (archiveint.dll, 23H2+).
 
-use std::ffi::{c_char, c_int, c_uint, c_void};
+use std::ffi::{c_char, c_int, c_void};
 use std::sync::OnceLock;
 
 use windows::Win32::System::LibraryLoader::{
@@ -13,10 +13,11 @@ pub enum ArchiveEntry {}
 
 pub const ARCHIVE_EOF: c_int = 1;
 pub const ARCHIVE_OK: c_int = 0;
+pub const ARCHIVE_WARN: c_int = -20;
 
 /// archive_entry_filetype masks (AE_IFMT / AE_IFREG in archive_entry.h).
-pub const FILETYPE_MASK: c_uint = 0o170000;
-pub const FILETYPE_REGULAR: c_uint = 0o100000;
+pub const FILETYPE_MASK: u16 = 0o170000;
+pub const FILETYPE_REGULAR: u16 = 0o100000;
 
 type NewFunction = unsafe extern "C" fn() -> *mut Archive;
 type ArchiveResultFunction = unsafe extern "C" fn(*mut Archive) -> c_int;
@@ -27,7 +28,8 @@ type ErrorStringFunction = unsafe extern "C" fn(*mut Archive) -> *const c_char;
 type EntryTextFunction = unsafe extern "C" fn(*mut ArchiveEntry) -> *const u16;
 type EntryNumberFunction = unsafe extern "C" fn(*mut ArchiveEntry) -> i64;
 type EntryFlagFunction = unsafe extern "C" fn(*mut ArchiveEntry) -> c_int;
-type EntryFiletypeFunction = unsafe extern "C" fn(*mut ArchiveEntry) -> c_uint;
+// __LA_MODE_T is unsigned short on Windows; a wider return type would read undefined upper bits.
+type EntryFiletypeFunction = unsafe extern "C" fn(*mut ArchiveEntry) -> u16;
 
 /// Read-only slice of the libarchive C API (zip/7z/rar/rar5/tar, no filters).
 pub struct Api {
