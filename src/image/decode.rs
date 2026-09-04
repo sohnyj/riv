@@ -1028,11 +1028,13 @@ fn decode_input(
             &input.read_all()?,
             format_name,
             usize::MAX,
+            cancellation,
         ),
         Adapter::AvifAnimation => crate::image::fallback::decode_avif_animation(
             &input.read_all()?,
             format_name,
             usize::MAX,
+            cancellation,
         ),
         Adapter::Exr => match input {
             DecodeInput::File(path) => crate::image::fallback::decode_exr(path, format_name),
@@ -1103,12 +1105,14 @@ fn animation_first_frame(
             &input.read_all().ok()?,
             descriptor.name,
             1,
+            cancellation,
         )
         .ok(),
         Adapter::AvifAnimation => crate::image::fallback::decode_avif_animation(
             &input.read_all().ok()?,
             descriptor.name,
             1,
+            cancellation,
         )
         .ok(),
         _ => None,

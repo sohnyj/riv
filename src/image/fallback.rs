@@ -4,6 +4,7 @@ use std::borrow::Cow;
 use std::ffi::{CStr, c_char, c_int, c_void};
 use std::path::Path;
 use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, Ordering};
 use windows::core::HSTRING;
 
 use crate::image::decode::{
@@ -77,6 +78,7 @@ pub fn decode_webp_animation(
     bytes: &[u8],
     format_name: &'static str,
     maximum_frames: usize,
+    cancellation: &AtomicBool,
 ) -> Result<DecodedImage, DecodeError> {
     let webp_data = WebPData {
         bytes: bytes.as_ptr(),
@@ -93,7 +95,7 @@ pub fn decode_webp_animation(
     if demuxer.is_null() {
         return Err(uncoded_error("WebP animation couldn't be read"));
     }
-    let decoded = compose_webp_frames(demuxer, format_name, maximum_frames);
+    let decoded = compose_webp_frames(demuxer, format_name, maximum_frames, cancellation);
     unsafe { WebPDemuxDelete(demuxer) };
     decoded
 }
@@ -102,6 +104,7 @@ fn compose_webp_frames(
     demuxer: *mut WebPDemuxer,
     format_name: &'static str,
     maximum_frames: usize,
+    cancellation: &AtomicBool,
 ) -> Result<DecodedImage, DecodeError> {
     let canvas_width = unsafe { WebPDemuxGetI(demuxer, WEBP_FF_CANVAS_WIDTH) };
     let canvas_height = unsafe { WebPDemuxGetI(demuxer, WEBP_FF_CANVAS_HEIGHT) };
@@ -119,6 +122,10 @@ fn compose_webp_frames(
     // Reused across frames; the decoder writes every byte it is given.
     let mut frame_pixels: Vec<u8> = Vec::new();
     loop {
+        if cancellation.load(Ordering::Relaxed) {
+            unsafe { WebPDemuxReleaseIterator(&raw mut iterator) };
+            return Err(DecodeError::cancelled());
+        }
         // The demuxer's frame count is real, so the budget is known after frame one.
         if !compositor.accepts_another(u64::from(iterator.frame_count.max(1) as u32)) {
             break;
@@ -674,12 +681,13 @@ pub fn decode_avif_animation(
     bytes: &[u8],
     format_name: &'static str,
     maximum_frames: usize,
+    cancellation: &AtomicBool,
 ) -> Result<DecodedImage, DecodeError> {
     let context = unsafe { heif_context_alloc() };
     if context.is_null() {
         return Err(uncoded_error("HEIF context allocation failed"));
     }
-    let decoded = decode_avif_sequence(context, bytes, format_name, maximum_frames);
+    let decoded = decode_avif_sequence(context, bytes, format_name, maximum_frames, cancellation);
     unsafe { heif_context_free(context) };
     decoded
 }
@@ -709,6 +717,7 @@ fn decode_avif_sequence(
     bytes: &[u8],
     format_name: &'static str,
     maximum_frames: usize,
+    cancellation: &AtomicBool,
 ) -> Result<DecodedImage, DecodeError> {
     let (track, canvas_width, canvas_height) = avif_sequence_track(context, bytes)?;
     let options = unsafe { riv_heif_sequence_decoding_options_alloc() };
@@ -722,6 +731,7 @@ fn decode_avif_sequence(
             canvas_height,
             format_name,
             maximum_frames,
+            cancellation,
         )
     };
     if !options.is_null() {
@@ -738,6 +748,7 @@ fn compose_avif_frames(
     canvas_height: u32,
     format_name: &'static str,
     maximum_frames: usize,
+    cancellation: &AtomicBool,
 ) -> Result<DecodedImage, DecodeError> {
     if canvas_width == 0 || canvas_height == 0 {
         return Err(uncoded_error("AVIF canvas has no size"));
@@ -751,6 +762,9 @@ fn compose_avif_frames(
     };
     let timescale = unsafe { heif_track_get_timescale(track) };
     loop {
+        if cancellation.load(Ordering::Relaxed) {
+            return Err(DecodeError::cancelled());
+        }
         // The container declares no sample count, so the budget is checked per frame.
         if !compositor.accepts_one_more() {
             break;
@@ -1123,9 +1137,14 @@ mod avif_sequence_tests {
     #[test]
     #[ignore = "needs test/ fixtures"]
     fn the_avif_fixture_decodes_frames_and_timing() {
-        let decoded = decode_avif_animation(&fixture_bytes(), "AVIF", usize::MAX)
-            .map_err(|error| error.message)
-            .expect("decodes");
+        let decoded = decode_avif_animation(
+            &fixture_bytes(),
+            "AVIF",
+            usize::MAX,
+            &AtomicBool::new(false),
+        )
+        .map_err(|error| error.message)
+        .expect("decodes");
         assert_eq!((decoded.width, decoded.height), (64, 32));
         assert_eq!(decoded.frames.len(), 4);
         assert!(!decoded.frames_truncated);
@@ -1148,7 +1167,7 @@ mod avif_sequence_tests {
     #[test]
     #[ignore = "needs test/ fixtures"]
     fn the_first_frame_stops_a_bounded_decode() {
-        let decoded = decode_avif_animation(&fixture_bytes(), "AVIF", 1)
+        let decoded = decode_avif_animation(&fixture_bytes(), "AVIF", 1, &AtomicBool::new(false))
             .map_err(|error| error.message)
             .expect("decodes");
         assert_eq!(decoded.frames.len(), 1);
