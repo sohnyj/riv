@@ -76,7 +76,7 @@ fn compile(compiler: &Path, name: &str, profile: &str, output_directory: &Path) 
         .arg(&output)
         .arg(format!(
             "BLUE_NOISE_EDGE_TEXELS={}",
-            crate::blue_noise::SIZE
+            crate::blue_noise::EDGE_TEXELS
         ))
         .current_dir(SHADER_DIRECTORY)
         .env("WINEDEBUG", "-all")

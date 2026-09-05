@@ -12,12 +12,13 @@ pub fn write_table(table: &Path) {
     std::fs::write(table, texels).expect("blue noise writable");
 }
 
-const SIZE_BITS: usize = 6;
-pub const SIZE: usize = 1 << SIZE_BITS;
-const CELL_COUNT: usize = SIZE * SIZE;
+const EDGE_BITS: usize = 6;
+/// The runtime reads the edge back from the table it writes, so this is the one definition.
+pub const EDGE_TEXELS: usize = 1 << EDGE_BITS;
+const CELL_COUNT: usize = EDGE_TEXELS * EDGE_TEXELS;
 
 fn cell_index(x: usize, y: usize) -> usize {
-    x | (y << SIZE_BITS)
+    x | (y << EDGE_BITS)
 }
 
 struct Generator {
@@ -47,7 +48,7 @@ impl Generator {
     }
 
     fn fill_gaussian(&mut self) {
-        let radius = SIZE / 2 - 1;
+        let radius = EDGE_TEXELS / 2 - 1;
         let diameter = radius * 2 + 1;
         let area = (diameter * diameter) as f64;
         let sigma = -(1.5 / u64::MAX as f64 * area).ln() / radius as f64;
@@ -79,7 +80,7 @@ impl Generator {
             return;
         }
         self.placed[cell] = true;
-        let middle = cell_index(SIZE / 2 - 1, SIZE / 2 - 1);
+        let middle = cell_index(EDGE_TEXELS / 2 - 1, EDGE_TEXELS / 2 - 1);
         let offset = (middle + CELL_COUNT - cell) & (CELL_COUNT - 1);
         let split = CELL_COUNT - offset;
         for index in 0..split {
@@ -129,9 +130,10 @@ fn generate() -> Vec<f32> {
         generator.ranks[cell] = rank;
     }
     let mut matrix = vec![0.0f32; CELL_COUNT];
-    for y in 0..SIZE {
-        for x in 0..SIZE {
-            matrix[x + y * SIZE] = generator.ranks[cell_index(x, y)] as f32 / CELL_COUNT as f32;
+    for y in 0..EDGE_TEXELS {
+        for x in 0..EDGE_TEXELS {
+            matrix[x + y * EDGE_TEXELS] =
+                generator.ranks[cell_index(x, y)] as f32 / CELL_COUNT as f32;
         }
     }
     matrix

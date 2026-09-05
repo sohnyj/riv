@@ -1,9 +1,9 @@
 //! Output-dither settings and inputs for the quantize pass; the math lives in the HLSL.
 
-pub const BLUE_NOISE_EDGE_TEXELS: u32 = 64;
-
 /// Single-channel f32 texels; the build script runs the void-and-cluster construction.
 pub const BLUE_NOISE_TEXELS: &[u8] = include_bytes!(concat!(env!("OUT_DIR"), "/blue_noise.bin"));
+/// The square table's edge, read back from the table so the generator stays its one definition.
+pub const BLUE_NOISE_EDGE_TEXELS: u32 = (BLUE_NOISE_TEXELS.len() / size_of::<f32>()).isqrt() as u32;
 
 #[derive(Clone, Copy, PartialEq, Eq)]
 pub enum DitherMode {
@@ -39,6 +39,7 @@ mod blue_noise_tests {
 
     #[test]
     fn the_built_matrix_is_a_permutation_of_all_ranks() {
+        // A non-square table would truncate in isqrt and fail this equality.
         let cell_count = (BLUE_NOISE_EDGE_TEXELS * BLUE_NOISE_EDGE_TEXELS) as usize;
         assert_eq!(BLUE_NOISE_TEXELS.len(), cell_count * size_of::<f32>());
         let mut seen = vec![false; cell_count];
