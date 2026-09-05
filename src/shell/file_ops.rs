@@ -6,8 +6,7 @@ use windows::Win32::Foundation::{E_ABORT, HWND};
 use windows::Win32::Storage::FileSystem::{MOVE_FILE_FLAGS, MoveFileExW};
 use windows::Win32::System::Com::{CLSCTX_INPROC_SERVER, CoCreateInstance};
 use windows::Win32::UI::Controls::{
-    TASKDIALOG_BUTTON, TASKDIALOGCONFIG, TDF_ALLOW_DIALOG_CANCELLATION,
-    TDF_POSITION_RELATIVE_TO_WINDOW, TaskDialogIndirect,
+    TASKDIALOG_BUTTON, TASKDIALOGCONFIG, TDF_ALLOW_DIALOG_CANCELLATION, TaskDialogIndirect,
 };
 use windows::Win32::UI::Shell::{
     FOF_ALLOWUNDO, FOF_NOCONFIRMATION, FOF_SILENT, FileOperation, IFileOperation, ILFree,
@@ -71,12 +70,13 @@ pub fn confirm_delete(window: HWND, details: &str, permanent: bool) -> DeleteCon
     let mut configuration = TASKDIALOGCONFIG {
         cbSize: size_of::<TASKDIALOGCONFIG>() as u32,
         hwndParent: window,
-        dwFlags: TDF_ALLOW_DIALOG_CANCELLATION | TDF_POSITION_RELATIVE_TO_WINDOW,
+        dwFlags: TDF_ALLOW_DIALOG_CANCELLATION,
         pszWindowTitle: title,
         pszContent: PCWSTR(content.as_ptr()),
         cButtons: buttons.len() as u32,
         pButtons: buttons.as_ptr(),
         nDefaultButton: IDYES.0,
+        pfCallback: crate::dialogs::message::centering_callback(Some(window)),
         ..Default::default()
     };
     if !permanent {

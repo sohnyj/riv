@@ -18,7 +18,7 @@ pub const YES_BUTTON: PCWSTR = w!("Yes");
 pub const NO_BUTTON: PCWSTR = w!("No");
 
 /// TDF_POSITION_RELATIVE_TO_WINDOW puts the dialog at a dialog owner's corner, so riv centers it.
-fn centering_callback(owner: Option<HWND>) -> PFTASKDIALOGCALLBACK {
+pub fn centering_callback(owner: Option<HWND>) -> PFTASKDIALOGCALLBACK {
     owner.is_some().then_some(center_when_created as _)
 }
 
