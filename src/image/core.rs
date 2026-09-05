@@ -1365,6 +1365,7 @@ impl ImageCore {
         self.missing_anchor = self.missing_anchor_for(&entries);
         self.entries = entries;
         self.listing_scope = Some(ListingScope::Directory(directory.to_path_buf()));
+        self.drop_pending_refresh_scan();
     }
 
     /// Drops a deleted item from the listing snapshot; no rescan.
@@ -1372,6 +1373,13 @@ impl ImageCore {
         if let Some(index) = self.position_of(location) {
             self.entries.remove(index);
         }
+        self.drop_pending_refresh_scan();
+    }
+
+    /// A refresh enumerated before a synchronous listing change would install what it undid.
+    fn drop_pending_refresh_scan(&mut self) {
+        self.pending_scan
+            .take_if(|pending| pending.purpose == ScanPurpose::Refresh);
     }
 
     /// Drops a deleted item and answers what to show next, resolved while it is still listed.
@@ -2947,6 +2955,51 @@ mod listing_scan_tests {
         ));
         assert!(core.listing_scan_pending()); // the requested scan is still due
         assert!(core.listing_scope.is_none());
+        let _ = std::fs::remove_dir_all(&directory);
+    }
+
+    #[test]
+    fn a_delete_during_a_refresh_discards_the_stale_arrival() {
+        let directory = fixture_directory("riv-delete-during-refresh", &["a.png", "b.png"]);
+        let deleted = directory.join("a.png");
+        let mut core = core();
+        core.rescan_folder(&directory);
+        core.submit_refresh_scan();
+        // Enumerated before the delete, so it still lists the file.
+        let stale = ScannedListing::scan(ListingScope::Directory(directory.clone()), &core.options);
+        std::fs::remove_file(&deleted).expect("delete fixture");
+        core.remove_deleted_item(&ItemLocation::File(deleted), NavigationCommand::Next);
+        assert!(!core.listing_scan_pending());
+        assert!(matches!(
+            core.install_listing_scan(stale),
+            ListingInstall::Discarded
+        ));
+        assert_eq!(core.entries.len(), 1);
+        let _ = std::fs::remove_dir_all(&directory);
+    }
+
+    #[test]
+    fn a_rename_during_a_refresh_discards_the_stale_arrival() {
+        let directory = fixture_directory("riv-rename-during-refresh", &["a.png"]);
+        let mut core = core();
+        core.rescan_folder(&directory);
+        core.submit_refresh_scan();
+        // Enumerated before the rename, so it lists the old name only.
+        let stale = ScannedListing::scan(ListingScope::Directory(directory.clone()), &core.options);
+        std::fs::rename(directory.join("a.png"), directory.join("b.png")).expect("rename fixture");
+        core.rescan_listing();
+        assert!(!core.listing_scan_pending());
+        assert!(matches!(
+            core.install_listing_scan(stale),
+            ListingInstall::Discarded
+        ));
+        assert_eq!(core.entries.len(), 1);
+        assert!(
+            core.entries[0]
+                .location
+                .display_name()
+                .eq_ignore_ascii_case("b.png")
+        );
         let _ = std::fs::remove_dir_all(&directory);
     }
 
