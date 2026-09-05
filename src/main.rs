@@ -2756,17 +2756,17 @@ extern "system" fn window_procedure(
             LRESULT(0)
         }
         WM_TIMER if wparam.0 == SLIDESHOW_TIMER => {
-            if let Some(application) = application_from_window(window) {
+            // KillTimer leaves a WM_TIMER already in the queue; one arriving after the stop advances nothing.
+            if let Some(application) = application_from_window(window)
+                && let Some(shown) = application.slideshow_item_shown_at
+            {
                 // Hold an animated frame until it finishes one loop; the interval is the floor.
                 let hold_milliseconds = application
                     .animation
                     .as_ref()
                     .map_or(0, Animation::loop_duration_milliseconds);
-                let elapsed_milliseconds = application
-                    .slideshow_item_shown_at
-                    .map_or(u32::MAX, |shown| {
-                        shown.elapsed().as_millis().min(u128::from(u32::MAX)) as u32
-                    });
+                let elapsed_milliseconds =
+                    shown.elapsed().as_millis().min(u128::from(u32::MAX)) as u32;
                 if hold_milliseconds > elapsed_milliseconds {
                     application
                         .schedule_slideshow_timer(window, hold_milliseconds - elapsed_milliseconds);
