@@ -318,7 +318,10 @@ impl SettingsFile {
             .path
             .with_extension(format!("json.{}.tmp", std::process::id()));
         std::fs::write(&temporary, serialized)?;
-        std::fs::rename(&temporary, &self.path)
+        std::fs::rename(&temporary, &self.path).inspect_err(|_| {
+            // Per-process names would otherwise pile up one leftover per failed save.
+            let _ = std::fs::remove_file(&temporary);
+        })
     }
 
     pub fn keyboard_bindings(&self) -> Option<&Map<String, Value>> {
@@ -1020,6 +1023,24 @@ mod recents_save_tests {
         let saved = read_document(&path);
         let _ = std::fs::remove_file(&path);
         assert!(saved.get("recents").is_none());
+    }
+
+    #[test]
+    fn a_failed_rename_leaves_no_temporary_file() {
+        // A directory in the settings file's place makes the rename over it fail.
+        let path = std::env::temp_dir().join("riv-save-blocked.json");
+        let _ = std::fs::remove_dir_all(&path);
+        std::fs::create_dir_all(&path).expect("blocking directory");
+        let settings = SettingsFile {
+            path: path.clone(),
+            document: serde_json::json!({}),
+            options: Options::default(),
+            removed_recent_keys: HashSet::new(),
+        };
+        assert!(settings.save().is_err());
+        let temporary = path.with_extension(format!("json.{}.tmp", std::process::id()));
+        let _ = std::fs::remove_dir_all(&path);
+        assert!(!temporary.exists());
     }
 }
 
