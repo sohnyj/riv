@@ -14,11 +14,11 @@ use windows::Win32::UI::Input::KeyboardAndMouse::{
 };
 use windows::Win32::UI::WindowsAndMessaging::{
     CS_DBLCLKS, CallWindowProcW, DLGC_WANTALLKEYS, DefWindowProcW, EndDialog, GWLP_USERDATA,
-    GWLP_WNDPROC, GetClientRect, GetDlgItem, GetParent, GetWindowLongPtrW, LB_ADDSTRING,
-    LB_DELETESTRING, LB_GETCOUNT, LB_GETCURSEL, LB_GETITEMHEIGHT, LB_GETITEMRECT, LB_GETTEXT,
-    LB_GETTEXTLEN, LB_GETTOPINDEX, LB_RESETCONTENT, RegisterClassExW, SendDlgItemMessageW,
-    SendMessageW, SetWindowLongPtrW, SetWindowTextW, WM_APP, WM_COMMAND, WM_DRAWITEM,
-    WM_ERASEBKGND, WM_GETDLGCODE, WM_INITDIALOG, WM_KEYDOWN, WM_KEYUP, WM_KILLFOCUS,
+    GWLP_WNDPROC, GetClientRect, GetDlgItem, GetParent, GetWindowLongPtrW, IDCANCEL, IDOK,
+    LB_ADDSTRING, LB_DELETESTRING, LB_GETCOUNT, LB_GETCURSEL, LB_GETITEMHEIGHT, LB_GETITEMRECT,
+    LB_GETTEXT, LB_GETTEXTLEN, LB_GETTOPINDEX, LB_RESETCONTENT, RegisterClassExW,
+    SendDlgItemMessageW, SendMessageW, SetWindowLongPtrW, SetWindowTextW, WM_APP, WM_COMMAND,
+    WM_DRAWITEM, WM_ERASEBKGND, WM_GETDLGCODE, WM_INITDIALOG, WM_KEYDOWN, WM_KEYUP, WM_KILLFOCUS,
     WM_LBUTTONDBLCLK, WM_LBUTTONDOWN, WM_MBUTTONDBLCLK, WM_MBUTTONDOWN, WM_MOUSEWHEEL, WM_PAINT,
     WM_SETFOCUS, WM_SETFONT, WM_SYSCHAR, WM_SYSKEYDOWN, WM_SYSKEYUP, WM_XBUTTONDBLCLK,
     WM_XBUTTONDOWN, WNDCLASSEXW, WNDPROC,
@@ -32,7 +32,6 @@ use crate::dialogs::resource::{
 };
 
 use crate::dialogs::modal::{DWLP_USER, state_mut};
-use crate::dialogs::resource::{IDCANCEL, IDOK};
 use crate::window::message::{high_word, high_word_signed, low_word, point_from_packed};
 
 const WM_RIV_KEYBOARD_CAPTURED: u32 = WM_APP + 0x40;
@@ -174,7 +173,7 @@ unsafe extern "system" fn keyboard_procedure(
                     }
                     1
                 }
-                command if command == IDOK as i32 => {
+                command if command == IDOK.0 => {
                     let conflict = state_mut::<KeyboardCaptureState>(dialog).and_then(|state| {
                         for sequence in &state.sequences {
                             if let Some((encoding, owner)) = state
@@ -193,11 +192,11 @@ unsafe extern "system" fn keyboard_procedure(
                         warn_conflict(dialog, &encoding, &owner);
                         return 1;
                     }
-                    let _ = unsafe { EndDialog(dialog, IDOK as isize) };
+                    let _ = unsafe { EndDialog(dialog, IDOK.0 as isize) };
                     1
                 }
-                command if command == IDCANCEL as i32 => {
-                    let _ = unsafe { EndDialog(dialog, IDCANCEL as isize) };
+                command if command == IDCANCEL.0 => {
+                    let _ = unsafe { EndDialog(dialog, IDCANCEL.0 as isize) };
                     1
                 }
                 _ => 0,
@@ -248,7 +247,7 @@ unsafe extern "system" fn mouse_procedure(
                     }
                     1
                 }
-                command if command == IDOK as i32 => {
+                command if command == IDOK.0 => {
                     let conflict = state_mut::<MouseCaptureState>(dialog).and_then(|state| {
                         if let Some(binding) = &state.binding
                             && let Some((encoding, owner)) =
@@ -264,11 +263,11 @@ unsafe extern "system" fn mouse_procedure(
                         warn_conflict(dialog, &encoding, &owner);
                         return 1;
                     }
-                    let _ = unsafe { EndDialog(dialog, IDOK as isize) };
+                    let _ = unsafe { EndDialog(dialog, IDOK.0 as isize) };
                     1
                 }
-                command if command == IDCANCEL as i32 => {
-                    let _ = unsafe { EndDialog(dialog, IDCANCEL as isize) };
+                command if command == IDCANCEL.0 => {
+                    let _ = unsafe { EndDialog(dialog, IDCANCEL.0 as isize) };
                     1
                 }
                 _ => 0,

@@ -24,9 +24,6 @@ pub const IDD_CAPTURE_MOUSE: u16 = 170;
 pub const IDD_RENAME: u16 = 180;
 pub const IDD_OPEN_URL: u16 = 185;
 
-pub const IDOK: usize = 1;
-pub const IDCANCEL: usize = 2;
-
 /// The single edit field both text input dialogs carry.
 pub const IDC_TEXT_INPUT: i32 = 100;
 
@@ -85,9 +82,16 @@ pub const IDC_ABOUT_LINK: i32 = 1804;
 
 #[cfg(test)]
 mod header_mirror_tests {
+    use windows::Win32::UI::WindowsAndMessaging::{IDCANCEL, IDOK};
+
     /// A number only one file has costs a compile error; two different numbers cost a control.
     #[test]
     fn every_identifier_carries_the_same_number_in_both_files() {
+        // Windows owns these two; the header spells them out because llvm-rc has no windows.h.
+        let os_owned = [
+            ("IDOK", IDOK.0.to_string()),
+            ("IDCANCEL", IDCANCEL.0.to_string()),
+        ];
         let header: Vec<(&str, &str)> = include_str!("../../res/resource.h")
             .lines()
             .filter_map(|line| line.strip_prefix("#define ")?.split_once(' '))
@@ -103,6 +107,7 @@ mod header_mirror_tests {
         let header_only: Vec<_> = header
             .iter()
             .filter(|entry| !declared.contains(entry))
+            .filter(|(name, value)| !os_owned.iter().any(|(os, v)| os == name && v == value))
             .collect();
         let rust_only: Vec<_> = declared
             .iter()

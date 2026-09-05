@@ -27,7 +27,7 @@ use windows::Win32::UI::Input::KeyboardAndMouse::{EnableWindow, VK_SPACE};
 use windows::Win32::UI::WindowsAndMessaging::{
     BN_CLICKED, CB_ADDSTRING, CB_GETCURSEL, CB_SETCURSEL, CBN_SELCHANGE, CreateDialogParamW,
     DestroyWindow, EN_CHANGE, EN_KILLFOCUS, EndDialog, GetClientRect, GetDlgItem, GetDlgItemInt,
-    GetMessagePos, MapDialogRect, SM_CXVSCROLL, SW_HIDE, SW_SHOW, SWP_NOACTIVATE,
+    GetMessagePos, IDCANCEL, IDOK, MapDialogRect, SM_CXVSCROLL, SW_HIDE, SW_SHOW, SWP_NOACTIVATE,
     SendDlgItemMessageW, SendMessageW, SetDlgItemTextW, SetWindowLongPtrW, SetWindowPos,
     ShowWindow, WM_APP, WM_COMMAND, WM_DESTROY, WM_DRAWITEM, WM_INITDIALOG, WM_NOTIFY,
 };
@@ -63,7 +63,6 @@ pub struct AppliedOptions {
 }
 
 use crate::dialogs::modal::DWLP_USER;
-use crate::dialogs::resource::{IDCANCEL, IDOK};
 
 const GROUP_FLAG: isize = 0x1000_0000;
 
@@ -277,13 +276,13 @@ unsafe extern "system" fn frame_procedure(
         WM_COMMAND => {
             let command = low_word(wparam.0) as i32;
             match command {
-                command if command == IDOK as i32 => {
+                command if command == IDOK.0 => {
                     apply(dialog);
-                    let _ = unsafe { EndDialog(dialog, IDOK as isize) };
+                    let _ = unsafe { EndDialog(dialog, IDOK.0 as isize) };
                     1
                 }
-                command if command == IDCANCEL as i32 => {
-                    let _ = unsafe { EndDialog(dialog, IDCANCEL as isize) };
+                command if command == IDCANCEL.0 => {
+                    let _ = unsafe { EndDialog(dialog, IDCANCEL.0 as isize) };
                     1
                 }
                 IDC_APPLY => {

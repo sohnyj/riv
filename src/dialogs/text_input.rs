@@ -4,14 +4,13 @@ use windows::Win32::Foundation::{HWND, LPARAM, WPARAM};
 use windows::Win32::UI::Controls::EM_SETSEL;
 use windows::Win32::UI::Input::KeyboardAndMouse::SetFocus;
 use windows::Win32::UI::WindowsAndMessaging::{
-    EndDialog, GetDlgItem, SendDlgItemMessageW, SendMessageW, SetDlgItemTextW, SetWindowLongPtrW,
-    WM_COMMAND, WM_GETTEXT, WM_GETTEXTLENGTH, WM_INITDIALOG,
+    EndDialog, GetDlgItem, IDCANCEL, IDOK, SendDlgItemMessageW, SendMessageW, SetDlgItemTextW,
+    SetWindowLongPtrW, WM_COMMAND, WM_GETTEXT, WM_GETTEXTLENGTH, WM_INITDIALOG,
 };
 use windows::core::HSTRING;
 
 use crate::dialogs::modal::DWLP_USER;
 use crate::dialogs::resource::IDC_TEXT_INPUT;
-use crate::dialogs::resource::{IDCANCEL, IDOK};
 
 /// One edit line with OK/Cancel; the template carries the title and the width.
 pub struct TextInputRequest<'a> {
@@ -40,7 +39,7 @@ pub fn show(window: HWND, request: &TextInputRequest) -> Option<String> {
         dialog_procedure,
         &raw mut state as isize,
     );
-    (dialog_result == IDOK as isize)
+    (dialog_result == IDOK.0 as isize)
         .then(|| state.accepted_text.take())
         .flatten()
 }
@@ -73,9 +72,9 @@ unsafe extern "system" fn dialog_procedure(
             0 // FALSE: focus set explicitly
         }
         WM_COMMAND => {
-            let command = crate::window::message::low_word(wparam.0) as usize;
+            let command = crate::window::message::low_word(wparam.0) as i32;
             match command {
-                IDOK => {
+                command if command == IDOK.0 => {
                     if let Some(state) = crate::dialogs::modal::state_mut::<TextInputState>(dialog)
                     {
                         // Sized per read, so a long URL is read whole instead of truncated.
@@ -102,11 +101,11 @@ unsafe extern "system" fn dialog_procedure(
                         .0 as usize;
                         state.accepted_text = Some(String::from_utf16_lossy(&buffer[..written]));
                     }
-                    let _ = unsafe { EndDialog(dialog, IDOK as isize) };
+                    let _ = unsafe { EndDialog(dialog, IDOK.0 as isize) };
                     1
                 }
-                IDCANCEL => {
-                    let _ = unsafe { EndDialog(dialog, IDCANCEL as isize) };
+                command if command == IDCANCEL.0 => {
+                    let _ = unsafe { EndDialog(dialog, IDCANCEL.0 as isize) };
                     1
                 }
                 _ => 0,

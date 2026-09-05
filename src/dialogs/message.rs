@@ -5,10 +5,8 @@ use windows::Win32::UI::Controls::{
     PFTASKDIALOGCALLBACK, TASKDIALOG_BUTTON, TASKDIALOG_NOTIFICATIONS, TASKDIALOGCONFIG,
     TDF_ALLOW_DIALOG_CANCELLATION, TDN_CREATED, TaskDialogIndirect,
 };
-use windows::Win32::UI::WindowsAndMessaging::{IDNO, IDYES};
+use windows::Win32::UI::WindowsAndMessaging::{IDNO, IDOK, IDYES};
 use windows::core::{HRESULT, HSTRING, PCWSTR, w};
-
-use crate::dialogs::resource::IDOK;
 
 /// The dismiss label every plain failure dialog passes.
 pub const CLOSE_BUTTON: &str = "Close";
@@ -43,7 +41,7 @@ pub fn show_message(owner: Option<HWND>, title: &str, headline: &str, detail: &s
     // Labeled here, not by the system: the settings dialog writes its own buttons too.
     let button_text = HSTRING::from(button);
     let buttons = [TASKDIALOG_BUTTON {
-        nButtonID: IDOK as i32,
+        nButtonID: IDOK.0,
         pszButtonText: PCWSTR(button_text.as_ptr()),
     }];
     let configuration = TASKDIALOGCONFIG {

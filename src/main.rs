@@ -3030,7 +3030,7 @@ mod open_url_smoke_tests {
 
     use windows::Win32::Foundation::{HWND, LPARAM, WPARAM};
     use windows::Win32::UI::WindowsAndMessaging::{
-        FindWindowW, GetDlgItem, GetWindowTextW, PostMessageW, SetDlgItemTextW, WM_CLOSE,
+        FindWindowW, GetDlgItem, GetWindowTextW, IDOK, PostMessageW, SetDlgItemTextW, WM_CLOSE,
         WM_COMMAND, WM_KEYDOWN,
     };
     use windows::core::{HSTRING, PCWSTR, w};
@@ -3160,7 +3160,8 @@ mod open_url_smoke_tests {
                 PCWSTR(url.as_ptr()),
             )
             .expect("set dialog text");
-            PostMessageW(Some(dialog), WM_COMMAND, WPARAM(1), LPARAM(0)).expect("post IDOK");
+            PostMessageW(Some(dialog), WM_COMMAND, WPARAM(IDOK.0 as usize), LPARAM(0))
+                .expect("post IDOK");
         }
         let title_became_file =
             wait_for(|| (window_title(window) == "test.png").then_some(()), 20).is_some();

@@ -21,9 +21,8 @@ pub fn show(window: HWND) -> Option<String> {
 mod dialog_tests {
     use super::*;
     use crate::dialogs::resource::IDC_TEXT_INPUT;
-    use crate::dialogs::resource::IDOK;
     use windows::Win32::Foundation::{LPARAM, WPARAM};
-    use windows::Win32::UI::WindowsAndMessaging::{GetDlgItem, SetDlgItemTextW, WM_COMMAND};
+    use windows::Win32::UI::WindowsAndMessaging::{GetDlgItem, IDOK, SetDlgItemTextW, WM_COMMAND};
     use windows::core::w;
 
     #[test]
@@ -44,7 +43,7 @@ mod dialog_tests {
                 unsafe {
                     SetDlgItemTextW(dialog, IDC_TEXT_INPUT, w!("  http://127.0.0.1/test.png  "))
                         .expect("set edit text");
-                    PostMessageW(Some(dialog), WM_COMMAND, WPARAM(IDOK), LPARAM(0))
+                    PostMessageW(Some(dialog), WM_COMMAND, WPARAM(IDOK.0 as usize), LPARAM(0))
                         .expect("post IDOK");
                 }
                 return;
