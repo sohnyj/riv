@@ -564,15 +564,12 @@ impl Application {
         }
     }
 
-    fn image_size(&self) -> Size {
-        let (width, height) = self
-            .displayed_image
-            .as_ref()
-            .map_or((1, 1), |image| (image.width, image.height));
-        Size {
-            width: width as f32,
-            height: height as f32,
-        }
+    /// None while nothing is displayed: a placeholder size would refit the view to itself.
+    fn image_size(&self) -> Option<Size> {
+        self.displayed_image.as_ref().map(|image| Size {
+            width: image.width as f32,
+            height: image.height as f32,
+        })
     }
 
     fn viewport(&self, window: HWND) -> Size {
@@ -1240,8 +1237,17 @@ impl Application {
             height: height as f32,
         };
         let image = self.image_size();
-        self.view_transform.synchronize(viewport, image);
-        let matrix = self.view_transform.matrix(viewport, image);
+        if let Some(image) = image {
+            self.view_transform.synchronize(viewport, image);
+        }
+        // Without an image the matrix places nothing; the frame decision still takes one.
+        let matrix = self.view_transform.matrix(
+            viewport,
+            image.unwrap_or(Size {
+                width: 0.0,
+                height: 0.0,
+            }),
+        );
         let interpolation = self.interpolation_mode();
         let background = self.background_color();
         // Decide first: the panel reports this frame, not the last one.
@@ -1373,8 +1379,10 @@ impl Application {
     }
 
     fn zoom_at(&mut self, window: HWND, factor: f32, anchor: Option<(f32, f32)>) {
+        let Some(image) = self.image_size() else {
+            return;
+        };
         let viewport = self.viewport(window);
-        let image = self.image_size();
         let previous_scale = self.view_transform.scale;
         self.view_transform.zoom(factor, anchor, viewport, image);
         if (self.view_transform.scale - previous_scale).abs() > f32::EPSILON {
@@ -1411,8 +1419,10 @@ impl Application {
     }
 
     fn pan_by(&mut self, window: HWND, delta_x: f32, delta_y: f32) {
+        let Some(image) = self.image_size() else {
+            return;
+        };
         let viewport = self.viewport(window);
-        let image = self.image_size();
         self.view_transform
             .pan_by(delta_x, delta_y, viewport, image);
         self.request_render(window);
@@ -1617,8 +1627,10 @@ fn dispatch_action(application: &mut Application, window: HWND, action: Action) 
         Action::ZoomIn => application.zoom_by(window, application.zoom_step()),
         Action::ZoomOut => application.zoom_by(window, 1.0 / application.zoom_step()),
         Action::ToggleZoom => {
+            let Some(image) = application.image_size() else {
+                return;
+            };
             let viewport = application.viewport(window);
-            let image = application.image_size();
             let anchor = application.zoom_anchor(window);
             application
                 .view_transform
@@ -1691,8 +1703,10 @@ fn dispatch_action(application: &mut Application, window: HWND, action: Action) 
         }
         Action::RotateRight | Action::RotateLeft => {
             let step = if action == Action::RotateRight { 1 } else { -1 };
+            let Some(image) = application.image_size() else {
+                return;
+            };
             let viewport = application.viewport(window);
-            let image = application.image_size();
             application.view_transform.rotate(step, viewport, image);
             let text = match application.view_transform.rotation_quadrant {
                 1 => "Rotate: R90°",
