@@ -1031,9 +1031,9 @@ fn sync_background_color_button(dialog: HWND) {
     }) else {
         return;
     };
-    let Ok(button) = (unsafe { GetDlgItem(Some(page), IDC_WINDOW_BACKGROUND_COLOR_BUTTON) }) else {
-        return;
-    };
+    // Every caller runs after WM_INITDIALOG built the window page, whose template has the swatch.
+    let button = unsafe { GetDlgItem(Some(page), IDC_WINDOW_BACKGROUND_COLOR_BUTTON) }
+        .expect("the window page carries the swatch");
     let _ = unsafe { EnableWindow(button, enabled) };
     // The swatch fills its whole rectangle, so an erase would only flash under it.
     let _ = unsafe { windows::Win32::Graphics::Gdi::InvalidateRect(Some(button), None, false) };
