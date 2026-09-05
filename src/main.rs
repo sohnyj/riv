@@ -85,9 +85,9 @@ use windows::Win32::UI::WindowsAndMessaging::{
     WHEEL_DELTA, WINDOWPLACEMENT, WM_ACTIVATE, WM_APP, WM_CAPTURECHANGED, WM_CLOSE, WM_CONTEXTMENU,
     WM_DESTROY, WM_DISPLAYCHANGE, WM_DPICHANGED, WM_ENTERSIZEMOVE, WM_EXITSIZEMOVE, WM_GESTURE,
     WM_GETMINMAXINFO, WM_KEYDOWN, WM_LBUTTONDBLCLK, WM_LBUTTONDOWN, WM_LBUTTONUP, WM_MBUTTONDOWN,
-    WM_MOUSEHWHEEL, WM_MOUSEMOVE, WM_MOUSEWHEEL, WM_MOVE, WM_NCDESTROY, WM_NCLBUTTONDOWN, WM_PAINT,
-    WM_QUIT, WM_SETCURSOR, WM_SIZE, WM_SYSCOMMAND, WM_SYSKEYDOWN, WM_TIMER, WM_XBUTTONDOWN,
-    WNDCLASSEXW, WS_OVERLAPPEDWINDOW, WindowFromPoint,
+    WM_MOUSEHWHEEL, WM_MOUSEMOVE, WM_MOUSEWHEEL, WM_MOVE, WM_NCDESTROY, WM_NCHITTEST,
+    WM_NCLBUTTONDOWN, WM_PAINT, WM_QUIT, WM_SETCURSOR, WM_SIZE, WM_SYSCOMMAND, WM_SYSKEYDOWN,
+    WM_TIMER, WM_XBUTTONDOWN, WNDCLASSEXW, WS_OVERLAPPEDWINDOW, WindowFromPoint,
 };
 use windows::core::{HSTRING, PCWSTR, Result};
 use windows_version::OsVersion;
@@ -2922,9 +2922,17 @@ extern "system" fn window_procedure(
             LRESULT(1)
         }
         WM_CONTEXTMENU => {
+            // The keyboard menu key reports no point of its own.
+            let point = point_from_packed(lparam.0 as usize);
+            // A right click on the caption reaches here too; DefWindowProc shows the system menu there.
+            if point != (-1, -1)
+                && unsafe { SendMessageW(window, WM_NCHITTEST, None, Some(lparam)) }.0
+                    != HTCLIENT as isize
+            {
+                return unsafe { DefWindowProcW(window, message, wparam, lparam) };
+            }
             if let Some(application) = application_from_window(window) {
-                // The keyboard menu key reports no point of its own.
-                let (x, y) = match point_from_packed(lparam.0 as usize) {
+                let (x, y) = match point {
                     (-1, -1) => window_center(window),
                     point => point,
                 };
