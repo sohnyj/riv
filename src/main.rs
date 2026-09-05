@@ -1805,6 +1805,13 @@ fn dispatch_action(application: &mut Application, window: HWND, action: Action) 
             let path = application.image_core.current_file().map(Path::to_path_buf);
             if let Some(path) = path {
                 open_with::show_open_with_dialog(window, &path);
+                // The dialog can register a new handler, so the list for this extension is stale.
+                if let Some(extension) = text::lowercase_extension(&path)
+                    && let Some(application) = application_from_window(window)
+                {
+                    application.open_with_lists.remove(&extension);
+                    application.start_open_with_enumeration(window);
+                }
             }
         }
         Action::Pause => {
