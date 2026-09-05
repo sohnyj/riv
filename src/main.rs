@@ -3076,6 +3076,35 @@ mod open_url_smoke_tests {
         }
     }
 
+    /// The debug exe's riv.json for the test's lifetime; the file it found comes back on drop.
+    struct SettingsFile {
+        previous: Option<Vec<u8>>,
+    }
+
+    impl SettingsFile {
+        fn replace(contents: &str) -> Self {
+            let previous = match std::fs::read(SETTINGS) {
+                Ok(previous) => Some(previous),
+                Err(error) if error.kind() == std::io::ErrorKind::NotFound => None,
+                Err(error) => panic!("read riv.json: {error}"),
+            };
+            std::fs::write(SETTINGS, contents).expect("write riv.json");
+            Self { previous }
+        }
+    }
+
+    impl Drop for SettingsFile {
+        fn drop(&mut self) {
+            let restored = match &self.previous {
+                Some(previous) => std::fs::write(SETTINGS, previous),
+                None => std::fs::remove_file(SETTINGS),
+            };
+            if let Err(error) = restored {
+                eprintln!("riv.json not restored: {error}");
+            }
+        }
+    }
+
     fn window_title(window: HWND) -> String {
         let mut buffer = [0u16; 256];
         let length = unsafe { GetWindowTextW(window, &mut buffer) } as usize;
@@ -3095,8 +3124,7 @@ mod open_url_smoke_tests {
             }
         });
         // Bind the dialog to a plain key so a posted WM_KEYDOWN can open it.
-        std::fs::write(SETTINGS, r#"{"keyboardbindings":{"openurl":["U"]}}"#)
-            .expect("write riv.json");
+        let _settings = SettingsFile::replace(r#"{"keyboardbindings":{"openurl":["U"]}}"#);
         let mut riv_process = std::process::Command::new(EXECUTABLE)
             .spawn()
             .expect("riv.exe spawn (build first, run from the repo root)");
@@ -3131,7 +3159,6 @@ mod open_url_smoke_tests {
         let final_title = window_title(window);
         let _ = unsafe { PostMessageW(Some(window), WM_CLOSE, WPARAM(0), LPARAM(0)) };
         let _ = riv_process.wait();
-        let _ = std::fs::remove_file(SETTINGS);
         assert!(
             title_became_file,
             "title never became test.png (was {final_title:?})"
