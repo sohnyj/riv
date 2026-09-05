@@ -454,11 +454,38 @@ enum ScanPurpose {
     Refresh,
 }
 
+/// The options a listing is built under; a scan carries its own so an arrival can compare.
+#[derive(Clone, Copy, PartialEq, Eq)]
+struct ListingOptions {
+    sort_mode: SortMode,
+    sort_descending: bool,
+    skip_hidden: bool,
+    detect_format_by_content: bool,
+}
+
+impl From<&CoreOptions> for ListingOptions {
+    fn from(options: &CoreOptions) -> Self {
+        Self {
+            sort_mode: options.sort_mode,
+            sort_descending: options.sort_descending,
+            skip_hidden: options.skip_hidden,
+            detect_format_by_content: options.detect_format_by_content,
+        }
+    }
+}
+
+impl ListingOptions {
+    /// Equal filters select the same entries; a sort difference is settled without another scan.
+    fn same_filters(&self, other: &Self) -> bool {
+        self.skip_hidden == other.skip_hidden
+            && self.detect_format_by_content == other.detect_format_by_content
+    }
+}
+
 /// A finished background scan, posted back as WM_APP_LISTING_READY.
 pub struct ScannedListing {
     scope: ListingScope,
-    sort_mode: SortMode,
-    sort_descending: bool,
+    options: ListingOptions,
     /// Directories always report Ok; archives can fail to enumerate or hold no images.
     result: Result<Vec<ListingEntry>, DecodeError>,
 }
@@ -472,8 +499,7 @@ impl ScannedListing {
         };
         Self {
             scope,
-            sort_mode: options.sort_mode,
-            sort_descending: options.sort_descending,
+            options: ListingOptions::from(options),
             result,
         }
     }
@@ -591,10 +617,7 @@ impl ImageCore {
         if options == self.options {
             return;
         }
-        let list_affected = options.sort_mode != self.options.sort_mode
-            || options.sort_descending != self.options.sort_descending
-            || options.skip_hidden != self.options.skip_hidden
-            || options.detect_format_by_content != self.options.detect_format_by_content;
+        let list_affected = ListingOptions::from(&options) != ListingOptions::from(&self.options);
         self.options = options;
         if list_affected {
             self.rescan_listing();
@@ -844,16 +867,19 @@ impl ImageCore {
                 };
             }
         };
-        // The worker sorted under an options snapshot; a change since then re-sorts here.
-        if scan.sort_mode != self.options.sort_mode
-            || scan.sort_descending != self.options.sort_descending
-        {
+        // The worker used an options snapshot; a change since then re-sorts here.
+        let current = ListingOptions::from(&self.options);
+        if scan.options != current {
             sort_entries(&mut entries, &self.options);
         }
         self.carry_weights_into(&mut entries);
         self.missing_anchor = self.missing_anchor_for(&entries);
         self.entries = entries;
         self.listing_scope = Some(scan.scope);
+        // A filter change during the scan: this listing shows until the re-collection arrives.
+        if !scan.options.same_filters(&current) {
+            self.submit_refresh_scan();
+        }
         if pending.purpose == ScanPurpose::OpenFirstEntry {
             let Some(first) = self.entries.first().map(|entry| entry.location.clone()) else {
                 return ListingInstall::Installed;
@@ -2792,6 +2818,56 @@ mod url_session_state_tests {
     }
 
     #[test]
+    fn a_filter_change_during_the_scan_re_collects_the_arrival() {
+        let directory = fixture_directory("riv-filter-during-scan", &["a.png", "hidden.png"]);
+        unsafe {
+            windows::Win32::Storage::FileSystem::SetFileAttributesW(
+                &HSTRING::from(directory.join("hidden.png").as_path()),
+                FILE_ATTRIBUTE_HIDDEN,
+            )
+        }
+        .expect("set hidden");
+        let mut core = core();
+        core.load_path(&directory.join("a.png"));
+        let scan = ScannedListing::of(ListingScope::Directory(directory.clone()), &core.options);
+        // The change arrives while the scan runs, so the synchronous rescan has no scope yet.
+        let mut options = core.options.clone();
+        options.skip_hidden = false;
+        core.update_options(options);
+        assert!(core.entries.is_empty());
+        core.install_listing_scan(scan);
+        // The stale listing shows meanwhile, and a refresh under the new filter is submitted.
+        assert_eq!(core.entries.len(), 1);
+        assert!(core.listing_scan_pending());
+        let refreshed =
+            ScannedListing::of(ListingScope::Directory(directory.clone()), &core.options);
+        core.install_listing_scan(refreshed);
+        assert_eq!(core.entries.len(), 2);
+        assert!(!core.listing_scan_pending());
+        let _ = std::fs::remove_dir_all(&directory);
+    }
+
+    #[test]
+    fn a_sort_change_during_the_scan_re_sorts_without_another_scan() {
+        let directory = fixture_directory("riv-sort-during-scan", &["a.png", "b.png"]);
+        let mut core = core();
+        core.load_path(&directory.join("a.png"));
+        let scan = ScannedListing::of(ListingScope::Directory(directory.clone()), &core.options);
+        let mut options = core.options.clone();
+        options.sort_descending = true;
+        core.update_options(options);
+        core.install_listing_scan(scan);
+        assert!(!core.listing_scan_pending());
+        let names: Vec<_> = core
+            .entries
+            .iter()
+            .map(|entry| entry.location.display_name())
+            .collect();
+        assert_eq!(names, ["b.png", "a.png"]);
+        let _ = std::fs::remove_dir_all(&directory);
+    }
+
+    #[test]
     fn a_url_open_drops_the_pending_scan() {
         let directory = fixture_directory("riv-url-drops-scan", &["a.png"]);
         let file = directory.join("a.png");
@@ -2932,8 +3008,7 @@ mod listing_scan_tests {
         let resolved = std::path::absolute(&archive).expect("absolute");
         let scan = ScannedListing {
             scope: ListingScope::Archive(resolved.clone()),
-            sort_mode: core.options.sort_mode,
-            sort_descending: core.options.sort_descending,
+            options: ListingOptions::from(&core.options),
             result: Ok(vec![archive_member(&resolved, "one.png")]),
         };
         assert!(matches!(
@@ -2952,8 +3027,7 @@ mod listing_scan_tests {
         let resolved = std::path::absolute(&archive).expect("absolute");
         let scan = ScannedListing {
             scope: ListingScope::Archive(resolved),
-            sort_mode: core.options.sort_mode,
-            sort_descending: core.options.sort_descending,
+            options: ListingOptions::from(&core.options),
             result: Err(decode::uncoded_error("enumerate failed")),
         };
         assert!(matches!(
