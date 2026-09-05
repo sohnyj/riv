@@ -1,12 +1,12 @@
 //! The one-message dialog the rest of the program reports failures through.
 
-use windows::Win32::Foundation::HWND;
+use windows::Win32::Foundation::{HWND, LPARAM, S_OK, WPARAM};
 use windows::Win32::UI::Controls::{
-    TASKDIALOG_BUTTON, TASKDIALOG_FLAGS, TASKDIALOGCONFIG, TDF_ALLOW_DIALOG_CANCELLATION,
-    TDF_POSITION_RELATIVE_TO_WINDOW, TaskDialogIndirect,
+    PFTASKDIALOGCALLBACK, TASKDIALOG_BUTTON, TASKDIALOG_NOTIFICATIONS, TASKDIALOGCONFIG,
+    TDF_ALLOW_DIALOG_CANCELLATION, TDN_CREATED, TaskDialogIndirect,
 };
 use windows::Win32::UI::WindowsAndMessaging::{IDNO, IDYES};
-use windows::core::{HSTRING, PCWSTR, w};
+use windows::core::{HRESULT, HSTRING, PCWSTR, w};
 
 use crate::dialogs::resource::IDOK;
 
@@ -16,6 +16,24 @@ pub const CLOSE_BUTTON: &str = "Close";
 /// The confirmation pair; the delete confirmation shares this vocabulary.
 pub const YES_BUTTON: PCWSTR = w!("Yes");
 pub const NO_BUTTON: PCWSTR = w!("No");
+
+/// TDF_POSITION_RELATIVE_TO_WINDOW puts the dialog at a dialog owner's corner, so riv centers it.
+fn centering_callback(owner: Option<HWND>) -> PFTASKDIALOGCALLBACK {
+    owner.is_some().then_some(center_when_created as _)
+}
+
+unsafe extern "system" fn center_when_created(
+    dialog: HWND,
+    notification: TASKDIALOG_NOTIFICATIONS,
+    _wparam: WPARAM,
+    _lparam: LPARAM,
+    _reference_data: isize,
+) -> HRESULT {
+    if notification == TDN_CREATED {
+        crate::dialogs::placement::center_on_owner(dialog);
+    }
+    S_OK
+}
 
 /// One-message task dialog titled after the action; the headline leads the message.
 pub fn show_message(owner: Option<HWND>, title: &str, headline: &str, detail: &str, button: &str) {
@@ -28,19 +46,14 @@ pub fn show_message(owner: Option<HWND>, title: &str, headline: &str, detail: &s
         nButtonID: IDOK as i32,
         pszButtonText: PCWSTR(button_text.as_ptr()),
     }];
-    // Without the flag a task dialog centers on the monitor, owner or not.
-    let placement = match owner {
-        Some(_) => TDF_POSITION_RELATIVE_TO_WINDOW,
-        None => TASKDIALOG_FLAGS(0),
-    };
     let configuration = TASKDIALOGCONFIG {
         cbSize: size_of::<TASKDIALOGCONFIG>() as u32,
-        dwFlags: placement,
         hwndParent: owner.unwrap_or_default(),
         pszWindowTitle: PCWSTR(title.as_ptr()),
         pszContent: PCWSTR(text.as_ptr()),
         cButtons: buttons.len() as u32,
         pButtons: buttons.as_ptr(),
+        pfCallback: centering_callback(owner),
         ..Default::default()
     };
     let _ = unsafe { TaskDialogIndirect(&raw const configuration, None, None, None) };
@@ -60,19 +73,16 @@ pub fn confirm_message(owner: Option<HWND>, title: &str, question: &str, detail:
             pszButtonText: NO_BUTTON,
         },
     ];
-    let placement = match owner {
-        Some(_) => TDF_POSITION_RELATIVE_TO_WINDOW,
-        None => TASKDIALOG_FLAGS(0),
-    };
     let configuration = TASKDIALOGCONFIG {
         cbSize: size_of::<TASKDIALOGCONFIG>() as u32,
-        dwFlags: placement | TDF_ALLOW_DIALOG_CANCELLATION,
+        dwFlags: TDF_ALLOW_DIALOG_CANCELLATION,
         hwndParent: owner.unwrap_or_default(),
         pszWindowTitle: PCWSTR(title.as_ptr()),
         pszContent: PCWSTR(text.as_ptr()),
         cButtons: buttons.len() as u32,
         pButtons: buttons.as_ptr(),
         nDefaultButton: IDNO.0,
+        pfCallback: centering_callback(owner),
         ..Default::default()
     };
     let mut pressed = IDNO.0;

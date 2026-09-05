@@ -32,9 +32,10 @@ fn clamp_to_work_area(x: i32, y: i32, width: i32, height: i32) -> (i32, i32) {
 
 pub fn center_on_owner(dialog: HWND) {
     use windows::Win32::UI::WindowsAndMessaging::{
-        GetParent, SWP_NOACTIVATE, SWP_NOSIZE, SWP_NOZORDER, SetWindowPos,
+        GW_OWNER, GetWindow, SWP_NOACTIVATE, SWP_NOSIZE, SWP_NOZORDER, SetWindowPos,
     };
-    let Ok(owner) = (unsafe { GetParent(dialog) }) else {
+    // GetParent is documented to fail for an owner with WS_POPUP, which the settings dialog is.
+    let Ok(owner) = (unsafe { GetWindow(dialog, GW_OWNER) }) else {
         return;
     };
     let mut owner_bounds = RECT::default();
