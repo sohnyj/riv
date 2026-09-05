@@ -1883,12 +1883,12 @@ fn delete_current_file(application: &mut Application, window: HWND, permanent: b
     } else {
         NavigationCommand::Next
     };
-    let deleted = file_ops::delete_file(window, &path, permanent);
+    let deletion = file_ops::delete_file(window, &path, permanent);
     // The shell's error dialog pumped messages, so re-fetch instead of reusing the reference across it.
     let Some(application) = application_from_window(window) else {
         return;
     };
-    match deleted {
+    match deletion {
         Ok(()) => match application
             .image_core
             .remove_deleted_item(&ItemLocation::File(path), preferred)
