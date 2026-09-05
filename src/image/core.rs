@@ -492,7 +492,7 @@ pub struct ScannedListing {
 
 impl ScannedListing {
     /// Enumerates and sorts the scope's contents: the worker half of submit_scan.
-    fn of(scope: ListingScope, options: &CoreOptions) -> Self {
+    fn scan(scope: ListingScope, options: &CoreOptions) -> Self {
         let result = match &scope {
             ListingScope::Directory(directory) => Ok(scan_folder(directory, options)),
             ListingScope::Archive(archive) => enumerate_archive(archive, options),
@@ -795,7 +795,7 @@ impl ImageCore {
                 post_boxed(
                     window,
                     WM_APP_LISTING_READY,
-                    Box::new(ScannedListing::of(scope, &options)),
+                    Box::new(ScannedListing::scan(scope, &options)),
                 );
             })
             .expect("listing scan thread spawn failed");
@@ -2806,7 +2806,7 @@ mod url_session_state_tests {
         // The scan is asynchronous: no listing until its arrival installs one.
         assert!(core.listing_scan_pending());
         assert!(core.entries.is_empty());
-        let scan = ScannedListing::of(ListingScope::Directory(directory.clone()), &core.options);
+        let scan = ScannedListing::scan(ListingScope::Directory(directory.clone()), &core.options);
         core.install_listing_scan(scan);
         assert!(!core.listing_scan_pending());
         assert!(matches!(
@@ -2829,7 +2829,7 @@ mod url_session_state_tests {
         .expect("set hidden");
         let mut core = core();
         core.load_path(&directory.join("a.png"));
-        let scan = ScannedListing::of(ListingScope::Directory(directory.clone()), &core.options);
+        let scan = ScannedListing::scan(ListingScope::Directory(directory.clone()), &core.options);
         // The change arrives while the scan runs, so the synchronous rescan has no scope yet.
         let mut options = core.options.clone();
         options.skip_hidden = false;
@@ -2840,7 +2840,7 @@ mod url_session_state_tests {
         assert_eq!(core.entries.len(), 1);
         assert!(core.listing_scan_pending());
         let refreshed =
-            ScannedListing::of(ListingScope::Directory(directory.clone()), &core.options);
+            ScannedListing::scan(ListingScope::Directory(directory.clone()), &core.options);
         core.install_listing_scan(refreshed);
         assert_eq!(core.entries.len(), 2);
         assert!(!core.listing_scan_pending());
@@ -2852,7 +2852,7 @@ mod url_session_state_tests {
         let directory = fixture_directory("riv-sort-during-scan", &["a.png", "b.png"]);
         let mut core = core();
         core.load_path(&directory.join("a.png"));
-        let scan = ScannedListing::of(ListingScope::Directory(directory.clone()), &core.options);
+        let scan = ScannedListing::scan(ListingScope::Directory(directory.clone()), &core.options);
         let mut options = core.options.clone();
         options.sort_descending = true;
         core.update_options(options);
@@ -2876,7 +2876,7 @@ mod url_session_state_tests {
         assert!(core.listing_scan_pending());
         let _ = core.load_url("ftp://a.com/b.png");
         assert!(!core.listing_scan_pending());
-        let scan = ScannedListing::of(ListingScope::Directory(directory.clone()), &core.options);
+        let scan = ScannedListing::scan(ListingScope::Directory(directory.clone()), &core.options);
         let outcome = core.install_listing_scan(scan); // nothing waits for it any more
         assert!(matches!(outcome, ListingInstall::Discarded));
         assert!(core.entries.is_empty());
@@ -2898,7 +2898,7 @@ mod listing_scan_tests {
         core.load_path(&directory);
         assert!(core.listing_scan_pending());
         core.load_path(&chosen);
-        let scan = ScannedListing::of(ListingScope::Directory(directory.clone()), &core.options);
+        let scan = ScannedListing::scan(ListingScope::Directory(directory.clone()), &core.options);
         // The demoted arrival installs the listing without loading the first entry.
         assert!(matches!(
             core.install_listing_scan(scan),
@@ -2940,7 +2940,7 @@ mod listing_scan_tests {
         core.load_path(&file);
         assert!(core.listing_scan_pending());
         let elsewhere = std::env::temp_dir().join("riv-stale-scan-elsewhere");
-        let stale = ScannedListing::of(ListingScope::Directory(elsewhere), &core.options);
+        let stale = ScannedListing::scan(ListingScope::Directory(elsewhere), &core.options);
         assert!(matches!(
             core.install_listing_scan(stale),
             ListingInstall::Discarded
@@ -2974,7 +2974,7 @@ mod listing_scan_tests {
         std::fs::write(&edited, b"listing only, now longer").expect("fixture file");
         core.submit_refresh_scan();
         let scope = ListingScope::Directory(directory.clone());
-        core.install_listing_scan(ScannedListing::of(scope, &core.options));
+        core.install_listing_scan(ScannedListing::scan(scope, &core.options));
         let weight_of = |name: &str| {
             core.entries
                 .iter()
@@ -3066,7 +3066,7 @@ mod listing_scan_tests {
         std::fs::write(directory.join("b.png"), b"listing only").expect("fixture file");
         core.reload_current();
         assert!(core.listing_scan_pending());
-        let scan = ScannedListing::of(ListingScope::Directory(directory.clone()), &core.options);
+        let scan = ScannedListing::scan(ListingScope::Directory(directory.clone()), &core.options);
         core.install_listing_scan(scan);
         assert_eq!(core.entries.len(), 2); // the file added since the open is listed
         assert_eq!(core.listing_position(), Some((1, 2))); // the anchor kept its place
@@ -3083,7 +3083,7 @@ mod listing_scan_tests {
         core.request = ViewRequest::Pending(ItemLocation::File(middle.clone()));
         std::fs::remove_file(&middle).expect("fixture removal");
         assert_eq!(core.reload_current(), Some(LoadOutcome::Failed)); // nothing left to decode
-        let scan = ScannedListing::of(ListingScope::Directory(directory.clone()), &core.options);
+        let scan = ScannedListing::scan(ListingScope::Directory(directory.clone()), &core.options);
         core.install_listing_scan(scan);
         assert_eq!(core.entries.len(), 2); // the listing dropped it
         assert!(core.load_failure().is_some()); // and the error stays on screen
@@ -3101,13 +3101,13 @@ mod listing_scan_tests {
         assert_eq!(adjacent_entries(&core), expected);
         // A second reload of the same missing item keeps the place it left.
         assert_eq!(core.reload_current(), Some(LoadOutcome::Failed));
-        let scan = ScannedListing::of(ListingScope::Directory(directory.clone()), &core.options);
+        let scan = ScannedListing::scan(ListingScope::Directory(directory.clone()), &core.options);
         core.install_listing_scan(scan);
         assert_eq!(adjacent_entries(&core), expected);
         // A digit-led name sorts first on every implementation, shifting every index; the place follows the entry beside it.
         std::fs::write(directory.join("0.png"), b"listing only").expect("fixture file");
         assert_eq!(core.reload_current(), Some(LoadOutcome::Failed));
-        let scan = ScannedListing::of(ListingScope::Directory(directory.clone()), &core.options);
+        let scan = ScannedListing::scan(ListingScope::Directory(directory.clone()), &core.options);
         core.install_listing_scan(scan);
         assert_eq!(core.entries.len(), 3);
         assert_eq!(adjacent_entries(&core), expected);
@@ -3120,7 +3120,7 @@ mod listing_scan_tests {
         let mut core = core();
         assert_eq!(core.load_path(&directory), LoadOutcome::Pending);
         assert!(core.listing_scan_pending());
-        let scan = ScannedListing::of(ListingScope::Directory(directory.clone()), &core.options);
+        let scan = ScannedListing::scan(ListingScope::Directory(directory.clone()), &core.options);
         assert!(matches!(
             core.install_listing_scan(scan),
             ListingInstall::Opened { .. }

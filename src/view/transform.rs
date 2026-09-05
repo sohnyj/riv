@@ -256,9 +256,9 @@ mod zoom_limit_tests {
         assert!(transform.scale < MINIMUM_ZOOM);
         let mut steps = 0;
         while transform.scale < MINIMUM_ZOOM && steps < 32 {
-            let before = transform.scale;
+            let previous_scale = transform.scale;
             transform.zoom(1.25, None, VIEWPORT, HUGE_IMAGE);
-            assert!(transform.scale > before);
+            assert!(transform.scale > previous_scale);
             steps += 1;
         }
         assert!(transform.scale >= MINIMUM_ZOOM);

@@ -442,7 +442,7 @@ mod space_tests {
     #[test]
     fn one_gamut_at_two_white_points_compares_unequal() {
         // Scaling a colorant keeps its chromaticity and moves the white the three add up to.
-        let scaled = |column: [f32; 3], by: f32| column.map(|value| value * by);
+        let scaled = |column: [f32; 3], factor: f32| column.map(|value| value * factor);
         let shifted = [
             scaled(SRGB_COLORANTS[0], 0.94),
             scaled(SRGB_COLORANTS[1], 1.05),

@@ -364,7 +364,7 @@ fn property_values<'xml>(xml: &'xml str, prefix: &str, name: &str) -> Option<Vec
 }
 
 /// One value copied to every plane, or three values in plane order.
-fn per_plane(values: &[&str]) -> Option<[f32; 3]> {
+fn plane_values(values: &[&str]) -> Option<[f32; 3]> {
     match values {
         [one] => {
             let value = one.parse().ok()?;
@@ -388,7 +388,7 @@ fn parse_hdrgm(xml: &str) -> Option<GainMapMetadata> {
     let prefix = hdrgm_prefix(xml)?;
     // An absent optional property means its default; a present one must read.
     let plane_or = |name: &str, default: [f32; 3]| match property_values(xml, prefix, name) {
-        Some(values) => per_plane(&values),
+        Some(values) => plane_values(&values),
         None => Some(default),
     };
     let scalar_or = |name: &str, default: f32| match property_values(xml, prefix, name) {
@@ -396,7 +396,7 @@ fn parse_hdrgm(xml: &str) -> Option<GainMapMetadata> {
         None => Some(default),
     };
     property_values(xml, prefix, "Version")?;
-    let gain_map_maximum = per_plane(&property_values(xml, prefix, "GainMapMax")?)?;
+    let gain_map_maximum = plane_values(&property_values(xml, prefix, "GainMapMax")?)?;
     let hdr_capacity_maximum = scalar(&property_values(xml, prefix, "HDRCapacityMax")?)?;
     let gain_map_minimum = plane_or("GainMapMin", [0.0; 3])?;
     let gamma = plane_or("Gamma", [1.0; 3])?;
