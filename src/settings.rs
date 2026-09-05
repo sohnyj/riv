@@ -313,7 +313,10 @@ impl SettingsFile {
     fn save(&self) -> std::io::Result<()> {
         let serialized =
             serde_json::to_string_pretty(&self.document).map_err(std::io::Error::other)?;
-        let temporary = self.path.with_extension("json.tmp");
+        // Named per process: windows saving at once must not share one half-written file.
+        let temporary = self
+            .path
+            .with_extension(format!("json.{}.tmp", std::process::id()));
         std::fs::write(&temporary, serialized)?;
         std::fs::rename(&temporary, &self.path)
     }
