@@ -2918,7 +2918,8 @@ extern "system" fn window_procedure(
                     dispatch_action(application, window, action);
                 }
             }
-            LRESULT(1) // handled: prevent default app-command translation
+            // The X button messages alone document TRUE for a processed press.
+            LRESULT(1)
         }
         WM_CONTEXTMENU => {
             if let Some(application) = application_from_window(window) {

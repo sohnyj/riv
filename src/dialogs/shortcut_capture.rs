@@ -643,10 +643,14 @@ unsafe extern "system" fn mouse_field_procedure(
         }
         WM_LBUTTONDBLCLK => notify(field, MouseBase::DoubleClick),
         WM_MBUTTONDOWN | WM_MBUTTONDBLCLK => notify(field, MouseBase::WheelButton),
-        WM_XBUTTONDOWN | WM_XBUTTONDBLCLK => notify(
-            field,
-            MouseBase::from_xbutton_flags(high_word(wparam.0) as u16),
-        ),
+        WM_XBUTTONDOWN | WM_XBUTTONDBLCLK => {
+            notify(
+                field,
+                MouseBase::from_xbutton_flags(high_word(wparam.0) as u16),
+            );
+            // The X button messages alone document TRUE for a processed press.
+            LRESULT(1)
+        }
         WM_MOUSEWHEEL => notify(
             field,
             MouseBase::from_wheel_delta(high_word_signed(wparam.0)),
