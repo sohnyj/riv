@@ -14,14 +14,14 @@ use windows::Win32::UI::Input::KeyboardAndMouse::{
 };
 use windows::Win32::UI::WindowsAndMessaging::{
     CS_DBLCLKS, CallWindowProcW, DLGC_WANTALLKEYS, DefWindowProcW, EndDialog, GWLP_USERDATA,
-    GWLP_WNDPROC, GetClientRect, GetDlgItem, GetParent, GetWindowLongPtrW, IDCANCEL, IDOK,
-    LB_ADDSTRING, LB_DELETESTRING, LB_GETCOUNT, LB_GETCURSEL, LB_GETITEMHEIGHT, LB_GETITEMRECT,
-    LB_GETTEXT, LB_GETTEXTLEN, LB_GETTOPINDEX, LB_RESETCONTENT, RegisterClassExW,
-    SendDlgItemMessageW, SendMessageW, SetWindowLongPtrW, SetWindowTextW, WM_APP, WM_COMMAND,
-    WM_DRAWITEM, WM_ERASEBKGND, WM_GETDLGCODE, WM_INITDIALOG, WM_KEYDOWN, WM_KEYUP, WM_KILLFOCUS,
-    WM_LBUTTONDBLCLK, WM_LBUTTONDOWN, WM_MBUTTONDBLCLK, WM_MBUTTONDOWN, WM_MOUSEWHEEL, WM_PAINT,
-    WM_SETFOCUS, WM_SETFONT, WM_SYSCHAR, WM_SYSKEYDOWN, WM_SYSKEYUP, WM_XBUTTONDBLCLK,
-    WM_XBUTTONDOWN, WNDCLASSEXW, WNDPROC,
+    GWLP_WNDPROC, GetClientRect, GetDlgItem, GetParent, GetWindowLongPtrW, IDC_ARROW, IDCANCEL,
+    IDOK, LB_ADDSTRING, LB_DELETESTRING, LB_GETCOUNT, LB_GETCURSEL, LB_GETITEMHEIGHT,
+    LB_GETITEMRECT, LB_GETTEXT, LB_GETTEXTLEN, LB_GETTOPINDEX, LB_RESETCONTENT, LoadCursorW,
+    RegisterClassExW, SendDlgItemMessageW, SendMessageW, SetWindowLongPtrW, SetWindowTextW, WM_APP,
+    WM_COMMAND, WM_DRAWITEM, WM_ERASEBKGND, WM_GETDLGCODE, WM_INITDIALOG, WM_KEYDOWN, WM_KEYUP,
+    WM_KILLFOCUS, WM_LBUTTONDBLCLK, WM_LBUTTONDOWN, WM_MBUTTONDBLCLK, WM_MBUTTONDOWN,
+    WM_MOUSEWHEEL, WM_PAINT, WM_SETFOCUS, WM_SETFONT, WM_SYSCHAR, WM_SYSKEYDOWN, WM_SYSKEYUP,
+    WM_XBUTTONDBLCLK, WM_XBUTTONDOWN, WNDCLASSEXW, WNDPROC,
 };
 use windows::core::{HSTRING, w};
 
@@ -486,6 +486,8 @@ fn ensure_capture_classes() {
     REGISTER.call_once(|| {
         let instance =
             unsafe { GetModuleHandleW(None) }.expect("the module handle of the running module");
+        // A NULL class cursor keeps whatever shape the pointer arrived with.
+        let arrow = unsafe { LoadCursorW(None, IDC_ARROW) }.expect("the system arrow cursor");
         for (class_name, procedure, style) in [
             (
                 w!("RivKeyboardCapture"),
@@ -499,6 +501,7 @@ fn ensure_capture_classes() {
                 style,
                 lpfnWndProc: Some(procedure),
                 hInstance: instance.into(),
+                hCursor: arrow,
                 // No class brush: the field fills what it repaints, and a system erase flashes.
                 hbrBackground: HBRUSH::default(),
                 lpszClassName: class_name,
