@@ -479,6 +479,24 @@ mod normalization_tests {
     use super::*;
 
     #[test]
+    fn the_retired_navigation_names_bind_nothing() {
+        // `previous` and `next` were renamed in 2026-08 with no migration: the defaults apply.
+        let overrides = serde_json::json!({ "previous": ["Q"], "next": ["W"] });
+        let map = overrides.as_object().expect("object");
+        assert_eq!(
+            resolved_keyboard_sequences(Some(map), "previousfile"),
+            ["Left"]
+        );
+        assert_eq!(
+            resolved_keyboard_sequences(Some(map), "nextfile"),
+            ["Right"]
+        );
+        let bindings = Bindings::from_settings(Some(map), None);
+        assert!(bindings.lookup_key(0, u16::from(b'Q')).is_none());
+        assert!(bindings.lookup_key(0, u16::from(b'W')).is_none());
+    }
+
+    #[test]
     fn resolved_bindings_round_trip_and_discard_junk() {
         let overrides = serde_json::json!({
             "nextfile": ["Right", "Ctrl+Ctrl+X", "A".repeat(300)],

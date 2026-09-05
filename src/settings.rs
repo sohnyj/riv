@@ -709,7 +709,11 @@ fn object_section<'a>(
 
 /// True when the settings file is there but unusable; loading it starts from defaults instead.
 pub fn settings_document_is_unreadable() -> bool {
-    match std::fs::read_to_string(settings_path()) {
+    document_is_unreadable(&settings_path())
+}
+
+fn document_is_unreadable(path: &Path) -> bool {
+    match std::fs::read_to_string(path) {
         Ok(text) => {
             !serde_json::from_str::<Value>(&text).is_ok_and(|document| document.is_object())
         }
@@ -817,6 +821,55 @@ mod option_bounds_tests {
         assert_eq!(options.fit_mode, 1);
         assert_eq!(options.preloading, 2);
         assert_eq!(options.zoom_step_percent, 200);
+    }
+}
+
+#[cfg(test)]
+mod document_readability_tests {
+    use super::*;
+
+    fn document_at(name: &str, bytes: &[u8]) -> PathBuf {
+        let path = std::env::temp_dir().join(name);
+        std::fs::write(&path, bytes).expect("document file");
+        path
+    }
+
+    #[test]
+    fn a_present_document_is_unreadable_unless_it_is_a_json_object() {
+        let cases: [(&str, &[u8], bool); 5] = [
+            ("riv-readability-object.json", br#"{"options": {}}"#, false),
+            (
+                "riv-readability-truncated.json",
+                br#"{"options": {"zoomstep": "#,
+                true,
+            ),
+            ("riv-readability-array.json", b"[]", true),
+            ("riv-readability-empty.json", b"", true),
+            // UTF-16 with a byte order mark, which PowerShell 5's Out-File writes by default.
+            ("riv-readability-utf16.json", b"\xff\xfe{\x00}\x00", true),
+        ];
+        for (name, bytes, unreadable) in cases {
+            let path = document_at(name, bytes);
+            assert_eq!(document_is_unreadable(&path), unreadable, "{name}");
+            let _ = std::fs::remove_file(&path);
+        }
+        // Absent is the ordinary first run, not a broken file.
+        let missing = std::env::temp_dir().join("riv-readability-missing.json");
+        assert!(!document_is_unreadable(&missing));
+    }
+
+    #[test]
+    fn mistyped_values_read_as_defaults() {
+        // Each value differs from its default and has a JSON type the reader does not take.
+        let document = serde_json::json!({ "options": {
+            "zoomstep": "50",
+            "cursorzoom": 0,
+            "slideshowinterval": -5,
+            "slideshowdirection": 0.0,
+            "backgroundcolor": 0x112233,
+            "sortdescending": "true",
+        }});
+        assert!(Options::from_document(&document) == Options::default());
     }
 }
 
@@ -1070,6 +1123,7 @@ mod stored_key_tests {
             "filteringenabled": 3,
             "loopfoldersenabled": false,
             "fractionalzoom": false,
+            "slideshowreversed": true,
         }});
         assert!(Options::from_document(&document) == Options::default());
     }
