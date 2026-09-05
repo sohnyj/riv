@@ -86,8 +86,8 @@ use windows::Win32::UI::WindowsAndMessaging::{
     WM_DESTROY, WM_DISPLAYCHANGE, WM_DPICHANGED, WM_ENTERSIZEMOVE, WM_EXITSIZEMOVE, WM_GESTURE,
     WM_GETMINMAXINFO, WM_KEYDOWN, WM_LBUTTONDBLCLK, WM_LBUTTONDOWN, WM_LBUTTONUP, WM_MBUTTONDOWN,
     WM_MOUSEHWHEEL, WM_MOUSEMOVE, WM_MOUSEWHEEL, WM_MOVE, WM_NCDESTROY, WM_NCLBUTTONDOWN, WM_PAINT,
-    WM_QUIT, WM_SETCURSOR, WM_SIZE, WM_SYSCHAR, WM_SYSCOMMAND, WM_SYSKEYDOWN, WM_TIMER,
-    WM_XBUTTONDOWN, WNDCLASSEXW, WS_OVERLAPPEDWINDOW, WindowFromPoint,
+    WM_QUIT, WM_SETCURSOR, WM_SIZE, WM_SYSCOMMAND, WM_SYSKEYDOWN, WM_TIMER, WM_XBUTTONDOWN,
+    WNDCLASSEXW, WS_OVERLAPPEDWINDOW, WindowFromPoint,
 };
 use windows::core::{HSTRING, PCWSTR, Result};
 use windows_version::OsVersion;
@@ -2801,22 +2801,6 @@ extern "system" fn window_procedure(
         }
         // Bindings run in the message loop, so an unbound key reaches here and Alt keys fall through.
         WM_KEYDOWN => LRESULT(0),
-        // Swallow Alt+chars consumed by bindings; DefWindowProc would beep.
-        WM_SYSCHAR => {
-            let character = char::from_u32(wparam.0 as u32).unwrap_or('\0');
-            let bound = character.is_ascii_alphanumeric()
-                && application_from_window(window).is_some_and(|application| {
-                    application
-                        .bindings
-                        .lookup_key(current_modifiers(), character.to_ascii_uppercase() as u16)
-                        .is_some()
-                });
-            if bound {
-                LRESULT(0)
-            } else {
-                unsafe { DefWindowProcW(window, message, wparam, lparam) }
-            }
-        }
         WM_GESTURE => {
             if let Some(application) = application_from_window(window)
                 && apply_gesture(application, window, lparam)
