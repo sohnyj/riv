@@ -617,7 +617,6 @@ unsafe extern "system" fn page_procedure(
                 return 1;
             }
             if control == IDC_WINDOW_BACKGROUND_COLOR_ENABLED && notification == BN_CLICKED {
-                // Enabling the swatch repaints it synchronously, so that sync runs after the borrow ends.
                 let dialog = state.dialog;
                 state.transient_options.background_color_enabled = is_checked(page, control);
                 update_buttons(state);
@@ -1127,8 +1126,8 @@ fn initialize_shortcuts_page(state: &OptionsState) {
     if unsafe { GetClientRect(list, &raw mut bounds) }.is_err() {
         return;
     }
-    let scrollbar_width =
-        unsafe { GetSystemMetricsForDpi(SM_CXVSCROLL, crate::window::dpi::dpi_for_window(list)) };
+    let dpi = crate::window::dpi::dpi_for_window(list);
+    let scrollbar_width = unsafe { GetSystemMetricsForDpi(SM_CXVSCROLL, dpi) };
     let usable = bounds.right - bounds.left - scrollbar_width;
     let action_width = usable * 36 / 100;
     let keyboard_width = usable * 32 / 100;

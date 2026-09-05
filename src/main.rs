@@ -204,7 +204,7 @@ struct Application {
     status_text: Option<StatusText>,
     /// Memoized information panel text, rebuilt only when a display input changes.
     information_text_cache: Option<InformationTextCache>,
-    /// Advanced-color state and EDID gamut for the information overlay; refreshed on display change.
+    /// Advanced-color state and gamut label for the information overlay; refreshed on display change.
     display_labels: DisplayLabels,
     /// The last title set, so unchanged rebuilds skip the caption write.
     window_title: String,
