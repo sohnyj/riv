@@ -345,6 +345,30 @@ mod fixture_tests {
     }
 
     #[test]
+    #[ignore = "needs archiveint.dll and test/fixture_repeated_name.tar"]
+    fn a_repeated_member_name_lists_once_and_reads_the_first_entry() {
+        let archive = Path::new("test/fixture_repeated_name.tar");
+        let members = enumerate(archive).unwrap_or_else(|error| panic!("{}", error.message));
+        assert_eq!(members.len(), 1);
+        assert_eq!(members[0].name, "a.png");
+        let cancellation = AtomicBool::new(false);
+        let bytes = read_member(archive, "a.png", &cancellation)
+            .unwrap_or_else(|error| panic!("{}", error.message));
+        // The appended copy carries 2; the listing and the read agree on the first.
+        assert_eq!(bytes, [PNG_SIGNATURE, &[1]].concat());
+    }
+
+    #[test]
+    #[ignore = "needs archiveint.dll and test/fixture_pax_warning.tar"]
+    fn a_header_read_with_a_warning_still_lists_the_member() {
+        // The malformed pax record makes libarchive return ARCHIVE_WARN for the member's header.
+        let members = enumerate(Path::new("test/fixture_pax_warning.tar"))
+            .unwrap_or_else(|error| panic!("{}", error.message));
+        assert_eq!(members.len(), 1);
+        assert_eq!(members[0].name, "a.png");
+    }
+
+    #[test]
     #[ignore = "needs archiveint.dll and test/ fixtures"]
     fn encrypted_zip_members_are_skipped() {
         let members = enumerate(Path::new("test/fixture_encrypted.zip"))
