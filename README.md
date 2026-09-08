@@ -109,16 +109,19 @@ wget -qO llvm.sh https://apt.llvm.org/llvm.sh
 sudo bash llvm.sh 23
 ```
 
-LLVM tools on PATH:
+LLVM tools on PATH, persisted in `~/.bashrc`:
 
 ```sh
-export PATH="/usr/lib/llvm-23/bin:$PATH"
+echo 'export PATH="/usr/lib/llvm-23/bin:$PATH"' >> ~/.bashrc
+source ~/.bashrc
 ```
 
-Rust:
+Rust (load the cargo environment into the current shell before adding the
+target):
 
 ```sh
 curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh
+source "$HOME/.cargo/env"
 rustup target add x86_64-pc-windows-msvc
 ```
 
