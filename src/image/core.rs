@@ -186,6 +186,17 @@ impl ListingScope {
             Self::Directory(path) | Self::Archive(path) => path,
         }
     }
+
+    /// The listing a path opens as a whole: a folder or an archive; None for an item.
+    fn opened_by(path: &Path) -> Option<Self> {
+        if path.is_dir() {
+            Some(Self::Directory(path.to_path_buf()))
+        } else if archive_reader::path_is_archive(path) {
+            Some(Self::Archive(path.to_path_buf()))
+        } else {
+            None
+        }
+    }
 }
 
 /// Preload mode 0/1/2 -> (distance against the navigation direction, distance along it, cache budget in bytes).
@@ -488,7 +499,7 @@ impl ListingOptions {
 pub struct ScannedListing {
     scope: ListingScope,
     options: ListingOptions,
-    /// Directories always report Ok; archives can fail to enumerate or hold no images.
+    /// Directories always report Ok; archives can fail to enumerate. Empty is a listing here.
     result: Result<Vec<ListingEntry>, DecodeError>,
 }
 
@@ -507,7 +518,7 @@ impl ScannedListing {
     }
 }
 
-/// Image members of an archive, sorted; an empty archive is an error, not a listing.
+/// Image members of an archive, sorted.
 fn enumerate_archive(
     archive: &Path,
     options: &CoreOptions,
@@ -517,11 +528,6 @@ fn enumerate_archive(
         .into_iter()
         .filter_map(|member| member_entry(archive, member))
         .collect();
-    if entries.is_empty() {
-        return Err(decode::uncoded_error(
-            "Archive contains no supported images",
-        ));
-    }
     sort_entries(&mut entries, options);
     Ok(entries)
 }
@@ -692,10 +698,9 @@ impl ImageCore {
             return Some(self.load_url(url));
         }
         if let ItemLocation::File(path) = &location
-            && archive_reader::path_is_archive(path)
+            && let Some(scope) = ListingScope::opened_by(path)
         {
-            // An archive anchor retries through its scan, like a URL revalidates.
-            let scope = ListingScope::Archive(path.clone());
+            // A folder or archive anchor retries through its scan, like a URL revalidates.
             self.submit_scan(PendingScan {
                 scope,
                 purpose: ScanPurpose::OpenFirstEntry,
@@ -719,16 +724,9 @@ impl ImageCore {
                 return LoadOutcome::Failed;
             }
         };
-        if path.is_dir() {
+        if let Some(scope) = ListingScope::opened_by(&path) {
             self.submit_scan(PendingScan {
-                scope: ListingScope::Directory(path),
-                purpose: ScanPurpose::OpenFirstEntry,
-            });
-            return LoadOutcome::Pending;
-        }
-        if archive_reader::path_is_archive(&path) {
-            self.submit_scan(PendingScan {
-                scope: ListingScope::Archive(path),
+                scope,
                 purpose: ScanPurpose::OpenFirstEntry,
             });
             return LoadOutcome::Pending;
@@ -884,7 +882,18 @@ impl ImageCore {
         }
         if pending.purpose == ScanPurpose::OpenFirstEntry {
             let Some(first) = self.entries.first().map(|entry| entry.location.clone()) else {
-                return ListingInstall::Installed;
+                // Opened to show something; a listing with nothing to show is the error.
+                let message = match &pending.scope {
+                    ListingScope::Directory(_) => "Folder contains no supported images",
+                    ListingScope::Archive(_) => "Archive contains no supported images",
+                };
+                self.request = ViewRequest::Failed(
+                    ItemLocation::File(pending.scope.path().to_path_buf()),
+                    decode::uncoded_error(message),
+                );
+                return ListingInstall::Opened {
+                    outcome: LoadOutcome::Failed,
+                };
             };
             return ListingInstall::Opened {
                 outcome: self.load_item(&first),
@@ -3182,6 +3191,28 @@ mod listing_scan_tests {
         ));
         assert_eq!(core.entries.len(), 1);
         assert!(core.has_pending_display()); // the first entry's decode is under way
+        let _ = std::fs::remove_dir_all(&directory);
+    }
+
+    #[test]
+    fn an_empty_directory_open_reports_no_images() {
+        let directory = fixture_directory("riv-directory-empty", &[]);
+        let mut core = core();
+        assert_eq!(core.load_path(&directory), LoadOutcome::Pending);
+        let scan = ScannedListing::scan(ListingScope::Directory(directory.clone()), &core.options);
+        assert!(matches!(
+            core.install_listing_scan(scan),
+            ListingInstall::Opened {
+                outcome: LoadOutcome::Failed
+            }
+        ));
+        assert!(core.entries.is_empty());
+        let (location, error) = core.request.failure().expect("the open failed");
+        assert!(location == &ItemLocation::File(directory.clone()));
+        assert_eq!(error.message, "Folder contains no supported images");
+        // Reload retries the folder itself instead of decoding it as a file.
+        assert_eq!(core.reload_current(), Some(LoadOutcome::Pending));
+        assert!(core.listing_scan_pending());
         let _ = std::fs::remove_dir_all(&directory);
     }
 }
