@@ -1038,7 +1038,7 @@ impl Application {
 
     fn rebuild_renderer(&mut self, window: HWND) -> Result<()> {
         self.recover_current_pixels();
-        // The old present target must release the window first: either kind allows one per window.
+        // The old presenter must release the window first: DComp allows one target per window.
         self.renderer = None;
         self.overlay.release_brushes();
         self.register_upload_device();

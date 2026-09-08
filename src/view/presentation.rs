@@ -17,7 +17,7 @@ use windows::Win32::Graphics::DirectComposition::{
 use windows::Win32::Graphics::Dxgi::Common::{
     DXGI_ALPHA_MODE_IGNORE, DXGI_COLOR_SPACE_TYPE, DXGI_FORMAT,
 };
-use windows::Win32::Graphics::Dxgi::IDXGIDevice;
+use windows::Win32::Graphics::Dxgi::{DXGI_ERROR_UNSUPPORTED, IDXGIDevice};
 use windows::Win32::System::LibraryLoader::{GetProcAddress, LoadLibraryW};
 use windows::Win32::System::Threading::WaitForSingleObjectEx;
 use windows::Win32::UI::WindowsAndMessaging::{WINDOW_EX_STYLE, WS_EX_NOREDIRECTIONBITMAP};
@@ -68,8 +68,8 @@ impl Drop for CompositionPresenter {
     }
 }
 
-/// The factory entry point, resolved at run time: wine's dcomp.dll lacks the export.
-fn create_presentation_factory(d3d_device: &ID3D11Device) -> Option<IPresentationFactory> {
+/// Resolved at run time: wine's dcomp.dll lacks the export and the test executable must load there.
+fn create_presentation_factory(d3d_device: &ID3D11Device) -> Result<IPresentationFactory> {
     type CreatePresentationFactoryFunction = unsafe extern "system" fn(
         *mut core::ffi::c_void,
         *const GUID,
@@ -87,7 +87,8 @@ fn create_presentation_factory(d3d_device: &ID3D11Device) -> Option<IPresentatio
                 CreatePresentationFactoryFunction,
             >(address)
         })
-    }))?;
+    }))
+    .ok_or_else(unsupported)?;
     let mut pointer: *mut core::ffi::c_void = core::ptr::null_mut();
     unsafe {
         create(
@@ -96,19 +97,22 @@ fn create_presentation_factory(d3d_device: &ID3D11Device) -> Option<IPresentatio
             &raw mut pointer,
         )
     }
-    .ok()
     .ok()?;
-    Some(unsafe { IPresentationFactory::from_raw(pointer) })
+    Ok(unsafe { IPresentationFactory::from_raw(pointer) })
+}
+
+/// The system cannot present this way, and the renderer has no other way.
+fn unsupported() -> windows::core::Error {
+    windows::core::Error::from_hresult(DXGI_ERROR_UNSUPPORTED)
 }
 
 impl CompositionPresenter {
-    /// None when the system cannot present this way; the caller keeps the hwnd swapchain.
-    pub fn new(d3d_device: &ID3D11Device, window: HWND) -> Option<Self> {
+    pub fn new(d3d_device: &ID3D11Device, window: HWND) -> Result<Self> {
         let factory = create_presentation_factory(d3d_device)?;
         if unsafe { factory.IsPresentationSupported() } == 0 {
-            return None;
+            return Err(unsupported());
         }
-        Self::bind(&factory, d3d_device, window).ok()
+        Self::bind(&factory, d3d_device, window)
     }
 
     fn bind(

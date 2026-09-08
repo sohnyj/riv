@@ -1,6 +1,6 @@
-//! D3D11 + D2D draw path; frames present through composed presentation buffers or an hwnd swapchain.
+//! D3D11 + D2D draw path; frames present through composed presentation buffers.
 
-use windows::Win32::Foundation::{CloseHandle, HANDLE, HMODULE, HWND};
+use windows::Win32::Foundation::{HANDLE, HMODULE, HWND};
 use windows::Win32::Graphics::Direct2D::Common::{
     D2D_RECT_F, D2D_SIZE_U, D2D1_ALPHA_MODE_PREMULTIPLIED, D2D1_COLOR_F,
     D2D1_COMPOSITE_MODE_SOURCE_OVER, D2D1_PIXEL_FORMAT,
@@ -27,8 +27,7 @@ use windows::Win32::Graphics::Direct2D::{
     ID2D1Image,
 };
 use windows::Win32::Graphics::Direct3D::{
-    D3D_DRIVER_TYPE, D3D_DRIVER_TYPE_HARDWARE, D3D_DRIVER_TYPE_WARP, D3D_FEATURE_LEVEL,
-    D3D_FEATURE_LEVEL_11_0, D3D_FEATURE_LEVEL_12_0,
+    D3D_DRIVER_TYPE_HARDWARE, D3D_FEATURE_LEVEL, D3D_FEATURE_LEVEL_12_0,
 };
 use windows::Win32::Graphics::Direct3D11::{
     D3D11_CPU_ACCESS_READ, D3D11_CREATE_DEVICE_BGRA_SUPPORT, D3D11_CREATE_DEVICE_FLAG,
@@ -37,18 +36,11 @@ use windows::Win32::Graphics::Direct3D11::{
     ID3D11DeviceContext, ID3D11RenderTargetView, ID3D11ShaderResourceView, ID3D11Texture2D,
 };
 use windows::Win32::Graphics::Dxgi::Common::{
-    DXGI_ALPHA_MODE_IGNORE, DXGI_COLOR_SPACE_RGB_FULL_G10_NONE_P709,
-    DXGI_COLOR_SPACE_RGB_FULL_G22_NONE_P709, DXGI_COLOR_SPACE_TYPE, DXGI_FORMAT,
-    DXGI_FORMAT_B8G8R8A8_UNORM, DXGI_FORMAT_R16G16B16A16_FLOAT, DXGI_FORMAT_R16G16B16A16_UNORM,
-    DXGI_FORMAT_UNKNOWN, DXGI_SAMPLE_DESC,
+    DXGI_COLOR_SPACE_RGB_FULL_G10_NONE_P709, DXGI_COLOR_SPACE_RGB_FULL_G22_NONE_P709,
+    DXGI_COLOR_SPACE_TYPE, DXGI_FORMAT, DXGI_FORMAT_B8G8R8A8_UNORM, DXGI_FORMAT_R16G16B16A16_FLOAT,
+    DXGI_FORMAT_R16G16B16A16_UNORM,
 };
-use windows::Win32::Graphics::Dxgi::{
-    DXGI_PRESENT, DXGI_SCALING_STRETCH, DXGI_SWAP_CHAIN_COLOR_SPACE_SUPPORT_FLAG_PRESENT,
-    DXGI_SWAP_CHAIN_DESC1, DXGI_SWAP_CHAIN_FLAG,
-    DXGI_SWAP_CHAIN_FLAG_FRAME_LATENCY_WAITABLE_OBJECT, DXGI_SWAP_EFFECT_FLIP_DISCARD,
-    DXGI_USAGE_RENDER_TARGET_OUTPUT, IDXGIDevice, IDXGIFactory2, IDXGISurface, IDXGISwapChain1,
-    IDXGISwapChain2, IDXGISwapChain3,
-};
+use windows::Win32::Graphics::Dxgi::{IDXGIDevice, IDXGISurface};
 use windows::Win32::System::Threading::WaitForSingleObjectEx;
 use windows::core::{Interface, Result};
 use windows_numerics::{Matrix3x2, Vector2};
@@ -68,9 +60,6 @@ use crate::view::gain::GainMapPass;
 use crate::view::presentation::{self, CompositionPresenter};
 use crate::view::quantize::QuantizePass;
 
-/// Creation and every ResizeBuffers must pass the same swap-chain flags.
-const SWAP_CHAIN_FLAGS: DXGI_SWAP_CHAIN_FLAG = DXGI_SWAP_CHAIN_FLAG_FRAME_LATENCY_WAITABLE_OBJECT;
-
 /// Frame-slot wait ceiling: a stalled present queue must not freeze the caller.
 pub const FRAME_SLOT_TIMEOUT_MILLISECONDS: u32 = 1000;
 
@@ -88,16 +77,6 @@ const SDR_BACKBUFFER_COLOR_SPACE: DXGI_COLOR_SPACE_TYPE = DXGI_COLOR_SPACE_RGB_F
 
 /// The UNORM16 intermediate scene the quantize pass reads.
 const SCENE_TEXTURE_FORMAT: DXGI_FORMAT = DXGI_FORMAT_R16G16B16A16_UNORM;
-
-/// Where frames go out: composed presentation buffers, or the hwnd swapchain where unsupported.
-enum PresentTarget {
-    Composition(CompositionPresenter),
-    SwapChain {
-        swap_chain: IDXGISwapChain1,
-        /// Signals when the present queue (depth 1) has room; the pump waits on it.
-        frame_latency_waitable: Option<HANDLE>,
-    },
-}
 
 #[derive(Default)]
 struct ModeEffects {
@@ -209,7 +188,7 @@ pub struct Renderer {
     output_mode: OutputMode,
     backbuffer_format: DXGI_FORMAT,
     luminances: DisplayLuminances,
-    present_target: PresentTarget,
+    presenter: CompositionPresenter,
     d3d_device: ID3D11Device,
     /// Incremented per build; worker textures from other generations never wrap here.
     upload_device_generation: u64,
@@ -222,7 +201,6 @@ pub struct Renderer {
     /// False when the first build only succeeded without the pass; a reconfigure must not bring it back.
     quantize_pass_allowed: bool,
     scene_shader_resource_view: Option<ID3D11ShaderResourceView>,
-    backbuffer_render_target_view: Option<ID3D11RenderTargetView>,
     backbuffer_size: (u32, u32),
     target: Option<ID2D1Bitmap1>,
     image: Option<ID2D1Bitmap1>,
@@ -282,22 +260,10 @@ impl FrameDecision {
 
 impl Drop for Renderer {
     fn drop(&mut self) {
-        match &mut self.present_target {
-            PresentTarget::SwapChain {
-                frame_latency_waitable,
-                ..
-            } => {
-                if let Some(handle) = frame_latency_waitable.take() {
-                    let _ = unsafe { CloseHandle(handle) };
-                }
-            }
-            PresentTarget::Composition(presenter) => {
-                // Release the per-buffer D2D wrappers while the device is alive.
-                for slot in presenter.buffers_mut() {
-                    slot.d2d_target = None;
-                    slot.render_target_view = None;
-                }
-            }
+        // Release the per-buffer D2D wrappers while the device is alive.
+        for slot in self.presenter.buffers_mut() {
+            slot.d2d_target = None;
+            slot.render_target_view = None;
         }
         unsafe { self.d2d_context.SetTarget(None) };
         self.effect_output = None;
@@ -305,7 +271,6 @@ impl Drop for Renderer {
         self.gain_state = None;
         self.target = None;
         self.scene_shader_resource_view = None;
-        self.backbuffer_render_target_view = None;
         self.mode_effects = ModeEffects::default();
     }
 }
@@ -318,31 +283,28 @@ pub struct GraphicsDevice {
 /// D2D interop needs BGRA support on every device riv creates.
 const REQUIRED_DEVICE_FLAGS: D3D11_CREATE_DEVICE_FLAG = D3D11_CREATE_DEVICE_BGRA_SUPPORT;
 
-/// Both hardware attempts must request the same level or they produce different devices.
-const HARDWARE_FEATURE_LEVELS: [D3D_FEATURE_LEVEL; 1] = [D3D_FEATURE_LEVEL_12_0];
+const REQUIRED_FEATURE_LEVELS: [D3D_FEATURE_LEVEL; 1] = [D3D_FEATURE_LEVEL_12_0];
 
-/// Hardware when available, WARP otherwise.
+/// A hardware device at FL 12_0 or nothing: no software rasterizer takes its place.
 pub fn create_device() -> Result<GraphicsDevice> {
-    let presentation_flags = REQUIRED_DEVICE_FLAGS | presentation::REQUIRED_DEVICE_FLAG;
-    // D3D11 WARP is documented only through 11_1; shader model 5.0 needs no more.
-    create_d3d_device(
-        D3D_DRIVER_TYPE_HARDWARE,
-        &HARDWARE_FEATURE_LEVELS,
-        presentation_flags,
-    )
-    .or_else(|_| {
-        create_d3d_device(
+    let mut device = None;
+    let mut context = None;
+    unsafe {
+        D3D11CreateDevice(
+            None,
             D3D_DRIVER_TYPE_HARDWARE,
-            &HARDWARE_FEATURE_LEVELS,
-            REQUIRED_DEVICE_FLAGS,
-        )
-    })
-    .or_else(|_| {
-        create_d3d_device(
-            D3D_DRIVER_TYPE_WARP,
-            &[D3D_FEATURE_LEVEL_11_0],
-            REQUIRED_DEVICE_FLAGS,
-        )
+            HMODULE::default(),
+            REQUIRED_DEVICE_FLAGS | presentation::REQUIRED_DEVICE_FLAG,
+            Some(&REQUIRED_FEATURE_LEVELS),
+            D3D11_SDK_VERSION,
+            Some(&raw mut device),
+            None,
+            Some(&raw mut context),
+        )?;
+    }
+    Ok(GraphicsDevice {
+        device: device.expect("D3D11CreateDevice succeeded without device"),
+        context: context.expect("D3D11CreateDevice succeeded without context"),
     })
 }
 
@@ -357,44 +319,6 @@ impl PendingDevice {
     pub fn wait(self) -> Result<GraphicsDevice> {
         self.0.join().expect("device thread panicked")
     }
-}
-
-fn create_d3d_device(
-    driver_type: D3D_DRIVER_TYPE,
-    feature_levels: &[D3D_FEATURE_LEVEL],
-    flags: D3D11_CREATE_DEVICE_FLAG,
-) -> Result<GraphicsDevice> {
-    let mut device = None;
-    let mut context = None;
-    unsafe {
-        D3D11CreateDevice(
-            None,
-            driver_type,
-            HMODULE::default(),
-            flags,
-            Some(feature_levels),
-            D3D11_SDK_VERSION,
-            Some(&raw mut device),
-            None,
-            Some(&raw mut context),
-        )?;
-    }
-    Ok(GraphicsDevice {
-        device: device.expect("D3D11CreateDevice succeeded without device"),
-        context: context.expect("D3D11CreateDevice succeeded without context"),
-    })
-}
-
-/// Declares only with reported PRESENT support; an undeclared surface stays sRGB.
-fn declare_color_space(
-    swap_chain: &IDXGISwapChain3,
-    color_space: DXGI_COLOR_SPACE_TYPE,
-) -> Result<()> {
-    let support = unsafe { swap_chain.CheckColorSpaceSupport(color_space) }?;
-    if support & DXGI_SWAP_CHAIN_COLOR_SPACE_SUPPORT_FLAG_PRESENT.0 as u32 == 0 {
-        return Err(windows::core::Error::empty());
-    }
-    unsafe { swap_chain.SetColorSpace1(color_space) }
 }
 
 fn source_pixel_format(storage: PixelStorage) -> D2D1_PIXEL_FORMAT {
@@ -493,7 +417,7 @@ impl Renderer {
             device,
         )
         .or_else(|_| {
-            // A fresh device for the retry: DXGI allows one flip swapchain per window.
+            // The retry rebuilds from a fresh device, as a device-loss rebuild does.
             Self::build(
                 window,
                 width,
@@ -710,67 +634,14 @@ impl Renderer {
             mode.display_profile.as_deref(),
         );
 
-        // Any composition setup failure keeps the proven hwnd swapchain path.
-        let composition =
-            CompositionPresenter::new(&d3d_device, window).and_then(|mut presenter| {
-                presenter.set_color_space(color_space).ok()?;
-                presenter
-                    .ensure_buffers(
-                        &d3d_device,
-                        backbuffer_format,
-                        (width, height),
-                        PRESENTATION_BUFFER_COUNT,
-                    )
-                    .ok()?;
-                Some(presenter)
-            });
-        let present_target = match composition {
-            Some(presenter) => PresentTarget::Composition(presenter),
-            None => {
-                let description = DXGI_SWAP_CHAIN_DESC1 {
-                    Width: width,
-                    Height: height,
-                    Format: backbuffer_format,
-                    SampleDesc: DXGI_SAMPLE_DESC {
-                        Count: 1,
-                        Quality: 0,
-                    },
-                    BufferUsage: DXGI_USAGE_RENDER_TARGET_OUTPUT,
-                    BufferCount: PRESENTATION_BUFFER_COUNT as u32,
-                    Scaling: DXGI_SCALING_STRETCH,
-                    SwapEffect: DXGI_SWAP_EFFECT_FLIP_DISCARD,
-                    AlphaMode: DXGI_ALPHA_MODE_IGNORE,
-                    Flags: SWAP_CHAIN_FLAGS.0 as u32,
-                    ..Default::default()
-                };
-                let swap_chain = unsafe {
-                    let adapter = dxgi_device.GetAdapter()?;
-                    let factory: IDXGIFactory2 = adapter.GetParent()?;
-                    factory.CreateSwapChainForHwnd(
-                        &d3d_device,
-                        window,
-                        &raw const description,
-                        None,
-                        None,
-                    )?
-                };
-                // Only FP16 declares; scRGB on plain SDR flashes DWM composition.
-                if (is_hdr_output || is_sdr_wide_gamut)
-                    && let Ok(swap_chain3) = swap_chain.cast::<IDXGISwapChain3>()
-                {
-                    let _ = declare_color_space(&swap_chain3, color_space);
-                }
-                // Waitable swapchains default to a present-queue depth of 1.
-                let frame_latency_waitable = swap_chain
-                    .cast::<IDXGISwapChain2>()
-                    .ok()
-                    .map(|swap_chain2| unsafe { swap_chain2.GetFrameLatencyWaitableObject() });
-                PresentTarget::SwapChain {
-                    swap_chain,
-                    frame_latency_waitable,
-                }
-            }
-        };
+        let mut presenter = CompositionPresenter::new(&d3d_device, window)?;
+        presenter.set_color_space(color_space)?;
+        presenter.ensure_buffers(
+            &d3d_device,
+            backbuffer_format,
+            (width, height),
+            PRESENTATION_BUFFER_COUNT,
+        )?;
         let mode_effects = Self::create_mode_effects(
             &d2d_context,
             is_hdr_output,
@@ -788,14 +659,13 @@ impl Renderer {
             upload_maximum_frame_bytes,
             backbuffer_format,
             luminances,
-            present_target,
+            presenter,
             d3d_device,
             d3d_context,
             d2d_context,
             quantize_pass,
             quantize_pass_allowed: with_quantize_pass,
             scene_shader_resource_view: None,
-            backbuffer_render_target_view: None,
             backbuffer_size: (width, height),
             target: None,
             image: None,
@@ -970,41 +840,11 @@ impl Renderer {
     }
 
     fn create_target(&mut self) -> Result<()> {
-        if let PresentTarget::SwapChain { swap_chain, .. } = &self.present_target {
-            let swap_chain = swap_chain.clone();
-            self.create_swap_chain_target(&swap_chain)
-        } else {
-            self.create_composition_target()
-        }
-    }
-
-    fn create_swap_chain_target(&mut self, swap_chain: &IDXGISwapChain1) -> Result<()> {
-        let buffer: ID3D11Texture2D = unsafe { swap_chain.GetBuffer(0) }?;
-        let mut buffer_description = D3D11_TEXTURE2D_DESC::default();
-        unsafe { buffer.GetDesc(&raw mut buffer_description) };
-        self.backbuffer_size = (buffer_description.Width, buffer_description.Height);
-        if self.quantize_pass.is_some() {
-            // The pass dithers and quantizes the scene into the backbuffer.
-            self.backbuffer_render_target_view = Some(
-                crate::view::texture::create_render_target_view(&self.d3d_device, &buffer)?,
-            );
-            return self.create_scene_target();
-        }
-        let properties = Self::target_bitmap_properties(self.backbuffer_format);
-        let target = Self::bitmap_over_texture(&self.d2d_context, &buffer, &properties)?;
-        unsafe { self.d2d_context.SetTarget(&target) };
-        self.target = Some(target);
-        Ok(())
-    }
-
-    fn create_composition_target(&mut self) -> Result<()> {
         let quantizing = self.quantize_pass.is_some();
         let format = self.backbuffer_format;
         let size = self.backbuffer_size;
         let first_target = {
-            let PresentTarget::Composition(presenter) = &mut self.present_target else {
-                return Err(windows::core::Error::empty());
-            };
+            let presenter = &mut self.presenter;
             presenter.ensure_buffers(&self.d3d_device, format, size, PRESENTATION_BUFFER_COUNT)?;
             let properties = Self::target_bitmap_properties(format);
             let mut first_target = None;
@@ -1045,24 +885,11 @@ impl Renderer {
         unsafe { self.d2d_context.SetTarget(None) };
         self.target = None;
         self.scene_shader_resource_view = None;
-        self.backbuffer_render_target_view = None;
-        if let PresentTarget::SwapChain { swap_chain, .. } = &mut self.present_target {
-            unsafe {
-                swap_chain.ResizeBuffers(
-                    0,
-                    width,
-                    height,
-                    DXGI_FORMAT_UNKNOWN,
-                    SWAP_CHAIN_FLAGS,
-                )?;
-            }
-        }
-        // The swapchain target re-derives this from the buffer it gets back.
         self.backbuffer_size = (width, height);
         self.create_target()
     }
 
-    /// Switches the output mode in place: DXGI allows one flip-model swapchain per window.
+    /// Switches the output mode in place; the window keeps its presentation surface.
     pub fn reconfigure_output(
         &mut self,
         mode: OutputMode,
@@ -1081,12 +908,11 @@ impl Renderer {
             );
         self.luminances = luminances;
 
-        // Release every backbuffer reference ahead of ResizeBuffers.
+        // Release every buffer reference before the ring is retargeted.
         unsafe { self.d2d_context.SetTarget(None) };
         self.target = None;
         self.effect_output = None;
         self.scene_shader_resource_view = None;
-        self.backbuffer_render_target_view = None;
 
         let (format, color_space) =
             Self::mode_format_and_color_space(is_hdr_output, is_sdr_wide_gamut);
@@ -1100,16 +926,7 @@ impl Renderer {
             // The pass depends only on the (unchanged) device, so keep it across reconfigures.
             self.quantize_pass = QuantizePass::new(&self.d3d_device).ok();
         }
-        match &mut self.present_target {
-            PresentTarget::Composition(presenter) => presenter.set_color_space(color_space)?,
-            PresentTarget::SwapChain { swap_chain, .. } => {
-                unsafe { swap_chain.ResizeBuffers(0, 0, 0, format, SWAP_CHAIN_FLAGS) }?;
-                if let Ok(swap_chain3) = swap_chain.cast::<IDXGISwapChain3>() {
-                    // The SDR space also undoes an earlier FP16 declaration.
-                    let _ = declare_color_space(&swap_chain3, color_space);
-                }
-            }
-        }
+        self.presenter.set_color_space(color_space)?;
 
         let mode_effects = Self::create_mode_effects(
             &self.d2d_context,
@@ -1640,19 +1457,12 @@ impl Renderer {
         }
     }
 
-    /// What the pump waits on; None when the next frame needs no wait or nothing signals one.
+    /// What the pump waits on; None when the slot is already held or no buffer exists yet.
     pub fn pending_frame_slot(&self) -> Option<HANDLE> {
         if self.frame_slot_held {
             return None;
         }
-        match &self.present_target {
-            PresentTarget::SwapChain {
-                frame_latency_waitable,
-                ..
-            } => *frame_latency_waitable,
-            PresentTarget::Composition(presenter) => presenter.next_available_event(),
-        }
-        .filter(|handle| !handle.is_invalid())
+        self.presenter.next_available_event()
     }
 
     pub fn hold_frame_slot(&mut self) {
@@ -1674,17 +1484,15 @@ impl Renderer {
         clear_color: D2D1_COLOR_F,
         draw_overlay: impl FnOnce(&ID2D1DeviceContext) -> Result<()>,
     ) -> Result<()> {
-        if let PresentTarget::Composition(presenter) = &self.present_target {
-            // The composition system dropped the manager; the caller rebuilds.
-            if presenter.is_lost() {
-                return Err(windows::core::Error::empty());
-            }
+        // The composition system dropped the manager; the caller rebuilds.
+        if self.presenter.is_lost() {
+            return Err(windows::core::Error::empty());
         }
         self.consume_frame_slot();
-        // The direct composition path draws into this frame's own buffer.
-        if let PresentTarget::Composition(presenter) = &self.present_target
-            && self.quantize_pass.is_none()
-            && let Some(target) = presenter
+        // Without the pass, D2D draws into this frame's own buffer.
+        if self.quantize_pass.is_none()
+            && let Some(target) = self
+                .presenter
                 .next_slot()
                 .and_then(|slot| slot.d2d_target.as_ref())
         {
@@ -1727,12 +1535,10 @@ impl Renderer {
         // Overlay failure must not block presenting the frame.
         let overlay_result = draw_overlay(&self.d2d_context);
         unsafe { self.d2d_context.EndDraw(None, None) }?;
-        let quantize_target = match &self.present_target {
-            PresentTarget::SwapChain { .. } => self.backbuffer_render_target_view.as_ref(),
-            PresentTarget::Composition(presenter) => presenter
-                .next_slot()
-                .and_then(|slot| slot.render_target_view.as_ref()),
-        };
+        let quantize_target = self
+            .presenter
+            .next_slot()
+            .and_then(|slot| slot.render_target_view.as_ref());
         if let (Some(quantize_pass), Some(quantization_steps), Some(scene), Some(backbuffer)) = (
             &self.quantize_pass,
             decision.quantization_steps,
@@ -1748,14 +1554,7 @@ impl Renderer {
                 quantization_steps,
             );
         }
-        match &mut self.present_target {
-            PresentTarget::SwapChain { swap_chain, .. } => {
-                unsafe { swap_chain.Present(1, DXGI_PRESENT(0)) }.ok()?;
-            }
-            PresentTarget::Composition(presenter) => {
-                presenter.present_next(&self.d3d_context)?;
-            }
-        }
+        self.presenter.present_next(&self.d3d_context)?;
         overlay_result
     }
 
