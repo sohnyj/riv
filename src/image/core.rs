@@ -1944,22 +1944,22 @@ fn sort_entries(entries: &mut [ListingEntry], options: &CoreOptions) {
         SortMode::Name => entries.sort_by(compare_natural_names),
         SortMode::Modified => {
             entries.sort_by(|a, b| {
-                b.modified
-                    .cmp(&a.modified)
+                a.modified
+                    .cmp(&b.modified)
                     .then_with(|| compare_natural_names(a, b))
             });
         }
         SortMode::Created => {
             entries.sort_by(|a, b| {
-                b.created
-                    .cmp(&a.created)
+                a.created
+                    .cmp(&b.created)
                     .then_with(|| compare_natural_names(a, b))
             });
         }
         SortMode::Size => {
             entries.sort_by(|a, b| {
-                b.file_size
-                    .cmp(&a.file_size)
+                a.file_size
+                    .cmp(&b.file_size)
                     .then_with(|| compare_natural_names(a, b))
             });
         }
@@ -3454,16 +3454,16 @@ mod sort_mode_tests {
         );
         assert_eq!(
             sorted_names(SortMode::Modified, false),
-            ["b2.png", "b10.jpg", "a1.png"]
+            ["a1.png", "b10.jpg", "b2.png"]
         );
         assert_eq!(
             sorted_names(SortMode::Created, false),
-            ["a1.png", "b10.jpg", "b2.png"]
+            ["b2.png", "b10.jpg", "a1.png"]
         );
         // The two 30-byte files tie and fall back to the natural name order.
         assert_eq!(
             sorted_names(SortMode::Size, false),
-            ["a1.png", "b2.png", "b10.jpg"]
+            ["b10.jpg", "a1.png", "b2.png"]
         );
         assert_eq!(
             sorted_names(SortMode::Type, false),
@@ -3479,7 +3479,7 @@ mod sort_mode_tests {
         );
         assert_eq!(
             sorted_names(SortMode::Modified, true),
-            ["a1.png", "b10.jpg", "b2.png"]
+            ["b2.png", "b10.jpg", "a1.png"]
         );
     }
 }
