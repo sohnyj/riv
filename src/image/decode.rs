@@ -2610,6 +2610,14 @@ pub fn uncoded_error(message: impl std::fmt::Display) -> DecodeError {
     }
 }
 
+/// The png crate wraps a read failure; its os code is kept like any other io failure.
+fn png_error(error: png::DecodingError) -> DecodeError {
+    match error {
+        png::DecodingError::IoError(error) => os_error(&error),
+        other => uncoded_error(other),
+    }
+}
+
 /// An io failure, whose message already names the OS error the code is kept for.
 pub fn os_error(error: &std::io::Error) -> DecodeError {
     DecodeError {
@@ -2630,7 +2638,7 @@ fn decode_apng<Input: BufRead + Seek>(
 ) -> Result<DecodedImage, DecodeError> {
     let mut decoder = png::Decoder::new(input);
     decoder.set_transformations(png::Transformations::normalize_to_color8());
-    let mut reader = decoder.read_info().map_err(uncoded_error)?;
+    let mut reader = decoder.read_info().map_err(png_error)?;
 
     let (canvas_width, canvas_height) = {
         let information = reader.info();
@@ -2660,7 +2668,7 @@ fn decode_apng<Input: BufRead + Seek>(
     };
 
     if has_animation && !default_image_is_first_frame {
-        reader.next_frame(&mut buffer).map_err(uncoded_error)?;
+        reader.next_frame(&mut buffer).map_err(png_error)?;
     }
 
     // Reused across frames; the conversion writes every byte it is given.
@@ -2674,7 +2682,7 @@ fn decode_apng<Input: BufRead + Seek>(
             break;
         }
         if !(index == 0 && (default_image_is_first_frame || !has_animation)) {
-            reader.next_frame_info().map_err(uncoded_error)?;
+            reader.next_frame_info().map_err(png_error)?;
         }
         let frame_control = reader.info().frame_control.unwrap_or(png::FrameControl {
             width: canvas_width,
@@ -2682,7 +2690,7 @@ fn decode_apng<Input: BufRead + Seek>(
             blend_op: png::BlendOp::Source,
             ..Default::default()
         });
-        let output = reader.next_frame(&mut buffer).map_err(uncoded_error)?;
+        let output = reader.next_frame(&mut buffer).map_err(png_error)?;
         pixels_to_premultiplied_bgra_into(
             &buffer[..output.buffer_size()],
             output.color_type,
