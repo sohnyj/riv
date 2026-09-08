@@ -403,6 +403,7 @@ mod mtime_tests {
             "huge.png",
             &cancellation,
         );
-        assert!(result.is_err()); // no crash/hang; reservation stayed bounded
+        let error = result.expect_err("the declared size must be refused");
+        assert_eq!(error.message, "Archive member exceeds the 1 GiB limit");
     }
 }
