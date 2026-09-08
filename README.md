@@ -109,11 +109,11 @@ wget -qO llvm.sh https://apt.llvm.org/llvm.sh
 sudo bash llvm.sh 23
 ```
 
-LLVM tools on PATH, persisted in `~/.bashrc`:
+LLVM tools on PATH, persisted in `~/.profile`:
 
 ```sh
-echo 'export PATH="/usr/lib/llvm-23/bin:$PATH"' >> ~/.bashrc
-source ~/.bashrc
+echo 'export PATH="/usr/lib/llvm-23/bin:$PATH"' >> ~/.profile
+source ~/.profile
 ```
 
 Rust (load the cargo environment into the current shell before adding the
@@ -129,7 +129,7 @@ rustup target add x86_64-pc-windows-msvc
 
 ```sh
 cargo install xwin
-xwin --accept-license splat --output ~/.xwin
+xwin --accept-license splat --output ~/.xwin --cache-dir ~/.xwin-cache
 ```
 
 Static build of the C/C++ codecs:
