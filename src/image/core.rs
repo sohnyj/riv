@@ -359,15 +359,17 @@ struct ImageReleaser {
 impl ImageReleaser {
     fn new() -> Self {
         let (sender, receiver) = mpsc::channel::<Arc<DecodedImage>>();
-        // A spawn failure drops the receiver, so every release frees inline instead.
-        let _ = std::thread::Builder::new()
+        // The same disposition as the scan thread: no path runs without it.
+        std::thread::Builder::new()
             .name("riv-image-releaser".to_string())
-            .spawn(move || receiver.iter().for_each(drop));
+            .spawn(move || receiver.iter().for_each(drop))
+            .expect("image releaser thread spawn failed");
         Self { sender }
     }
 
     fn release(&self, image: Arc<DecodedImage>) {
-        let _ = self.sender.send(image);
+        // The receiver lives as long as the process, so a send cannot fail.
+        self.sender.send(image).expect("image releaser thread gone");
     }
 }
 

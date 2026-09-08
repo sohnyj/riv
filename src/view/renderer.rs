@@ -72,6 +72,9 @@ const SCRGB_BACKBUFFER_FORMAT: DXGI_FORMAT = DXGI_FORMAT_R16G16B16A16_FLOAT;
 /// The 8-bit backbuffer of plain SDR output; the app quantizes and dithers it.
 const SDR_BACKBUFFER_FORMAT: DXGI_FORMAT = DXGI_FORMAT_B8G8R8A8_UNORM;
 
+/// Bits per channel of that backbuffer: the dither step and the output label read it.
+const SDR_BACKBUFFER_BITS: u32 = 8;
+
 /// The color space composition reads the SDR backbuffer in.
 const SDR_BACKBUFFER_COLOR_SPACE: DXGI_COLOR_SPACE_TYPE = DXGI_COLOR_SPACE_RGB_FULL_G22_NONE_P709;
 
@@ -517,7 +520,7 @@ impl Renderer {
 
     /// Dither only the 8-bit backbuffer the app quantizes; FP16 leaves quantization to DWM.
     fn backbuffer_bits_for(format: DXGI_FORMAT) -> Option<u32> {
-        (format == SDR_BACKBUFFER_FORMAT).then_some(8)
+        (format == SDR_BACKBUFFER_FORMAT).then_some(SDR_BACKBUFFER_BITS)
     }
 
     /// FP16 scRGB for HDR and ACM-on wide gamut, 8-bit sRGB otherwise; both paths share it.
@@ -744,8 +747,10 @@ impl Renderer {
     fn sdr_output_label(&self) -> String {
         let destination = self.destination_gamut_label.unwrap_or("sRGB");
         match self.source_gamut_label {
-            Some(source) if source != destination => format!("8-bit {source} in {destination}"),
-            _ => format!("8-bit {destination}"),
+            Some(source) if source != destination => {
+                format!("{SDR_BACKBUFFER_BITS}-bit {source} in {destination}")
+            }
+            _ => format!("{SDR_BACKBUFFER_BITS}-bit {destination}"),
         }
     }
 

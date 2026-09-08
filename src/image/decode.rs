@@ -902,7 +902,7 @@ impl DecodeInput<'_> {
         match self {
             DecodeInput::File(path) => std::fs::read(path)
                 .map(std::borrow::Cow::Owned)
-                .map_err(uncoded_error),
+                .map_err(|error| os_error(&error)),
             DecodeInput::Memory { bytes, .. } => Ok(std::borrow::Cow::Borrowed(*bytes)),
         }
     }
@@ -1050,7 +1050,7 @@ fn decode_input(
         }
         Adapter::Apng => match input {
             DecodeInput::File(path) => {
-                let file = File::open(path).map_err(uncoded_error)?;
+                let file = File::open(path).map_err(|error| os_error(&error))?;
                 decode_apng(BufReader::new(file), format_name, cancellation)
             }
             DecodeInput::Memory { bytes, .. } => {
