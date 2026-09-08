@@ -78,13 +78,21 @@ const SDR_BACKBUFFER_COLOR_SPACE: DXGI_COLOR_SPACE_TYPE = DXGI_COLOR_SPACE_RGB_F
 /// The UNORM16 intermediate scene the quantize pass reads.
 const SCENE_TEXTURE_FORMAT: DXGI_FORMAT = DXGI_FORMAT_R16G16B16A16_UNORM;
 
-#[derive(Default)]
+/// The tone map for HDR content on SDR output, with the stages that follow it.
+struct ToneMapStage {
+    tone_map: ID2D1Effect,
+    /// Reinterprets scene-referred white as display-referred.
+    normalize: ID2D1Effect,
+    /// Re-encodes to the sRGB backbuffer; None on the FP16 scRGB backbuffer of ACM-on SDR.
+    output_encoding: Option<ID2D1Effect>,
+}
+
 struct ModeEffects {
-    color_management_effect: Option<ID2D1Effect>,
-    hdr_tone_map_effect: Option<ID2D1Effect>,
-    tone_map_normalize_effect: Option<ID2D1Effect>,
-    output_color_management_effect: Option<ID2D1Effect>,
-    white_level_effect: Option<ID2D1Effect>,
+    color_management: ID2D1Effect,
+    /// SDR output only: HDR displays pass content through.
+    tone_map: Option<ToneMapStage>,
+    /// HDR output only: the SDR white-level boost.
+    white_level: Option<ID2D1Effect>,
 }
 
 #[derive(Clone, PartialEq)]
@@ -195,22 +203,21 @@ pub struct Renderer {
     /// The adapter's per-resource ceiling, fixed per device; read once at build.
     upload_maximum_frame_bytes: u64,
     d3d_context: ID3D11DeviceContext,
+    /// Declared before d2d_context: effects must release while their context lives.
+    mode_effects: ModeEffects,
     d2d_context: ID2D1DeviceContext,
     /// Fullscreen quantizing copy from the UNORM16 scene to the 8-bit backbuffer.
     quantize_pass: Option<QuantizePass>,
-    /// False when the first build only succeeded without the pass; a reconfigure must not bring it back.
-    quantize_pass_allowed: bool,
     scene_shader_resource_view: Option<ID3D11ShaderResourceView>,
     backbuffer_size: (u32, u32),
     target: Option<ID2D1Bitmap1>,
     image: Option<ID2D1Bitmap1>,
     effect_output: Option<ID2D1Image>,
-    mode_effects: ModeEffects,
     dither_setting: DitherMode,
     image_storage: PixelStorage,
     image_source_bits_per_channel: u32,
-    scrgb_color_context: Option<ID2D1ColorContext>,
-    srgb_color_context: Option<ID2D1ColorContext>,
+    scrgb_color_context: ID2D1ColorContext,
+    srgb_color_context: ID2D1ColorContext,
     /// ACM-off SDR destination = the display's own profile; None outside that mode.
     display_color_context: Option<ID2D1ColorContext>,
     /// Display gamut label shown as the output space when profile mapping is active.
@@ -271,7 +278,6 @@ impl Drop for Renderer {
         self.gain_state = None;
         self.target = None;
         self.scene_shader_resource_view = None;
-        self.mode_effects = ModeEffects::default();
     }
 }
 
@@ -347,9 +353,9 @@ fn interface_property_bytes<T: Interface>(interface: &T) -> [u8; size_of::<usize
 /// ACM-off SDR maps into the display's own profile; sRGB otherwise.
 fn sdr_destination<'a>(
     display_color_context: Option<&'a ID2D1ColorContext>,
-    srgb_color_context: Option<&'a ID2D1ColorContext>,
-) -> Option<&'a ID2D1ColorContext> {
-    display_color_context.or(srgb_color_context)
+    srgb_color_context: &'a ID2D1ColorContext,
+) -> &'a ID2D1ColorContext {
+    display_color_context.unwrap_or(srgb_color_context)
 }
 
 fn wire_color_management(
@@ -372,18 +378,15 @@ fn wire_color_management(
     Ok(())
 }
 
-fn effect_when(
-    condition: bool,
-    build: impl FnOnce() -> Option<ID2D1Effect>,
-) -> Option<ID2D1Effect> {
-    condition.then(build).flatten()
+fn effect_when<T>(condition: bool, build: impl FnOnce() -> Result<T>) -> Result<Option<T>> {
+    condition.then(build).transpose()
 }
 
 /// A WhiteLevelAdjustment with its input at SDR reference white; the output defaults to 80.
-fn create_white_level_effect(d2d_context: &ID2D1DeviceContext) -> Option<ID2D1Effect> {
-    let effect = unsafe { d2d_context.CreateEffect(&CLSID_D2D1WhiteLevelAdjustment) }.ok()?;
-    set_white_level_input(&effect, SDR_REFERENCE_WHITE_NITS).ok()?;
-    Some(effect)
+fn create_white_level_effect(d2d_context: &ID2D1DeviceContext) -> Result<ID2D1Effect> {
+    let effect = unsafe { d2d_context.CreateEffect(&CLSID_D2D1WhiteLevelAdjustment) }?;
+    set_white_level_input(&effect, SDR_REFERENCE_WHITE_NITS)?;
+    Ok(effect)
 }
 
 /// WhiteLevelAdjustment multiplies by input/output white level.
@@ -398,49 +401,16 @@ fn set_white_level_input(effect: &ID2D1Effect, input_white_nits: f32) -> Result<
 }
 
 impl Renderer {
-    pub fn new(
-        window: HWND,
-        width: u32,
-        height: u32,
-        mode: OutputMode,
-        luminances: DisplayLuminances,
-        device: GraphicsDevice,
-    ) -> Result<Self> {
-        // A failed first build retries without the quantize pass, never blocking launch.
-        Self::build(
-            window,
-            width,
-            height,
-            mode.clone(),
-            luminances,
-            true,
-            device,
-        )
-        .or_else(|_| {
-            // The retry rebuilds from a fresh device, as a device-loss rebuild does.
-            Self::build(
-                window,
-                width,
-                height,
-                mode,
-                luminances,
-                false,
-                create_device()?,
-            )
-        })
-    }
-
-    fn create_color_management_effect(d2d_context: &ID2D1DeviceContext) -> Option<ID2D1Effect> {
+    fn create_color_management_effect(d2d_context: &ID2D1DeviceContext) -> Result<ID2D1Effect> {
         // BEST quality is required for float precision and scRGB conversions.
-        let effect = unsafe { d2d_context.CreateEffect(&CLSID_D2D1ColorManagement) }.ok()?;
+        let effect = unsafe { d2d_context.CreateEffect(&CLSID_D2D1ColorManagement) }?;
         unsafe {
             effect.SetValue(
                 D2D1_COLORMANAGEMENT_PROP_QUALITY.0 as u32,
                 D2D1_PROPERTY_TYPE_ENUM,
                 &D2D1_COLORMANAGEMENT_QUALITY_BEST.0.to_ne_bytes(),
             )
-        }
-        .ok()?;
+        }?;
         // Colorimetric intent, not the perceptual default.
         for intent in [
             D2D1_COLORMANAGEMENT_PROP_SOURCE_RENDERING_INTENT,
@@ -454,10 +424,9 @@ impl Renderer {
                         .0
                         .to_ne_bytes(),
                 )
-            }
-            .ok()?;
+            }?;
         }
-        Some(effect)
+        Ok(effect)
     }
 
     /// Display-profile color context and its gamut label for ACM-off SDR; both None otherwise.
@@ -482,13 +451,12 @@ impl Renderer {
 
     fn create_conversion_effect(
         d2d_context: &ID2D1DeviceContext,
-        source: Option<&ID2D1ColorContext>,
-        destination: Option<&ID2D1ColorContext>,
-    ) -> Option<ID2D1Effect> {
-        let (source, destination) = (source?, destination?);
+        source: &ID2D1ColorContext,
+        destination: &ID2D1ColorContext,
+    ) -> Result<ID2D1Effect> {
         let effect = Self::create_color_management_effect(d2d_context)?;
-        wire_color_management(&effect, source, destination).ok()?;
-        Some(effect)
+        wire_color_management(&effect, source, destination)?;
+        Ok(effect)
     }
 
     fn create_mode_effects(
@@ -496,66 +464,55 @@ impl Renderer {
         is_hdr_output: bool,
         is_sdr_wide_gamut: bool,
         tone_map_target_nits: f32,
-        scrgb_color_context: Option<&ID2D1ColorContext>,
-        sdr_destination_context: Option<&ID2D1ColorContext>,
-    ) -> ModeEffects {
-        let color_management_effect = Self::create_color_management_effect(d2d_context);
+        scrgb_color_context: &ID2D1ColorContext,
+        sdr_destination_context: &ID2D1ColorContext,
+    ) -> Result<ModeEffects> {
+        let color_management = Self::create_color_management_effect(d2d_context)?;
         // SDR only: HDR displays pass content through with no tone map.
-        let hdr_tone_map_effect =
-            effect_when(!is_hdr_output && color_management_effect.is_some(), || {
-                let effect = unsafe { d2d_context.CreateEffect(&CLSID_D2D1HdrToneMap) }.ok()?;
-                unsafe {
-                    effect.SetValue(
-                        D2D1_HDRTONEMAP_PROP_OUTPUT_MAX_LUMINANCE.0 as u32,
-                        D2D1_PROPERTY_TYPE_FLOAT,
-                        &tone_map_target_nits.to_ne_bytes(),
-                    )
-                }
-                .ok()?;
+        let tone_map = effect_when(!is_hdr_output, || {
+            let effect = unsafe { d2d_context.CreateEffect(&CLSID_D2D1HdrToneMap) }?;
+            unsafe {
+                effect.SetValue(
+                    D2D1_HDRTONEMAP_PROP_OUTPUT_MAX_LUMINANCE.0 as u32,
+                    D2D1_PROPERTY_TYPE_FLOAT,
+                    &tone_map_target_nits.to_ne_bytes(),
+                )?;
                 // The SDR curve mode raises midtones; always use the HDR curve.
-                unsafe {
-                    effect.SetValue(
-                        D2D1_HDRTONEMAP_PROP_DISPLAY_MODE.0 as u32,
-                        D2D1_PROPERTY_TYPE_ENUM,
-                        &D2D1_HDRTONEMAP_DISPLAY_MODE_HDR.0.to_ne_bytes(),
+                effect.SetValue(
+                    D2D1_HDRTONEMAP_PROP_DISPLAY_MODE.0 as u32,
+                    D2D1_PROPERTY_TYPE_ENUM,
+                    &D2D1_HDRTONEMAP_DISPLAY_MODE_HDR.0.to_ne_bytes(),
+                )?;
+            }
+            Ok(ToneMapStage {
+                tone_map: effect,
+                normalize: create_white_level_effect(d2d_context)?,
+                // The FP16 scRGB backbuffer of ACM-on SDR takes the tone-mapped scRGB with no re-encode.
+                output_encoding: effect_when(!is_sdr_wide_gamut, || {
+                    Self::create_conversion_effect(
+                        d2d_context,
+                        scrgb_color_context,
+                        sdr_destination_context,
                     )
-                }
-                .ok()?;
-                Some(effect)
-            });
-        // A Some tone map already implies SDR output, so later stages key on it alone.
-        let tone_map_normalize_effect = effect_when(hdr_tone_map_effect.is_some(), || {
-            create_white_level_effect(d2d_context)
-        });
-        // The FP16 scRGB backbuffer of ACM-on SDR takes the tone-mapped scRGB with no re-encode.
-        let output_color_management_effect =
-            effect_when(!is_sdr_wide_gamut && hdr_tone_map_effect.is_some(), || {
-                Self::create_conversion_effect(
-                    d2d_context,
-                    scrgb_color_context,
-                    sdr_destination_context,
-                )
-            });
-        let white_level_effect =
-            effect_when(is_hdr_output && color_management_effect.is_some(), || {
-                let effect = create_white_level_effect(d2d_context)?;
-                unsafe {
-                    effect.SetValue(
-                        D2D1_WHITELEVELADJUSTMENT_PROP_OUTPUT_WHITE_LEVEL.0 as u32,
-                        D2D1_PROPERTY_TYPE_FLOAT,
-                        &SDR_REFERENCE_WHITE_NITS.to_ne_bytes(),
-                    )
-                }
-                .ok()?;
-                Some(effect)
-            });
-        ModeEffects {
-            color_management_effect,
-            hdr_tone_map_effect,
-            tone_map_normalize_effect,
-            output_color_management_effect,
-            white_level_effect,
-        }
+                })?,
+            })
+        })?;
+        let white_level = effect_when(is_hdr_output, || {
+            let effect = create_white_level_effect(d2d_context)?;
+            unsafe {
+                effect.SetValue(
+                    D2D1_WHITELEVELADJUSTMENT_PROP_OUTPUT_WHITE_LEVEL.0 as u32,
+                    D2D1_PROPERTY_TYPE_FLOAT,
+                    &SDR_REFERENCE_WHITE_NITS.to_ne_bytes(),
+                )?;
+            }
+            Ok(effect)
+        })?;
+        Ok(ModeEffects {
+            color_management,
+            tone_map,
+            white_level,
+        })
     }
 
     /// Dither only the 8-bit backbuffer the app quantizes; FP16 leaves quantization to DWM.
@@ -578,13 +535,12 @@ impl Renderer {
         }
     }
 
-    fn build(
+    pub fn new(
         window: HWND,
         width: u32,
         height: u32,
         mode: OutputMode,
         luminances: DisplayLuminances,
-        with_quantize_pass: bool,
         device: GraphicsDevice,
     ) -> Result<Self> {
         let is_sdr_wide_gamut = mode.is_sdr_wide_gamut();
@@ -617,16 +573,14 @@ impl Renderer {
         let (backbuffer_format, color_space) =
             Self::mode_format_and_color_space(is_hdr_output, is_sdr_wide_gamut);
         // D2D draws the UNORM16 scene and the pass quantizes it; FP16 leaves that to DWM.
-        let quantize_pass = (with_quantize_pass
-            && backbuffer_format != SCRGB_BACKBUFFER_FORMAT
-            && unsafe { d2d_context.IsDxgiFormatSupported(SCENE_TEXTURE_FORMAT) }.as_bool())
-        .then(|| QuantizePass::new(&d3d_device).ok())
-        .flatten();
+        let quantize_pass = (backbuffer_format != SCRGB_BACKBUFFER_FORMAT)
+            .then(|| QuantizePass::new(&d3d_device))
+            .transpose()?;
 
         let scrgb_color_context =
-            unsafe { d2d_context.CreateColorContext(D2D1_COLOR_SPACE_SCRGB, None) }.ok();
+            unsafe { d2d_context.CreateColorContext(D2D1_COLOR_SPACE_SCRGB, None) }?;
         let srgb_color_context =
-            unsafe { d2d_context.CreateColorContext(D2D1_COLOR_SPACE_SRGB, None) }.ok();
+            unsafe { d2d_context.CreateColorContext(D2D1_COLOR_SPACE_SRGB, None) }?;
         let (display_color_context, destination_gamut_label) = Self::display_context_and_label(
             &d2d_context,
             is_hdr_output,
@@ -647,9 +601,9 @@ impl Renderer {
             is_hdr_output,
             is_sdr_wide_gamut,
             tone_map_target_nits,
-            scrgb_color_context.as_ref(),
-            sdr_destination(display_color_context.as_ref(), srgb_color_context.as_ref()),
-        );
+            &scrgb_color_context,
+            sdr_destination(display_color_context.as_ref(), &srgb_color_context),
+        )?;
         static UPLOAD_DEVICE_GENERATIONS: std::sync::atomic::AtomicU64 =
             std::sync::atomic::AtomicU64::new(1);
         let mut renderer = Self {
@@ -664,7 +618,6 @@ impl Renderer {
             d3d_context,
             d2d_context,
             quantize_pass,
-            quantize_pass_allowed: with_quantize_pass,
             scene_shader_resource_view: None,
             backbuffer_size: (width, height),
             target: None,
@@ -780,10 +733,10 @@ impl Renderer {
         }
     }
 
-    fn sdr_destination_context(&self) -> Option<&ID2D1ColorContext> {
+    fn sdr_destination_context(&self) -> &ID2D1ColorContext {
         sdr_destination(
             self.display_color_context.as_ref(),
-            self.srgb_color_context.as_ref(),
+            &self.srgb_color_context,
         )
     }
 
@@ -919,12 +872,9 @@ impl Renderer {
         if format == SCRGB_BACKBUFFER_FORMAT {
             // FP16 leaves quantization to DWM.
             self.quantize_pass = None;
-        } else if self.quantize_pass_allowed
-            && self.quantize_pass.is_none()
-            && unsafe { self.d2d_context.IsDxgiFormatSupported(SCENE_TEXTURE_FORMAT) }.as_bool()
-        {
+        } else if self.quantize_pass.is_none() {
             // The pass depends only on the (unchanged) device, so keep it across reconfigures.
-            self.quantize_pass = QuantizePass::new(&self.d3d_device).ok();
+            self.quantize_pass = Some(QuantizePass::new(&self.d3d_device)?);
         }
         self.presenter.set_color_space(color_space)?;
 
@@ -933,9 +883,9 @@ impl Renderer {
             is_hdr_output,
             is_sdr_wide_gamut,
             luminances.target_nits,
-            self.scrgb_color_context.as_ref(),
+            &self.scrgb_color_context,
             self.sdr_destination_context(),
-        );
+        )?;
         self.mode_effects = mode_effects;
         self.backbuffer_format = format;
         self.refresh_output_label();
@@ -944,7 +894,7 @@ impl Renderer {
 
     pub fn set_sdr_white_boost(&mut self, boost: f32) {
         self.sdr_white_boost = boost;
-        if let Some(effect) = &self.mode_effects.white_level_effect {
+        if let Some(effect) = &self.mode_effects.white_level {
             let _ = set_white_level_input(effect, SDR_REFERENCE_WHITE_NITS * self.sdr_white_boost);
         }
     }
@@ -962,9 +912,9 @@ impl Renderer {
     }
 
     /// Bakes or retires the gain rendition when its inputs moved; part of each frame decision.
-    fn refresh_gain_bake(&mut self) {
+    fn refresh_gain_bake(&mut self) -> Result<()> {
         let Some(mut state) = self.gain_state.take() else {
-            return;
+            return Ok(());
         };
         let conditions =
             self.display_headroom
@@ -975,28 +925,29 @@ impl Renderer {
                 });
         if state.adopted_conditions == conditions {
             self.gain_state = Some(state);
-            return;
+            return Ok(());
         }
         match conditions {
             Some(conditions) => {
                 if let Some(bitmap) = self.bake_gain_map(&mut state, conditions.display_headroom) {
                     let wiring = Self::baked_wiring(&state);
-                    self.adopt_image_bitmap(bitmap, &wiring);
+                    self.adopt_image_bitmap(bitmap, &wiring)?;
                     state.adopted_conditions = Some(conditions);
                 } else {
                     // The bake fell through; show the base and stop retrying this image.
                     if state.adopted_conditions.is_some() {
-                        self.adopt_image_bitmap(state.base_bitmap.clone(), &state.base_image);
+                        self.adopt_image_bitmap(state.base_bitmap.clone(), &state.base_image)?;
                     }
-                    return;
+                    return Ok(());
                 }
             }
             None => {
-                self.adopt_image_bitmap(state.base_bitmap.clone(), &state.base_image);
+                self.adopt_image_bitmap(state.base_bitmap.clone(), &state.base_image)?;
                 state.adopted_conditions = None;
             }
         }
         self.gain_state = Some(state);
+        Ok(())
     }
 
     fn bake_gain_map(
@@ -1107,7 +1058,7 @@ impl Renderer {
                 &raw const properties,
             )?
         };
-        self.adopt_image_bitmap(bitmap, image);
+        self.adopt_image_bitmap(bitmap, image)?;
         Ok(())
     }
 
@@ -1119,7 +1070,7 @@ impl Renderer {
         let properties = image_bitmap_properties(image.storage);
         let bitmap = Self::bitmap_over_texture(&self.d2d_context, &uploaded.texture, &properties)?;
         self.gain_state = self.create_gain_state(uploaded, image, bitmap.clone());
-        self.adopt_image_bitmap(bitmap, image);
+        self.adopt_image_bitmap(bitmap, image)?;
         Ok(())
     }
 
@@ -1197,7 +1148,7 @@ impl Renderer {
         }
     }
 
-    fn adopt_image_bitmap(&mut self, bitmap: ID2D1Bitmap1, image: &DecodedImage) {
+    fn adopt_image_bitmap(&mut self, bitmap: ID2D1Bitmap1, image: &DecodedImage) -> Result<()> {
         self.image_display_size = (image.width as f32, image.height as f32);
         self.image_pixel_size = (image.pixel_width, image.pixel_height);
         self.image_storage = image.storage;
@@ -1208,8 +1159,9 @@ impl Renderer {
             image.storage,
             image.peak_luminance_nits,
             image.source_primaries,
-        );
+        )?;
         self.image = Some(bitmap);
+        Ok(())
     }
 
     pub fn set_dither_setting(&mut self, mode: DitherMode) {
@@ -1237,23 +1189,20 @@ impl Renderer {
         storage: PixelStorage,
         peak_luminance_nits: Option<f32>,
         source_primaries: Option<[[f32; 2]; 3]>,
-    ) {
+    ) -> Result<()> {
         let icc_bytes = icc_profile.map(|profile| &**profile);
         self.effect_output = None;
         self.source_gamut_label = source_primaries
             .map(nearest_gamut_label)
             .or_else(|| icc_bytes.and_then(icc::gamut_label));
         self.refresh_output_label();
-        let Some(color_management) = &self.mode_effects.color_management_effect else {
-            return;
-        };
         // Unwire the previous bitmap now, so a failure return does not keep it alive.
-        unsafe { color_management.SetInput(0, None, true) };
+        unsafe { self.mode_effects.color_management.SetInput(0, None, true) };
         // HDR passes through; SDR maps content above SDR white to the target.
         let hdr_content = peak_luminance_nits.is_some_and(|peak| peak > SDR_REFERENCE_WHITE_NITS);
         let tone_map = self
             .mode_effects
-            .hdr_tone_map_effect
+            .tone_map
             .as_ref()
             .zip(peak_luminance_nits.filter(|_| hdr_content));
         let scrgb_destination =
@@ -1263,8 +1212,16 @@ impl Renderer {
             && !scrgb_destination
             && self.is_destination_space(icc_bytes)
         {
-            return;
+            return Ok(());
         }
+        let destination_context = if scrgb_destination {
+            &self.scrgb_color_context
+        } else {
+            sdr_destination(
+                self.display_color_context.as_ref(),
+                &self.srgb_color_context,
+            )
+        };
         // FP16 pixels are linear light in the stated primaries; scRGB covers unknown ones.
         let dedicated_context = match storage {
             PixelStorage::RgbaHalf => {
@@ -1275,131 +1232,97 @@ impl Renderer {
                     self.linear_source_context = self.create_linear_color_context(primaries);
                     self.linear_source_primaries = Some(primaries);
                 }
-                source_primaries
-                    .and(self.linear_source_context.as_ref())
-                    .or(self.scrgb_color_context.as_ref())
+                Some(
+                    source_primaries
+                        .and(self.linear_source_context.as_ref())
+                        .unwrap_or(&self.scrgb_color_context),
+                )
             }
             PixelStorage::Bgra8 => None,
         };
         let source_context = match dedicated_context {
             Some(context) => context,
             None => {
-                if self.source_color_context.is_none()
-                    || self.source_icc_profile.as_deref() != icc_bytes
-                {
-                    self.source_color_context = match icc_bytes {
-                        Some(icc_profile) => unsafe {
-                            self.d2d_context
-                                .CreateColorContext(D2D1_COLOR_SPACE_CUSTOM, Some(icc_profile))
-                        }
-                        .ok(),
-                        None => None,
-                    }
-                    .or_else(|| {
-                        unsafe {
-                            self.d2d_context
-                                .CreateColorContext(D2D1_COLOR_SPACE_SRGB, None)
-                        }
-                        .ok()
-                    });
+                if self.source_icc_profile.as_deref() != icc_bytes {
+                    self.source_color_context = None;
                     self.source_icc_profile = icc_profile.cloned();
                 }
-                let Some(source_context) = &self.source_color_context else {
-                    return;
-                };
-                source_context
+                let d2d_context = &self.d2d_context;
+                let srgb_color_context = &self.srgb_color_context;
+                &*self.source_color_context.get_or_insert_with(|| {
+                    // A profile D2D rejects reads as untagged: sRGB.
+                    icc_bytes
+                        .and_then(|icc_profile| {
+                            unsafe {
+                                d2d_context
+                                    .CreateColorContext(D2D1_COLOR_SPACE_CUSTOM, Some(icc_profile))
+                            }
+                            .ok()
+                        })
+                        .unwrap_or_else(|| srgb_color_context.clone())
+                })
             }
         };
-        let destination_context = if scrgb_destination {
-            self.scrgb_color_context.as_ref()
-        } else {
-            self.sdr_destination_context()
-        };
-        let Some(destination_context) = destination_context else {
-            return;
-        };
-        if wire_color_management(color_management, source_context, destination_context).is_err() {
-            return;
-        }
+        let color_management = &self.mode_effects.color_management;
+        wire_color_management(color_management, source_context, destination_context)?;
         unsafe { color_management.SetInput(0, bitmap, true) };
-        let Ok(converted) = (unsafe { color_management.GetOutput() }) else {
-            return;
-        };
+        let converted = unsafe { color_management.GetOutput() }?;
         let scene = match tone_map {
-            Some((tone_map_effect, peak)) => {
+            Some((stage, peak)) => {
                 // Very low input maxima misbehave; floor at the SDR reference white.
                 let input_maximum = peak.max(SDR_REFERENCE_WHITE_NITS);
-                let input_set = unsafe {
-                    tone_map_effect.SetValue(
+                unsafe {
+                    stage.tone_map.SetValue(
                         D2D1_HDRTONEMAP_PROP_INPUT_MAX_LUMINANCE.0 as u32,
                         D2D1_PROPERTY_TYPE_FLOAT,
                         &input_maximum.to_ne_bytes(),
-                    )
-                }
-                .is_ok();
-                if !input_set {
-                    return;
-                }
-                let output_maximum = self.luminances.target_nits;
-                let output_set = unsafe {
-                    tone_map_effect.SetValue(
+                    )?;
+                    stage.tone_map.SetValue(
                         D2D1_HDRTONEMAP_PROP_OUTPUT_MAX_LUMINANCE.0 as u32,
                         D2D1_PROPERTY_TYPE_FLOAT,
-                        &output_maximum.to_ne_bytes(),
-                    )
+                        &self.luminances.target_nits.to_ne_bytes(),
+                    )?;
+                    stage.tone_map.SetInput(0, &converted, true);
                 }
-                .is_ok();
-                if !output_set {
-                    return;
-                }
-                unsafe { tone_map_effect.SetInput(0, &converted, true) };
-                let tone_mapped = unsafe { tone_map_effect.GetOutput() }.ok();
+                let tone_mapped = unsafe { stage.tone_map.GetOutput() }?;
                 // Reinterpret scene-referred white as display-referred, then re-encode to sRGB.
-                tone_mapped.and_then(|tone_mapped| {
-                    let normalize = self.mode_effects.tone_map_normalize_effect.as_ref()?;
-                    let display_white = self.luminances.target_nits.min(input_maximum);
-                    unsafe {
-                        normalize.SetValue(
-                            D2D1_WHITELEVELADJUSTMENT_PROP_OUTPUT_WHITE_LEVEL.0 as u32,
-                            D2D1_PROPERTY_TYPE_FLOAT,
-                            &display_white.to_ne_bytes(),
-                        )
+                let display_white = self.luminances.target_nits.min(input_maximum);
+                unsafe {
+                    stage.normalize.SetValue(
+                        D2D1_WHITELEVELADJUSTMENT_PROP_OUTPUT_WHITE_LEVEL.0 as u32,
+                        D2D1_PROPERTY_TYPE_FLOAT,
+                        &display_white.to_ne_bytes(),
+                    )?;
+                    stage.normalize.SetInput(0, &tone_mapped, true);
+                }
+                let normalized = unsafe { stage.normalize.GetOutput() }?;
+                match &stage.output_encoding {
+                    None => normalized,
+                    Some(output_encoding) => {
+                        unsafe { output_encoding.SetInput(0, &normalized, true) };
+                        unsafe { output_encoding.GetOutput() }?
                     }
-                    .ok()?;
-                    unsafe { normalize.SetInput(0, &tone_mapped, true) };
-                    let normalized = unsafe { normalize.GetOutput() }.ok()?;
-                    if self.is_sdr_wide_gamut() {
-                        // FP16 scRGB backbuffer: keep the tone-mapped scRGB, no sRGB re-encode.
-                        return Some(normalized);
-                    }
-                    let output_encoding =
-                        self.mode_effects.output_color_management_effect.as_ref()?;
-                    unsafe { output_encoding.SetInput(0, &normalized, true) };
-                    unsafe { output_encoding.GetOutput() }.ok()
-                })
-            }
-            None => {
-                // SDR content takes the white-level boost; HDR content passes through.
-                match &self.mode_effects.white_level_effect {
-                    Some(white_level) if !hdr_content => {
-                        unsafe { white_level.SetInput(0, &converted, true) };
-                        unsafe { white_level.GetOutput() }.ok()
-                    }
-                    _ => Some(converted),
                 }
             }
+            None => match &self.mode_effects.white_level {
+                // SDR content takes the white-level boost; HDR content passes through.
+                Some(white_level) if !hdr_content => {
+                    unsafe { white_level.SetInput(0, &converted, true) };
+                    unsafe { white_level.GetOutput() }?
+                }
+                _ => converted,
+            },
         };
-        self.effect_output = scene;
+        self.effect_output = Some(scene);
+        Ok(())
     }
 
     pub fn clear_image(&mut self) {
         self.gain_state = None;
         self.image = None;
         self.effect_output = None;
-        if let Some(color_management) = &self.mode_effects.color_management_effect {
-            // Unwire the previous bitmap so the effect does not keep it alive.
-            unsafe { color_management.SetInput(0, None, true) };
-        }
+        // Unwire the previous bitmap so the effect does not keep it alive.
+        unsafe { self.mode_effects.color_management.SetInput(0, None, true) };
     }
 
     /// Decides the frame's placement and quantization; the information panel reads it.
@@ -1407,9 +1330,9 @@ impl Renderer {
         &mut self,
         matrix: [f32; 6],
         interpolation: D2D1_INTERPOLATION_MODE,
-    ) -> FrameDecision {
+    ) -> Result<FrameDecision> {
         // The gain rendition settles first, so the decision and the panel see it.
-        self.refresh_gain_bake();
+        self.refresh_gain_bake()?;
         // DrawImage has no destination rect; fold the display scale into the matrix.
         let scale_x = self.image_display_size.0 / (self.image_pixel_size.0.max(1) as f32);
         let scale_y = self.image_display_size.1 / (self.image_pixel_size.1.max(1) as f32);
@@ -1448,13 +1371,13 @@ impl Renderer {
             Some(bits) if self.image.is_some() => self.active_dither_mode(draw_interpolation, bits),
             _ => DitherMode::None,
         };
-        FrameDecision {
+        Ok(FrameDecision {
             transform,
             draw_interpolation,
             dither: pass_dither,
             quantization_steps,
             identity_placement,
-        }
+        })
     }
 
     /// What the pump waits on; None when the slot is already held or no buffer exists yet.

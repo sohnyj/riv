@@ -1251,10 +1251,22 @@ impl Application {
         let interpolation = self.interpolation_mode();
         let background = self.background_color();
         // Decide first: the panel reports this frame, not the last one.
-        let decision = self
+        let decision = match self
             .renderer
             .as_mut()
-            .map(|renderer| renderer.decide_frame(matrix, interpolation));
+            .map(|renderer| renderer.decide_frame(matrix, interpolation))
+        {
+            Some(Ok(decision)) => Some(decision),
+            // Wiring the frame failed on the device: rebuild once and decide again.
+            Some(Err(_)) => match self.rebuild_renderer(window) {
+                Ok(()) => self
+                    .renderer
+                    .as_mut()
+                    .and_then(|renderer| renderer.decide_frame(matrix, interpolation).ok()),
+                Err(_) => None,
+            },
+            None => None,
+        };
         let content = self.overlay_content(background, decision);
         let clear_color = color::output_color(background, self.output_color_target());
         let overlay = &mut self.overlay;
@@ -1266,8 +1278,8 @@ impl Application {
             // Device or presentation loss: rebuild once (reading the texture back first) and retry.
             if self.rebuild_renderer(window).is_ok()
                 && let Some(renderer) = &mut self.renderer
+                && let Ok(decision) = renderer.decide_frame(matrix, interpolation)
             {
-                let decision = renderer.decide_frame(matrix, interpolation);
                 let overlay = &mut self.overlay;
                 let _ = renderer.render(decision, clear_color, |context| {
                     overlay.draw(context, viewport.width, viewport.height, &content)
