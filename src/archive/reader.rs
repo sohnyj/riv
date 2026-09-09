@@ -328,6 +328,17 @@ mod fixture_tests {
                     .any(|member| member.name.contains("한글 이미지")),
                 "{fixture}: unicode member missing"
             );
+            // The listing filters by extension; enumerate must not, so a non-image member proves it.
+            assert!(
+                members.iter().any(|member| {
+                    crate::text::lowercase_extension(Path::new(&member.name))
+                        .and_then(|extension| {
+                            crate::image::decode::format_name_for_extension(&extension)
+                        })
+                        .is_none()
+                }),
+                "{fixture}: non-image member missing"
+            );
             let cancellation = AtomicBool::new(false);
             let member_bytes = read_member(Path::new(fixture), &image.name, &cancellation)
                 .unwrap_or_else(|error| panic!("{fixture}: {}", error.message));
