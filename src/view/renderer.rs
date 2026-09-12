@@ -381,7 +381,7 @@ fn wire_color_management(
     Ok(())
 }
 
-fn effect_when<T>(condition: bool, build: impl FnOnce() -> Result<T>) -> Result<Option<T>> {
+fn build_when<T>(condition: bool, build: impl FnOnce() -> Result<T>) -> Result<Option<T>> {
     condition.then(build).transpose()
 }
 
@@ -472,7 +472,7 @@ impl Renderer {
     ) -> Result<ModeEffects> {
         let color_management = Self::create_color_management_effect(d2d_context)?;
         // SDR only: HDR displays pass content through with no tone map.
-        let tone_map = effect_when(!is_hdr_output, || {
+        let tone_map = build_when(!is_hdr_output, || {
             let effect = unsafe { d2d_context.CreateEffect(&CLSID_D2D1HdrToneMap) }?;
             unsafe {
                 effect.SetValue(
@@ -491,7 +491,7 @@ impl Renderer {
                 tone_map: effect,
                 normalize: create_white_level_effect(d2d_context)?,
                 // The FP16 scRGB backbuffer of ACM-on SDR takes the tone-mapped scRGB with no re-encode.
-                output_encoding: effect_when(!is_sdr_wide_gamut, || {
+                output_encoding: build_when(!is_sdr_wide_gamut, || {
                     Self::create_conversion_effect(
                         d2d_context,
                         scrgb_color_context,
@@ -500,7 +500,7 @@ impl Renderer {
                 })?,
             })
         })?;
-        let white_level = effect_when(is_hdr_output, || {
+        let white_level = build_when(is_hdr_output, || {
             let effect = create_white_level_effect(d2d_context)?;
             unsafe {
                 effect.SetValue(
