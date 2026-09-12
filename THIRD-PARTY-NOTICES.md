@@ -179,15 +179,15 @@ The `windows*` crates are Copyright (c) Microsoft Corporation.
 | arrayref | 0.3.9 | BSD-2-Clause |
 | arrayvec | 0.7.8 | MIT OR Apache-2.0 |
 | base64 | 0.23.1 | MIT OR Apache-2.0 |
-| bitflags | 2.13.1 | MIT OR Apache-2.0 |
+| bitflags | 2.13.2 | MIT OR Apache-2.0 |
 | bytemuck | 1.25.2 | Zlib OR Apache-2.0 OR MIT |
 | cfg-if | 1.0.4 | MIT OR Apache-2.0 |
 | crc32fast | 1.5.1 | MIT OR Apache-2.0 |
 | data-url | 0.3.2 | MIT OR Apache-2.0 |
 | fdeflate | 0.3.7 | MIT OR Apache-2.0 |
-| flate2 | 1.1.9 | MIT OR Apache-2.0 |
+| flate2 | 1.1.10 | MIT OR Apache-2.0 |
 | float-cmp | 0.9.0 | MIT |
-| font-types | 0.12.4 | MIT OR Apache-2.0 |
+| font-types | 0.12.5 | MIT OR Apache-2.0 |
 | fontdb | 0.24.0 | MIT |
 | harfrust | 0.12.0 | MIT |
 | imagesize | 0.15.0 | MIT |
@@ -197,6 +197,7 @@ The `windows*` crates are Copyright (c) Microsoft Corporation.
 | memchr | 2.8.3 | Unlicense OR MIT |
 | memmap2 | 0.9.11 | MIT OR Apache-2.0 |
 | miniz_oxide | 0.8.9 | MIT OR Zlib OR Apache-2.0 |
+| miniz_oxide | 0.9.1 | MIT OR Zlib OR Apache-2.0 |
 | once_cell | 1.21.4 | MIT OR Apache-2.0 |
 | pico-args | 0.5.0 | MIT |
 | png | 0.18.1 | MIT OR Apache-2.0 |
@@ -212,12 +213,12 @@ The `windows*` crates are Copyright (c) Microsoft Corporation.
 | siphasher | 1.0.3 | MIT/Apache-2.0 |
 | skrifa | 0.44.0 | MIT OR Apache-2.0 |
 | slotmap | 1.1.1 | Zlib |
-| smallvec | 1.15.2 | MIT OR Apache-2.0 |
+| smallvec | 1.16.1 | MIT OR Apache-2.0 |
 | strict-num | 0.1.1 | MIT |
 | svgtypes | 0.16.1 | Apache-2.0 OR MIT |
 | tiny-skia | 0.12.0 | BSD-3-Clause |
 | tiny-skia-path | 0.12.0 | BSD-3-Clause |
-| tinyvec | 1.12.0 | Zlib OR Apache-2.0 OR MIT |
+| tinyvec | 1.13.2 | Zlib OR Apache-2.0 OR MIT |
 | tinyvec_macros | 0.1.1 | MIT OR Apache-2.0 OR Zlib |
 | unicode-bidi | 0.3.18 | MIT OR Apache-2.0 |
 | unicode-script | 0.5.8 | MIT OR Apache-2.0 |
