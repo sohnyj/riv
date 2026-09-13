@@ -106,6 +106,35 @@ fn unsupported() -> windows::core::Error {
     windows::core::Error::from_hresult(DXGI_ERROR_UNSUPPORTED)
 }
 
+/// The DirectComposition tree that shows the surface in the window, committed once.
+fn build_visual_tree(
+    d3d_device: &ID3D11Device,
+    window: HWND,
+    surface_handle: HANDLE,
+) -> Result<(
+    IDCompositionDevice,
+    IDCompositionTarget,
+    IDCompositionVisual,
+    IUnknown,
+)> {
+    let dxgi_device: IDXGIDevice = d3d_device.cast()?;
+    let composition_device: IDCompositionDevice =
+        unsafe { DCompositionCreateDevice(&dxgi_device) }?;
+    let composition_target = unsafe { composition_device.CreateTargetForHwnd(window, true) }?;
+    let composition_visual = unsafe { composition_device.CreateVisual() }?;
+    let composition_content =
+        unsafe { composition_device.CreateSurfaceFromHandle(surface_handle) }?;
+    unsafe { composition_visual.SetContent(&composition_content) }?;
+    unsafe { composition_target.SetRoot(&composition_visual) }?;
+    unsafe { composition_device.Commit() }?;
+    Ok((
+        composition_device,
+        composition_target,
+        composition_visual,
+        composition_content,
+    ))
+}
+
 impl CompositionPresenter {
     pub fn new(d3d_device: &ID3D11Device, window: HWND) -> Result<Self> {
         let factory = create_presentation_factory(d3d_device)?;
@@ -134,27 +163,11 @@ impl CompositionPresenter {
         let bound = (|| {
             let surface = unsafe { manager.CreatePresentationSurface(surface_handle) }?;
             unsafe { surface.SetAlphaMode(DXGI_ALPHA_MODE_IGNORE) }?;
-            let dxgi_device: IDXGIDevice = d3d_device.cast()?;
-            let composition_device: IDCompositionDevice =
-                unsafe { DCompositionCreateDevice(&dxgi_device) }?;
-            let composition_target =
-                unsafe { composition_device.CreateTargetForHwnd(window, true) }?;
-            let composition_visual = unsafe { composition_device.CreateVisual() }?;
-            let composition_content =
-                unsafe { composition_device.CreateSurfaceFromHandle(surface_handle) }?;
-            unsafe { composition_visual.SetContent(&composition_content) }?;
-            unsafe { composition_target.SetRoot(&composition_visual) }?;
-            unsafe { composition_device.Commit() }?;
-            Ok((
-                surface,
-                composition_device,
-                composition_target,
-                composition_visual,
-                composition_content,
-            ))
+            let tree = build_visual_tree(d3d_device, window, surface_handle)?;
+            Ok((surface, tree))
         })();
         match bound {
-            Ok((surface, device, target, visual, content)) => Ok(Self {
+            Ok((surface, (device, target, visual, content))) => Ok(Self {
                 manager,
                 surface,
                 lost_event,
