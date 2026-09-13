@@ -137,11 +137,7 @@ unsafe extern "system" fn keyboard_procedure(
                 listbox_add(dialog, sequence);
             }
             if let Ok(listbox) = unsafe { GetDlgItem(Some(dialog), IDC_CAPTURE_KEYBOARD_LIST) } {
-                let procedure = keyboard_list_procedure as *const core::ffi::c_void;
-                // The original procedure is stored before the swap, so the subclass never reads it unset.
-                let original = unsafe { GetWindowLongPtrW(listbox, GWLP_WNDPROC) };
-                unsafe { SetWindowLongPtrW(listbox, GWLP_USERDATA, original) };
-                unsafe { SetWindowLongPtrW(listbox, GWLP_WNDPROC, procedure as isize) };
+                subclass_listbox(listbox);
             }
             if let Ok(field) = unsafe { GetDlgItem(Some(dialog), IDC_CAPTURE_KEYBOARD_FIELD) } {
                 let _ = unsafe { SetFocus(Some(field)) };
@@ -382,20 +378,33 @@ fn paint_sequence_item(draw: &DRAWITEMSTRUCT, device: HDC) {
     });
     draw_field_text(device, draw.rcItem, &mut text, color);
     if selected {
-        let zone = remove_icon_bounds(&draw.rcItem);
-        let side = zone.bottom - zone.top;
-        let inset = side / REMOVE_ICON_INSET_DIVISOR;
-        let stroke = (side / REMOVE_ICON_STROKE_DIVISOR).max(1);
-        unsafe {
-            let pen = CreatePen(PS_SOLID, stroke, REMOVE_ICON_RED);
-            let previous = SelectObject(device, pen.into());
-            let _ = MoveToEx(device, zone.left + inset, zone.top + inset, None);
-            let _ = LineTo(device, zone.right - inset, zone.bottom - inset);
-            let _ = MoveToEx(device, zone.right - inset, zone.top + inset, None);
-            let _ = LineTo(device, zone.left + inset, zone.bottom - inset);
-            SelectObject(device, previous);
-            let _ = DeleteObject(pen.into());
-        }
+        draw_remove_icon(device, remove_icon_bounds(&draw.rcItem));
+    }
+}
+
+/// Routes the list box through keyboard_list_procedure, keeping the original in USERDATA.
+fn subclass_listbox(listbox: HWND) {
+    let procedure = keyboard_list_procedure as *const core::ffi::c_void;
+    // The original procedure is stored before the swap, so the subclass never reads it unset.
+    let original = unsafe { GetWindowLongPtrW(listbox, GWLP_WNDPROC) };
+    unsafe { SetWindowLongPtrW(listbox, GWLP_USERDATA, original) };
+    unsafe { SetWindowLongPtrW(listbox, GWLP_WNDPROC, procedure as isize) };
+}
+
+/// A red X inset in the zone; the stroke scales with the zone.
+fn draw_remove_icon(device: HDC, zone: RECT) {
+    let side = zone.bottom - zone.top;
+    let inset = side / REMOVE_ICON_INSET_DIVISOR;
+    let stroke = (side / REMOVE_ICON_STROKE_DIVISOR).max(1);
+    unsafe {
+        let pen = CreatePen(PS_SOLID, stroke, REMOVE_ICON_RED);
+        let previous = SelectObject(device, pen.into());
+        let _ = MoveToEx(device, zone.left + inset, zone.top + inset, None);
+        let _ = LineTo(device, zone.right - inset, zone.bottom - inset);
+        let _ = MoveToEx(device, zone.right - inset, zone.top + inset, None);
+        let _ = LineTo(device, zone.left + inset, zone.bottom - inset);
+        SelectObject(device, previous);
+        let _ = DeleteObject(pen.into());
     }
 }
 
