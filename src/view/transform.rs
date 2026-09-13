@@ -36,6 +36,13 @@ pub struct Size {
     pub height: f32,
 }
 
+/// Scales within this of 1 are 1:1: the origin snaps to whole pixels and the renderer copies.
+const UNIT_SCALE_TOLERANCE: f32 = 1e-6;
+
+pub fn is_unit_scale(scale: f32) -> bool {
+    (scale - 1.0).abs() < UNIT_SCALE_TOLERANCE
+}
+
 /// Scale is physical: image pixels to device pixels, 1.0 = untouched 1:1.
 pub struct ViewTransform {
     pub scale: f32,
@@ -156,7 +163,7 @@ impl ViewTransform {
     pub fn rotate(&mut self, quadrant_step: i32, viewport: Size, image: Size) {
         self.rotation_quadrant =
             (self.rotation_quadrant as i32 + quadrant_step).rem_euclid(4) as u32;
-        if (self.scale - 1.0).abs() < f32::EPSILON && !self.fit_tracking {
+        if is_unit_scale(self.scale) && !self.fit_tracking {
             self.pan_offset_x = 0.0;
             self.pan_offset_y = 0.0;
             self.clamp_pan(viewport, image);
@@ -205,7 +212,7 @@ impl ViewTransform {
         let mut origin_y = translate_y - center_x * scale_x * sine - center_y * scale_y * cosine;
 
         // Snap the origin so the texel grid aligns with device pixels.
-        if (self.scale - 1.0).abs() < f32::EPSILON {
+        if is_unit_scale(self.scale) {
             origin_x = origin_x.round();
             origin_y = origin_y.round();
         }

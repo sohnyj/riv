@@ -59,6 +59,7 @@ use crate::view::dither::DitherMode;
 use crate::view::gain::GainMapPass;
 use crate::view::presentation::{self, CompositionPresenter};
 use crate::view::quantize::QuantizePass;
+use crate::view::transform::is_unit_scale;
 
 /// Frame-slot wait ceiling: a stalled present queue must not freeze the caller.
 pub const FRAME_SLOT_TIMEOUT_MILLISECONDS: u32 = 1000;
@@ -1488,8 +1489,8 @@ impl Renderer {
 
     /// A whole-pixel 1:1 placement (unit scale, integer offset) that resamples nothing.
     fn is_pixel_identity(scale_x: f32, scale_y: f32, offset_x: f32, offset_y: f32) -> bool {
-        (scale_x.abs() - 1.0).abs() < 1e-6
-            && (scale_y.abs() - 1.0).abs() < 1e-6
+        is_unit_scale(scale_x.abs())
+            && is_unit_scale(scale_y.abs())
             && (offset_x - offset_x.round()).abs() < 1e-4
             && (offset_y - offset_y.round()).abs() < 1e-4
     }
