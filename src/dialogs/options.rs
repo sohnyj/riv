@@ -334,8 +334,8 @@ fn initialize_frame(state: &mut OptionsState) {
     let Ok(tab) = (unsafe { GetDlgItem(Some(dialog), IDC_OPTIONS_TAB) }) else {
         return;
     };
-    for (index, &(_, title)) in PAGES.iter().enumerate() {
-        let text = HSTRING::from(title);
+    for (index, page) in PAGES.iter().enumerate() {
+        let text = HSTRING::from(page.title);
         let item = TCITEMW {
             mask: TCIF_TEXT,
             pszText: windows::core::PWSTR(text.as_ptr().cast_mut()),
@@ -397,21 +397,70 @@ fn select_page(dialog: HWND, tab: HWND, selected: isize) {
     show_page(dialog, selected);
 }
 
-const PAGES: [(u16, &str); 7] = [
-    (IDD_PAGE_WINDOW, "Window"),
-    (IDD_PAGE_IMAGE, "Image"),
-    (IDD_PAGE_MISCELLANEOUS, "Miscellaneous"),
-    (IDD_PAGE_SHORTCUTS, "Shortcuts"),
-    (IDD_PAGE_ASSOCIATION, "File association"),
-    (IDD_PAGE_START_MENU, "Start menu"),
-    (IDD_PAGE_ABOUT, "About"),
+/// A tab page: its template, its tab title, and what runs at creation and at each sync.
+struct Page {
+    template: u16,
+    title: &'static str,
+    initialize: Option<fn(&mut OptionsState, HWND)>,
+    sync: Option<fn(&OptionsState)>,
+}
+
+const PAGES: [Page; 7] = [
+    Page {
+        template: IDD_PAGE_WINDOW,
+        title: "Window",
+        initialize: Some(|state, _| initialize_window_page(state)),
+        sync: Some(sync_window_page),
+    },
+    Page {
+        template: IDD_PAGE_IMAGE,
+        title: "Image",
+        initialize: Some(|state, _| initialize_image_page(state)),
+        sync: Some(sync_image_page),
+    },
+    Page {
+        template: IDD_PAGE_MISCELLANEOUS,
+        title: "Miscellaneous",
+        initialize: Some(|state, _| initialize_miscellaneous_page(state)),
+        sync: Some(sync_miscellaneous_page),
+    },
+    Page {
+        template: IDD_PAGE_SHORTCUTS,
+        title: "Shortcuts",
+        initialize: Some(|state, page| {
+            fit_page_controls(page, IDC_SHORTCUTS_LIST, IDC_SHORTCUTS_CLEAR_ALL);
+            initialize_shortcuts_page(state);
+        }),
+        sync: None, // the rows refresh after the sync flag drops; see sync_page
+    },
+    Page {
+        template: IDD_PAGE_ASSOCIATION,
+        title: "File association",
+        initialize: Some(|state, page| {
+            fit_page_controls(page, IDC_ASSOCIATION_TREE, IDC_ASSOCIATION_SELECT_NONE);
+            initialize_association_page(state);
+        }),
+        sync: None,
+    },
+    Page {
+        template: IDD_PAGE_START_MENU,
+        title: "Start menu",
+        initialize: None,
+        sync: Some(sync_start_menu_page),
+    },
+    Page {
+        template: IDD_PAGE_ABOUT,
+        title: "About",
+        initialize: Some(|state, page| state.about_fonts = about::initialize_page(page)),
+        sync: None,
+    },
 ];
 
 /// A page's slot in `pages`, derived from the table so a reorder moves every index with it.
 const fn page_position(template: u16) -> usize {
     let mut index = 0;
     while index < PAGES.len() {
-        if PAGES[index].0 == template {
+        if PAGES[index].template == template {
             return index;
         }
         index += 1;
@@ -424,7 +473,6 @@ const MISCELLANEOUS_PAGE: usize = page_position(IDD_PAGE_MISCELLANEOUS);
 const SHORTCUTS_PAGE: usize = page_position(IDD_PAGE_SHORTCUTS);
 const ASSOCIATION_PAGE: usize = page_position(IDD_PAGE_ASSOCIATION);
 const START_MENU_PAGE: usize = page_position(IDD_PAGE_START_MENU);
-const ABOUT_PAGE: usize = page_position(IDD_PAGE_ABOUT);
 
 fn ensure_page(state: &mut OptionsState, tab: HWND, index: usize) {
     if !state.pages[index].is_invalid() {
@@ -434,7 +482,7 @@ fn ensure_page(state: &mut OptionsState, tab: HWND, index: usize) {
     let page = unsafe {
         CreateDialogParamW(
             Some(crate::dialogs::modal::module_handle().into()),
-            crate::dialogs::resource::template_name(PAGES[index].0),
+            crate::dialogs::resource::template_name(PAGES[index].template),
             Some(state.dialog),
             Some(page_procedure),
             LPARAM(state_pointer),
@@ -454,20 +502,8 @@ fn ensure_page(state: &mut OptionsState, tab: HWND, index: usize) {
         )
     };
     state.pages[index] = page;
-    match index {
-        WINDOW_PAGE => initialize_window_page(state),
-        IMAGE_PAGE => initialize_image_page(state),
-        MISCELLANEOUS_PAGE => initialize_miscellaneous_page(state),
-        SHORTCUTS_PAGE => {
-            fit_page_controls(page, IDC_SHORTCUTS_LIST, IDC_SHORTCUTS_CLEAR_ALL);
-            initialize_shortcuts_page(state);
-        }
-        ASSOCIATION_PAGE => {
-            fit_page_controls(page, IDC_ASSOCIATION_TREE, IDC_ASSOCIATION_SELECT_NONE);
-            initialize_association_page(state);
-        }
-        ABOUT_PAGE => state.about_fonts = about::initialize_page(page),
-        _ => {}
+    if let Some(initialize) = PAGES[index].initialize {
+        initialize(state, page);
     }
     sync_page(state, index);
 }
@@ -878,12 +914,8 @@ fn sync_all_pages(state: &mut OptionsState) {
 
 fn sync_page(state: &mut OptionsState, index: usize) {
     state.syncing = true;
-    match index {
-        WINDOW_PAGE => sync_window_page(state),
-        IMAGE_PAGE => sync_image_page(state),
-        MISCELLANEOUS_PAGE => sync_miscellaneous_page(state),
-        START_MENU_PAGE => sync_start_menu_page(state),
-        _ => {}
+    if let Some(sync) = PAGES[index].sync {
+        sync(state);
     }
     state.syncing = false;
     if index == SHORTCUTS_PAGE {
