@@ -30,6 +30,11 @@ pub fn lowercase_extension(path: &std::path::Path) -> Option<String> {
     Some(path.extension()?.to_string_lossy().to_lowercase())
 }
 
+/// The extension as the shell spells it in registry keys and association labels: `.png`.
+pub fn dotted_extension(extension: &str) -> String {
+    format!(".{extension}")
+}
+
 /// Explorer's natural order over UTF-16 names.
 pub fn natural_order(a: &HSTRING, b: &HSTRING) -> std::cmp::Ordering {
     let result = unsafe { StrCmpLogicalW(a, b) };

@@ -1277,7 +1277,7 @@ fn initialize_association_page(state: &mut OptionsState) {
 
     for (name, extension_list) in image::formats::sorted_format_groups() {
         if extension_list.len() == 1 {
-            let extension = format!(".{}", extension_list[0]);
+            let extension = crate::text::dotted_extension(extension_list[0]);
             insert_extension(
                 state,
                 tree,
@@ -1296,7 +1296,7 @@ fn initialize_association_page(state: &mut OptionsState) {
             );
             let mut members = Vec::new();
             for extension_name in extension_list {
-                let extension = format!(".{extension_name}");
+                let extension = crate::text::dotted_extension(extension_name);
                 members.push(insert_extension(
                     state, tree, header, &extension, &extension,
                 ));

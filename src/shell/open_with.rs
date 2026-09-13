@@ -40,7 +40,7 @@ pub fn enumerate_in_background(window: HWND, extension: String) {
 fn enumerate(extension: String) -> OpenWithList {
     let mut items = Vec::new();
     let own_executable = crate::executable_path().to_string_lossy().into_owned();
-    let dotted_extension = HSTRING::from(format!(".{extension}"));
+    let dotted_extension = HSTRING::from(crate::text::dotted_extension(&extension));
     let default_executable = default_executable_for(&dotted_extension);
 
     // Packaged apps have no readable file path, so only riv itself is filtered out.
@@ -86,7 +86,7 @@ pub fn invoke(path: &Path, executable_path: &str) -> InvokeOutcome {
     let Some(extension) = crate::text::lowercase_extension(path) else {
         return InvokeOutcome::HandlerMissing;
     };
-    let dotted_extension = HSTRING::from(format!(".{extension}"));
+    let dotted_extension = HSTRING::from(crate::text::dotted_extension(&extension));
     for handler in handlers_for(&dotted_extension) {
         if handler_executable_path(&handler)
             .is_some_and(|name| name.eq_ignore_ascii_case(executable_path))
