@@ -17,6 +17,8 @@ const MAXIMUM_DOWNLOAD_BYTES: u64 = crate::archive::reader::MAXIMUM_MEMBER_BYTES
 const READ_BLOCK_BYTES: usize = crate::archive::reader::READ_BLOCK_BYTES;
 
 const SUPPORTED_PROTOCOLS: &[&str] = &["http", "https"];
+/// Refused by load_url before a job exists and again here at the spawn; both say this.
+pub const UNSUPPORTED_PROTOCOL_MESSAGE: &str = "Unsupported URL protocol";
 
 /// curl policy: redirect depth, connection setup ceiling, and the stall detector.
 const MAXIMUM_REDIRECTS: u32 = 10;
@@ -96,7 +98,7 @@ pub fn download(
     progress: &mut dyn FnMut(u64),
 ) -> Result<Vec<u8>, NetworkError> {
     if !is_supported_protocol(url) {
-        return Err(NetworkError::new("Unsupported URL protocol"));
+        return Err(NetworkError::new(UNSUPPORTED_PROTOCOL_MESSAGE));
     }
     let mut child = spawn_curl(url)?;
     let mut stdout = child.stdout.take().expect("stdout piped above");

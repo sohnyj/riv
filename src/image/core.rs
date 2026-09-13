@@ -939,7 +939,7 @@ impl ImageCore {
         let failure = if url.is_empty() {
             Some("No URL in the clipboard") // only the paste path can deliver an empty URL
         } else if !curl::is_supported_protocol(url) {
-            Some("Unsupported URL protocol")
+            Some(curl::UNSUPPORTED_PROTOCOL_MESSAGE)
         } else if archive_reader::url_is_archive(url) {
             Some("Archives aren't supported from a URL")
         } else {
