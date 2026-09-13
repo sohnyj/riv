@@ -31,7 +31,7 @@ pub fn create_render_texture(
     };
     let mut texture = None;
     unsafe { device.CreateTexture2D(&raw const description, None, Some(&raw mut texture))? };
-    texture.ok_or_else(windows::core::Error::empty)
+    Ok(texture.expect("CreateTexture2D succeeded without texture"))
 }
 
 pub fn create_render_target_view(
@@ -40,7 +40,7 @@ pub fn create_render_target_view(
 ) -> windows::core::Result<ID3D11RenderTargetView> {
     let mut view = None;
     unsafe { device.CreateRenderTargetView(texture, None, Some(&raw mut view))? };
-    view.ok_or_else(windows::core::Error::empty)
+    Ok(view.expect("CreateRenderTargetView succeeded without view"))
 }
 
 pub fn create_shader_resource_view(
@@ -49,5 +49,5 @@ pub fn create_shader_resource_view(
 ) -> windows::core::Result<ID3D11ShaderResourceView> {
     let mut view = None;
     unsafe { device.CreateShaderResourceView(texture, None, Some(&raw mut view))? };
-    view.ok_or_else(windows::core::Error::empty)
+    Ok(view.expect("CreateShaderResourceView succeeded without view"))
 }

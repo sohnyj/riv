@@ -64,7 +64,7 @@ impl QuantizePass {
                 Some(&raw const noise_data),
                 Some(&raw mut noise_texture),
             )?;
-            let noise_texture = noise_texture.ok_or_else(windows::core::Error::empty)?;
+            let noise_texture = noise_texture.expect("CreateTexture2D succeeded without texture");
             device.CreateShaderResourceView(
                 &noise_texture,
                 None,
