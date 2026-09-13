@@ -53,7 +53,7 @@ pub enum PixelStorage {
 }
 
 impl PixelStorage {
-    pub fn bytes_per_pixel(self) -> u32 {
+    pub const fn bytes_per_pixel(self) -> u32 {
         match self {
             Self::Bgra8 => 4,
             Self::RgbaHalf => 8,
@@ -66,6 +66,14 @@ impl PixelStorage {
             Self::RgbaHalf
         } else {
             Self::Bgra8
+        }
+    }
+
+    /// The premultiplied WIC pixel format of the same layout, for WIC-side resampling.
+    fn wic_pixel_format(self) -> &'static windows::core::GUID {
+        match self {
+            Self::Bgra8 => &GUID_WICPixelFormat32bppPBGRA,
+            Self::RgbaHalf => &GUID_WICPixelFormat64bppPRGBAHalf,
         }
     }
 
@@ -314,7 +322,9 @@ pub(crate) const BGRA8_SOURCE_BITS: u32 = 8;
 
 // Shrinking the budget below one full-size canvas would need a per-canvas check in FrameCompositor::new.
 const _: () = assert!(
-    MAXIMUM_TEXTURE_DIMENSION as u64 * MAXIMUM_TEXTURE_DIMENSION as u64 * 4
+    MAXIMUM_TEXTURE_DIMENSION as u64
+        * MAXIMUM_TEXTURE_DIMENSION as u64
+        * PixelStorage::Bgra8.bytes_per_pixel() as u64
         <= MAXIMUM_ANIMATION_FRAMES_BYTES
 );
 
@@ -376,7 +386,9 @@ impl FrameCompositor {
         if width.max(height) > MAXIMUM_TEXTURE_DIMENSION {
             return None;
         }
-        let canvas = try_zeroed_buffer(width as usize * height as usize * 4)?;
+        let canvas = try_zeroed_buffer(
+            width as usize * height as usize * PixelStorage::Bgra8.bytes_per_pixel() as usize,
+        )?;
         Some(Self {
             canvas,
             width,
@@ -1010,7 +1022,13 @@ fn decode_gain_map_plane(
         ) {
             return Err(E_FAIL.into());
         }
-        let pixels = copy_pixels(&source, width, height, 4, cancellation)?;
+        let pixels = copy_pixels(
+            &source,
+            width,
+            height,
+            PixelStorage::Bgra8.bytes_per_pixel(),
+            cancellation,
+        )?;
         Ok(crate::image::gain_map::GainMapPlane {
             width,
             height,
@@ -1276,7 +1294,7 @@ fn probe_apng_weight<Input: BufRead + Seek>(input: Input) -> Option<u64> {
     Some(decoded_weight(
         information.width,
         information.height,
-        4,
+        PixelStorage::Bgra8.bytes_per_pixel(),
         frame_count,
     ))
 }
@@ -1285,7 +1303,12 @@ fn probe_apng_weight<Input: BufRead + Seek>(input: Input) -> Option<u64> {
 fn probe_svg_weight(bytes: &[u8]) -> Option<u64> {
     let tree = parse_svg_tree(bytes).ok()?;
     let (pixel_width, pixel_height, _) = svg_raster_geometry(&tree)?;
-    Some(decoded_weight(pixel_width, pixel_height, 4, 1))
+    Some(decoded_weight(
+        pixel_width,
+        pixel_height,
+        PixelStorage::Bgra8.bytes_per_pixel(),
+        1,
+    ))
 }
 
 /// The VP8X canvas sits in the header; counting frames would walk the file.
@@ -1302,7 +1325,12 @@ fn probe_webp_weight(input: &DecodeInput<'_>) -> Option<u64> {
         let bytes = header.get(offset..offset + 3)?;
         Some(1 + (u32::from(bytes[0]) | u32::from(bytes[1]) << 8 | u32::from(bytes[2]) << 16))
     };
-    Some(decoded_weight(dimension(24)?, dimension(27)?, 4, 1))
+    Some(decoded_weight(
+        dimension(24)?,
+        dimension(27)?,
+        PixelStorage::Bgra8.bytes_per_pixel(),
+        1,
+    ))
 }
 
 /// Extension-only descriptor lookup, so the UI-thread checks do no I/O.
@@ -1356,7 +1384,13 @@ fn decode_raw_preview(
         let (width, height) = source_size(&source)?;
         let (source, pixel_width, pixel_height) =
             downscale_to_device_limit(factory, source, width, height)?;
-        let pixels = copy_pixels(&source, pixel_width, pixel_height, 4, cancellation)?;
+        let pixels = copy_pixels(
+            &source,
+            pixel_width,
+            pixel_height,
+            PixelStorage::Bgra8.bytes_per_pixel(),
+            cancellation,
+        )?;
         Ok(DecodedImage {
             width,
             height,
@@ -1569,10 +1603,7 @@ fn enforce_device_limit(
     if width.max(height) <= MAXIMUM_TEXTURE_DIMENSION {
         return Ok(decoded);
     }
-    let pixel_format = match decoded.storage {
-        PixelStorage::Bgra8 => &GUID_WICPixelFormat32bppPBGRA,
-        PixelStorage::RgbaHalf => &GUID_WICPixelFormat64bppPRGBAHalf,
-    };
+    let pixel_format = decoded.storage.wic_pixel_format();
     let bytes_per_pixel = decoded.storage.bytes_per_pixel();
     // u64 stride: a native EXR/HEIF width near u32::MAX would overflow width*bytes_per_pixel.
     let stride = u32::try_from(u64::from(width) * u64::from(bytes_per_pixel))
@@ -1938,7 +1969,12 @@ fn upload_gain_map_texture(
         BindFlags: D3D11_BIND_SHADER_RESOURCE.0 as u32,
         ..Default::default()
     };
-    upload_immutable_texture(upload_device, &description, &plane.pixels, plane.width * 4)
+    upload_immutable_texture(
+        upload_device,
+        &description,
+        &plane.pixels,
+        plane.width * PixelStorage::Bgra8.bytes_per_pixel(),
+    )
 }
 
 /// One immutable shader-resource texture from tightly packed pixels.
@@ -2347,7 +2383,7 @@ fn decode_animation(
             &source,
             frame_width,
             frame_height,
-            4,
+            PixelStorage::Bgra8.bytes_per_pixel(),
             cancellation,
             &mut frame_pixels,
         )?;
@@ -2801,14 +2837,15 @@ fn pixels_to_premultiplied_bgra_into(
     output: &mut Vec<u8>,
 ) -> Result<(), DecodeError> {
     let pixel_count = width as usize * height as usize;
+    let output_bytes = pixel_count * PixelStorage::Bgra8.bytes_per_pixel() as usize;
     // Reserved in place, because the frames share one region buffer.
     if output
-        .try_reserve_exact((pixel_count * 4).saturating_sub(output.len()))
+        .try_reserve_exact(output_bytes.saturating_sub(output.len()))
         .is_err()
     {
         return Err(out_of_memory_error("APNG"));
     }
-    output.resize(pixel_count * 4, 0);
+    output.resize(output_bytes, 0);
     match color_type {
         png::ColorType::Rgba => {
             premultiplied_bgra_from_rgba(&pixels[..pixel_count * 4], output);
@@ -2876,11 +2913,13 @@ fn copy_rectangle(
     ) else {
         return;
     };
+    let bytes_per_pixel = PixelStorage::Bgra8.bytes_per_pixel() as usize;
     for row in 0..visible_height {
-        let source_start = row * source_width as usize * 4;
-        let canvas_start = ((top as usize + row) * canvas_width as usize + left as usize) * 4;
-        canvas[canvas_start..canvas_start + visible_width * 4]
-            .copy_from_slice(&source[source_start..source_start + visible_width * 4]);
+        let source_start = row * source_width as usize * bytes_per_pixel;
+        let canvas_start =
+            ((top as usize + row) * canvas_width as usize + left as usize) * bytes_per_pixel;
+        canvas[canvas_start..canvas_start + visible_width * bytes_per_pixel]
+            .copy_from_slice(&source[source_start..source_start + visible_width * bytes_per_pixel]);
     }
 }
 
