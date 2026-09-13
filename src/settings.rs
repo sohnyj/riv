@@ -512,17 +512,9 @@ impl SettingsFile {
             |name| name.to_string_lossy().into_owned(),
         );
         let mut files = self.recent_files();
-        let key = recent_key(&path_text);
-        if files
-            .first()
-            .is_some_and(|(_, existing)| recent_key(existing) == key)
-        {
-            return;
+        if push_recent_file(&mut files, (name, path_text)) {
+            self.set_recent_files(&files);
         }
-        files.retain(|(_, existing)| recent_key(existing) != key);
-        files.insert(0, (name, path_text));
-        files.truncate(MAXIMUM_RECENT_FILES);
-        self.set_recent_files(&files);
     }
 
     /// Drops the entry and records its key so the exit merge cannot restore it.
@@ -547,6 +539,21 @@ impl SettingsFile {
 /// Recent entries are the same file when their paths match ignoring ASCII case.
 fn recent_key(path: &str) -> String {
     path.to_ascii_lowercase()
+}
+
+/// Puts the entry first, dropping an older copy of it; false when it already leads the list.
+fn push_recent_file(files: &mut Vec<(String, String)>, entry: (String, String)) -> bool {
+    let key = recent_key(&entry.1);
+    if files
+        .first()
+        .is_some_and(|(_, existing)| recent_key(existing) == key)
+    {
+        return false;
+    }
+    files.retain(|(_, existing)| recent_key(existing) != key);
+    files.insert(0, entry);
+    files.truncate(MAXIMUM_RECENT_FILES);
+    true
 }
 
 /// The session's list first, then disk entries it neither holds nor removed, capped at the maximum.
@@ -1287,6 +1294,25 @@ mod recent_merge_tests {
         let disk = vec![("KEPT".to_string(), "C:\\P\\KEPT".to_string())];
         let merged = merge_recent_files(vec![entry("kept")], disk, &HashSet::new());
         assert_eq!(merged, vec![entry("kept")]);
+    }
+
+    #[test]
+    fn a_repeated_entry_moves_to_the_front_and_the_leading_one_is_left_alone() {
+        let mut files = vec![entry("a"), entry("b"), entry("c")];
+        assert!(push_recent_file(&mut files, entry("c")));
+        assert_eq!(files, vec![entry("c"), entry("a"), entry("b")]);
+        assert!(!push_recent_file(&mut files, entry("c")));
+    }
+
+    #[test]
+    fn pushing_past_the_maximum_drops_the_oldest() {
+        let mut files: Vec<_> = (0..MAXIMUM_RECENT_FILES)
+            .map(|i| entry(&format!("s{i}")))
+            .collect();
+        assert!(push_recent_file(&mut files, entry("new")));
+        assert_eq!(files.len(), MAXIMUM_RECENT_FILES);
+        assert_eq!(files[0], entry("new"));
+        assert!(!files.contains(&entry(&format!("s{}", MAXIMUM_RECENT_FILES - 1))));
     }
 
     #[test]
