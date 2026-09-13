@@ -10,9 +10,9 @@ use windows::core::HSTRING;
 use crate::image::decode::{
     BGRA8_SOURCE_BITS, DEFAULT_FRAME_DELAY_MILLISECONDS, DecodeError, DecodedImage, Frame,
     FrameBlend, FrameCompositor, FrameDisposal, FrameRegion, HdrEncoding, MAXIMUM_HDR_SOURCE_BITS,
-    PixelStorage, cicp_hdr_encoding, linearize_hdr_pixels, peak_luminance_from_half_pixels,
-    peak_luminance_with_maximum_bits, premultiplied_bgra_from_rgba, try_zeroed_buffer,
-    uncoded_error,
+    PixelStorage, canvas_too_large_error, cicp_hdr_encoding, linearize_hdr_pixels,
+    out_of_memory_error, peak_luminance_from_half_pixels, peak_luminance_with_maximum_bits,
+    premultiplied_bgra_from_rgba, too_many_pixels_error, try_zeroed_buffer, uncoded_error,
 };
 
 /// Must match the built libwebpdemux ABI or WebPDemuxInternal returns null.
@@ -117,7 +117,7 @@ fn compose_webp_frames(
     }
     let Some(mut compositor) = FrameCompositor::new(canvas_width, canvas_height) else {
         unsafe { WebPDemuxReleaseIterator(&raw mut iterator) };
-        return Err(uncoded_error("WebP canvas is too large to decode"));
+        return Err(canvas_too_large_error("WebP"));
     };
     // Reused across frames; the decoder writes every byte it is given.
     let mut frame_pixels: Vec<u8> = Vec::new();
@@ -139,7 +139,7 @@ fn compose_webp_frames(
             .is_err()
         {
             unsafe { WebPDemuxReleaseIterator(&raw mut iterator) };
-            return Err(uncoded_error("WebP is too large to fit in memory"));
+            return Err(out_of_memory_error("WebP"));
         }
         frame_pixels.resize(frame_bytes, 0);
         let decoded = unsafe {
@@ -323,11 +323,11 @@ fn decode_exr_with(
     };
     let pixel_count = probed_width as usize * probed_height as usize;
     if pixel_count > MAXIMUM_FALLBACK_PIXELS {
-        return Err(uncoded_error("EXR has too many pixels to decode"));
+        return Err(too_many_pixels_error("EXR"));
     }
     // The shim writes associated-alpha linear RGBA halves (the FP16 storage layout).
     let Some(mut pixels) = try_zeroed_buffer(pixel_count * 8) else {
-        return Err(uncoded_error("EXR is too large to fit in memory"));
+        return Err(out_of_memory_error("EXR"));
     };
     let mut width: c_int = 0;
     let mut height: c_int = 0;
@@ -632,13 +632,13 @@ fn decode_heif_primary_image(
     let pixel_count = width as usize * height as usize;
     if pixel_count > MAXIMUM_FALLBACK_PIXELS {
         unsafe { heif_image_release(image) };
-        return Err(uncoded_error("HEIF has too many pixels to decode"));
+        return Err(too_many_pixels_error("HEIF"));
     }
     // The cap bounds pixel_count, so row_bytes * height cannot overflow usize here.
     let total_bytes = row_bytes * height as usize;
     let Some(mut pixels) = try_zeroed_buffer(total_bytes) else {
         unsafe { heif_image_release(image) };
-        return Err(uncoded_error("HEIF is too large to fit in memory"));
+        return Err(out_of_memory_error("HEIF"));
     };
     for (row, output_row) in pixels.chunks_exact_mut(row_bytes).enumerate() {
         let row_pointer = unsafe { plane.add(row * stride as usize) };
@@ -752,11 +752,11 @@ fn compose_avif_frames(
         return Err(uncoded_error("AVIF canvas has no size"));
     }
     let Some(mut compositor) = FrameCompositor::new(canvas_width, canvas_height) else {
-        return Err(uncoded_error("AVIF canvas is too large to decode"));
+        return Err(canvas_too_large_error("AVIF"));
     };
     let frame_bytes = canvas_width as usize * canvas_height as usize * 4;
     let Some(mut frame_pixels) = try_zeroed_buffer(frame_bytes) else {
-        return Err(uncoded_error("AVIF is too large to fit in memory"));
+        return Err(out_of_memory_error("AVIF"));
     };
     let timescale = unsafe { heif_track_get_timescale(track) };
     loop {

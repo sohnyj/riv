@@ -2610,6 +2610,21 @@ pub fn uncoded_error(message: impl std::fmt::Display) -> DecodeError {
     }
 }
 
+/// The pixel count is over the decode cap; `format_name` is the sentence's subject.
+pub fn too_many_pixels_error(format_name: &str) -> DecodeError {
+    uncoded_error(format!("{format_name} has too many pixels to decode"))
+}
+
+/// The animation canvas is over the frame budget or the texture axis.
+pub fn canvas_too_large_error(format_name: &str) -> DecodeError {
+    uncoded_error(format!("{format_name} canvas is too large to decode"))
+}
+
+/// A pixel buffer reservation failed.
+pub fn out_of_memory_error(format_name: &str) -> DecodeError {
+    uncoded_error(format!("{format_name} is too large to fit in memory"))
+}
+
 /// The png crate wraps a read failure; its os code is kept like any other io failure.
 fn png_error(error: png::DecodingError) -> DecodeError {
     match error {
@@ -2646,7 +2661,7 @@ fn decode_apng<Input: BufRead + Seek>(
     };
     // Untrusted IHDR: the compositor refuses an over-budget canvas, which bounds the frame buffer.
     let Some(mut compositor) = FrameCompositor::new(canvas_width, canvas_height) else {
-        return Err(uncoded_error("APNG canvas is too large to decode"));
+        return Err(canvas_too_large_error("APNG"));
     };
     let icc_profile = reader
         .info()
@@ -2664,7 +2679,7 @@ fn decode_apng<Input: BufRead + Seek>(
         .output_buffer_size()
         .ok_or_else(|| uncoded_error("APNG output buffer size overflow"))?;
     let Some(mut buffer) = try_zeroed_buffer(buffer_size) else {
-        return Err(uncoded_error("APNG is too large to fit in memory"));
+        return Err(out_of_memory_error("APNG"));
     };
 
     if has_animation && !default_image_is_first_frame {
@@ -2783,7 +2798,7 @@ fn pixels_to_premultiplied_bgra_into(
         .try_reserve_exact((pixel_count * 4).saturating_sub(output.len()))
         .is_err()
     {
-        return Err(uncoded_error("APNG is too large to fit in memory"));
+        return Err(out_of_memory_error("APNG"));
     }
     output.resize(pixel_count * 4, 0);
     match color_type {
