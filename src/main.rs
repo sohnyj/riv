@@ -933,6 +933,14 @@ impl Application {
         self.request_render(window);
     }
 
+    /// The animation speed after a speed action; a no-op without an animation.
+    fn show_speed_status(&mut self, window: HWND) {
+        if let Some(animation) = &self.animation {
+            let text = format!("Speed: {}%", animation.speed_percent());
+            self.show_status_text(window, text);
+        }
+    }
+
     /// Drops any status pill; moving to another item ends its context.
     fn dismiss_status_text(&mut self, window: HWND) {
         if self.status_text.take().is_some() {
@@ -1851,15 +1859,13 @@ fn dispatch_action(application: &mut Application, window: HWND, action: Action) 
         Action::DecreaseSpeed | Action::IncreaseSpeed => {
             if let Some(animation) = application.animation.as_mut() {
                 animation.adjust_speed(action == Action::IncreaseSpeed);
-                let text = format!("Speed: {}%", animation.speed_percent());
-                application.show_status_text(window, text);
+                application.show_speed_status(window);
             }
         }
         Action::ResetSpeed => {
             if let Some(animation) = application.animation.as_mut() {
                 animation.reset_speed();
-                let text = format!("Speed: {}%", animation.speed_percent());
-                application.show_status_text(window, text);
+                application.show_speed_status(window);
             }
         }
         Action::Settings => {
