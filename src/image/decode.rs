@@ -143,7 +143,38 @@ impl ExifMetadata {
     }
 }
 
+impl Frame {
+    /// A still image's one frame; the delay is meaningless and stays 0.
+    pub fn still(pixels: Vec<u8>) -> Self {
+        Self {
+            pixels,
+            delay_milliseconds: 0,
+        }
+    }
+}
+
 impl DecodedImage {
+    /// An 8-bit SDR result at its own size; metadata and HDR fields start unset.
+    pub fn bgra8(width: u32, height: u32, format_name: &'static str, frames: Vec<Frame>) -> Self {
+        Self {
+            width,
+            height,
+            pixel_width: width,
+            pixel_height: height,
+            format_name,
+            icc_profile: None,
+            exif: None,
+            storage: PixelStorage::Bgra8,
+            source_bits_per_channel: BGRA8_SOURCE_BITS,
+            peak_luminance_nits: None,
+            source_primaries: None,
+            frames,
+            frames_truncated: false,
+            gain_map: None,
+            gain_map_plane: None,
+        }
+    }
+
     pub fn pixel_bytes(&self) -> usize {
         let frames: usize = self.frames.iter().map(|frame| frame.pixels.len()).sum();
         let plane = self
@@ -1392,24 +1423,11 @@ fn decode_raw_preview(
             cancellation,
         )?;
         Ok(DecodedImage {
-            width,
-            height,
             pixel_width,
             pixel_height,
-            format_name,
             icc_profile,
             exif,
-            storage: PixelStorage::Bgra8,
-            source_bits_per_channel: BGRA8_SOURCE_BITS,
-            peak_luminance_nits: None,
-            source_primaries: None,
-            frames: vec![Frame {
-                pixels,
-                delay_milliseconds: 0,
-            }],
-            frames_truncated: false,
-            gain_map: None,
-            gain_map_plane: None,
+            ..DecodedImage::bgra8(width, height, format_name, vec![Frame::still(pixels)])
         })
     })
     .ok()
@@ -1751,10 +1769,7 @@ fn decode_frame_source(
         source_bits_per_channel,
         peak_luminance_nits,
         source_primaries,
-        frames: vec![Frame {
-            pixels,
-            delay_milliseconds: 0,
-        }],
+        frames: vec![Frame::still(pixels)],
         frames_truncated: false,
         gain_map: None,
         gain_map_plane: None,
@@ -2405,21 +2420,9 @@ fn decode_animation(
     }
     let (frames, frames_truncated) = compositor.finish();
     Ok(DecodedImage {
-        width: canvas_width,
-        height: canvas_height,
-        pixel_width: canvas_width,
-        pixel_height: canvas_height,
-        format_name,
         icc_profile,
-        exif: None,
-        storage: PixelStorage::Bgra8,
-        source_bits_per_channel: BGRA8_SOURCE_BITS,
-        peak_luminance_nits: None,
-        source_primaries: None,
-        frames,
         frames_truncated,
-        gain_map: None,
-        gain_map_plane: None,
+        ..DecodedImage::bgra8(canvas_width, canvas_height, format_name, frames)
     })
 }
 
@@ -2784,21 +2787,9 @@ fn decode_apng<Input: BufRead + Seek>(
     }
     let (frames, frames_truncated) = compositor.finish();
     Ok(DecodedImage {
-        width: canvas_width,
-        height: canvas_height,
-        pixel_width: canvas_width,
-        pixel_height: canvas_height,
-        format_name,
         icc_profile,
-        exif: None,
-        storage: PixelStorage::Bgra8,
-        source_bits_per_channel: BGRA8_SOURCE_BITS,
-        peak_luminance_nits: None,
-        source_primaries: None,
-        frames,
         frames_truncated,
-        gain_map: None,
-        gain_map_plane: None,
+        ..DecodedImage::bgra8(canvas_width, canvas_height, format_name, frames)
     })
 }
 
@@ -2939,26 +2930,12 @@ fn decode_svg(bytes: &[u8], format_name: &'static str) -> Result<DecodedImage, D
         let swapped = [pixel[2], pixel[1], pixel[0], pixel[3]];
         pixel.copy_from_slice(&swapped);
     }
-    Ok(DecodedImage {
-        width: pixel_width,
-        height: pixel_height,
+    Ok(DecodedImage::bgra8(
         pixel_width,
         pixel_height,
         format_name,
-        icc_profile: None,
-        exif: None,
-        storage: PixelStorage::Bgra8,
-        source_bits_per_channel: BGRA8_SOURCE_BITS,
-        peak_luminance_nits: None,
-        source_primaries: None,
-        frames: vec![Frame {
-            pixels,
-            delay_milliseconds: 0,
-        }],
-        frames_truncated: false,
-        gain_map: None,
-        gain_map_plane: None,
-    })
+        vec![Frame::still(pixels)],
+    ))
 }
 
 fn parse_svg_tree(bytes: &[u8]) -> Result<resvg::usvg::Tree, DecodeError> {

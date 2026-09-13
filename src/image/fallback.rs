@@ -8,8 +8,8 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use windows::core::HSTRING;
 
 use crate::image::decode::{
-    BGRA8_SOURCE_BITS, DEFAULT_FRAME_DELAY_MILLISECONDS, DecodeError, DecodedImage, Frame,
-    FrameBlend, FrameCompositor, FrameDisposal, FrameRegion, HdrEncoding, MAXIMUM_HDR_SOURCE_BITS,
+    DEFAULT_FRAME_DELAY_MILLISECONDS, DecodeError, DecodedImage, Frame, FrameBlend,
+    FrameCompositor, FrameDisposal, FrameRegion, HdrEncoding, MAXIMUM_HDR_SOURCE_BITS,
     PixelStorage, canvas_too_large_error, cicp_hdr_encoding, linearize_hdr_pixels,
     out_of_memory_error, peak_luminance_from_half_pixels, peak_luminance_with_maximum_bits,
     premultiplied_bgra_from_rgba, too_many_pixels_error, try_zeroed_buffer, uncoded_error,
@@ -189,21 +189,8 @@ fn compose_webp_frames(
     let (frames, frames_truncated) = compositor.finish();
     unsafe { WebPDemuxReleaseIterator(&raw mut iterator) };
     Ok(DecodedImage {
-        width: canvas_width,
-        height: canvas_height,
-        pixel_width: canvas_width,
-        pixel_height: canvas_height,
-        format_name,
-        icc_profile: None,
-        exif: None,
-        storage: PixelStorage::Bgra8,
-        source_bits_per_channel: BGRA8_SOURCE_BITS,
-        peak_luminance_nits: None,
-        source_primaries: None,
-        frames,
         frames_truncated,
-        gain_map: None,
-        gain_map_plane: None,
+        ..DecodedImage::bgra8(canvas_width, canvas_height, format_name, frames)
     })
 }
 
@@ -363,10 +350,7 @@ fn decode_exr_with(
         peak_luminance_nits,
         // EXR chromaticities are ignored, so nothing states the primaries.
         source_primaries: None,
-        frames: vec![Frame {
-            pixels,
-            delay_milliseconds: 0,
-        }],
+        frames: vec![Frame::still(pixels)],
         frames_truncated: false,
         gain_map: None,
         gain_map_plane: None,
@@ -668,10 +652,7 @@ fn decode_heif_primary_image(
         source_bits_per_channel: source_bits_per_channel as u32,
         peak_luminance_nits,
         source_primaries: hdr_encoding.map(HdrEncoding::source_primaries),
-        frames: vec![Frame {
-            pixels,
-            delay_milliseconds: 0,
-        }],
+        frames: vec![Frame::still(pixels)],
         frames_truncated: false,
         gain_map: None,
         gain_map_plane: None,
@@ -810,21 +791,8 @@ fn compose_avif_frames(
         return Err(uncoded_error("AVIF sequence has no frames"));
     }
     Ok(DecodedImage {
-        width: canvas_width,
-        height: canvas_height,
-        pixel_width: canvas_width,
-        pixel_height: canvas_height,
-        format_name,
-        icc_profile: None,
-        exif: None,
-        storage: PixelStorage::Bgra8,
-        source_bits_per_channel: BGRA8_SOURCE_BITS,
-        peak_luminance_nits: None,
-        source_primaries: None,
-        frames,
         frames_truncated,
-        gain_map: None,
-        gain_map_plane: None,
+        ..DecodedImage::bgra8(canvas_width, canvas_height, format_name, frames)
     })
 }
 
