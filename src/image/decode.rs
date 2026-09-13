@@ -110,7 +110,7 @@ pub struct DecodedImage {
     pub gain_map_plane: Option<crate::image::gain_map::GainMapPlane>,
 }
 
-#[derive(Clone)]
+#[derive(Clone, Default, PartialEq)]
 pub struct ExifMetadata {
     pub date_taken: Option<std::time::SystemTime>,
     pub rating: Option<u32>,
@@ -128,18 +128,7 @@ pub struct ExifMetadata {
 
 impl ExifMetadata {
     fn any_present(&self) -> bool {
-        self.date_taken.is_some()
-            || self.rating.is_some()
-            || self.camera_maker.is_some()
-            || self.camera_model.is_some()
-            || self.f_stop.is_some()
-            || self.exposure_time_seconds.is_some()
-            || self.iso_speed.is_some()
-            || self.exposure_bias.is_some()
-            || self.focal_length_millimeters.is_some()
-            || self.maximum_aperture.is_some()
-            || self.metering_mode.is_some()
-            || self.flash.is_some()
+        *self != Self::default()
     }
 }
 
