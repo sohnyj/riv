@@ -140,12 +140,7 @@ pub fn enumerate(archive_path: &Path) -> Result<Vec<ArchiveMember>, ArchiveError
     let mut members = Vec::new();
     let mut listed_names = HashSet::new();
     while let Some(entry) = reader.next_header()? {
-        if unsafe { (reader.api.entry_is_metadata_encrypted)(entry) } != 0 {
-            return Err(ArchiveError::new("Archive metadata is encrypted"));
-        }
-        if unsafe { (reader.api.entry_filetype)(entry) } & FILETYPE_MASK != FILETYPE_REGULAR
-            || unsafe { (reader.api.entry_is_data_encrypted)(entry) } != 0
-        {
+        if !entry_is_listable(reader.api, entry)? {
             continue;
         }
         let Some(name) = entry_name(reader.api, entry) else {
@@ -155,22 +150,37 @@ pub fn enumerate(archive_path: &Path) -> Result<Vec<ArchiveMember>, ArchiveError
         if !listed_names.insert(name.clone()) {
             continue;
         }
-        let uncompressed_bytes = if unsafe { (reader.api.entry_size_is_set)(entry) } != 0 {
-            unsafe { (reader.api.entry_size)(entry) }.max(0) as u64
-        } else {
-            0
-        };
-        let modified_seconds = unsafe { (reader.api.entry_mtime)(entry) }.max(0) as u64;
-        members.push(ArchiveMember {
-            name,
-            uncompressed_bytes,
-            // checked_add: a crafted PAX/GNU mtime overflows SystemTime (verified).
-            modified: UNIX_EPOCH
-                .checked_add(Duration::from_secs(modified_seconds))
-                .unwrap_or(UNIX_EPOCH),
-        });
+        members.push(member_from_entry(reader.api, entry, name));
     }
     Ok(members)
+}
+
+/// A regular file whose data is readable; encrypted metadata ends the listing with an error.
+fn entry_is_listable(api: &Api, entry: *mut ArchiveEntry) -> Result<bool, ArchiveError> {
+    if unsafe { (api.entry_is_metadata_encrypted)(entry) } != 0 {
+        return Err(ArchiveError::new("Archive metadata is encrypted"));
+    }
+    let regular = unsafe { (api.entry_filetype)(entry) } & FILETYPE_MASK == FILETYPE_REGULAR;
+    let readable = unsafe { (api.entry_is_data_encrypted)(entry) } == 0;
+    Ok(regular && readable)
+}
+
+/// The listing entry: the declared size (0 when unset) and the modified time.
+fn member_from_entry(api: &Api, entry: *mut ArchiveEntry, name: String) -> ArchiveMember {
+    let uncompressed_bytes = if unsafe { (api.entry_size_is_set)(entry) } != 0 {
+        unsafe { (api.entry_size)(entry) }.max(0) as u64
+    } else {
+        0
+    };
+    let modified_seconds = unsafe { (api.entry_mtime)(entry) }.max(0) as u64;
+    ArchiveMember {
+        name,
+        uncompressed_bytes,
+        // checked_add: a crafted PAX/GNU mtime overflows SystemTime (verified).
+        modified: UNIX_EPOCH
+            .checked_add(Duration::from_secs(modified_seconds))
+            .unwrap_or(UNIX_EPOCH),
+    }
 }
 
 /// Extracts one member to memory; `member_name` must match an enumerate result.
