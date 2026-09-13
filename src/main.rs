@@ -2042,6 +2042,26 @@ fn window_center(window: HWND) -> (i32, i32) {
 
 /// Tracks the context menu, or just its playlist submenu, and applies what the user picked.
 fn show_menu(application: &mut Application, window: HWND, x: i32, y: i32, target: MenuTarget) {
+    let snapshot = menu_snapshot(application, window);
+    let selection = context_menu::show(window, &snapshot.state, x, y, target);
+    // The menu pumped messages; re-fetch in case the window was destroyed.
+    if let Some(selection) = selection
+        && let Some(application) = application_from_window(window)
+    {
+        apply_menu_selection(application, window, selection, &snapshot);
+    }
+}
+
+/// The menu's state plus the lists a selection resolves against, taken before the menu pumps.
+struct MenuSnapshot {
+    state: MenuState,
+    playlist_locations: Vec<ItemLocation>,
+    recent_paths: Vec<String>,
+    open_with_target: Option<PathBuf>,
+    open_with_executables: Vec<String>,
+}
+
+fn menu_snapshot(application: &Application, window: HWND) -> MenuSnapshot {
     // Measured here: the work area moves with the taskbar, which sends no message riv listens for.
     let playlist = application
         .image_core
@@ -2100,55 +2120,71 @@ fn show_menu(application: &mut Application, window: HWND, x: i32, y: i32, target
             })
             .collect(),
     };
-    let selection = context_menu::show(window, &state, x, y, target);
-    // The menu pumped messages; re-fetch in case the window was destroyed.
-    if let Some(selection) = selection
-        && let Some(application) = application_from_window(window)
-    {
-        match selection {
-            // A recent opened from the menu is the one the label named, not today's first entry.
-            MenuSelection::Action(Action::Recent(index)) => {
-                if let Some(path) = recent_paths.get(usize::from(index)) {
-                    open_recent_path(application, window, Path::new(path));
-                }
+    MenuSnapshot {
+        state,
+        playlist_locations,
+        recent_paths,
+        open_with_target,
+        open_with_executables,
+    }
+}
+
+fn apply_menu_selection(
+    application: &mut Application,
+    window: HWND,
+    selection: MenuSelection,
+    snapshot: &MenuSnapshot,
+) {
+    match selection {
+        // A recent opened from the menu is the one the label named, not today's first entry.
+        MenuSelection::Action(Action::Recent(index)) => {
+            if let Some(path) = snapshot.recent_paths.get(usize::from(index)) {
+                open_recent_path(application, window, Path::new(path));
             }
-            MenuSelection::Action(action) => {
-                dispatch_action(application, window, action);
+        }
+        MenuSelection::Action(action) => {
+            dispatch_action(application, window, action);
+        }
+        MenuSelection::OpenWithEntry(index) => {
+            if let (Some(path), Some(executable)) = (
+                &snapshot.open_with_target,
+                snapshot.open_with_executables.get(index),
+            ) {
+                // Names and executables snapshot the same list, so this index holds a name too.
+                let name = snapshot.state.open_with_items[index].as_str();
+                invoke_open_with(window, path, executable, name);
             }
-            MenuSelection::OpenWithEntry(index) => {
-                if let (Some(path), Some(executable)) =
-                    (open_with_target, open_with_executables.get(index))
-                {
-                    // Names and executables snapshot the same list, so this index holds a name too.
-                    let name = state.open_with_items[index].as_str();
-                    match open_with::invoke(&path, executable) {
-                        open_with::InvokeOutcome::Invoked => {}
-                        open_with::InvokeOutcome::HandlerMissing => {
-                            show_open_with_failure(
-                                window,
-                                name,
-                                "The app isn't registered for this file type anymore.",
-                            );
-                            // The failure proved the cached list stale; collect it again.
-                            if let Some(application) = application_from_window(window)
-                                && let Some(extension) = text::lowercase_extension(&path)
-                            {
-                                application.open_with_lists.remove(&extension);
-                                application.start_open_with_enumeration(window);
-                            }
-                        }
-                        open_with::InvokeOutcome::Failed(error) => {
-                            show_open_with_failure(window, name, &error.to_string());
-                        }
-                    }
-                }
+        }
+        MenuSelection::PlaylistEntry(slot) => {
+            let load_outcome = snapshot
+                .playlist_locations
+                .get(slot)
+                .and_then(|location| application.image_core.navigate_to_location(location));
+            complete_navigation(application, window, load_outcome);
+        }
+    }
+}
+
+/// Opens the file with the chosen application; a missing handler also re-collects the list.
+fn invoke_open_with(window: HWND, path: &Path, executable: &str, name: &str) {
+    match open_with::invoke(path, executable) {
+        open_with::InvokeOutcome::Invoked => {}
+        open_with::InvokeOutcome::HandlerMissing => {
+            show_open_with_failure(
+                window,
+                name,
+                "The app isn't registered for this file type anymore.",
+            );
+            // The failure proved the cached list stale; collect it again.
+            if let Some(application) = application_from_window(window)
+                && let Some(extension) = text::lowercase_extension(path)
+            {
+                application.open_with_lists.remove(&extension);
+                application.start_open_with_enumeration(window);
             }
-            MenuSelection::PlaylistEntry(slot) => {
-                let load_outcome = playlist_locations
-                    .get(slot)
-                    .and_then(|location| application.image_core.navigate_to_location(location));
-                complete_navigation(application, window, load_outcome);
-            }
+        }
+        open_with::InvokeOutcome::Failed(error) => {
+            show_open_with_failure(window, name, &error.to_string());
         }
     }
 }
