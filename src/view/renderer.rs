@@ -331,11 +331,16 @@ impl PendingDevice {
     }
 }
 
-fn source_pixel_format(storage: PixelStorage) -> D2D1_PIXEL_FORMAT {
+/// Every bitmap riv draws or targets is premultiplied; only the DXGI format varies.
+fn premultiplied_pixel_format(format: DXGI_FORMAT) -> D2D1_PIXEL_FORMAT {
     D2D1_PIXEL_FORMAT {
-        format: storage.dxgi_format(),
+        format,
         alphaMode: D2D1_ALPHA_MODE_PREMULTIPLIED,
     }
+}
+
+fn source_pixel_format(storage: PixelStorage) -> D2D1_PIXEL_FORMAT {
+    premultiplied_pixel_format(storage.dxgi_format())
 }
 
 /// Shared by the CPU upload and the worker-texture wrap; both must describe alike.
@@ -757,10 +762,7 @@ impl Renderer {
 
     fn target_bitmap_properties(format: DXGI_FORMAT) -> D2D1_BITMAP_PROPERTIES1 {
         D2D1_BITMAP_PROPERTIES1 {
-            pixelFormat: D2D1_PIXEL_FORMAT {
-                format,
-                alphaMode: D2D1_ALPHA_MODE_PREMULTIPLIED,
-            },
+            pixelFormat: premultiplied_pixel_format(format),
             dpiX: 96.0,
             dpiY: 96.0,
             bitmapOptions: D2D1_BITMAP_OPTIONS_TARGET | D2D1_BITMAP_OPTIONS_CANNOT_DRAW,
