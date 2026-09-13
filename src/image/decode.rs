@@ -984,15 +984,7 @@ fn find_and_decode_gain_map(
     crate::image::gain_map::GainMapMetadata,
     crate::image::gain_map::GainMapPlane,
 )> {
-    // The header probe skips the whole-file read below when the JPEG carries no MPF.
-    if let DecodeInput::File(path) = input {
-        let file = File::open(path).ok()?;
-        if !crate::image::gain_map::jpeg_carries_mpf(BufReader::new(file)) {
-            return None;
-        }
-    }
-    let bytes = input.read_all().ok()?;
-    let found = crate::image::gain_map::find_ultra_hdr(&bytes)?;
+    let (bytes, found) = find_gain_map(input)?;
     // The gain map carries no orientation of its own; it follows the base frame's.
     let orientation = declared_orientation(&bytes).ok()?;
     let plane = decode_gain_map_plane(
@@ -1003,6 +995,21 @@ fn find_and_decode_gain_map(
         cancellation,
     )?;
     Some((found.metadata, plane))
+}
+
+/// The whole file and where its Ultra HDR gain map sits; a header without MPF skips the read.
+fn find_gain_map<'a>(
+    input: &'a DecodeInput<'a>,
+) -> Option<(std::borrow::Cow<'a, [u8]>, crate::image::gain_map::UltraHdr)> {
+    if let DecodeInput::File(path) = input {
+        let file = File::open(path).ok()?;
+        if !crate::image::gain_map::jpeg_carries_mpf(BufReader::new(file)) {
+            return None;
+        }
+    }
+    let bytes = input.read_all().ok()?;
+    let found = crate::image::gain_map::find_ultra_hdr(&bytes)?;
+    Some((bytes, found))
 }
 
 /// The EXIF orientation the image bytes declare; 1 when they declare none.
@@ -2211,13 +2218,22 @@ pub(crate) fn peak_luminance_with_maximum_bits(pixels: &[u8], maximum_bits: u16)
         // Entirely within SDR white: the tone map is skipped, so skip the histogram.
         return Some(maximum_linear * SDR_REFERENCE_WHITE_NITS);
     }
-    // Jittered subsampling: a fixed stride aliases with periodic image structure.
     const SUBSAMPLE_MINIMUM_PIXELS: usize = 4_000_000;
+    let pixel_count = pixels.len() / 8;
+    let (histogram, sample_count) =
+        maxima_histogram(pixels, pixel_count >= SUBSAMPLE_MINIMUM_PIXELS);
+    let percentile_bin = percentile_bin(&histogram, sample_count);
+    let code = (percentile_bin as f32 + 1.0) / PEAK_HISTOGRAM_BINS as f32;
+    Some(perceptual_quantizer_nits(code.min(1.0)))
+}
+
+/// Per-pixel channel maxima binned in PQ code space, and how many pixels were sampled.
+fn maxima_histogram(pixels: &[u8], subsample: bool) -> ([u32; PEAK_HISTOGRAM_BINS], u32) {
     let bin_table = peak_histogram_bin_table();
     let pixel_count = pixels.len() / 8;
-    let subsample = pixel_count >= SUBSAMPLE_MINIMUM_PIXELS;
     let mut histogram = [0u32; PEAK_HISTOGRAM_BINS];
     let mut sample_count = 0u32;
+    // Jittered subsampling: a fixed stride aliases with periodic image structure.
     let mut jitter_state = 0x9E37_79B9u32;
     let mut index = 0usize;
     while index < pixel_count {
@@ -2238,18 +2254,20 @@ pub(crate) fn peak_luminance_with_maximum_bits(pixels: &[u8], maximum_bits: u16)
             index += 1;
         }
     }
+    (histogram, sample_count)
+}
+
+/// The bin the 99.9th percentile of samples falls in; the top bin when the count is tiny.
+fn percentile_bin(histogram: &[u32; PEAK_HISTOGRAM_BINS], sample_count: u32) -> usize {
     let threshold = (u64::from(sample_count) * 999 / 1000) as u32;
     let mut accumulated = 0u32;
-    let mut percentile_bin = PEAK_HISTOGRAM_BINS - 1;
     for (bin, count) in histogram.iter().enumerate() {
         accumulated += count;
         if accumulated >= threshold {
-            percentile_bin = bin;
-            break;
+            return bin;
         }
     }
-    let code = (percentile_bin as f32 + 1.0) / PEAK_HISTOGRAM_BINS as f32;
-    Some(perceptual_quantizer_nits(code.min(1.0)))
+    PEAK_HISTOGRAM_BINS - 1
 }
 
 /// Per-channel maxima; the discarded alpha lane keeps the stride regular.
