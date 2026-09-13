@@ -3,7 +3,7 @@
 use std::io::Read;
 use std::os::windows::process::CommandExt;
 use std::path::PathBuf;
-use std::process::{Child, Command, Stdio};
+use std::process::{Child, ChildStdout, Command, Stdio};
 use std::sync::atomic::{AtomicBool, Ordering};
 
 use windows::Win32::Foundation::MAX_PATH;
@@ -98,13 +98,26 @@ pub fn download(
     if !is_supported_protocol(url) {
         return Err(NetworkError::new("Unsupported URL protocol"));
     }
+    let mut child = spawn_curl(url)?;
+    let mut stdout = child.stdout.take().expect("stdout piped above");
+    let body = match read_body(&mut stdout, cancellation, progress) {
+        Ok(body) => body,
+        Err(error) => return Err(kill_child(child, error)),
+    };
+    drop(stdout);
+    finish(child)?;
+    Ok(body)
+}
+
+/// Starts curl with the transfer policy, writing the body to its stdout.
+fn spawn_curl(url: &str) -> Result<Child, NetworkError> {
     let maximum_bytes = MAXIMUM_DOWNLOAD_BYTES.to_string();
     let maximum_redirects = MAXIMUM_REDIRECTS.to_string();
     let connect_timeout = CONNECT_TIMEOUT_SECONDS.to_string();
     let minimum_speed = MINIMUM_SPEED_BYTES_PER_SECOND.to_string();
     let speed_time = SPEED_TIME_SECONDS.to_string();
     let protocol_allowlist = format!("={}", SUPPORTED_PROTOCOLS.join(","));
-    let mut child = Command::new(executable_path())
+    Command::new(executable_path())
         .args([
             "--silent",
             "--show-error",
@@ -135,45 +148,47 @@ pub fn download(
         .stderr(Stdio::piped())
         .creation_flags(CREATE_NO_WINDOW.0)
         .spawn()
-        .map_err(|error| NetworkError::new(format!("curl couldn't be started: {error}")))?;
-    let mut stdout = child.stdout.take().expect("stdout piped above");
+        .map_err(|error| NetworkError::new(format!("curl couldn't be started: {error}")))
+}
+
+/// Streams the body in blocks, checking cancellation and the size limit between them.
+fn read_body(
+    stdout: &mut ChildStdout,
+    cancellation: &AtomicBool,
+    progress: &mut dyn FnMut(u64),
+) -> Result<Vec<u8>, NetworkError> {
     progress(0);
     let mut body = Vec::new();
     let mut block = vec![0u8; READ_BLOCK_BYTES];
     loop {
         if cancellation.load(Ordering::Relaxed) {
-            return Err(kill_child(child, NetworkError::cancelled()));
+            return Err(NetworkError::cancelled());
         }
         let read_bytes = match stdout.read(&mut block) {
             Ok(0) => break,
             Ok(read_bytes) => read_bytes,
             Err(error) => {
-                return Err(kill_child(
-                    child,
-                    NetworkError::new(format!("Download read failed: {error}")),
-                ));
+                return Err(NetworkError::new(format!("Download read failed: {error}")));
             }
         };
         if body.len() as u64 + read_bytes as u64 > MAXIMUM_DOWNLOAD_BYTES {
-            return Err(kill_child(
-                child,
-                NetworkError::new(format!(
-                    "Download exceeds the {} GiB limit",
-                    MAXIMUM_DOWNLOAD_BYTES >> 30
-                )),
-            ));
+            return Err(NetworkError::new(format!(
+                "Download exceeds the {} GiB limit",
+                MAXIMUM_DOWNLOAD_BYTES >> 30
+            )));
         }
         let chunk = &block[..read_bytes];
         if body.try_reserve(chunk.len()).is_err() {
-            return Err(kill_child(
-                child,
-                NetworkError::new("Download is too large to fit in memory"),
-            ));
+            return Err(NetworkError::new("Download is too large to fit in memory"));
         }
         body.extend_from_slice(chunk);
         progress(body.len() as u64);
     }
-    drop(stdout);
+    Ok(body)
+}
+
+/// Waits for curl; a failing exit becomes its first stderr line with the exit code.
+fn finish(mut child: Child) -> Result<(), NetworkError> {
     let mut stderr_text = String::new();
     let mut stderr = child.stderr.take().expect("stderr piped above");
     let _ = stderr.read_to_string(&mut stderr_text);
@@ -195,7 +210,7 @@ pub fn download(
             cancelled: false,
         });
     }
-    Ok(body)
+    Ok(())
 }
 
 fn kill_child(mut child: Child, error: NetworkError) -> NetworkError {
