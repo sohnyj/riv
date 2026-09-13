@@ -434,18 +434,30 @@ const KEY_NAMES: [(&str, VIRTUAL_KEY); 26] = [
     ("'", VK_OEM_7),
 ];
 
+/// The function keys named by number; both name directions read this one range.
+const FUNCTION_KEYS: std::ops::RangeInclusive<u16> = VK_F1.0..=VK_F24.0;
+
+/// Digits and capital letters name themselves: their virtual keys are their ASCII codes.
+fn is_character_key(virtual_key: u16) -> bool {
+    (u16::from(b'0')..=u16::from(b'9')).contains(&virtual_key)
+        || (u16::from(b'A')..=u16::from(b'Z')).contains(&virtual_key)
+}
+
 fn virtual_key_from_name(name: &str) -> Option<u16> {
     let mut characters = name.chars();
     if let (Some(character), None) = (characters.next(), characters.next())
-        && character.is_ascii_alphanumeric()
+        && character.is_ascii()
+        && is_character_key(character.to_ascii_uppercase() as u16)
     {
         return Some(character.to_ascii_uppercase() as u16);
     }
     if let Some(number) = name.strip_prefix('F')
         && let Ok(index) = number.parse::<u16>()
-        && (1..=24).contains(&index)
+        && let Some(offset) = index.checked_sub(1)
+        && let Some(key) = VK_F1.0.checked_add(offset)
+        && FUNCTION_KEYS.contains(&key)
     {
-        return Some(VK_F1.0 + index - 1);
+        return Some(key);
     }
     KEY_NAMES
         .iter()
@@ -454,12 +466,10 @@ fn virtual_key_from_name(name: &str) -> Option<u16> {
 }
 
 fn key_name_from_virtual_key(virtual_key: u16) -> Option<String> {
-    if (u16::from(b'0')..=u16::from(b'9')).contains(&virtual_key)
-        || (u16::from(b'A')..=u16::from(b'Z')).contains(&virtual_key)
-    {
+    if is_character_key(virtual_key) {
         return Some(char::from(virtual_key as u8).to_string());
     }
-    if (VK_F1.0..=VK_F24.0).contains(&virtual_key) {
+    if FUNCTION_KEYS.contains(&virtual_key) {
         return Some(format!("F{}", virtual_key - VK_F1.0 + 1));
     }
     KEY_NAMES
