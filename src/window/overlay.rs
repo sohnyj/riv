@@ -91,6 +91,16 @@ impl PanelPlacement {
     }
 }
 
+/// EXIF MeteringMode codes and their names; any other code shows as Unknown.
+const METERING_MODES: [(u32, &str); 6] = [
+    (1, "Average"),
+    (2, "Center-weighted average"),
+    (3, "Spot"),
+    (4, "Multi-spot"),
+    (5, "Pattern"),
+    (6, "Partial"),
+];
+
 /// One cache slot per shaped text: the information panel, the status pill, a message, the wordmark.
 const SHAPED_TEXT_SLOTS: usize = 4;
 const CENTERED_MESSAGE_SLOT: usize = 2;
@@ -575,15 +585,10 @@ fn append_exif_lines(lines: &mut Vec<String>, exif: &crate::image::decode::ExifM
         lines.push(format!("Max aperture: f/{}", trim_number(aperture, 2)));
     }
     if let Some(mode) = exif.metering_mode {
-        let text = match mode {
-            1 => "Average",
-            2 => "Center-weighted average",
-            3 => "Spot",
-            4 => "Multi-spot",
-            5 => "Pattern",
-            6 => "Partial",
-            _ => "Unknown",
-        };
+        let text = METERING_MODES
+            .iter()
+            .find(|(code, _)| *code == mode)
+            .map_or("Unknown", |(_, name)| *name);
         lines.push(format!("Metering mode: {text}"));
     }
     if let Some(flash) = exif.flash {

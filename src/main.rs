@@ -158,6 +158,9 @@ const FULL_DECODE_TIMER: usize = 5;
 /// How far an action-driven pan moves, in device pixels.
 const PAN_STEP_PIXELS: f32 = 64.0;
 
+/// The rotate status by quadrant; the quadrant is always 0..4.
+const ROTATION_STATUS: [&str; 4] = ["Rotate: 0°", "Rotate: R90°", "Rotate: 180°", "Rotate: L90°"];
+
 /// A wheel-driven pan moves half the delta, so a 120-unit notch moves 60 device pixels.
 const WHEEL_PAN_DIVISOR: f32 = 2.0;
 
@@ -1731,12 +1734,7 @@ fn dispatch_action(application: &mut Application, window: HWND, action: Action) 
             };
             let viewport = application.viewport(window);
             application.view_transform.rotate(step, viewport, image);
-            let text = match application.view_transform.rotation_quadrant {
-                1 => "Rotate: R90°",
-                2 => "Rotate: 180°",
-                3 => "Rotate: L90°",
-                _ => "Rotate: 0°",
-            };
+            let text = ROTATION_STATUS[application.view_transform.rotation_quadrant as usize];
             application.show_status_text(window, text.to_string());
             application.request_render(window);
         }
