@@ -907,18 +907,23 @@ fn group_thousands(value: u64) -> String {
     grouped
 }
 
-/// Fixed 24-hour local time; locale forms can pull fallback glyphs into the panel.
-fn format_local_datetime(time: SystemTime) -> Option<String> {
-    // FILETIME reaches back to 1601, so a modified time before 1970 still formats.
+/// The FILETIME of a system time; None before 1601, which FILETIME cannot hold.
+fn file_time_from_system_time(time: SystemTime) -> Option<FILETIME> {
+    // FILETIME reaches back to 1601, so a modified time before 1970 still converts.
     let epoch_intervals = u128::from(crate::image::decode::FILETIME_UNIX_EPOCH);
     let intervals = match time.duration_since(UNIX_EPOCH) {
         Ok(elapsed) => epoch_intervals + elapsed.as_nanos() / 100,
         Err(earlier) => epoch_intervals.checked_sub(earlier.duration().as_nanos() / 100)?,
     };
-    let file_time = FILETIME {
+    Some(FILETIME {
         dwLowDateTime: intervals as u32,
         dwHighDateTime: (intervals >> 32) as u32,
-    };
+    })
+}
+
+/// Fixed 24-hour local time; locale forms can pull fallback glyphs into the panel.
+fn format_local_datetime(time: SystemTime) -> Option<String> {
+    let file_time = file_time_from_system_time(time)?;
     let mut utc = SYSTEMTIME::default();
     let mut local = SYSTEMTIME::default();
     if unsafe { FileTimeToSystemTime(&raw const file_time, &raw mut utc) }.is_err()
@@ -936,6 +941,24 @@ fn format_local_datetime(time: SystemTime) -> Option<String> {
 mod datetime_tests {
     use super::*;
     use std::time::Duration;
+
+    #[test]
+    fn a_time_between_1601_and_1970_has_a_file_time_below_the_epoch() {
+        // About 1670: inside FILETIME's range, so the subtraction from the epoch has a result.
+        let time = UNIX_EPOCH - Duration::from_secs(300 * 365 * 24 * 60 * 60);
+        let file_time = file_time_from_system_time(time).unwrap();
+        let intervals =
+            u64::from(file_time.dwHighDateTime) << 32 | u64::from(file_time.dwLowDateTime);
+        assert!(intervals < crate::image::decode::FILETIME_UNIX_EPOCH);
+    }
+
+    #[test]
+    fn the_unix_epoch_is_the_documented_interval_count() {
+        let file_time = file_time_from_system_time(UNIX_EPOCH).unwrap();
+        let intervals =
+            u64::from(file_time.dwHighDateTime) << 32 | u64::from(file_time.dwLowDateTime);
+        assert_eq!(intervals, crate::image::decode::FILETIME_UNIX_EPOCH);
+    }
 
     #[test]
     fn a_timestamp_before_1970_still_formats() {
