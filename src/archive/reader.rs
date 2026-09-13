@@ -76,6 +76,17 @@ impl ArchiveError {
         }
     }
 
+    fn exceeds_member_limit() -> Self {
+        Self::new(format!(
+            "Archive member exceeds the {} GiB limit",
+            MAXIMUM_MEMBER_BYTES >> 30
+        ))
+    }
+
+    fn out_of_memory() -> Self {
+        Self::new("Archive member is too large to fit in memory")
+    }
+
     fn cancelled() -> Self {
         Self {
             message: "cancelled".to_string(),
@@ -141,10 +152,7 @@ pub fn read_member(
         let declared_bytes = unsafe { (reader.api.entry_size_is_set)(entry) != 0 }
             .then(|| unsafe { (reader.api.entry_size)(entry) }.max(0) as u64);
         if declared_bytes.is_some_and(|bytes| bytes > MAXIMUM_MEMBER_BYTES) {
-            return Err(ArchiveError::new(format!(
-                "Archive member exceeds the {} GiB limit",
-                MAXIMUM_MEMBER_BYTES >> 30
-            )));
+            return Err(ArchiveError::exceeds_member_limit());
         }
         return reader.read_entry_data(declared_bytes, cancellation);
     }
@@ -222,9 +230,7 @@ impl Reader<'_> {
             .unwrap_or(0)
             .min(MAXIMUM_MEMBER_RESERVATION_BYTES) as usize;
         if contents.try_reserve_exact(reservation_bytes).is_err() {
-            return Err(ArchiveError::new(
-                "Archive member is too large to fit in memory",
-            ));
+            return Err(ArchiveError::out_of_memory());
         }
         let mut block = vec![0u8; READ_BLOCK_BYTES];
         loop {
@@ -241,16 +247,11 @@ impl Reader<'_> {
                 return Err(self.error("Archive member extraction failed"));
             }
             if contents.len() as u64 + read_bytes as u64 > MAXIMUM_MEMBER_BYTES {
-                return Err(ArchiveError::new(format!(
-                    "Archive member exceeds the {} GiB limit",
-                    MAXIMUM_MEMBER_BYTES >> 30
-                )));
+                return Err(ArchiveError::exceeds_member_limit());
             }
             let chunk = &block[..read_bytes as usize];
             if contents.try_reserve(chunk.len()).is_err() {
-                return Err(ArchiveError::new(
-                    "Archive member is too large to fit in memory",
-                ));
+                return Err(ArchiveError::out_of_memory());
             }
             contents.extend_from_slice(chunk);
         }
