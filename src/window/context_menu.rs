@@ -104,7 +104,22 @@ impl<'a> MenuBuilder<'a> {
     }
 
     fn append_action(&mut self, menu: HMENU, action: Action) -> Result<()> {
-        self.append_action_labeled(menu, action, action.label())
+        self.append_action_labeled(menu, action, self.label_for(action))
+    }
+
+    /// The table label, except for the four actions whose label names the state a click leaves.
+    fn label_for(&self, action: Action) -> &'static str {
+        match action {
+            Action::Pause if self.state.animation_paused => "Resume",
+            // The label names the axis a click switches to (slideshow convention).
+            Action::ToggleFitMode if self.state.fit_height => "Fit width",
+            Action::ToggleFitMode => "Fit height",
+            Action::ToggleSlideshow if self.state.slideshow_active => "Stop slideshow",
+            Action::ToggleSlideshow => "Start slideshow",
+            Action::ToggleFullscreen if self.state.fullscreen => "Exit fullscreen",
+            Action::ToggleFullscreen => "Enter fullscreen",
+            _ => action.label(),
+        }
     }
 
     /// The one place text reaches the menu, so every label is escaped exactly once.
@@ -266,12 +281,7 @@ impl<'a> MenuBuilder<'a> {
         )?;
         self.append_action(menu, Action::Loop)?;
         let playback = self.create_menu()?;
-        let pause_label = if self.state.animation_paused {
-            "Resume"
-        } else {
-            Action::Pause.label()
-        };
-        self.append_action_labeled(playback, Action::Pause, pause_label)?;
+        self.append_action(playback, Action::Pause)?;
         self.append_action(playback, Action::PreviousFrame)?;
         self.append_action(playback, Action::NextFrame)?;
         self.append_separator(playback)?;
@@ -292,13 +302,7 @@ impl<'a> MenuBuilder<'a> {
         self.append_separator(menu)?;
 
         let view = self.create_menu()?;
-        // The label names the axis a click switches to (slideshow convention).
-        let fit_label = if self.state.fit_height {
-            "Fit width"
-        } else {
-            "Fit height"
-        };
-        self.append_action_labeled(view, Action::ToggleFitMode, fit_label)?;
+        self.append_action(view, Action::ToggleFitMode)?;
         self.append_action(view, Action::PreserveZoom)?;
         self.append_separator(view)?;
         self.append_action(view, Action::ZoomIn)?;
@@ -317,23 +321,13 @@ impl<'a> MenuBuilder<'a> {
         self.append_action(tools, Action::Rename)?;
         self.append_action(tools, Action::Delete)?;
         self.append_separator(tools)?;
-        let slideshow_label = if self.state.slideshow_active {
-            "Stop slideshow"
-        } else {
-            "Start slideshow"
-        };
-        self.append_action_labeled(tools, Action::ToggleSlideshow, slideshow_label)?;
+        self.append_action(tools, Action::ToggleSlideshow)?;
         self.append_separator(tools)?;
         self.append_action(tools, Action::Settings)?;
         self.append_submenu(menu, tools, "Tools", true)?;
 
         let window = self.create_menu()?;
-        let fullscreen_label = if self.state.fullscreen {
-            "Exit fullscreen"
-        } else {
-            "Enter fullscreen"
-        };
-        self.append_action_labeled(window, Action::ToggleFullscreen, fullscreen_label)?;
+        self.append_action(window, Action::ToggleFullscreen)?;
         self.append_action(window, Action::AlwaysOnTop)?;
         self.append_submenu(menu, window, "Window", true)?;
         self.append_separator(menu)?;
