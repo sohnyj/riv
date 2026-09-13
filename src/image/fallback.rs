@@ -511,15 +511,22 @@ fn heif_pixel_target(encoding: Option<HdrEncoding>) -> (c_int, PixelStorage) {
     }
 }
 
-/// Container-parse size and storage of the primary image; no pixel decode.
-pub fn probe_heif_dimensions_and_storage(bytes: &[u8]) -> Option<(u32, u32, PixelStorage)> {
+/// Runs `body` on a fresh libheif context and frees it afterwards.
+fn with_heif_context<T>(body: impl FnOnce(*mut HeifContext) -> T) -> Result<T, DecodeError> {
     let context = unsafe { heif_context_alloc() };
     if context.is_null() {
-        return None;
+        return Err(uncoded_error("HEIF context allocation failed"));
     }
-    let dimensions_and_storage = probe_heif_primary_image(context, bytes);
+    let outcome = body(context);
     unsafe { heif_context_free(context) };
-    dimensions_and_storage
+    Ok(outcome)
+}
+
+/// Container-parse size and storage of the primary image; no pixel decode.
+pub fn probe_heif_dimensions_and_storage(bytes: &[u8]) -> Option<(u32, u32, PixelStorage)> {
+    with_heif_context(|context| probe_heif_primary_image(context, bytes))
+        .ok()
+        .flatten()
 }
 
 /// Reads the buffer into the context and takes the primary image handle.
@@ -559,13 +566,7 @@ fn probe_heif_primary_image(
 }
 
 pub fn decode_heif(bytes: &[u8], format_name: &'static str) -> Result<DecodedImage, DecodeError> {
-    let context = unsafe { heif_context_alloc() };
-    if context.is_null() {
-        return Err(uncoded_error("HEIF context allocation failed"));
-    }
-    let decoded = decode_heif_primary_image(context, bytes, format_name);
-    unsafe { heif_context_free(context) };
-    decoded
+    with_heif_context(|context| decode_heif_primary_image(context, bytes, format_name))?
 }
 
 fn decode_heif_primary_image(
@@ -684,13 +685,9 @@ pub fn decode_avif_animation(
     maximum_frames: usize,
     cancellation: &AtomicBool,
 ) -> Result<DecodedImage, DecodeError> {
-    let context = unsafe { heif_context_alloc() };
-    if context.is_null() {
-        return Err(uncoded_error("HEIF context allocation failed"));
-    }
-    let decoded = decode_avif_sequence(context, bytes, format_name, maximum_frames, cancellation);
-    unsafe { heif_context_free(context) };
-    decoded
+    with_heif_context(|context| {
+        decode_avif_sequence(context, bytes, format_name, maximum_frames, cancellation)
+    })?
 }
 
 /// The file's first visual track with its resolution; the caller releases the track.
@@ -868,18 +865,13 @@ fn sequence_delay_milliseconds(duration_ticks: u32, timescale: u32) -> u32 {
 
 /// Parse-only, for the weight probe; no frame is decoded.
 pub fn probe_avif_sequence_dimensions(bytes: &[u8]) -> Option<(u32, u32)> {
-    let context = unsafe { heif_context_alloc() };
-    if context.is_null() {
-        return None;
-    }
-    let dimensions = avif_sequence_track(context, bytes)
-        .ok()
-        .map(|(track, width, height)| {
-            unsafe { heif_track_release(track) };
-            (width, height)
-        });
-    unsafe { heif_context_free(context) };
-    dimensions
+    with_heif_context(|context| {
+        let (track, width, height) = avif_sequence_track(context, bytes).ok()?;
+        unsafe { heif_track_release(track) };
+        Some((width, height))
+    })
+    .ok()
+    .flatten()
 }
 
 #[cfg(test)]
