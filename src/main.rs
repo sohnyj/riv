@@ -938,6 +938,51 @@ impl Application {
         self.render_animation_frame(window, frame_index);
     }
 
+    /// One slideshow tick: an animated item holds until its loop ends, then the show steps.
+    fn advance_slideshow(&mut self, window: HWND) {
+        // KillTimer leaves a WM_TIMER already in the queue; one arriving after the stop advances nothing.
+        let Some(shown) = self.slideshow_item_shown_at else {
+            return;
+        };
+        // Hold an animated frame until it finishes one loop; the interval is the floor.
+        let hold_milliseconds = self
+            .animation
+            .as_ref()
+            .map_or(0, Animation::loop_duration_milliseconds);
+        let elapsed_milliseconds = shown.elapsed().as_millis().min(u128::from(u32::MAX)) as u32;
+        if hold_milliseconds > elapsed_milliseconds {
+            self.schedule_slideshow_timer(window, hold_milliseconds - elapsed_milliseconds);
+            return;
+        }
+        let command = if self.settings.options.slideshow_backward() {
+            NavigationCommand::Previous
+        } else {
+            NavigationCommand::Next
+        };
+        if !execute_navigation(self, window, command) {
+            self.stop_slideshow(window);
+        }
+    }
+
+    /// Resizes or rebuilds the output for the new client size, draws it, and remembers the placement.
+    fn on_window_resized(&mut self, window: HWND, width: u32, height: u32) {
+        // A size change inside the modal loop still needs every frame drawn.
+        self.window_moving = false;
+        if width > 0 && height > 0 {
+            let resized = self
+                .renderer
+                .as_mut()
+                .is_some_and(|renderer| renderer.resize(width, height).is_ok());
+            if !resized {
+                let _ = self.rebuild_renderer(window);
+            }
+            // Rendered synchronously here; validate so the WM_PAINT skips it.
+            self.render(window);
+            let _ = unsafe { ValidateRect(Some(window), None) };
+        }
+        self.remember_window_placement(window);
+    }
+
     fn render_animation_frame(&mut self, window: HWND, frame_index: usize) {
         let Some(image) = &self.displayed_image else {
             return;
@@ -2267,6 +2312,59 @@ fn dispatch_wheel(application: &mut Application, window: HWND, wheel_delta: i16)
     }
 }
 
+/// Stores and saves what the settings dialog applied, then re-applies it to the window.
+fn apply_options_from_dialog(window: HWND, payload: &dialogs::options::AppliedOptions) {
+    let mut save_error = None;
+    if let Some(application) = application_from_window(window) {
+        application.settings.set_options(&payload.options);
+        application
+            .settings
+            .set_binding_overrides(&payload.keyboard, &payload.mouse);
+        save_error = application.settings.save_merging_recents().err();
+        application.apply_options(window);
+        application.request_render(window);
+    }
+    // The dialog pumps messages, so the borrow above ends before it opens.
+    if let Some(error) = save_error {
+        dialogs::message::show_message(
+            Some(payload.dialog),
+            Action::Settings.label(),
+            "Settings can't be saved.",
+            &error.to_string(),
+            dialogs::message::CLOSE_BUTTON,
+        );
+    }
+}
+
+/// A Ctrl-drag moves the window when the setting allows; otherwise the press starts a pan.
+fn begin_pointer_press(window: HWND, lparam: LPARAM) {
+    let Some(application) = application_from_window(window) else {
+        return;
+    };
+    let move_window = current_modifiers() == MODIFIER_CONTROL
+        && application.settings.options.control_drag_window
+        && application.fullscreen_restore.is_none()
+        && !unsafe { IsZoomed(window) }.as_bool();
+    if move_window {
+        let _ = unsafe { ReleaseCapture() };
+        // The application borrow ended above: this send runs the system move loop, which re-enters.
+        unsafe {
+            SendMessageW(
+                window,
+                WM_NCLBUTTONDOWN,
+                Some(WPARAM(HTCAPTION as usize)),
+                Some(LPARAM(0)),
+            )
+        };
+    } else {
+        unsafe { SetCapture(window) };
+        if !application.cursor_hidden {
+            unsafe { SetCursor(Some(application.pan_cursor)) };
+        }
+        application.pan_drag_position = Some(point_from_packed(lparam.0 as usize));
+    }
+}
+
 fn apply_gesture(application: &mut Application, window: HWND, lparam: LPARAM) -> bool {
     use windows::Win32::UI::Input::Touch::{
         CloseGestureInfoHandle, GESTUREINFO, GID_PAN, GID_ZOOM, GetGestureInfo, HGESTUREINFO,
@@ -2695,23 +2793,9 @@ extern "system" fn window_procedure(
         }
         WM_SIZE => {
             if let Some(application) = application_from_window(window) {
-                // A size change inside the modal loop still needs every frame drawn.
-                application.window_moving = false;
                 let width = low_word(lparam.0 as usize);
                 let height = high_word(lparam.0 as usize);
-                if width > 0 && height > 0 {
-                    let resized = application
-                        .renderer
-                        .as_mut()
-                        .is_some_and(|renderer| renderer.resize(width, height).is_ok());
-                    if !resized {
-                        let _ = application.rebuild_renderer(window);
-                    }
-                    // Rendered synchronously here; validate so the WM_PAINT skips it.
-                    application.render(window);
-                    let _ = unsafe { ValidateRect(Some(window), None) };
-                }
-                application.remember_window_placement(window);
+                application.on_window_resized(window, width, height);
             }
             LRESULT(0)
         }
@@ -2805,26 +2889,7 @@ extern "system" fn window_procedure(
             }) else {
                 return LRESULT(0);
             };
-            let mut save_error = None;
-            if let Some(application) = application_from_window(window) {
-                application.settings.set_options(&payload.options);
-                application
-                    .settings
-                    .set_binding_overrides(&payload.keyboard, &payload.mouse);
-                save_error = application.settings.save_merging_recents().err();
-                application.apply_options(window);
-                application.request_render(window);
-            }
-            // The dialog pumps messages, so the borrow above ends before it opens.
-            if let Some(error) = save_error {
-                dialogs::message::show_message(
-                    Some(payload.dialog),
-                    Action::Settings.label(),
-                    "Settings can't be saved.",
-                    &error.to_string(),
-                    dialogs::message::CLOSE_BUTTON,
-                );
-            }
+            apply_options_from_dialog(window, payload);
             LRESULT(0)
         }
         WM_APP_SHOW_WINDOW => {
@@ -2878,30 +2943,8 @@ extern "system" fn window_procedure(
             LRESULT(0)
         }
         WM_TIMER if wparam.0 == SLIDESHOW_TIMER => {
-            // KillTimer leaves a WM_TIMER already in the queue; one arriving after the stop advances nothing.
-            if let Some(application) = application_from_window(window)
-                && let Some(shown) = application.slideshow_item_shown_at
-            {
-                // Hold an animated frame until it finishes one loop; the interval is the floor.
-                let hold_milliseconds = application
-                    .animation
-                    .as_ref()
-                    .map_or(0, Animation::loop_duration_milliseconds);
-                let elapsed_milliseconds =
-                    shown.elapsed().as_millis().min(u128::from(u32::MAX)) as u32;
-                if hold_milliseconds > elapsed_milliseconds {
-                    application
-                        .schedule_slideshow_timer(window, hold_milliseconds - elapsed_milliseconds);
-                } else {
-                    let command = if application.settings.options.slideshow_backward() {
-                        NavigationCommand::Previous
-                    } else {
-                        NavigationCommand::Next
-                    };
-                    if !execute_navigation(application, window, command) {
-                        application.stop_slideshow(window);
-                    }
-                }
+            if let Some(application) = application_from_window(window) {
+                application.advance_slideshow(window);
             }
             LRESULT(0)
         }
@@ -2947,30 +2990,7 @@ extern "system" fn window_procedure(
             LRESULT(0)
         }
         WM_LBUTTONDOWN => {
-            if let Some(application) = application_from_window(window) {
-                let move_window = current_modifiers() == MODIFIER_CONTROL
-                    && application.settings.options.control_drag_window
-                    && application.fullscreen_restore.is_none()
-                    && !unsafe { IsZoomed(window) }.as_bool();
-                if move_window {
-                    let _ = unsafe { ReleaseCapture() };
-                    // The application borrow ended above: this send runs the system move loop, which re-enters.
-                    unsafe {
-                        SendMessageW(
-                            window,
-                            WM_NCLBUTTONDOWN,
-                            Some(WPARAM(HTCAPTION as usize)),
-                            Some(LPARAM(0)),
-                        )
-                    };
-                } else {
-                    unsafe { SetCapture(window) };
-                    if !application.cursor_hidden {
-                        unsafe { SetCursor(Some(application.pan_cursor)) };
-                    }
-                    application.pan_drag_position = Some(point_from_packed(lparam.0 as usize));
-                }
-            }
+            begin_pointer_press(window, lparam);
             LRESULT(0)
         }
         WM_MOUSEMOVE => {
