@@ -93,6 +93,19 @@ pub fn capture_mouse_binding(
     state.accepted.then(|| state.binding.into_iter().collect())
 }
 
+/// The first candidate another action already holds, with that action's label.
+fn first_conflict<'a>(
+    candidates: impl IntoIterator<Item = &'a String>,
+    taken: &[(&str, &str)],
+) -> Option<(String, String)> {
+    candidates.into_iter().find_map(|candidate| {
+        taken
+            .iter()
+            .find(|(encoding, _)| encoding == candidate)
+            .map(|(encoding, owner)| (encoding.to_string(), owner.to_string()))
+    })
+}
+
 fn warn_conflict(dialog: HWND, encoding: &str, owner_label: &str) {
     crate::dialogs::message::show_message(
         Some(dialog),
@@ -182,17 +195,9 @@ unsafe extern "system" fn keyboard_procedure(
                 }
                 command if command == IDOK.0 => {
                     let conflict = state_mut::<KeyboardCaptureState>(dialog).and_then(|state| {
-                        for sequence in &state.sequences {
-                            if let Some((encoding, owner)) = state
-                                .taken
-                                .iter()
-                                .find(|(encoding, _)| encoding == sequence)
-                            {
-                                return Some((encoding.to_string(), owner.to_string()));
-                            }
-                        }
-                        state.accepted = true;
-                        None
+                        let conflict = first_conflict(&state.sequences, state.taken);
+                        state.accepted = conflict.is_none();
+                        conflict
                     });
                     // The warning runs a modal loop that re-enters this procedure; the borrow ended above.
                     if let Some((encoding, owner)) = conflict {
@@ -256,14 +261,9 @@ unsafe extern "system" fn mouse_procedure(
                 }
                 command if command == IDOK.0 => {
                     let conflict = state_mut::<MouseCaptureState>(dialog).and_then(|state| {
-                        if let Some(binding) = &state.binding
-                            && let Some((encoding, owner)) =
-                                state.taken.iter().find(|(encoding, _)| encoding == binding)
-                        {
-                            return Some((encoding.to_string(), owner.to_string()));
-                        }
-                        state.accepted = true;
-                        None
+                        let conflict = first_conflict(state.binding.as_ref(), state.taken);
+                        state.accepted = conflict.is_none();
+                        conflict
                     });
                     // The warning runs a modal loop that re-enters this procedure; the borrow ended above.
                     if let Some((encoding, owner)) = conflict {
