@@ -64,21 +64,31 @@ fn build_compiler(output_directory: &Path, xwin_root: &str) -> PathBuf {
 fn compile(compiler: &Path, name: &str, profile: &str, output_directory: &Path) {
     let source = format!("{name}.hlsl");
     let output = output_directory.join(format!("{name}.dxbc"));
+    if shader_is_current(&source, &output, compiler) {
+        return;
+    }
+    run_compiler(compiler, &source, profile, &output);
+    verify_blob(&output);
+}
+
+/// The output is newer than the source, the shared include, the noise generator, and the compiler.
+fn shader_is_current(source: &str, output: &Path, compiler: &Path) -> bool {
     let source_path = PathBuf::from(format!("{SHADER_DIRECTORY}/{source}"));
     let shared_path = PathBuf::from(format!("{SHADER_DIRECTORY}/ps_shared.hlsl"));
     // The blue noise edge reaches the HLSL as a macro, so the table and the shader share one source.
     let blue_noise_path = blue_noise_source();
-    if !crate::is_stale(
-        &output,
+    !crate::is_stale(
+        output,
         &[&source_path, &shared_path, &blue_noise_path, compiler],
-    ) {
-        return;
-    }
+    )
+}
+
+fn run_compiler(compiler: &Path, source: &str, profile: &str, output: &Path) {
     let result = Command::new("wine")
         .arg(compiler)
-        .arg(&source)
+        .arg(source)
         .arg(profile)
-        .arg(&output)
+        .arg(output)
         .arg(format!(
             "BLUE_NOISE_EDGE_TEXELS={}",
             crate::blue_noise::EDGE_TEXELS
@@ -93,7 +103,11 @@ fn compile(compiler: &Path, name: &str, profile: &str, output_directory: &Path) 
             String::from_utf8_lossy(&result.stderr)
         );
     }
-    let blob = std::fs::read(&output).expect("compiled blob readable");
+}
+
+/// A DXBC container came out; anything else means the compiler wrote something unusable.
+fn verify_blob(output: &Path) {
+    let blob = std::fs::read(output).expect("compiled blob readable");
     assert!(
         blob.starts_with(b"DXBC"),
         "{} did not produce a DXBC container",

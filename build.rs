@@ -29,12 +29,7 @@ fn main() {
     println!("cargo:rerun-if-changed={}", shaders::SHADER_DIRECTORY);
 
     let output_directory = PathBuf::from(env::var("OUT_DIR").unwrap());
-    // The texels are a pure function of the generator, so an up-to-date table is kept.
-    let blue_noise_table = output_directory.join("blue_noise.bin");
-    let blue_noise_source = shaders::blue_noise_source();
-    if is_stale(&blue_noise_table, &[&blue_noise_source]) {
-        blue_noise::write_table(&blue_noise_table);
-    }
+    write_blue_noise_table(&output_directory);
 
     // xwin CRT/SDK import libraries; override the splat location with XWIN_ROOT.
     println!("cargo:rerun-if-env-changed=XWIN_ROOT");
@@ -49,12 +44,31 @@ fn main() {
     println!("cargo:rerun-if-changed=res/riv.manifest");
     println!("cargo:rerun-if-changed=res/riv.ico");
 
-    let compiled_resource = output_directory.join("riv.res");
-
     // The package version is the single source: manifest substitution + VERSIONINFO.
     let version = env::var("CARGO_PKG_VERSION").unwrap();
+    let processed_manifest = write_manifest(&output_directory, &version);
+    let generated_source = write_resource_script(&output_directory, &processed_manifest, &version);
+    let compiled_resource = compile_resources(&output_directory, &generated_source);
+    println!("cargo:rustc-link-arg-bins={}", compiled_resource.display());
+
+    for library_directory in XWIN_LIBRARY_DIRECTORIES {
+        println!("cargo:rustc-link-search=native={xwin_root}/{library_directory}");
+    }
+    link_codec_libraries();
+}
+
+/// The texels are a pure function of the generator, so an up-to-date table is kept.
+fn write_blue_noise_table(output_directory: &Path) {
+    let blue_noise_table = output_directory.join("blue_noise.bin");
+    let blue_noise_source = shaders::blue_noise_source();
+    if is_stale(&blue_noise_table, &[&blue_noise_source]) {
+        blue_noise::write_table(&blue_noise_table);
+    }
+}
+
+/// The manifest with the package version substituted; the path llvm-rc embeds.
+fn write_manifest(output_directory: &Path, version: &str) -> PathBuf {
     let four_part = format!("{version}.0");
-    let numeric = four_part.replace('.', ",");
     let manifest_template = std::fs::read_to_string("res/riv.manifest").expect("manifest readable");
     let processed_manifest = output_directory.join("riv.manifest");
     std::fs::write(
@@ -62,6 +76,12 @@ fn main() {
         manifest_template.replace("@VERSION@", &four_part),
     )
     .expect("manifest writable");
+    processed_manifest
+}
+
+/// The resource script that includes riv.rc and adds the manifest and VERSIONINFO.
+fn write_resource_script(output_directory: &Path, manifest: &Path, version: &str) -> PathBuf {
+    let numeric = format!("{version}.0").replace('.', ",");
     // 24 = RT_MANIFEST, 1 = CREATEPROCESS_MANIFEST_RESOURCE_ID
     let generated_source = output_directory.join("app.rc");
     let generated = format!(
@@ -92,28 +112,30 @@ fn main() {
             "  END\n",
             "END\n",
         ),
-        manifest = processed_manifest.display(),
+        manifest = manifest.display(),
         numeric = numeric,
         version = version,
         description = env::var("CARGO_PKG_DESCRIPTION").unwrap(),
     );
     std::fs::write(&generated_source, generated).expect("generated rc writable");
+    generated_source
+}
 
+/// Runs llvm-rc over the script; the compiled .res the binary links.
+fn compile_resources(output_directory: &Path, generated_source: &Path) -> PathBuf {
+    let compiled_resource = output_directory.join("riv.res");
     let status = Command::new("llvm-rc")
         .args(["/I", "res", "/FO"])
         .arg(&compiled_resource)
-        .arg(&generated_source)
+        .arg(generated_source)
         .status()
         .expect("failed to run llvm-rc");
     assert!(status.success(), "llvm-rc failed with {status}");
+    compiled_resource
+}
 
-    println!("cargo:rustc-link-arg-bins={}", compiled_resource.display());
-
-    for library_directory in XWIN_LIBRARY_DIRECTORIES {
-        println!("cargo:rustc-link-search=native={xwin_root}/{library_directory}");
-    }
-
-    // Link every static library produced by deps/build_deps.sh.
+/// Links every static library produced by deps/build_deps.sh, plus the static C++ runtime.
+fn link_codec_libraries() {
     let manifest_directory = PathBuf::from(env::var("CARGO_MANIFEST_DIR").unwrap());
     let codec_library_directory = manifest_directory.join("deps/prefix/lib");
     assert!(
