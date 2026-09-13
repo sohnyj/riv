@@ -477,19 +477,11 @@ impl SettingsFile {
     pub fn save_merging_recents(&mut self) -> std::io::Result<()> {
         if self.options.remember_recents {
             let disk = read_document(&self.path);
-            let mut files = self.recent_files();
-            let mut seen: HashSet<String> =
-                files.iter().map(|(_, path)| recent_key(path)).collect();
-            for (name, path) in recent_files_of(&disk) {
-                let key = recent_key(&path);
-                if self.removed_recent_keys.contains(&key) {
-                    continue; // dropped as missing this session
-                }
-                if seen.insert(key) {
-                    files.push((name, path));
-                }
-            }
-            files.truncate(MAXIMUM_RECENT_FILES);
+            let files = merge_recent_files(
+                self.recent_files(),
+                recent_files_of(&disk),
+                &self.removed_recent_keys,
+            );
             self.set_recent_files(&files);
         } else {
             // set_last_file_dialog_directory can re-insert the section after write_options dropped it.
@@ -555,6 +547,27 @@ impl SettingsFile {
 /// Recent entries are the same file when their paths match ignoring ASCII case.
 fn recent_key(path: &str) -> String {
     path.to_ascii_lowercase()
+}
+
+/// The session's list first, then disk entries it neither holds nor removed, capped at the maximum.
+fn merge_recent_files(
+    session: Vec<(String, String)>,
+    disk: impl IntoIterator<Item = (String, String)>,
+    removed_keys: &HashSet<String>,
+) -> Vec<(String, String)> {
+    let mut files = session;
+    let mut seen: HashSet<String> = files.iter().map(|(_, path)| recent_key(path)).collect();
+    for (name, path) in disk {
+        let key = recent_key(&path);
+        if removed_keys.contains(&key) {
+            continue; // dropped as missing this session
+        }
+        if seen.insert(key) {
+            files.push((name, path));
+        }
+    }
+    files.truncate(MAXIMUM_RECENT_FILES);
+    files
 }
 
 fn settings_path() -> PathBuf {
@@ -1250,5 +1263,38 @@ mod recent_files_tests {
             .collect();
         // This session first, the disk's b folded into the session's B, the removed a gone.
         assert_eq!(paths, ["C:\\d\\B.png", "C:\\d\\c.png"]);
+    }
+}
+
+#[cfg(test)]
+mod recent_merge_tests {
+    use super::*;
+
+    fn entry(name: &str) -> (String, String) {
+        (name.to_string(), format!("C:\\p\\{name}"))
+    }
+
+    #[test]
+    fn disk_entries_removed_this_session_stay_out() {
+        let removed: HashSet<String> = [recent_key("C:\\p\\gone")].into_iter().collect();
+        let merged =
+            merge_recent_files(vec![entry("kept")], [entry("gone"), entry("new")], &removed);
+        assert_eq!(merged, vec![entry("kept"), entry("new")]);
+    }
+
+    #[test]
+    fn a_disk_entry_the_session_holds_is_not_added_again_whatever_its_case() {
+        let disk = vec![("KEPT".to_string(), "C:\\P\\KEPT".to_string())];
+        let merged = merge_recent_files(vec![entry("kept")], disk, &HashSet::new());
+        assert_eq!(merged, vec![entry("kept")]);
+    }
+
+    #[test]
+    fn the_merge_is_capped_at_the_maximum() {
+        let session: Vec<_> = (0..MAXIMUM_RECENT_FILES)
+            .map(|i| entry(&format!("s{i}")))
+            .collect();
+        let merged = merge_recent_files(session.clone(), [entry("disk")], &HashSet::new());
+        assert_eq!(merged, session);
     }
 }
