@@ -853,7 +853,7 @@ impl ImageCore {
         else {
             return ListingInstall::Discarded;
         };
-        let mut entries = match scan.result {
+        let entries = match scan.result {
             Ok(entries) => entries,
             Err(error) => {
                 // A refresh that failed to enumerate leaves the listing it was refreshing.
@@ -867,40 +867,52 @@ impl ImageCore {
                 };
             }
         };
+        self.install_entries(entries, scan.scope, &scan.options);
+        if pending.purpose == ScanPurpose::OpenFirstEntry {
+            return ListingInstall::Opened {
+                outcome: self.open_first_entry(&pending.scope),
+            };
+        }
+        self.refresh_preload();
+        ListingInstall::Installed
+    }
+
+    /// Takes the scanned entries as the listing, re-sorted when the options moved since the scan.
+    fn install_entries(
+        &mut self,
+        mut entries: Vec<ListingEntry>,
+        scope: ListingScope,
+        scanned_with: &ListingOptions,
+    ) {
         // The worker used an options snapshot; a change since then re-sorts here.
         let current = ListingOptions::from(&self.options);
-        if scan.options != current {
+        if *scanned_with != current {
             sort_entries(&mut entries, &self.options);
         }
         self.carry_weights_into(&mut entries);
         self.missing_anchor = self.missing_anchor_for(&entries);
         self.entries = entries;
-        self.listing_scope = Some(scan.scope);
+        self.listing_scope = Some(scope);
         // A filter change during the scan: this listing shows until the re-collection arrives.
-        if !scan.options.same_filters(&current) {
+        if !scanned_with.same_filters(&current) {
             self.submit_refresh_scan();
         }
-        if pending.purpose == ScanPurpose::OpenFirstEntry {
-            let Some(first) = self.entries.first().map(|entry| entry.location.clone()) else {
-                // Opened to show something; a listing with nothing to show is the error.
-                let message = match &pending.scope {
-                    ListingScope::Directory(_) => "Folder contains no supported images",
-                    ListingScope::Archive(_) => "Archive contains no supported images",
-                };
-                self.request = ViewRequest::Failed(
-                    ItemLocation::File(pending.scope.path().to_path_buf()),
-                    decode::uncoded_error(message),
-                );
-                return ListingInstall::Opened {
-                    outcome: LoadOutcome::Failed,
-                };
+    }
+
+    /// Loads the first entry the open produced; a listing with nothing to show is the error.
+    fn open_first_entry(&mut self, scope: &ListingScope) -> LoadOutcome {
+        let Some(first) = self.entries.first().map(|entry| entry.location.clone()) else {
+            let message = match scope {
+                ListingScope::Directory(_) => "Folder contains no supported images",
+                ListingScope::Archive(_) => "Archive contains no supported images",
             };
-            return ListingInstall::Opened {
-                outcome: self.load_item(&first),
-            };
-        }
-        self.refresh_preload();
-        ListingInstall::Installed
+            self.request = ViewRequest::Failed(
+                ItemLocation::File(scope.path().to_path_buf()),
+                decode::uncoded_error(message),
+            );
+            return LoadOutcome::Failed;
+        };
+        self.load_item(&first)
     }
 
     /// True while a listing scan is submitted; the window is loading, not empty.
@@ -1402,17 +1414,7 @@ impl ImageCore {
         location: &ItemLocation,
         preferred: NavigationCommand,
     ) -> Option<PathBuf> {
-        let opposite = match preferred {
-            NavigationCommand::Previous => NavigationCommand::Next,
-            _ => NavigationCommand::Previous,
-        };
-        let successor = [preferred, opposite]
-            .into_iter()
-            .find_map(|direction| {
-                self.navigation_target(direction)
-                    .filter(|candidate| candidate != location)
-            })
-            .and_then(|candidate| candidate.as_file().map(Path::to_path_buf));
+        let successor = self.successor_after_removal(location, preferred);
         self.remove_listing_entry(location);
         // The file is gone; its decode must not outlive it in the cache.
         if let Some(entry) = self.cache.remove(location) {
@@ -1422,6 +1424,25 @@ impl ImageCore {
             self.clear_current_item();
         }
         successor
+    }
+
+    /// The file to show once `location` is gone: the preferred direction first, then the other.
+    fn successor_after_removal(
+        &self,
+        location: &ItemLocation,
+        preferred: NavigationCommand,
+    ) -> Option<PathBuf> {
+        let opposite = match preferred {
+            NavigationCommand::Previous => NavigationCommand::Next,
+            _ => NavigationCommand::Previous,
+        };
+        [preferred, opposite]
+            .into_iter()
+            .find_map(|direction| {
+                self.navigation_target(direction)
+                    .filter(|candidate| candidate != location)
+            })
+            .and_then(|candidate| candidate.as_file().map(Path::to_path_buf))
     }
 
     /// Synchronous by design; only opens enumerate off the UI thread.
@@ -1444,12 +1465,6 @@ impl ImageCore {
 
     /// Speculation waits for the display; the cancel and evict sweeps do not.
     pub fn refresh_preload(&mut self) {
-        // A pending upgrade of what is already on screen (RAW, animation) still speculates.
-        let awaiting_first_view = self.request.pending().is_some_and(|pending| {
-            self.current
-                .as_ref()
-                .is_none_or(|current| current.location != *pending)
-        });
         let plan = self.preload_plan();
         // Candidates in priority order; a missing anchor still names adjacent entries.
         let candidates = preload_candidates(
@@ -1458,23 +1473,43 @@ impl ImageCore {
             self.entries.len(),
             self.options.loop_within_folder,
         );
-        let mut targets: HashSet<ItemLocation> = candidates
-            .iter()
-            .map(|&index| self.entries[index].location.clone())
-            .collect();
-        targets.extend(self.navigation_anchor().cloned());
+        let targets = self.preload_targets(&candidates);
         if plan.ahead == 0 && plan.behind == 0 {
-            for (_, entry) in self.cache.drain() {
-                self.releaser.release(entry.image);
-            }
+            self.release_all_cached();
         } else {
             self.drop_entries_outside(&targets);
-            if !awaiting_first_view {
+            if !self.awaiting_first_view() {
                 self.submit_preload_decodes(&candidates, plan.budget);
             }
         }
         self.cancel_decodes_outside(&targets);
         self.evict_cache();
+    }
+
+    /// The requested item is not on screen yet; a pending upgrade of what shows (RAW, animation) is not.
+    fn awaiting_first_view(&self) -> bool {
+        self.request.pending().is_some_and(|pending| {
+            self.current
+                .as_ref()
+                .is_none_or(|current| current.location != *pending)
+        })
+    }
+
+    /// The candidates' locations plus the anchor: what the sweeps keep.
+    fn preload_targets(&self, candidates: &[usize]) -> HashSet<ItemLocation> {
+        let mut targets: HashSet<ItemLocation> = candidates
+            .iter()
+            .map(|&index| self.entries[index].location.clone())
+            .collect();
+        targets.extend(self.navigation_anchor().cloned());
+        targets
+    }
+
+    /// Preloading is off: nothing stays cached.
+    fn release_all_cached(&mut self) {
+        for (_, entry) in self.cache.drain() {
+            self.releaser.release(entry.image);
+        }
     }
 
     /// Queues candidates while their weights fit the budget; unknown weights probe first.
@@ -1564,34 +1599,41 @@ impl ImageCore {
     /// SVG rasters at the largest monitor's size, so a monitor change expires them.
     pub fn invalidate_svg_rasters(&mut self) {
         decode::invalidate_monitor_size();
-        let display_sized = |location: &ItemLocation| {
-            location
-                .extension_lowercase()
-                .is_some_and(|extension| decode::weight_depends_on_display(&extension))
-        };
+        self.expire_display_sized_weights();
+        self.release_display_sized_rasters();
+        self.reload_current_if_display_sized();
+    }
+
+    fn expire_display_sized_weights(&mut self) {
         for entry in &mut self.entries {
             // An unprobed entry has no weight to clear, and the name lookup is not free.
             if entry.weight == DecodedWeight::Unknown {
                 continue;
             }
-            if display_sized(&entry.location) {
+            if weight_depends_on_display(&entry.location) {
                 entry.weight = DecodedWeight::Unknown;
             }
         }
-        // The cached rasters expire with the weights; a revisit rasterizes at the new size.
+    }
+
+    /// The cached rasters expire with the weights; a revisit rasterizes at the new size.
+    fn release_display_sized_rasters(&mut self) {
         let cache = &mut self.cache;
         let releaser = &self.releaser;
-        for (_, entry) in cache.extract_if(|location, _| display_sized(location)) {
+        for (_, entry) in cache.extract_if(|location, _| weight_depends_on_display(location)) {
             releaser.release(entry.image);
         }
-        // The one on screen re-rasterizes now; a URL waits for reload, its only outlet.
+    }
+
+    /// The one on screen re-rasterizes now; a URL waits for reload, its only outlet.
+    fn reload_current_if_display_sized(&mut self) {
         if self.request.pending().is_none()
             && let Some(location) = self
                 .current
                 .as_ref()
                 .map(|current| &current.location)
                 .filter(|location| {
-                    display_sized(location) && !matches!(location, ItemLocation::Url(_))
+                    weight_depends_on_display(location) && !matches!(location, ItemLocation::Url(_))
                 })
                 .cloned()
         {
@@ -2250,6 +2292,13 @@ fn worker_loop(shared: &PoolShared, window: isize) {
             }),
         );
     }
+}
+
+/// Rasters of this item are sized to the monitor, so its weight and cache expire with it.
+fn weight_depends_on_display(location: &ItemLocation) -> bool {
+    location
+        .extension_lowercase()
+        .is_some_and(|extension| decode::weight_depends_on_display(&extension))
 }
 
 /// Header-only weight probe on a worker; the result is recorded on the listing entry.
