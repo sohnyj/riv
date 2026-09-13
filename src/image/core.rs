@@ -951,39 +951,14 @@ impl ImageCore {
         }
         // This request owns the view from here; what the last one left stops deciding what shows.
         self.request = ViewRequest::Idle;
-        let metadata = match location {
-            ItemLocation::File(path) => match std::fs::metadata(path) {
-                Ok(file) => ItemMetadata {
-                    file_size: file.len(),
-                    modified: file.modified().ok(),
-                },
-                Err(error) => {
-                    self.request = ViewRequest::Failed(location.clone(), decode::os_error(&error));
-                    // The wait this request dropped may still hold a decode; the sweep ends it.
-                    self.refresh_preload();
-                    return LoadOutcome::Failed;
-                }
-            },
-            // Member sizes are fixed by the listing; a vanished member fails here.
-            ItemLocation::ArchiveMember { .. } => match self.position_of(location) {
-                Some(index) => self.entries[index].metadata(),
-                None => {
-                    self.request = ViewRequest::Failed(
-                        location.clone(),
-                        decode::uncoded_error(archive_reader::MEMBER_MISSING_MESSAGE),
-                    );
-                    self.refresh_preload();
-                    return LoadOutcome::Failed;
-                }
-            },
-            // A cached remote item stays valid until an explicit reload.
-            ItemLocation::Url(_) => ItemMetadata {
-                file_size: self
-                    .cache
-                    .get(location)
-                    .map_or(0, |entry| entry.metadata.file_size),
-                modified: None,
-            },
+        let metadata = match self.item_metadata(location) {
+            Ok(metadata) => metadata,
+            Err(error) => {
+                self.request = ViewRequest::Failed(location.clone(), error);
+                // The wait this request dropped may still hold a decode; the sweep ends it.
+                self.refresh_preload();
+                return LoadOutcome::Failed;
+            }
         };
         let cached = self
             .cache
@@ -1019,6 +994,34 @@ impl ImageCore {
             LoadOutcome::Shown
         } else {
             LoadOutcome::Pending
+        }
+    }
+
+    /// The size and time a cache entry must match: the file's, the listing's, or the cached URL's.
+    fn item_metadata(&self, location: &ItemLocation) -> Result<ItemMetadata, DecodeError> {
+        match location {
+            ItemLocation::File(path) => match std::fs::metadata(path) {
+                Ok(file) => Ok(ItemMetadata {
+                    file_size: file.len(),
+                    modified: file.modified().ok(),
+                }),
+                Err(error) => Err(decode::os_error(&error)),
+            },
+            // Member sizes are fixed by the listing; a vanished member fails here.
+            ItemLocation::ArchiveMember { .. } => match self.position_of(location) {
+                Some(index) => Ok(self.entries[index].metadata()),
+                None => Err(decode::uncoded_error(
+                    archive_reader::MEMBER_MISSING_MESSAGE,
+                )),
+            },
+            // A cached remote item stays valid until an explicit reload.
+            ItemLocation::Url(_) => Ok(ItemMetadata {
+                file_size: self
+                    .cache
+                    .get(location)
+                    .map_or(0, |entry| entry.metadata.file_size),
+                modified: None,
+            }),
         }
     }
 
