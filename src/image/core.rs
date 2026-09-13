@@ -5,7 +5,7 @@ use std::hash::{Hash, Hasher};
 use std::os::windows::fs::MetadataExt;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::{Arc, Condvar, Mutex, mpsc};
+use std::sync::{Arc, Condvar, Mutex, MutexGuard, mpsc};
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 use windows::Win32::Foundation::HWND;
@@ -2004,6 +2004,27 @@ struct PoolShared {
     available: Condvar,
 }
 
+impl PoolShared {
+    /// The job queue; the lock is poisoned only by a worker that panicked holding it.
+    fn queue(&self) -> MutexGuard<'_, VecDeque<DecodeJob>> {
+        self.queue.lock().expect("decode queue poisoned")
+    }
+
+    /// Blocks until a job is posted; the queue comes back locked.
+    fn wait_for_job<'a>(
+        &'a self,
+        queue: MutexGuard<'a, VecDeque<DecodeJob>>,
+    ) -> MutexGuard<'a, VecDeque<DecodeJob>> {
+        self.available.wait(queue).expect("decode queue poisoned")
+    }
+
+    fn upload_device(&self) -> MutexGuard<'_, Option<UploadDevice>> {
+        self.upload_device
+            .lock()
+            .expect("upload device lock poisoned")
+    }
+}
+
 struct DecodePool {
     shared: Arc<PoolShared>,
 }
@@ -2025,11 +2046,7 @@ impl DecodePool {
     }
 
     fn set_upload_device(&self, upload_device: Option<UploadDevice>) {
-        *self
-            .shared
-            .upload_device
-            .lock()
-            .expect("upload device lock poisoned") = upload_device;
+        *self.shared.upload_device() = upload_device;
     }
 
     fn submit(
@@ -2040,7 +2057,7 @@ impl DecodePool {
         kind: JobKind,
         awaited: bool,
     ) {
-        let mut queue = self.shared.queue.lock().expect("decode queue poisoned");
+        let mut queue = self.shared.queue();
         let job = DecodeJob {
             location,
             metadata,
@@ -2059,7 +2076,7 @@ impl DecodePool {
 
     /// A job a worker already took keeps its kind; PreviewFinal covers that arrival.
     fn promote(&self, location: &ItemLocation) {
-        let mut queue = self.shared.queue.lock().expect("decode queue poisoned");
+        let mut queue = self.shared.queue();
         if let Some(position) = queue
             .iter()
             .position(|job| job.kind != JobKind::Probe && job.location == *location)
@@ -2075,7 +2092,7 @@ impl DecodePool {
         &self,
         relevant: &HashSet<ItemLocation>,
     ) -> Vec<(ItemLocation, JobKind)> {
-        let mut queue = self.shared.queue.lock().expect("decode queue poisoned");
+        let mut queue = self.shared.queue();
         let mut removed = Vec::new();
         queue.retain(|job| {
             if relevant.contains(&job.location) {
@@ -2107,12 +2124,12 @@ fn worker_loop(shared: &PoolShared, window: isize) {
         .expect("CoInitializeEx MTA failed");
     loop {
         let job = {
-            let mut queue = shared.queue.lock().expect("decode queue poisoned");
+            let mut queue = shared.queue();
             loop {
                 if let Some(job) = queue.pop_front() {
                     break job;
                 }
-                queue = shared.available.wait(queue).expect("decode queue poisoned");
+                queue = shared.wait_for_job(queue);
             }
         };
         if job.kind == JobKind::Probe {
@@ -2209,11 +2226,7 @@ fn worker_loop(shared: &PoolShared, window: isize) {
         }
         .map(Arc::new);
         let texture = result.as_ref().ok().and_then(|image| {
-            let upload_device = shared
-                .upload_device
-                .lock()
-                .expect("upload device lock poisoned")
-                .clone()?;
+            let upload_device = shared.upload_device().clone()?;
             upload_still_texture(&upload_device, image)
         });
         // The texture is the only copy: the decode buffer frees here at the source.
