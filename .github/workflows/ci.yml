@@ -55,3 +55,11 @@ jobs:
           CARGO_TARGET_X86_64_PC_WINDOWS_MSVC_RUNNER: wine
           WINEDEBUG: "-all"
         run: cargo test
+
+      # The tested executable, for a hands-on check without a release.
+      - name: Upload the executable as a workflow artifact
+        uses: actions/upload-artifact@v7
+        with:
+          name: riv-${{ github.sha }}
+          path: target/x86_64-pc-windows-msvc/release/riv.exe
+          if-no-files-found: error
