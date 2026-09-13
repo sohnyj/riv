@@ -39,10 +39,7 @@ pub fn enumerate_in_background(window: HWND, extension: String) {
 
 fn enumerate(extension: String) -> OpenWithList {
     let mut items = Vec::new();
-    let own_executable = std::env::current_exe()
-        .expect("the running module always has a path")
-        .to_string_lossy()
-        .into_owned();
+    let own_executable = crate::executable_path().to_string_lossy().into_owned();
     let dotted_extension = HSTRING::from(format!(".{extension}"));
     let default_executable = default_executable_for(&dotted_extension);
 

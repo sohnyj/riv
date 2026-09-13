@@ -101,6 +101,11 @@ const APPLICATION_NAME: &str = "riv";
 /// Shortcut and registry capability description; Cargo.toml owns the wording.
 const APPLICATION_DESCRIPTION: &str = env!("CARGO_PKG_DESCRIPTION");
 
+/// The running executable: settings live beside it, and the shell registers and spawns it.
+pub fn executable_path() -> PathBuf {
+    std::env::current_exe().expect("the running module always has a path")
+}
+
 /// The title-bar text setting: what `update_window_title` composes for the caption.
 #[derive(Clone, Copy)]
 pub enum TitleBarText {
@@ -2461,8 +2466,9 @@ fn create_main_window(initial_path: Option<&Path>, pending_device: PendingDevice
 }
 
 fn open_in_new_window(path: &Path) -> std::io::Result<()> {
-    let executable = std::env::current_exe().expect("the running module always has a path");
-    std::process::Command::new(executable).arg(path).spawn()?;
+    std::process::Command::new(executable_path())
+        .arg(path)
+        .spawn()?;
     Ok(())
 }
 

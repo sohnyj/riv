@@ -76,10 +76,7 @@ fn registry_key_is_empty(subkey: &str) -> bool {
 }
 
 fn ensure_application_registration() {
-    let executable = std::env::current_exe()
-        .expect("the running module always has a path")
-        .to_string_lossy()
-        .into_owned();
+    let executable = crate::executable_path().to_string_lossy().into_owned();
     let progid_key = classes_progid_key();
     let capabilities = capabilities_key();
     registry_set_string(
@@ -205,10 +202,7 @@ mod reversibility_tests {
         registered.sort();
         assert_eq!(registered, both);
 
-        let executable = std::env::current_exe()
-            .expect("the running module always has a path")
-            .to_string_lossy()
-            .into_owned();
+        let executable = crate::executable_path().to_string_lossy().into_owned();
         let progid_key = classes_progid_key();
         assert_eq!(
             registry_read_string(&format!("{progid_key}\\DefaultIcon"), ""),
