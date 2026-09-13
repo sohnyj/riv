@@ -337,6 +337,16 @@ pub const MAXIMUM_ANIMATION_FRAMES_BYTES: u64 = 1 << 30;
 /// Frame delay when the container declares none or an unusable one.
 pub const DEFAULT_FRAME_DELAY_MILLISECONDS: u32 = 100;
 
+/// GIF delays are centiseconds; below the minimum the default replaces them, as browsers do.
+const GIF_DELAY_UNIT_MILLISECONDS: u32 = 10;
+const MINIMUM_GIF_DELAY_MILLISECONDS: u32 = 20;
+/// GIF graphic control disposal codes; 0 and 1 both keep the frame.
+const GIF_DISPOSAL_RESTORE_BACKGROUND: u32 = 2;
+const GIF_DISPOSAL_RESTORE_PREVIOUS: u32 = 3;
+/// An fcTL delay denominator of 0 reads as 100 per the APNG specification.
+const APNG_DEFAULT_DELAY_DENOMINATOR: u32 = 100;
+const MINIMUM_APNG_DELAY_MILLISECONDS: u32 = 10;
+
 /// Header probe window; the memory and the file inputs must classify identically.
 const HEADER_PROBE_BYTES: usize = 4096;
 
@@ -2341,8 +2351,8 @@ fn frame_metadata(frame: &IWICBitmapFrameDecode) -> FrameMetadata {
     let query = |name: PCWSTR| reader.as_ref().and_then(|reader| query_u32(reader, name));
 
     let delay_milliseconds = query(w!("/grctlext/Delay"))
-        .map(|centiseconds| centiseconds.saturating_mul(10))
-        .filter(|milliseconds| *milliseconds >= 20)
+        .map(|centiseconds| centiseconds.saturating_mul(GIF_DELAY_UNIT_MILLISECONDS))
+        .filter(|milliseconds| *milliseconds >= MINIMUM_GIF_DELAY_MILLISECONDS)
         .unwrap_or(DEFAULT_FRAME_DELAY_MILLISECONDS);
     FrameMetadata {
         left: query(w!("/imgdesc/Left")).unwrap_or(0),
@@ -2409,8 +2419,8 @@ fn decode_animation(
             // GIF frames are placed sub-rectangles that always composite over the canvas.
             blend: FrameBlend::Over,
             disposal: match metadata.disposal {
-                2 => FrameDisposal::Background,
-                3 => FrameDisposal::Previous,
+                GIF_DISPOSAL_RESTORE_BACKGROUND => FrameDisposal::Background,
+                GIF_DISPOSAL_RESTORE_PREVIOUS => FrameDisposal::Previous,
                 _ => FrameDisposal::Keep,
             },
             delay_milliseconds: metadata.delay_milliseconds,
@@ -2751,7 +2761,7 @@ fn decode_apng<Input: BufRead + Seek>(
         )?;
 
         let delay_denominator = if frame_control.delay_den == 0 {
-            100
+            APNG_DEFAULT_DELAY_DENOMINATOR
         } else {
             u32::from(frame_control.delay_den)
         };
@@ -2771,7 +2781,7 @@ fn decode_apng<Input: BufRead + Seek>(
                 png::DisposeOp::None => FrameDisposal::Keep,
             },
             delay_milliseconds: (u32::from(frame_control.delay_num) * 1000 / delay_denominator)
-                .max(10),
+                .max(MINIMUM_APNG_DELAY_MILLISECONDS),
         });
     }
     let (frames, frames_truncated) = compositor.finish();
