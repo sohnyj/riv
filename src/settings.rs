@@ -132,6 +132,11 @@ impl Options {
         self.slideshow_direction == 0
     }
 
+    /// Deleting shows the previous item; 0 = "Move back" in the after-deletion combo.
+    pub fn after_deletion_moves_back(&self) -> bool {
+        self.after_deletion == 0
+    }
+
     fn from_document(document: &Value) -> Self {
         let default = Self::default();
         let Some(options) = document.get(SECTION_OPTIONS).and_then(Value::as_object) else {

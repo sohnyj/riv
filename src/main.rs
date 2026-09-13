@@ -1906,7 +1906,7 @@ fn delete_current_file(application: &mut Application, window: HWND, permanent: b
             application.settings.store_options();
         }
     }
-    let preferred = if application.settings.options.after_deletion == 0 {
+    let preferred = if application.settings.options.after_deletion_moves_back() {
         NavigationCommand::Previous
     } else {
         NavigationCommand::Next
