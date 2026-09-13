@@ -1245,25 +1245,32 @@ fn refresh_shortcut_rows(state: &OptionsState) {
     }
 }
 
+/// The encodings every other row holds in the column, each with its action's label.
+fn taken_encodings(
+    rows: &[ShortcutRow],
+    row_index: usize,
+    mouse_column: bool,
+) -> Vec<(String, &'static str)> {
+    rows.iter()
+        .enumerate()
+        .filter(|(index, _)| *index != row_index)
+        .flat_map(|(_, row)| {
+            let encodings = if mouse_column {
+                &row.mouse
+            } else {
+                &row.keyboard
+            };
+            encodings
+                .iter()
+                .map(|encoding| (encoding.clone(), row.action.label()))
+        })
+        .collect()
+}
+
 /// Borrows the state in stages: the capture dialog's modal loop re-enters the procedures.
 fn edit_shortcut(page: HWND, row_index: usize, mouse_column: bool) {
     let Some((dialog, current, taken)) = state_mut(page).map(|state| {
-        let taken: Vec<(String, &'static str)> = state
-            .transient_shortcuts
-            .iter()
-            .enumerate()
-            .filter(|(index, _)| *index != row_index)
-            .flat_map(|(_, row)| {
-                let encodings = if mouse_column {
-                    &row.mouse
-                } else {
-                    &row.keyboard
-                };
-                encodings
-                    .iter()
-                    .map(|encoding| (encoding.clone(), row.action.label()))
-            })
-            .collect();
+        let taken = taken_encodings(&state.transient_shortcuts, row_index, mouse_column);
         let row = &state.transient_shortcuts[row_index];
         let current = if mouse_column {
             row.mouse.clone()
