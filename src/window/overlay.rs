@@ -18,7 +18,7 @@ use windows::Win32::System::Time::{FileTimeToSystemTime, SystemTimeToTzSpecificL
 use windows::core::{HSTRING, Result, w};
 use windows_numerics::Vector2;
 
-use crate::dialogs::about::{TITLE_FONT_FAMILY, TITLE_POINT_SIZE};
+use crate::dialogs::about::{POINTS_PER_INCH, TITLE_FONT_FAMILY, TITLE_POINT_SIZE};
 use crate::image::color;
 use crate::image::core::ItemMetadata;
 use crate::image::decode::{DecodedImage, ErrorCode, PixelStorage};
@@ -411,7 +411,7 @@ fn create_text_formats(
     let text_format = create_format(PANEL_FONT_LOGICAL_PIXEL_SIZE)?;
     let centered_format = create_format(CENTERED_FONT_LOGICAL_PIXEL_SIZE)?;
     // The About title's point size, to pixels at the D2D 96 DPI baseline.
-    let wordmark_format = create_format(TITLE_POINT_SIZE as f32 * 96.0 / 72.0)?;
+    let wordmark_format = create_format(TITLE_POINT_SIZE as f32 * 96.0 / POINTS_PER_INCH as f32)?;
     for format in [&centered_format, &wordmark_format] {
         unsafe {
             format.SetTextAlignment(DWRITE_TEXT_ALIGNMENT_CENTER)?;

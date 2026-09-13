@@ -17,6 +17,8 @@ use crate::dialogs::resource::{
 
 /// Title type, shared with the empty-window wordmark that matches it.
 pub const TITLE_POINT_SIZE: i32 = 40;
+/// Font sizes are typographic points; pixels = points * dpi / this.
+pub const POINTS_PER_INCH: i32 = 72;
 pub const TITLE_FONT_FAMILY: windows::core::PCWSTR = w!("Lucida Console");
 const VERSION_POINT_SIZE: i32 = 14;
 
@@ -175,7 +177,7 @@ fn set_font(page: HWND, control: i32, font: HFONT) {
 fn create_font(point_size: i32, dpi: i32) -> HFONT {
     unsafe {
         CreateFontW(
-            -(point_size * dpi / 72),
+            -(point_size * dpi / POINTS_PER_INCH),
             0,
             0,
             0,
