@@ -1518,6 +1518,20 @@ fn toggle_association_at_cursor(state: &mut OptionsState, tree: HWND) {
 }
 
 fn toggle_association_item(state: &mut OptionsState, tree: HWND, item: HTREEITEM) {
+    let target = association_target(tree_item_data(tree, item));
+    let (changed, group_index) = toggle_association_target(state, target);
+    for index in changed {
+        let entry = &state.extensions[index];
+        tree_set_state_image(tree, entry.item, check_state(entry.checked));
+    }
+    if let Some(group_index) = group_index {
+        refresh_group_check_image(state, tree, group_index);
+    }
+    update_buttons(state);
+}
+
+/// The item's lParam: a group index under GROUP_FLAG or an extension index.
+fn tree_item_data(tree: HWND, item: HTREEITEM) -> isize {
     let mut query = TVITEMEXW {
         mask: TVIF_PARAM,
         hItem: item,
@@ -1531,35 +1545,48 @@ fn toggle_association_item(state: &mut OptionsState, tree: HWND, item: HTREEITEM
             Some(LPARAM(&raw mut query as isize)),
         )
     };
-    let item_data = query.lParam.0;
+    query.lParam.0
+}
+
+enum AssociationTarget {
+    Group(usize),
+    Extension(usize),
+}
+
+fn association_target(item_data: isize) -> AssociationTarget {
     if item_data & GROUP_FLAG != 0 {
-        let group_index = (item_data & !GROUP_FLAG) as usize;
-        let group = &state.groups[group_index];
-        let extensions = &mut state.extensions;
-        let all_checked = group
-            .members
-            .iter()
-            .all(|member| extensions[*member].checked);
-        for member in &group.members {
-            let entry = &mut extensions[*member];
-            entry.checked = !all_checked;
-            tree_set_state_image(tree, entry.item, check_state(entry.checked));
-        }
-        refresh_group_check_image(state, tree, group_index);
+        AssociationTarget::Group((item_data & !GROUP_FLAG) as usize)
     } else {
-        let extension_index = item_data as usize;
-        let entry = &mut state.extensions[extension_index];
-        entry.checked = !entry.checked;
-        tree_set_state_image(tree, entry.item, check_state(entry.checked));
-        if let Some(group_index) = state
-            .groups
-            .iter()
-            .position(|group| group.members.contains(&extension_index))
-        {
-            refresh_group_check_image(state, tree, group_index);
+        AssociationTarget::Extension(item_data as usize)
+    }
+}
+
+/// Flips the target in the model; the extensions whose check changed and the group to re-summarize.
+fn toggle_association_target(
+    state: &mut OptionsState,
+    target: AssociationTarget,
+) -> (Vec<usize>, Option<usize>) {
+    match target {
+        AssociationTarget::Group(group_index) => {
+            let members = state.groups[group_index].members.clone();
+            let all_checked = members
+                .iter()
+                .all(|member| state.extensions[*member].checked);
+            for member in &members {
+                state.extensions[*member].checked = !all_checked;
+            }
+            (members, Some(group_index))
+        }
+        AssociationTarget::Extension(extension_index) => {
+            let entry = &mut state.extensions[extension_index];
+            entry.checked = !entry.checked;
+            let group_index = state
+                .groups
+                .iter()
+                .position(|group| group.members.contains(&extension_index));
+            (vec![extension_index], group_index)
         }
     }
-    update_buttons(state);
 }
 
 fn refresh_group_check_image(state: &OptionsState, tree: HWND, group_index: usize) {
