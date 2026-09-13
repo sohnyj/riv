@@ -1925,25 +1925,13 @@ fn delete_current_file(application: &mut Application, window: HWND, permanent: b
     let Some(path) = application.image_core.current_file().map(Path::to_path_buf) else {
         return;
     };
-    let confirmation = if permanent || application.settings.options.ask_delete {
-        let details = application.delete_details(&path);
-        Some(file_ops::confirm_delete(window, &details, permanent))
-    } else {
-        None
-    };
+    if !confirm_deletion(application, window, &path, permanent) {
+        return;
+    }
     // The confirmation pumped messages, so re-fetch instead of reusing the reference across it.
     let Some(application) = application_from_window(window) else {
         return;
     };
-    if let Some(confirmation) = confirmation {
-        if !confirmation.confirmed {
-            return;
-        }
-        if !permanent && confirmation.do_not_ask_again {
-            application.settings.options.ask_delete = false;
-            application.settings.store_options();
-        }
-    }
     let preferred = if application.settings.options.after_deletion_moves_back() {
         NavigationCommand::Previous
     } else {
@@ -1954,19 +1942,48 @@ fn delete_current_file(application: &mut Application, window: HWND, permanent: b
     let Some(application) = application_from_window(window) else {
         return;
     };
-    match deletion {
-        Ok(()) => match application
+    show_after_deletion(application, window, path, deletion.is_ok(), preferred);
+}
+
+/// Asks when a permanent delete or the setting requires it; a confirmed "don't ask again" is stored.
+fn confirm_deletion(application: &Application, window: HWND, path: &Path, permanent: bool) -> bool {
+    if !(permanent || application.settings.options.ask_delete) {
+        return true;
+    }
+    let details = application.delete_details(path);
+    let confirmation = file_ops::confirm_delete(window, &details, permanent);
+    if !confirmation.confirmed {
+        return false;
+    }
+    // The confirmation pumped messages, so re-fetch instead of reusing the reference across it.
+    let Some(application) = application_from_window(window) else {
+        return false;
+    };
+    if !permanent && confirmation.do_not_ask_again {
+        application.settings.options.ask_delete = false;
+        application.settings.store_options();
+    }
+    true
+}
+
+/// After a delete: the preferred item, an empty window, or a reload when the delete failed.
+fn show_after_deletion(
+    application: &mut Application,
+    window: HWND,
+    path: PathBuf,
+    deleted: bool,
+    preferred: NavigationCommand,
+) {
+    if deleted {
+        match application
             .image_core
             .remove_deleted_item(&ItemLocation::File(path), preferred)
         {
             Some(target) => open_external_path(application, window, &target),
             None => application.clear_displayed_image(window),
-        },
-        Err(_) => {
-            if let Some(outcome) = application.image_core.reload_current() {
-                application.apply_load_outcome(window, outcome);
-            }
         }
+    } else if let Some(outcome) = application.image_core.reload_current() {
+        application.apply_load_outcome(window, outcome);
     }
 }
 
