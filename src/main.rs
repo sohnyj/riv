@@ -698,25 +698,30 @@ impl Application {
     }
 
     fn save_on_exit(&mut self, window: HWND) {
-        if self.settings.options.remember_window_placement {
-            let restore = self
-                .fullscreen_restore
-                .or(self.remembered_window_placement)
-                .unwrap_or_else(|| WindowRestore::capture(window));
-            // Nothing is written before the window has been visible somewhere.
-            if !restore.minimized() {
-                let bounds = restore.saved_bounds();
-                self.settings.set_window_placement(
-                    bounds.left,
-                    bounds.top,
-                    bounds.right - bounds.left,
-                    bounds.bottom - bounds.top,
-                    restore.maximized(),
-                );
-            }
+        if let Some((bounds, maximized)) = self.placement_to_save(window) {
+            self.settings.set_window_placement(
+                bounds.left,
+                bounds.top,
+                bounds.right - bounds.left,
+                bounds.bottom - bounds.top,
+                maximized,
+            );
         }
         // The window is closing, so the failure has nowhere to show; the settings dialog reports it.
         let _ = self.settings.save_merging_recents();
+    }
+
+    /// The bounds and maximized state to remember; None when the setting is off or nothing was visible.
+    fn placement_to_save(&self, window: HWND) -> Option<(RECT, bool)> {
+        if !self.settings.options.remember_window_placement {
+            return None;
+        }
+        let restore = self
+            .fullscreen_restore
+            .or(self.remembered_window_placement)
+            .unwrap_or_else(|| WindowRestore::capture(window));
+        // Nothing is written before the window has been visible somewhere.
+        (!restore.minimized()).then(|| (restore.saved_bounds(), restore.maximized()))
     }
 
     /// The title follows the navigation anchor, so a running load already names its file.
