@@ -2168,130 +2168,165 @@ fn worker_loop(shared: &PoolShared, window: isize) {
         .ok()
         .expect("CoInitializeEx MTA failed");
     loop {
-        let job = {
-            let mut queue = shared.queue();
-            loop {
-                if let Some(job) = queue.pop_front() {
-                    break job;
-                }
-                queue = shared.wait_for_job(queue);
-            }
-        };
+        let job = next_job(shared);
         if job.kind == JobKind::Probe {
             run_probe_job(&job, window);
             continue;
         }
         let mut metadata = job.metadata;
-        let post_preview = |image: DecodedImage, last: bool| {
-            post_boxed(
-                window,
-                WM_APP_DECODE_COMPLETE,
-                Box::new(DecodeCompletion {
-                    location: job.location.clone(),
-                    metadata: job.metadata,
-                    stage: if last {
-                        DecodeStage::PreviewFinal
-                    } else {
-                        DecodeStage::Preview
-                    },
-                    result: Ok(Arc::new(image)),
-                    texture: None,
-                }),
-            );
+        let Some(result) = decode_job(&job, window, &mut metadata) else {
+            continue; // a posted preview finished the job
         };
-        let result = match &job.location {
-            ItemLocation::File(path) => {
-                if job.kind != JobKind::Full
-                    && let Some(preview) = decode::decode_two_stage_preview(path, &job.cancellation)
-                {
-                    post_preview(preview, true);
-                    continue; // the full decode is submitted separately
-                }
-                // An animation opens on its first frame; a guess stops there.
-                if (job.speculative || job.kind != JobKind::Full)
-                    && let Some(first_frame) =
-                        decode::decode_animation_first_frame(path, &job.cancellation)
-                {
-                    post_preview(first_frame, job.speculative);
-                    if job.speculative {
-                        continue;
-                    }
-                }
-                decode::decode_file(path, &job.cancellation)
+        post_final_result(shared, window, job.location, metadata, result);
+    }
+}
+
+/// Blocks until the queue holds a job.
+fn next_job(shared: &PoolShared) -> DecodeJob {
+    let mut queue = shared.queue();
+    loop {
+        if let Some(job) = queue.pop_front() {
+            return job;
+        }
+        queue = shared.wait_for_job(queue);
+    }
+}
+
+/// A preview stage result for the job; `last` marks the preview as the job's final post.
+fn post_preview(window: isize, job: &DecodeJob, image: DecodedImage, last: bool) {
+    post_boxed(
+        window,
+        WM_APP_DECODE_COMPLETE,
+        Box::new(DecodeCompletion {
+            location: job.location.clone(),
+            metadata: job.metadata,
+            stage: if last {
+                DecodeStage::PreviewFinal
+            } else {
+                DecodeStage::Preview
+            },
+            result: Ok(Arc::new(image)),
+            texture: None,
+        }),
+    );
+}
+
+/// The job's decode for its location kind; None when a posted preview already finished the job.
+fn decode_job(
+    job: &DecodeJob,
+    window: isize,
+    metadata: &mut ItemMetadata,
+) -> Option<Result<DecodedImage, DecodeError>> {
+    let result = match &job.location {
+        ItemLocation::File(path) => {
+            if job.kind != JobKind::Full
+                && let Some(preview) = decode::decode_two_stage_preview(path, &job.cancellation)
+            {
+                post_preview(window, job, preview, true);
+                return None; // the full decode is submitted separately
             }
-            ItemLocation::ArchiveMember { archive, member } => {
-                match archive_reader::read_member(archive, member, &job.cancellation) {
-                    Ok(member_bytes) => {
-                        let extension = job.location.extension_lowercase();
-                        // An animation opens on its first frame; a guess stops there.
-                        if (job.speculative || job.kind != JobKind::Full)
-                            && let Some(first_frame) = decode::decode_animation_first_frame_bytes(
-                                &member_bytes,
-                                extension.as_deref(),
-                                &job.cancellation,
-                            )
-                        {
-                            post_preview(first_frame, job.speculative);
-                            if job.speculative {
-                                continue;
-                            }
+            // An animation opens on its first frame; a guess stops there.
+            if (job.speculative || job.kind != JobKind::Full)
+                && let Some(first_frame) =
+                    decode::decode_animation_first_frame(path, &job.cancellation)
+            {
+                post_preview(window, job, first_frame, job.speculative);
+                if job.speculative {
+                    return None;
+                }
+            }
+            decode::decode_file(path, &job.cancellation)
+        }
+        ItemLocation::ArchiveMember { archive, member } => {
+            match archive_reader::read_member(archive, member, &job.cancellation) {
+                Ok(member_bytes) => {
+                    let extension = job.location.extension_lowercase();
+                    // An animation opens on its first frame; a guess stops there.
+                    if (job.speculative || job.kind != JobKind::Full)
+                        && let Some(first_frame) = decode::decode_animation_first_frame_bytes(
+                            &member_bytes,
+                            extension.as_deref(),
+                            &job.cancellation,
+                        )
+                    {
+                        post_preview(window, job, first_frame, job.speculative);
+                        if job.speculative {
+                            return None;
                         }
-                        decode::decode_bytes(&member_bytes, extension.as_deref(), &job.cancellation)
                     }
-                    Err(error) => Err(error.into()),
+                    decode::decode_bytes(&member_bytes, extension.as_deref(), &job.cancellation)
                 }
-            }
-            ItemLocation::Url(url) => {
-                let mut last_report: Option<Instant> = None;
-                let mut report = |received_bytes: u64| {
-                    if last_report.is_some_and(|last| last.elapsed() < DOWNLOAD_PROGRESS_INTERVAL) {
-                        return;
-                    }
-                    last_report = Some(Instant::now());
-                    post_boxed(
-                        window,
-                        WM_APP_DOWNLOAD_PROGRESS,
-                        Box::new(DownloadProgress {
-                            location: job.location.clone(),
-                            received_bytes,
-                        }),
-                    );
-                };
-                match curl::download(url, &job.cancellation, &mut report) {
-                    Ok(bytes) => {
-                        // The remote size becomes known here.
-                        metadata.file_size = bytes.len() as u64;
-                        let extension = curl::extension_lowercase(url);
-                        decode::decode_bytes(&bytes, extension.as_deref(), &job.cancellation)
-                            .map_err(url_decode_error)
-                    }
-                    Err(error) => Err(error.into()),
-                }
+                Err(error) => Err(error.into()),
             }
         }
-        .map(Arc::new);
-        let texture = result.as_ref().ok().and_then(|image| {
-            let upload_device = shared.upload_device().clone()?;
-            upload_still_texture(&upload_device, image)
-        });
-        // The texture is the only copy: the decode buffer frees here at the source.
-        let result = if texture.is_some() {
-            result.map(|image| Arc::new(image.without_pixels()))
-        } else {
-            result
-        };
+        ItemLocation::Url(url) => match download_with_progress(url, job, window) {
+            Ok(bytes) => {
+                // The remote size becomes known here.
+                metadata.file_size = bytes.len() as u64;
+                let extension = curl::extension_lowercase(url);
+                decode::decode_bytes(&bytes, extension.as_deref(), &job.cancellation)
+                    .map_err(url_decode_error)
+            }
+            Err(error) => Err(error.into()),
+        },
+    };
+    Some(result)
+}
+
+/// Downloads the URL, posting progress at most once per DOWNLOAD_PROGRESS_INTERVAL.
+fn download_with_progress(
+    url: &str,
+    job: &DecodeJob,
+    window: isize,
+) -> Result<Vec<u8>, crate::network::curl::NetworkError> {
+    let mut last_report: Option<Instant> = None;
+    let mut report = |received_bytes: u64| {
+        if last_report.is_some_and(|last| last.elapsed() < DOWNLOAD_PROGRESS_INTERVAL) {
+            return;
+        }
+        last_report = Some(Instant::now());
         post_boxed(
             window,
-            WM_APP_DECODE_COMPLETE,
-            Box::new(DecodeCompletion {
-                location: job.location,
-                metadata,
-                stage: DecodeStage::Final,
-                result,
-                texture,
+            WM_APP_DOWNLOAD_PROGRESS,
+            Box::new(DownloadProgress {
+                location: job.location.clone(),
+                received_bytes,
             }),
         );
-    }
+    };
+    curl::download(url, &job.cancellation, &mut report)
+}
+
+/// Uploads the texture when a device is registered, drops the pixels it now holds, and posts.
+fn post_final_result(
+    shared: &PoolShared,
+    window: isize,
+    location: ItemLocation,
+    metadata: ItemMetadata,
+    result: Result<DecodedImage, DecodeError>,
+) {
+    let result = result.map(Arc::new);
+    let texture = result.as_ref().ok().and_then(|image| {
+        let upload_device = shared.upload_device().clone()?;
+        upload_still_texture(&upload_device, image)
+    });
+    // The texture is the only copy: the decode buffer frees here at the source.
+    let result = if texture.is_some() {
+        result.map(|image| Arc::new(image.without_pixels()))
+    } else {
+        result
+    };
+    post_boxed(
+        window,
+        WM_APP_DECODE_COMPLETE,
+        Box::new(DecodeCompletion {
+            location,
+            metadata,
+            stage: DecodeStage::Final,
+            result,
+            texture,
+        }),
+    );
 }
 
 /// Rasters of this item are sized to the monitor, so its weight and cache expire with it.
