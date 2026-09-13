@@ -57,26 +57,27 @@ pub enum MouseBase {
 }
 
 impl MouseBase {
+    /// Every base in discriminant order; `from_index` reads it and the round-trip test pins it.
+    const ALL: [Self; 6] = [
+        Self::DoubleClick,
+        Self::WheelButton,
+        Self::Back,
+        Self::Forward,
+        Self::WheelUp,
+        Self::WheelDown,
+    ];
+
     /// Recovers a base sent as its discriminant; the capture dialog packs one into a WPARAM.
     pub fn from_index(index: u8) -> Option<Self> {
-        match index {
-            0 => Some(Self::DoubleClick),
-            1 => Some(Self::WheelButton),
-            2 => Some(Self::Back),
-            3 => Some(Self::Forward),
-            4 => Some(Self::WheelUp),
-            5 => Some(Self::WheelDown),
-            _ => None,
-        }
+        Self::ALL.get(usize::from(index)).copied()
     }
 
     pub fn index(self) -> u8 {
         self as u8
     }
 
-    /// Every base, walked through the discriminant mapping so the two cannot drift.
     fn all() -> impl Iterator<Item = Self> {
-        (0u8..).map_while(Self::from_index)
+        Self::ALL.into_iter()
     }
 
     /// The encoding token; the match is exhaustive, so a new base cannot go unnamed.
