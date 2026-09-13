@@ -4,8 +4,8 @@ use std::sync::OnceLock;
 use windows::Win32::Foundation::{COLORREF, HWND, LPARAM, POINT, RECT, WPARAM};
 use windows::Win32::Graphics::Gdi::{
     CreateCompatibleBitmap, CreateCompatibleDC, CreateSolidBrush, DFC_BUTTON, DFCS_BUTTON3STATE,
-    DFCS_BUTTONCHECK, DFCS_CHECKED, DeleteDC, DeleteObject, DrawFrameControl, FillRect, FrameRect,
-    GetDC, GetSysColorBrush, ReleaseDC, SelectObject,
+    DFCS_BUTTONCHECK, DFCS_CHECKED, DFCS_STATE, DeleteDC, DeleteObject, DrawFrameControl, FillRect,
+    FrameRect, GetDC, GetSysColorBrush, ReleaseDC, SelectObject,
 };
 use windows::Win32::UI::Controls::Dialogs::{CC_FULLOPEN, CC_RGBINIT, CHOOSECOLORW, ChooseColorW};
 use windows::Win32::UI::Controls::{
@@ -68,6 +68,15 @@ const GROUP_FLAG: isize = 0x1000_0000;
 const STATE_UNCHECKED: isize = 1;
 const STATE_CHECKED: isize = 2;
 const STATE_PARTIAL: isize = 3;
+
+/// The tree's state images by state index; the control reserves index 0 for "no image".
+const STATE_IMAGE_STYLES: [DFCS_STATE; 4] = [
+    DFCS_BUTTONCHECK,
+    DFCS_BUTTONCHECK,
+    DFCS_STATE(DFCS_BUTTONCHECK.0 | DFCS_CHECKED.0),
+    DFCS_STATE(DFCS_BUTTON3STATE.0 | DFCS_CHECKED.0),
+];
+const _: () = assert!(STATE_IMAGE_STYLES.len() == STATE_PARTIAL as usize + 1);
 
 /// Shortcut list columns; the header order, the hit test, and the refresh share them.
 const ACTION_COLUMN: i32 = 0;
@@ -1371,7 +1380,7 @@ fn create_tristate_images() -> HIMAGELIST {
             STATE_IMAGE_EDGE_PIXELS,
             STATE_IMAGE_EDGE_PIXELS,
             ILC_COLOR32 | ILC_MASK,
-            4,
+            STATE_IMAGE_STYLES.len() as i32,
             0,
         )
     };
@@ -1380,12 +1389,7 @@ fn create_tristate_images() -> HIMAGELIST {
         return images;
     }
     let screen = unsafe { GetDC(None) };
-    for style in [
-        DFCS_BUTTONCHECK, // index 0 placeholder (state image 0 = none)
-        DFCS_BUTTONCHECK,
-        DFCS_BUTTONCHECK | DFCS_CHECKED,
-        DFCS_BUTTON3STATE | DFCS_CHECKED,
-    ] {
+    for style in STATE_IMAGE_STYLES {
         unsafe {
             let memory = CreateCompatibleDC(Some(screen));
             let bitmap =
