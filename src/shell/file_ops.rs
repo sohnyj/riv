@@ -45,20 +45,55 @@ pub struct DeleteConfirmation {
 
 /// `details` carries the file facts, one per line, the first being the name.
 pub fn confirm_delete(window: HWND, details: &str, permanent: bool) -> DeleteConfirmation {
-    // The title is the action's label, so the two delete actions title themselves apart.
-    let title = HSTRING::from(if permanent {
-        Action::DeletePermanently.label()
-    } else {
-        Action::Delete.label()
-    });
-    let question = if permanent {
-        "Permanently delete this file?"
-    } else {
-        "Move this file to the Recycle Bin?"
-    };
+    let wording = delete_wording(permanent);
     // The question goes in the content: a main instruction would enlarge and color it.
-    let content = HSTRING::from(format!("{question}\n\n{details}"));
-    let verification = w!("Don't ask again");
+    let content = format!("{}\n\n{details}", wording.question);
+    let verification = wording.ask_again.then_some(w!("Don't ask again"));
+    let answer = ask_yes_no(window, wording.title, &content, verification);
+    DeleteConfirmation {
+        confirmed: answer.yes,
+        do_not_ask_again: answer.verification_checked,
+    }
+}
+
+/// What the confirmation says; the title is the action's label, so the two deletes title apart.
+struct DeleteWording {
+    title: &'static str,
+    question: &'static str,
+    /// Only the recycle delete offers to stop asking; a permanent delete always asks.
+    ask_again: bool,
+}
+
+fn delete_wording(permanent: bool) -> DeleteWording {
+    if permanent {
+        DeleteWording {
+            title: Action::DeletePermanently.label(),
+            question: "Permanently delete this file?",
+            ask_again: false,
+        }
+    } else {
+        DeleteWording {
+            title: Action::Delete.label(),
+            question: "Move this file to the Recycle Bin?",
+            ask_again: true,
+        }
+    }
+}
+
+struct YesNoAnswer {
+    yes: bool,
+    verification_checked: bool,
+}
+
+/// A Yes/No task dialog centered on the owner, with an optional verification check box.
+fn ask_yes_no(
+    window: HWND,
+    title: &str,
+    content: &str,
+    verification: Option<PCWSTR>,
+) -> YesNoAnswer {
+    let title = HSTRING::from(title);
+    let content = HSTRING::from(content);
     let buttons = [
         TASKDIALOG_BUTTON {
             nButtonID: IDYES.0,
@@ -81,7 +116,7 @@ pub fn confirm_delete(window: HWND, details: &str, permanent: bool) -> DeleteCon
         pfCallback: crate::dialogs::message::centering_callback(Some(window)),
         ..Default::default()
     };
-    if !permanent {
+    if let Some(verification) = verification {
         configuration.pszVerificationText = verification;
     }
     let mut pressed = IDCANCEL.0;
@@ -94,9 +129,9 @@ pub fn confirm_delete(window: HWND, details: &str, permanent: bool) -> DeleteCon
             Some(&raw mut checked),
         )
     };
-    DeleteConfirmation {
-        confirmed: dialog_result.is_ok() && pressed == IDYES.0,
-        do_not_ask_again: checked.as_bool(),
+    YesNoAnswer {
+        yes: dialog_result.is_ok() && pressed == IDYES.0,
+        verification_checked: checked.as_bool(),
     }
 }
 
