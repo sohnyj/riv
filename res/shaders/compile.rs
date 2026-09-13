@@ -6,7 +6,12 @@ use std::process::Command;
 /// Pixel shaders; all but gain_apply include ps_shared.hlsl for the bindings and dither math.
 const PIXEL_SHADERS: [&str; 4] = ["copy", "ordered", "fruit", "gain_apply"];
 const VERTEX_SHADER: &str = "fullscreen_triangle";
-const SHADER_DIRECTORY: &str = "res/shaders";
+pub const SHADER_DIRECTORY: &str = "res/shaders";
+
+/// The blue noise generator: the table and the dither shader both depend on it.
+pub fn blue_noise_source() -> PathBuf {
+    PathBuf::from(format!("{SHADER_DIRECTORY}/blue_noise.rs"))
+}
 
 pub fn compile_all(output_directory: &Path, xwin_root: &str) {
     let compiler = build_compiler(output_directory, xwin_root);
@@ -62,7 +67,7 @@ fn compile(compiler: &Path, name: &str, profile: &str, output_directory: &Path) 
     let source_path = PathBuf::from(format!("{SHADER_DIRECTORY}/{source}"));
     let shared_path = PathBuf::from(format!("{SHADER_DIRECTORY}/ps_shared.hlsl"));
     // The blue noise edge reaches the HLSL as a macro, so the table and the shader share one source.
-    let blue_noise_path = PathBuf::from(format!("{SHADER_DIRECTORY}/blue_noise.rs"));
+    let blue_noise_path = blue_noise_source();
     if !crate::is_stale(
         &output,
         &[&source_path, &shared_path, &blue_noise_path, compiler],

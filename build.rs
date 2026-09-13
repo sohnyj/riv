@@ -26,12 +26,13 @@ fn is_stale(output: &Path, inputs: &[&Path]) -> bool {
 }
 
 fn main() {
-    println!("cargo:rerun-if-changed=res/shaders");
+    println!("cargo:rerun-if-changed={}", shaders::SHADER_DIRECTORY);
 
     let output_directory = PathBuf::from(env::var("OUT_DIR").unwrap());
     // The texels are a pure function of the generator, so an up-to-date table is kept.
     let blue_noise_table = output_directory.join("blue_noise.bin");
-    if is_stale(&blue_noise_table, &[Path::new("res/shaders/blue_noise.rs")]) {
+    let blue_noise_source = shaders::blue_noise_source();
+    if is_stale(&blue_noise_table, &[&blue_noise_source]) {
         blue_noise::write_table(&blue_noise_table);
     }
 
