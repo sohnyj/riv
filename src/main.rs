@@ -468,13 +468,7 @@ impl Application {
             open_with_enumeration_pending: false,
         };
         application.adopt_display_capabilities(&capabilities);
-        if let Some(renderer) = &mut application.renderer {
-            renderer.set_sdr_white_boost(application.sdr_white_boost);
-            renderer.set_display_headroom(application.display_headroom);
-            renderer.set_dither_setting(DitherMode::from_setting(
-                application.settings.options.dither_mode,
-            ));
-        }
+        application.apply_renderer_state();
         application.overlay.set_scale(device_pixel_ratio);
         application.register_upload_device();
         Ok(application)
