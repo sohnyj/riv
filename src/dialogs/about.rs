@@ -40,17 +40,26 @@ impl AboutFonts {
 }
 
 pub fn initialize_page(page: HWND) -> AboutFonts {
-    let version = HSTRING::from(concat!("version ", env!("CARGO_PKG_VERSION")));
-    let _ = unsafe { SetDlgItemTextW(page, IDC_ABOUT_VERSION, &version) };
-    let dpi = crate::window::dpi::dpi_for_window(page) as i32;
-    let fonts = AboutFonts {
-        title: create_font(TITLE_POINT_SIZE, dpi),
-        version: create_font(VERSION_POINT_SIZE, dpi),
-    };
+    show_version(page);
+    let fonts = create_fonts(page);
     set_font(page, IDC_ABOUT_TITLE, fonts.title);
     set_font(page, IDC_ABOUT_VERSION, fonts.version);
     layout_centered(page);
     fonts
+}
+
+fn show_version(page: HWND) {
+    let version = HSTRING::from(concat!("version ", env!("CARGO_PKG_VERSION")));
+    let _ = unsafe { SetDlgItemTextW(page, IDC_ABOUT_VERSION, &version) };
+}
+
+/// The title and version fonts at the page's DPI; the caller owns and later deletes them.
+fn create_fonts(page: HWND) -> AboutFonts {
+    let dpi = crate::window::dpi::dpi_for_window(page) as i32;
+    AboutFonts {
+        title: create_font(TITLE_POINT_SIZE, dpi),
+        version: create_font(VERSION_POINT_SIZE, dpi),
+    }
 }
 
 /// Open the repository URL carried by the link's notification.
