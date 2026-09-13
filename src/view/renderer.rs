@@ -1200,21 +1200,16 @@ impl Renderer {
     ) -> Result<()> {
         let icc_bytes = icc_profile.map(|profile| &**profile);
         self.effect_output = None;
-        self.source_gamut_label = source_primaries
-            .map(nearest_gamut_label)
-            .or_else(|| icc_bytes.and_then(icc::gamut_label));
-        self.refresh_output_label();
+        self.note_source_gamut(source_primaries, icc_bytes);
         // Unwire the previous bitmap now, so a failure return does not keep it alive.
         unsafe { self.mode_effects.color_management.SetInput(0, None, true) };
         // HDR passes through; SDR maps content above SDR white to the target.
         let hdr_content = peak_luminance_nits.is_some_and(|peak| peak > SDR_REFERENCE_WHITE_NITS);
-        let tone_map = self
-            .mode_effects
-            .tone_map
-            .as_ref()
-            .zip(peak_luminance_nits.filter(|_| hdr_content));
+        let tone_map_peak = peak_luminance_nits
+            .filter(|_| hdr_content)
+            .filter(|_| self.mode_effects.tone_map.is_some());
         let scrgb_destination =
-            self.is_hdr_output() || self.is_sdr_wide_gamut() || tone_map.is_some();
+            self.is_hdr_output() || self.is_sdr_wide_gamut() || tone_map_peak.is_some();
         // A source already in the destination space skips CM; the conversion would change nothing.
         if storage == PixelStorage::Bgra8
             && !scrgb_destination
@@ -1223,15 +1218,45 @@ impl Renderer {
             return Ok(());
         }
         let destination_context = if scrgb_destination {
-            &self.scrgb_color_context
+            self.scrgb_color_context.clone()
         } else {
             sdr_destination(
                 self.display_color_context.as_ref(),
                 &self.srgb_color_context,
             )
+            .clone()
         };
+        let source_context = self.resolve_source_context(storage, source_primaries, icc_profile);
+        let color_management = &self.mode_effects.color_management;
+        wire_color_management(color_management, &source_context, &destination_context)?;
+        unsafe { color_management.SetInput(0, bitmap, true) };
+        let converted = unsafe { color_management.GetOutput() }?;
+        self.effect_output = Some(self.wire_scene(converted, tone_map_peak, hdr_content)?);
+        Ok(())
+    }
+
+    /// The gamut the information panel names for the source: its primaries, else its profile.
+    fn note_source_gamut(
+        &mut self,
+        source_primaries: Option<[[f32; 2]; 3]>,
+        icc_bytes: Option<&[u8]>,
+    ) {
+        self.source_gamut_label = source_primaries
+            .map(nearest_gamut_label)
+            .or_else(|| icc_bytes.and_then(icc::gamut_label));
+        self.refresh_output_label();
+    }
+
+    /// The color context the source pixels are in; cached per primaries and per ICC profile.
+    fn resolve_source_context(
+        &mut self,
+        storage: PixelStorage,
+        source_primaries: Option<[[f32; 2]; 3]>,
+        icc_profile: Option<&Arc<[u8]>>,
+    ) -> ID2D1ColorContext {
+        let icc_bytes = icc_profile.map(|profile| &**profile);
         // FP16 pixels are linear light in the stated primaries; scRGB covers unknown ones.
-        let dedicated_context = match storage {
+        match storage {
             PixelStorage::RgbaHalf => {
                 // A source that states nothing leaves the cached context alone.
                 if let Some(primaries) = source_primaries
@@ -1240,41 +1265,46 @@ impl Renderer {
                     self.linear_source_context = self.create_linear_color_context(primaries);
                     self.linear_source_primaries = Some(primaries);
                 }
-                Some(
-                    source_primaries
-                        .and(self.linear_source_context.as_ref())
-                        .unwrap_or(&self.scrgb_color_context),
-                )
+                source_primaries
+                    .and(self.linear_source_context.as_ref())
+                    .unwrap_or(&self.scrgb_color_context)
+                    .clone()
             }
-            PixelStorage::Bgra8 => None,
-        };
-        let source_context = match dedicated_context {
-            Some(context) => context,
-            None => {
+            PixelStorage::Bgra8 => {
                 if self.source_icc_profile.as_deref() != icc_bytes {
                     self.source_color_context = None;
                     self.source_icc_profile = icc_profile.cloned();
                 }
                 let d2d_context = &self.d2d_context;
                 let srgb_color_context = &self.srgb_color_context;
-                &*self.source_color_context.get_or_insert_with(|| {
-                    // A profile D2D rejects reads as untagged: sRGB.
-                    icc_bytes
-                        .and_then(|icc_profile| {
-                            unsafe {
-                                d2d_context
-                                    .CreateColorContext(D2D1_COLOR_SPACE_CUSTOM, Some(icc_profile))
-                            }
-                            .ok()
-                        })
-                        .unwrap_or_else(|| srgb_color_context.clone())
-                })
+                self.source_color_context
+                    .get_or_insert_with(|| {
+                        // A profile D2D rejects reads as untagged: sRGB.
+                        icc_bytes
+                            .and_then(|icc_profile| {
+                                unsafe {
+                                    d2d_context.CreateColorContext(
+                                        D2D1_COLOR_SPACE_CUSTOM,
+                                        Some(icc_profile),
+                                    )
+                                }
+                                .ok()
+                            })
+                            .unwrap_or_else(|| srgb_color_context.clone())
+                    })
+                    .clone()
             }
-        };
-        let color_management = &self.mode_effects.color_management;
-        wire_color_management(color_management, source_context, destination_context)?;
-        unsafe { color_management.SetInput(0, bitmap, true) };
-        let converted = unsafe { color_management.GetOutput() }?;
+        }
+    }
+
+    /// The scene after color management: tone mapped for SDR output, boosted, or passed through.
+    fn wire_scene(
+        &self,
+        converted: ID2D1Image,
+        tone_map_peak: Option<f32>,
+        hdr_content: bool,
+    ) -> Result<ID2D1Image> {
+        let tone_map = self.mode_effects.tone_map.as_ref().zip(tone_map_peak);
         let scene = match tone_map {
             Some((stage, peak)) => {
                 // Very low input maxima misbehave; floor at the SDR reference white.
@@ -1321,8 +1351,7 @@ impl Renderer {
                 _ => converted,
             },
         };
-        self.effect_output = Some(scene);
-        Ok(())
+        Ok(scene)
     }
 
     pub fn clear_image(&mut self) {
