@@ -305,15 +305,7 @@ unsafe extern "system" fn frame_procedure(
                     1
                 }
                 IDC_RESTORE_DEFAULTS => {
-                    if let Some(state) = state_mut(dialog) {
-                        state.transient_options = Options::default();
-                        state.transient_shortcuts = default_shortcut_rows().to_vec();
-                        sync_all_pages(state);
-                        update_buttons(state);
-                    }
-                    sync_number_edit(dialog, IMAGE_PAGE);
-                    sync_number_edit(dialog, MISCELLANEOUS_PAGE);
-                    sync_background_color_button(dialog);
+                    restore_defaults(dialog);
                     1
                 }
                 _ => 0,
@@ -494,6 +486,16 @@ fn ensure_page(state: &mut OptionsState, tab: HWND, index: usize) {
     if !state.pages[index].is_invalid() {
         return;
     }
+    let page = create_page(state, tab, index);
+    state.pages[index] = page;
+    if let Some(initialize) = PAGES[index].initialize {
+        initialize(state, page);
+    }
+    sync_page(state, index);
+}
+
+/// Creates the page from its template and places it inside the tab's display area.
+fn create_page(state: &mut OptionsState, tab: HWND, index: usize) -> HWND {
     let state_pointer = state as *mut OptionsState as isize;
     let page = unsafe {
         CreateDialogParamW(
@@ -517,11 +519,7 @@ fn ensure_page(state: &mut OptionsState, tab: HWND, index: usize) {
             windows::Win32::UI::WindowsAndMessaging::SET_WINDOW_POS_FLAGS(0),
         )
     };
-    state.pages[index] = page;
-    if let Some(initialize) = PAGES[index].initialize {
-        initialize(state, page);
-    }
-    sync_page(state, index);
+    page
 }
 
 /// The selected page goes up before the others go down, so the bare tab never shows.
@@ -610,6 +608,20 @@ fn apply(dialog: HWND) {
     state.saved_options = payload.options;
     state.saved_shortcuts = state.transient_shortcuts.clone();
     update_buttons(state);
+}
+
+/// Resets the transient options and shortcuts and shows them on every page.
+fn restore_defaults(dialog: HWND) {
+    if let Some(state) = state_mut(dialog) {
+        state.transient_options = Options::default();
+        state.transient_shortcuts = default_shortcut_rows().to_vec();
+        sync_all_pages(state);
+        update_buttons(state);
+    }
+    // The number edits and the color button re-enter through notifications; the borrow ended above.
+    sync_number_edit(dialog, IMAGE_PAGE);
+    sync_number_edit(dialog, MISCELLANEOUS_PAGE);
+    sync_background_color_button(dialog);
 }
 
 /// Writes the registry when the desired set changed; the saved set is re-probed, not assumed.
