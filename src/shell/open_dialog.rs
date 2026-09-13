@@ -7,7 +7,7 @@ use windows::Win32::System::Com::{CLSCTX_INPROC_SERVER, CoCreateInstance, CoTask
 use windows::Win32::UI::Shell::Common::COMDLG_FILTERSPEC;
 use windows::Win32::UI::Shell::{
     FOS_ALLOWMULTISELECT, FOS_FILEMUSTEXIST, FileOpenDialog, IFileOpenDialog, IShellItem,
-    SHCreateItemFromParsingName, SIGDN_FILESYSPATH,
+    IShellItemArray, SHCreateItemFromParsingName, SIGDN_FILESYSPATH,
 };
 use windows::core::{HSTRING, PCWSTR};
 
@@ -48,11 +48,8 @@ fn select_files(
     let dialog: IFileOpenDialog =
         unsafe { CoCreateInstance(&FileOpenDialog, None, CLSCTX_INPROC_SERVER)? };
 
-    let (filter_texts, supported_position) = filters();
-    let filter_texts: Vec<(HSTRING, HSTRING)> = filter_texts
-        .into_iter()
-        .map(|(name, pattern)| (HSTRING::from(name), HSTRING::from(pattern)))
-        .collect();
+    let (filter_texts, supported_position) = wide_filters();
+    // The specs point into filter_texts, which outlives the dialog call.
     let filters: Vec<COMDLG_FILTERSPEC> = filter_texts
         .iter()
         .map(|(name, pattern)| COMDLG_FILTERSPEC {
@@ -76,17 +73,31 @@ fn select_files(
         if dialog.Show(Some(window)).is_err() {
             return Ok(Vec::new());
         }
-        let results = dialog.GetResults()?;
-        let count = results.GetCount()?;
-        let mut paths = Vec::with_capacity(count as usize);
-        for index in 0..count {
-            let item = results.GetItemAt(index)?;
-            let raw = item.GetDisplayName(SIGDN_FILESYSPATH)?;
-            paths.push(crate::text::path_from_wide(raw.as_wide()));
-            CoTaskMemFree(Some(raw.as_ptr().cast()));
-        }
-        Ok(paths)
+        selected_paths(&dialog.GetResults()?)
     }
+}
+
+/// The filter names and patterns as wide strings, and the position of the all-formats entry.
+fn wide_filters() -> (Vec<(HSTRING, HSTRING)>, usize) {
+    let (filter_texts, supported_position) = filters();
+    let wide = filter_texts
+        .into_iter()
+        .map(|(name, pattern)| (HSTRING::from(name), HSTRING::from(pattern)))
+        .collect();
+    (wide, supported_position)
+}
+
+/// The file system paths of every selected item.
+fn selected_paths(results: &IShellItemArray) -> windows::core::Result<Vec<PathBuf>> {
+    let count = unsafe { results.GetCount()? };
+    let mut paths = Vec::with_capacity(count as usize);
+    for index in 0..count {
+        let item = unsafe { results.GetItemAt(index)? };
+        let raw = unsafe { item.GetDisplayName(SIGDN_FILESYSPATH)? };
+        paths.push(crate::text::path_from_wide(unsafe { raw.as_wide() }));
+        unsafe { CoTaskMemFree(Some(raw.as_ptr().cast())) };
+    }
+    Ok(paths)
 }
 
 #[cfg(test)]
