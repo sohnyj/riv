@@ -333,27 +333,25 @@ fn collect_bindings<T>(
     maximum: usize,
     mut parse: impl FnMut(&str) -> Option<T>,
 ) -> Vec<(T, Action)> {
+    // Default names first, then names only the overrides know; a name without either is skipped.
+    let override_only = overrides
+        .into_iter()
+        .flat_map(Map::keys)
+        .map(String::as_str)
+        .filter(|name| !defaults.iter().any(|(default, _)| default == name));
+    let names = defaults.iter().map(|(name, _)| *name).chain(override_only);
     let mut collected = Vec::new();
-    for (name, default_sequences) in defaults {
-        if let Some(action) = Action::from_name(name) {
-            for sequence in override_or_default(overrides, name, default_sequences, maximum) {
-                if let Some(parsed) = parse(sequence) {
-                    collected.push((parsed, action));
-                }
-            }
-        }
-    }
-    if let Some(overrides) = overrides {
-        for (name, sequences) in overrides {
-            if defaults.iter().any(|(default, _)| default == name) {
-                continue;
-            }
-            if let Some(action) = Action::from_name(name) {
-                for sequence in string_list(sequences).into_iter().take(maximum) {
-                    if let Some(parsed) = parse(sequence) {
-                        collected.push((parsed, action));
-                    }
-                }
+    for name in names {
+        let Some(action) = Action::from_name(name) else {
+            continue;
+        };
+        let default_sequences = defaults
+            .iter()
+            .find(|(default, _)| *default == name)
+            .map_or(&[][..], |(_, sequences)| *sequences);
+        for sequence in override_or_default(overrides, name, default_sequences, maximum) {
+            if let Some(parsed) = parse(sequence) {
+                collected.push((parsed, action));
             }
         }
     }
