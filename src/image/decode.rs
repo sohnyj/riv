@@ -1675,8 +1675,6 @@ fn decode_frame_source(
     let icc_profile = icc_profile_bytes(factory, frame);
     let exif = metadata.as_ref().and_then(read_exif);
     let (native_bits_per_channel, float_native) = frame_pixel_format_traits(factory, frame);
-    let high_depth =
-        PixelStorage::for_source_bits(native_bits_per_channel) == PixelStorage::RgbaHalf;
     // PQ/HLG integers bypass WIC's sRGB-assuming float conversion.
     let hdr_encoding = if float_native {
         None
@@ -1685,8 +1683,15 @@ fn decode_frame_source(
     };
     let (frame_width, frame_height) = source_size(&pixel_source)?;
     let oversized = frame_width.max(frame_height) > MAXIMUM_TEXTURE_DIMENSION;
-    // The Fant scaler rejects half floats; oversized integers scale first, convert after.
-    let deferred_half = high_depth && !float_native && hdr_encoding.is_none() && oversized;
+    let ConversionPlan {
+        high_depth,
+        deferred_half,
+    } = conversion_plan(
+        native_bits_per_channel,
+        float_native,
+        hdr_encoding,
+        oversized,
+    );
     let (source, storage) = if high_depth {
         // PQ/HLG and deferred sources stay integer at this stage; the rest go straight to half.
         let target = if hdr_encoding.is_some() || deferred_half {
@@ -1740,20 +1745,13 @@ fn decode_frame_source(
             None => peak_luminance_from_half_pixels(&pixels),
         })
         .flatten();
-    // The 8bpc fallback conversion truncates whatever the native format held.
-    let source_bits_per_channel = if storage == PixelStorage::RgbaHalf {
-        native_bits_per_channel
-    } else {
-        BGRA8_SOURCE_BITS
-    };
-    // Only a conversion riv drove keeps the source primaries; a float native is scRGB already.
-    let source_primaries = match hdr_encoding {
-        Some(encoding) => Some(encoding.source_primaries()),
-        None if storage == PixelStorage::RgbaHalf && !float_native => {
-            icc_profile.as_deref().and_then(icc::primaries)
-        }
-        None => None,
-    };
+    let (source_bits_per_channel, source_primaries) = source_color_metadata(
+        storage,
+        native_bits_per_channel,
+        float_native,
+        hdr_encoding,
+        icc_profile.as_deref(),
+    );
     Ok(DecodedImage {
         width,
         height,
@@ -1771,6 +1769,52 @@ fn decode_frame_source(
         gain_map: None,
         gain_map_plane: None,
     })
+}
+
+/// How WIC's output is requested: at half depth or 8-bit, and whether the half conversion waits.
+struct ConversionPlan {
+    high_depth: bool,
+    /// The Fant scaler rejects half floats; oversized integers scale first, convert after.
+    deferred_half: bool,
+}
+
+fn conversion_plan(
+    native_bits_per_channel: u32,
+    float_native: bool,
+    hdr_encoding: Option<HdrEncoding>,
+    oversized: bool,
+) -> ConversionPlan {
+    let high_depth =
+        PixelStorage::for_source_bits(native_bits_per_channel) == PixelStorage::RgbaHalf;
+    ConversionPlan {
+        high_depth,
+        deferred_half: high_depth && !float_native && hdr_encoding.is_none() && oversized,
+    }
+}
+
+/// The bits and primaries the decoded pixels state, from the route they took.
+fn source_color_metadata(
+    storage: PixelStorage,
+    native_bits_per_channel: u32,
+    float_native: bool,
+    hdr_encoding: Option<HdrEncoding>,
+    icc_profile: Option<&[u8]>,
+) -> (u32, Option<[[f32; 2]; 3]>) {
+    // The 8bpc fallback conversion truncates whatever the native format held.
+    let source_bits_per_channel = if storage == PixelStorage::RgbaHalf {
+        native_bits_per_channel
+    } else {
+        BGRA8_SOURCE_BITS
+    };
+    // Only a conversion riv drove keeps the source primaries; a float native is scRGB already.
+    let source_primaries = match hdr_encoding {
+        Some(encoding) => Some(encoding.source_primaries()),
+        None if storage == PixelStorage::RgbaHalf && !float_native => {
+            icc_profile.and_then(icc::primaries)
+        }
+        None => None,
+    };
+    (source_bits_per_channel, source_primaries)
 }
 
 /// Native format traits: (bits per channel, float representation).
