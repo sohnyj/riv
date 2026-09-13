@@ -73,6 +73,7 @@ jobs:
           name: riv-${{ env.RELEASE_TAG }}
           path: riv-${{ env.RELEASE_TAG }}.7z
           if-no-files-found: error
+          retention-days: 1
 
       # The commit list runs from the previous tag to the released commit, so it needs no tag of its own.
       - name: Compose the release notes

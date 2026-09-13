@@ -63,3 +63,4 @@ jobs:
           name: riv-${{ github.sha }}
           path: target/x86_64-pc-windows-msvc/release/riv.exe
           if-no-files-found: error
+          retention-days: 1
