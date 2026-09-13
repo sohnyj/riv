@@ -129,7 +129,7 @@ rustup target add x86_64-pc-windows-msvc
 
 ```sh
 cargo install xwin
-xwin --accept-license splat --output ~/.xwin --cache-dir ~/.xwin-cache
+xwin --accept-license --cache-dir ~/.xwin-cache splat --output ~/.xwin
 ```
 
 Static build of the C/C++ codecs:
