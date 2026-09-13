@@ -1,6 +1,6 @@
 //! Running a dialog template and reaching the state it was given.
 
-use windows::Win32::Foundation::{HWND, LPARAM, WPARAM};
+use windows::Win32::Foundation::{HMODULE, HWND, LPARAM, WPARAM};
 use windows::Win32::System::LibraryLoader::GetModuleHandleW;
 use windows::Win32::UI::WindowsAndMessaging::{
     DialogBoxParamW, GetWindowLongPtrW, WINDOW_LONG_PTR_INDEX,
@@ -13,6 +13,11 @@ pub const DWLP_USER: WINDOW_LONG_PTR_INDEX = WINDOW_LONG_PTR_INDEX(16);
 
 pub type DialogProcedure = unsafe extern "system" fn(HWND, u32, WPARAM, LPARAM) -> isize;
 
+/// The executable's own module: the dialog templates and window classes come from it.
+pub fn module_handle() -> HMODULE {
+    unsafe { GetModuleHandleW(None) }.expect("the module handle of the running module")
+}
+
 /// Runs a dialog template from the executable's own resources; the DialogBox result.
 pub fn run_modal(
     owner: HWND,
@@ -20,11 +25,9 @@ pub fn run_modal(
     procedure: DialogProcedure,
     state_pointer: isize,
 ) -> isize {
-    let instance =
-        unsafe { GetModuleHandleW(None) }.expect("the module handle of the running module");
     unsafe {
         DialogBoxParamW(
-            Some(instance.into()),
+            Some(module_handle().into()),
             resource::template_name(template),
             Some(owner),
             Some(procedure),

@@ -7,7 +7,6 @@ use windows::Win32::Graphics::Gdi::{
     DFCS_BUTTONCHECK, DFCS_CHECKED, DeleteDC, DeleteObject, DrawFrameControl, FillRect, FrameRect,
     GetDC, GetSysColorBrush, ReleaseDC, SelectObject,
 };
-use windows::Win32::System::LibraryLoader::GetModuleHandleW;
 use windows::Win32::UI::Controls::Dialogs::{CC_FULLOPEN, CC_RGBINIT, CHOOSECOLORW, ChooseColorW};
 use windows::Win32::UI::Controls::{
     BST_CHECKED, BST_UNCHECKED, CheckDlgButton, CheckRadioButton, DRAWITEMSTRUCT, ETDT_ENABLE,
@@ -431,12 +430,10 @@ fn ensure_page(state: &mut OptionsState, tab: HWND, index: usize) {
     if !state.pages[index].is_invalid() {
         return;
     }
-    let instance =
-        unsafe { GetModuleHandleW(None) }.expect("the module handle of the running module");
     let state_pointer = state as *mut OptionsState as isize;
     let page = unsafe {
         CreateDialogParamW(
-            Some(instance.into()),
+            Some(crate::dialogs::modal::module_handle().into()),
             crate::dialogs::resource::template_name(PAGES[index].0),
             Some(state.dialog),
             Some(page_procedure),

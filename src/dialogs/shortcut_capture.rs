@@ -7,7 +7,6 @@ use windows::Win32::Graphics::Gdi::{
     EndPaint, FillRect, GetSysColor, GetSysColorBrush, HBRUSH, HDC, HFONT, InvalidateRect, LineTo,
     MoveToEx, PAINTSTRUCT, PS_SOLID, SelectObject, SetBkMode, SetTextColor, TRANSPARENT,
 };
-use windows::Win32::System::LibraryLoader::GetModuleHandleW;
 use windows::Win32::UI::Controls::{DRAWITEMSTRUCT, ODS_SELECTED};
 use windows::Win32::UI::Input::KeyboardAndMouse::{
     SetFocus, VK_CONTROL, VK_LWIN, VK_MENU, VK_RWIN, VK_SHIFT,
@@ -484,8 +483,7 @@ fn listbox_clear(dialog: HWND) {
 fn ensure_capture_classes() {
     static REGISTER: std::sync::Once = std::sync::Once::new();
     REGISTER.call_once(|| {
-        let instance =
-            unsafe { GetModuleHandleW(None) }.expect("the module handle of the running module");
+        let instance = crate::dialogs::modal::module_handle();
         // A NULL class cursor keeps whatever shape the pointer arrived with.
         let arrow = unsafe { LoadCursorW(None, IDC_ARROW) }.expect("the system arrow cursor");
         for (class_name, procedure, style) in [
