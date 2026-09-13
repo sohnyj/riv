@@ -38,41 +38,49 @@ pub fn enumerate_in_background(window: HWND, extension: String) {
 }
 
 fn enumerate(extension: String) -> OpenWithList {
-    let mut items = Vec::new();
-    let own_executable = crate::executable_path().to_string_lossy().into_owned();
     let dotted_extension = HSTRING::from(crate::text::dotted_extension(&extension));
-    let default_executable = default_executable_for(&dotted_extension);
-
-    // Packaged apps have no readable file path, so only riv itself is filtered out.
-    for handler in handlers_for(&dotted_extension) {
-        let Some(executable_path) = handler_executable_path(&handler) else {
-            continue;
-        };
-        if executable_path.eq_ignore_ascii_case(&own_executable) {
-            continue;
-        }
-        let display_name = handler_ui_name(&handler).unwrap_or_else(|| executable_path.clone());
-        items.push(OpenWithItem {
-            display_name,
-            executable_path,
-        });
-    }
+    let own_executable = crate::executable_path().to_string_lossy().into_owned();
+    let mut items = handler_items(&dotted_extension, &own_executable);
     items.sort_by(|a, b| crate::text::natural_order_text(&a.display_name, &b.display_name));
-    let default_index = default_executable.as_deref().and_then(|executable| {
-        items
-            .iter()
-            .position(|item| item.executable_path.eq_ignore_ascii_case(executable))
-    });
-    let has_default = default_index.is_some();
-    if let Some(index) = default_index {
-        let default_item = items.remove(index);
-        items.insert(0, default_item);
-    }
+    let has_default = default_executable_for(&dotted_extension)
+        .is_some_and(|executable| promote_default(&mut items, &executable));
     OpenWithList {
         extension,
         has_default,
         items,
     }
+}
+
+/// The registered handlers with a readable executable, except riv itself, named for display.
+fn handler_items(dotted_extension: &HSTRING, own_executable: &str) -> Vec<OpenWithItem> {
+    // Packaged apps have no readable file path, so only riv itself is filtered out.
+    handlers_for(dotted_extension)
+        .into_iter()
+        .filter_map(|handler| {
+            let executable_path = handler_executable_path(&handler)?;
+            if executable_path.eq_ignore_ascii_case(own_executable) {
+                return None;
+            }
+            let display_name = handler_ui_name(&handler).unwrap_or_else(|| executable_path.clone());
+            Some(OpenWithItem {
+                display_name,
+                executable_path,
+            })
+        })
+        .collect()
+}
+
+/// Moves the default handler to the front; false when it is not in the list.
+fn promote_default(items: &mut Vec<OpenWithItem>, executable: &str) -> bool {
+    let Some(index) = items
+        .iter()
+        .position(|item| item.executable_path.eq_ignore_ascii_case(executable))
+    else {
+        return false;
+    };
+    let default_item = items.remove(index);
+    items.insert(0, default_item);
+    true
 }
 
 /// The launch result; a missing handler means the cached menu list went stale.
