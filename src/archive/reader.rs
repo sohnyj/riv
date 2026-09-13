@@ -12,10 +12,45 @@ use crate::archive::libarchive::{
     FILETYPE_REGULAR,
 };
 
+/// Reaches one libarchive format reader on the loaded API.
+type ReaderAccessor = fn(&libarchive::Api) -> libarchive::ArchiveResultFunction;
+
+/// The containers riv opens: the archive extension, the comic book form, and the readers.
+const CONTAINERS: [(&str, &str, &[ReaderAccessor]); 4] = [
+    ("zip", "cbz", &[|api| api.read_support_format_zip]),
+    ("7z", "cb7", &[|api| api.read_support_format_7zip]),
+    (
+        "rar",
+        "cbr",
+        &[
+            |api| api.read_support_format_rar,
+            |api| api.read_support_format_rar5,
+        ],
+    ),
+    ("tar", "cbt", &[|api| api.read_support_format_tar]),
+];
+
+/// One column of `CONTAINERS`: 0 = archive extensions, 1 = comic book extensions.
+const fn container_extensions(column: usize) -> [&'static str; CONTAINERS.len()] {
+    let mut extensions = [""; CONTAINERS.len()];
+    let mut index = 0;
+    while index < CONTAINERS.len() {
+        extensions[index] = if column == 0 {
+            CONTAINERS[index].0
+        } else {
+            CONTAINERS[index].1
+        };
+        index += 1;
+    }
+    extensions
+}
+const ARCHIVE_EXTENSIONS: [&str; CONTAINERS.len()] = container_extensions(0);
+const COMIC_BOOK_EXTENSIONS: [&str; CONTAINERS.len()] = container_extensions(1);
+
 /// Extension groups parallel to decode::format_groups.
 const FORMAT_GROUPS: &[(&str, &[&str])] = &[
-    ("Archive", &["zip", "7z", "rar", "tar"]),
-    ("Comic book archive", &["cbz", "cb7", "cbr", "cbt"]),
+    ("Archive", &ARCHIVE_EXTENSIONS),
+    ("Comic book archive", &COMIC_BOOK_EXTENSIONS),
 ];
 
 /// Uncompressed per-member ceiling; guards against decompression bombs.
@@ -191,16 +226,11 @@ impl Reader<'_> {
             return Err(ArchiveError::new("Archive reader allocation failed"));
         }
         let reader = Self { api, handle };
-        let supports = [
-            api.read_support_format_zip,
-            api.read_support_format_7zip,
-            api.read_support_format_rar,
-            api.read_support_format_rar5,
-            api.read_support_format_tar,
-        ];
-        for support in supports {
-            if unsafe { support(handle) } != ARCHIVE_OK {
-                return Err(reader.error("Archive format registration failed"));
+        for (_, _, readers) in CONTAINERS {
+            for read_support in readers {
+                if unsafe { read_support(api)(handle) } != ARCHIVE_OK {
+                    return Err(reader.error("Archive format registration failed"));
+                }
             }
         }
         let wide_path = HSTRING::from(archive_path);

@@ -20,7 +20,7 @@ pub const FILETYPE_MASK: u16 = 0o170000;
 pub const FILETYPE_REGULAR: u16 = 0o100000;
 
 type NewFunction = unsafe extern "C" fn() -> *mut Archive;
-type ArchiveResultFunction = unsafe extern "C" fn(*mut Archive) -> c_int;
+pub type ArchiveResultFunction = unsafe extern "C" fn(*mut Archive) -> c_int;
 type OpenFilenameFunction = unsafe extern "C" fn(*mut Archive, *const u16, usize) -> c_int;
 type NextHeaderFunction = unsafe extern "C" fn(*mut Archive, *mut *mut ArchiveEntry) -> c_int;
 type ReadDataFunction = unsafe extern "C" fn(*mut Archive, *mut c_void, usize) -> isize;
