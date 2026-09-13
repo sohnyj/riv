@@ -2543,7 +2543,7 @@ fn fail_fast_dialog(reason: &str, detail: &str) {
 fn show_open_with_failure(window: HWND, name: &str, detail: &str) {
     dialogs::message::show_message(
         Some(window),
-        "Open with",
+        context_menu::OPEN_WITH_SUBMENU_LABEL,
         &format!("Can't open the file with {name}."),
         detail,
         dialogs::message::CLOSE_BUTTON,
@@ -2722,7 +2722,7 @@ extern "system" fn window_procedure(
             if let Some(error) = save_error {
                 dialogs::message::show_message(
                     Some(payload.dialog),
-                    "Settings",
+                    Action::Settings.label(),
                     "Settings can't be saved.",
                     &error.to_string(),
                     dialogs::message::CLOSE_BUTTON,

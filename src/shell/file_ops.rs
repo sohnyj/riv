@@ -15,11 +15,13 @@ use windows::Win32::UI::Shell::{
 use windows::Win32::UI::WindowsAndMessaging::{IDCANCEL, IDNO, IDYES};
 use windows::core::{HSTRING, PCWSTR, Result, w};
 
+use crate::actions::Action;
+
 pub fn show_in_explorer(window: HWND, path: &Path) {
     if let Err(error) = select_in_explorer(path) {
         crate::dialogs::message::show_message(
             Some(window),
-            "Show in Explorer",
+            Action::ShowInExplorer.label(),
             "Can't show the file in Explorer.",
             &error.to_string(),
             crate::dialogs::message::CLOSE_BUTTON,
@@ -43,12 +45,12 @@ pub struct DeleteConfirmation {
 
 /// `details` carries the file facts, one per line, the first being the name.
 pub fn confirm_delete(window: HWND, details: &str, permanent: bool) -> DeleteConfirmation {
-    // The title names the action, so the two delete actions title themselves apart.
-    let title = if permanent {
-        w!("Delete permanently")
+    // The title is the action's label, so the two delete actions title themselves apart.
+    let title = HSTRING::from(if permanent {
+        Action::DeletePermanently.label()
     } else {
-        w!("Delete")
-    };
+        Action::Delete.label()
+    });
     let question = if permanent {
         "Permanently delete this file?"
     } else {
@@ -71,7 +73,7 @@ pub fn confirm_delete(window: HWND, details: &str, permanent: bool) -> DeleteCon
         cbSize: size_of::<TASKDIALOGCONFIG>() as u32,
         hwndParent: window,
         dwFlags: TDF_ALLOW_DIALOG_CANCELLATION,
-        pszWindowTitle: title,
+        pszWindowTitle: PCWSTR(title.as_ptr()),
         pszContent: PCWSTR(content.as_ptr()),
         cButtons: buttons.len() as u32,
         pButtons: buttons.as_ptr(),

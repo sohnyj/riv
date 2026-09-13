@@ -16,6 +16,9 @@ use windows::core::{HSTRING, Result};
 
 use crate::actions::{Action, ActionRequirement, SatisfiedRequirements};
 
+/// The submenu name; the Open with failure dialog titles itself with it too.
+pub const OPEN_WITH_SUBMENU_LABEL: &str = "Open with";
+
 /// What one menu level is meant to hold, whatever the display measures.
 const MENU_LEVEL_CAPACITY: usize = 25;
 
@@ -240,7 +243,7 @@ impl<'a> MenuBuilder<'a> {
         self.append_submenu(
             menu,
             open_with,
-            "Open with",
+            OPEN_WITH_SUBMENU_LABEL,
             self.requirement_satisfied(ActionRequirement::FileOnDisk),
         )?;
         self.append_separator(menu)?;
