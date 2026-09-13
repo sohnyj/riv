@@ -80,6 +80,11 @@ pub unsafe fn borrowed_payload<'payload, T: 'static>(
     was_sent::<T>(pointer, message).then(|| unsafe { &*(pointer as *const T) })
 }
 
+/// Two 16-bit halves in one message parameter; `high_word` and `low_word` read them back.
+pub fn pack_words(high: u32, low: u32) -> usize {
+    ((high as usize & 0xFFFF) << 16) | (low as usize & 0xFFFF)
+}
+
 /// Low 16 bits of a packed message parameter.
 pub fn low_word(value: usize) -> u32 {
     (value & 0xFFFF) as u32

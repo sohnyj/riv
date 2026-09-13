@@ -31,7 +31,9 @@ use crate::dialogs::resource::{
 };
 
 use crate::dialogs::modal::{DWLP_USER, state_mut};
-use crate::window::message::{high_word, high_word_signed, low_word, point_from_packed};
+use crate::window::message::{
+    high_word, high_word_signed, low_word, pack_words, point_from_packed,
+};
 
 const WM_RIV_KEYBOARD_CAPTURED: u32 = WM_APP + 0x40;
 const WM_RIV_MOUSE_CAPTURED: u32 = WM_APP + 0x41;
@@ -580,7 +582,7 @@ unsafe extern "system" fn keyboard_field_procedure(
             if is_modifier_key(virtual_key) {
                 let _ = unsafe { InvalidateRect(Some(field), None, false) };
             } else {
-                let packed = ((current_modifiers() as usize) << 16) | virtual_key as usize;
+                let packed = pack_words(u32::from(current_modifiers()), u32::from(virtual_key));
                 if let Ok(dialog) = unsafe { GetParent(field) } {
                     unsafe {
                         SendMessageW(dialog, WM_RIV_KEYBOARD_CAPTURED, Some(WPARAM(packed)), None)
