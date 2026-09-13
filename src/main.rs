@@ -727,33 +727,37 @@ impl Application {
 
     /// The title follows the navigation anchor, so a running load already names its file.
     fn update_window_title(&mut self, window: HWND) {
-        let title = if self.image_core.url_download_pending() {
-            // A full URL makes a useless title; the centered overlay carries the progress.
-            "Downloading...".to_string()
-        } else {
-            let anchor = self.image_core.navigation_anchor();
-            let file_name = anchor
-                .map(|location| location.display_name())
-                .filter(|name| !name.is_empty());
-            let title_bar_text = TitleBarText::from_setting(self.settings.options.title_bar_text);
-            match (title_bar_text, file_name) {
-                (TitleBarText::ApplicationName, _) | (_, None) => APPLICATION_NAME.to_string(),
-                (TitleBarText::FileName, Some(name)) => name,
-                (TitleBarText::PositionAndFileName, Some(name)) => self.prefix_with_position(name),
-                (TitleBarText::PositionAndFolderFileName, Some(name)) => {
-                    let body = match anchor.and_then(|location| location.folder_name()) {
-                        Some(folder) => format!("{folder}\\{name}"),
-                        None => name,
-                    };
-                    self.prefix_with_position(body)
-                }
-            }
-        };
+        let title = self.compose_title();
         if title == self.window_title {
             return;
         }
         let _ = unsafe { SetWindowTextW(window, &HSTRING::from(&title)) };
         self.window_title = title;
+    }
+
+    /// The caption the title-bar setting asks for; a download names itself instead.
+    fn compose_title(&self) -> String {
+        if self.image_core.url_download_pending() {
+            // A full URL makes a useless title; the centered overlay carries the progress.
+            return "Downloading...".to_string();
+        }
+        let anchor = self.image_core.navigation_anchor();
+        let file_name = anchor
+            .map(|location| location.display_name())
+            .filter(|name| !name.is_empty());
+        let title_bar_text = TitleBarText::from_setting(self.settings.options.title_bar_text);
+        match (title_bar_text, file_name) {
+            (TitleBarText::ApplicationName, _) | (_, None) => APPLICATION_NAME.to_string(),
+            (TitleBarText::FileName, Some(name)) => name,
+            (TitleBarText::PositionAndFileName, Some(name)) => self.prefix_with_position(name),
+            (TitleBarText::PositionAndFolderFileName, Some(name)) => {
+                let body = match anchor.and_then(|location| location.folder_name()) {
+                    Some(folder) => format!("{folder}\\{name}"),
+                    None => name,
+                };
+                self.prefix_with_position(body)
+            }
+        }
     }
 
     fn prefix_with_position(&self, body: String) -> String {
