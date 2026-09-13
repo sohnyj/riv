@@ -83,12 +83,25 @@ enum PanelPlacement {
 }
 
 impl PanelPlacement {
-    fn cache_slot(&self) -> usize {
+    fn cache_slot(&self) -> ShapedTextSlot {
         match self {
-            Self::TopLeft => 0,
-            Self::TopCenter => 1,
+            Self::TopLeft => ShapedTextSlot::InformationPanel,
+            Self::TopCenter => ShapedTextSlot::StatusPill,
         }
     }
+}
+
+/// One cache slot per shaped text the overlay keeps.
+#[derive(Clone, Copy)]
+enum ShapedTextSlot {
+    InformationPanel,
+    StatusPill,
+    CenteredMessage,
+    Wordmark,
+}
+
+impl ShapedTextSlot {
+    const COUNT: usize = 4;
 }
 
 /// EXIF MeteringMode codes and their names; any other code shows as Unknown.
@@ -100,11 +113,6 @@ const METERING_MODES: [(u32, &str); 6] = [
     (5, "Pattern"),
     (6, "Partial"),
 ];
-
-/// One cache slot per shaped text: the information panel, the status pill, a message, the wordmark.
-const SHAPED_TEXT_SLOTS: usize = 4;
-const CENTERED_MESSAGE_SLOT: usize = 2;
-const WORDMARK_SLOT: usize = 3;
 
 /// A shaped layout reused while its text and the box it wraps into stay unchanged.
 struct ShapedText {
@@ -188,7 +196,7 @@ pub struct Overlay {
     dwrite_factory: IDWriteFactory,
     scale: f32,
     /// One slot per shaped text, so each caches independently of the others.
-    layouts: [Option<ShapedText>; SHAPED_TEXT_SLOTS],
+    layouts: [Option<ShapedText>; ShapedTextSlot::COUNT],
     /// Brushes belong to the renderer's device context, so a rebuilt renderer voids them.
     brushes: Option<Brushes>,
 }
@@ -205,7 +213,7 @@ impl Overlay {
             wordmark_format,
             dwrite_factory,
             scale: 1.0,
-            layouts: [const { None }; SHAPED_TEXT_SLOTS],
+            layouts: [const { None }; ShapedTextSlot::COUNT],
             brushes: None,
         })
     }
@@ -227,7 +235,7 @@ impl Overlay {
             self.centered_format = centered_format;
             self.wordmark_format = wordmark_format;
             self.scale = scale;
-            self.layouts = [const { None }; SHAPED_TEXT_SLOTS];
+            self.layouts = [const { None }; ShapedTextSlot::COUNT];
         }
     }
 
@@ -297,7 +305,7 @@ impl Overlay {
                 * self.scale)
             .max(0.0);
         let cached = shaped_text(
-            &mut self.layouts[placement.cache_slot()],
+            &mut self.layouts[placement.cache_slot() as usize],
             &self.dwrite_factory,
             text,
             &self.text_format,
@@ -359,12 +367,12 @@ impl Overlay {
             0.0
         };
         let (slot, format) = if boxed {
-            (CENTERED_MESSAGE_SLOT, &self.centered_format)
+            (ShapedTextSlot::CenteredMessage, &self.centered_format)
         } else {
-            (WORDMARK_SLOT, &self.wordmark_format)
+            (ShapedTextSlot::Wordmark, &self.wordmark_format)
         };
         let cached = shaped_text(
-            &mut self.layouts[slot],
+            &mut self.layouts[slot as usize],
             &self.dwrite_factory,
             text,
             format,
