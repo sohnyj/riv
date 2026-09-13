@@ -29,7 +29,7 @@ use image::core::{
     LoadOutcome, NavigationCommand, ProbeCompletion, ScannedListing, SortMode,
     WM_APP_DECODE_COMPLETE, WM_APP_DOWNLOAD_PROGRESS, WM_APP_LISTING_READY, WM_APP_PROBE_COMPLETE,
 };
-use image::decode::DecodedImage;
+use image::decode::{DecodedImage, UploadedTexture};
 use settings::{DEFAULT_BACKGROUND_COLOR, Options, SettingsFile};
 use shell::drag_drop::{self, WM_APP_DROP_PATHS};
 use shell::open_with::{self, OpenWithList, WM_APP_OPEN_WITH_LIST};
@@ -783,48 +783,90 @@ impl Application {
         };
         let image = current.image.clone();
         let location = current.location.clone();
+        let texture = current.texture.clone();
         // The same item keeps its view; a preview of another size keeps its on-screen size.
         let same_view = self.displayed_location.as_ref() == Some(&location);
-        let previous_width = self
-            .displayed_image
-            .as_ref()
-            .map_or(0, |previous| previous.width);
-        if same_view && previous_width > 0 && image.width > 0 && previous_width != image.width {
-            self.view_transform.scale *= previous_width as f32 / image.width as f32;
+        if same_view {
+            self.keep_on_screen_size(image.width);
         }
-        let frame = &image.frames[0];
-        let upload = match &mut self.renderer {
-            Some(renderer) => renderer.set_image(&frame.pixels, current.texture.as_ref(), &image),
-            None => Err(windows::core::Error::empty()),
-        };
+        let upload = self.upload_frame(&image, texture.as_ref());
         if let Some(previous) = self.displayed_image.replace(image) {
             self.image_core.release_image(previous);
         }
         if !same_view {
-            // Members list the archive itself; URL items stay out of recents.
-            if let Some(file) = location.containing_file() {
-                self.settings.add_recent_file(file);
-            }
+            self.note_recent(&location);
         }
         self.displayed_location = Some(location);
         if !same_view {
-            let transform = &mut self.view_transform;
-            transform.rotation_quadrant = 0;
-            transform.mirrored = false;
-            transform.flipped = false;
-            transform.pan_offset_x = 0.0;
-            transform.pan_offset_y = 0.0;
-            transform.fit_tracking = !self.preserve_zoom;
+            self.reset_view_for_new_item();
         }
         if upload.is_err() {
             let _ = self.rebuild_renderer(window);
         }
+        self.restart_animation(window);
+        self.announce_truncation(window);
+        self.restart_slideshow_clock();
+        if !same_view {
+            self.start_open_with_enumeration(window);
+        }
+        self.preload_after_display = true;
+        self.request_render(window);
+    }
+
+    /// A replacement of another pixel width (preview to full) keeps the size on screen.
+    fn keep_on_screen_size(&mut self, image_width: u32) {
+        let previous_width = self
+            .displayed_image
+            .as_ref()
+            .map_or(0, |previous| previous.width);
+        if previous_width > 0 && image_width > 0 && previous_width != image_width {
+            self.view_transform.scale *= previous_width as f32 / image_width as f32;
+        }
+    }
+
+    /// Hands the first frame to the renderer; an absent renderer is an error the caller rebuilds on.
+    fn upload_frame(
+        &mut self,
+        image: &DecodedImage,
+        texture: Option<&UploadedTexture>,
+    ) -> windows::core::Result<()> {
+        let frame = &image.frames[0];
+        match &mut self.renderer {
+            Some(renderer) => renderer.set_image(&frame.pixels, texture, image),
+            None => Err(windows::core::Error::empty()),
+        }
+    }
+
+    /// Members list the archive itself; URL items stay out of recents.
+    fn note_recent(&mut self, location: &ItemLocation) {
+        if let Some(file) = location.containing_file() {
+            self.settings.add_recent_file(file);
+        }
+    }
+
+    /// A new item starts upright, unmirrored, centered, and fitted unless zoom is preserved.
+    fn reset_view_for_new_item(&mut self) {
+        let transform = &mut self.view_transform;
+        transform.rotation_quadrant = 0;
+        transform.mirrored = false;
+        transform.flipped = false;
+        transform.pan_offset_x = 0.0;
+        transform.pan_offset_y = 0.0;
+        transform.fit_tracking = !self.preserve_zoom;
+    }
+
+    /// The animation of the displayed image, if any, from its first frame.
+    fn restart_animation(&mut self, window: HWND) {
         let _ = unsafe { KillTimer(Some(window), ANIMATION_TIMER) };
         self.animation = self
             .displayed_image
             .as_ref()
             .and_then(|image| Animation::new(image));
         self.schedule_animation_timer(window);
+    }
+
+    /// Says so when the animation was cut to its first frame by the byte budget.
+    fn announce_truncation(&mut self, window: HWND) {
         if self
             .displayed_image
             .as_ref()
@@ -838,14 +880,13 @@ impl Application {
                 ),
             );
         }
+    }
+
+    /// A shown item gets its full slideshow interval from now.
+    fn restart_slideshow_clock(&mut self) {
         if let Some(shown) = &mut self.slideshow_item_shown_at {
             *shown = std::time::Instant::now();
         }
-        if !same_view {
-            self.start_open_with_enumeration(window);
-        }
-        self.preload_after_display = true;
-        self.request_render(window);
     }
 
     /// Drops the image so only centered overlay text (error, download) shows.
