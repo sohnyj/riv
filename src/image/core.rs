@@ -970,7 +970,7 @@ impl ImageCore {
                 None => {
                     self.request = ViewRequest::Failed(
                         location.clone(),
-                        decode::uncoded_error("Member no longer exists in the archive"),
+                        decode::uncoded_error(archive_reader::MEMBER_MISSING_MESSAGE),
                     );
                     self.refresh_preload();
                     return LoadOutcome::Failed;

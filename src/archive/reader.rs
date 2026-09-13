@@ -21,6 +21,9 @@ const FORMAT_GROUPS: &[(&str, &[&str])] = &[
 /// Uncompressed per-member ceiling; guards against decompression bombs.
 pub const MAXIMUM_MEMBER_BYTES: u64 = 1 << 30;
 
+/// A member the listing named but the archive no longer holds; the listing lookup says it too.
+pub const MEMBER_MISSING_MESSAGE: &str = "Member no longer exists in the archive";
+
 /// libarchive read-ahead block for archive_read_open_filename_w.
 const OPEN_BLOCK_BYTES: usize = 128 * 1024;
 
@@ -156,7 +159,7 @@ pub fn read_member(
         }
         return reader.read_entry_data(declared_bytes, cancellation);
     }
-    Err(ArchiveError::new("Member no longer exists in the archive"))
+    Err(ArchiveError::new(MEMBER_MISSING_MESSAGE))
 }
 
 fn entry_name(api: &Api, entry: *mut ArchiveEntry) -> Option<String> {
