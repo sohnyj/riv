@@ -2,10 +2,10 @@
 
 use serde_json::{Map, Value};
 use windows::Win32::UI::Input::KeyboardAndMouse::{
-    VIRTUAL_KEY, VK_BACK, VK_DELETE, VK_DOWN, VK_END, VK_ESCAPE, VK_F1, VK_F24, VK_HOME, VK_INSERT,
-    VK_LEFT, VK_NEXT, VK_OEM_1, VK_OEM_2, VK_OEM_3, VK_OEM_4, VK_OEM_5, VK_OEM_6, VK_OEM_7,
-    VK_OEM_COMMA, VK_OEM_MINUS, VK_OEM_PERIOD, VK_OEM_PLUS, VK_PRIOR, VK_RETURN, VK_RIGHT,
-    VK_SPACE, VK_TAB, VK_UP,
+    GetKeyState, VIRTUAL_KEY, VK_BACK, VK_CONTROL, VK_DELETE, VK_DOWN, VK_END, VK_ESCAPE, VK_F1,
+    VK_F24, VK_HOME, VK_INSERT, VK_LEFT, VK_LWIN, VK_MENU, VK_NEXT, VK_OEM_1, VK_OEM_2, VK_OEM_3,
+    VK_OEM_4, VK_OEM_5, VK_OEM_6, VK_OEM_7, VK_OEM_COMMA, VK_OEM_MINUS, VK_OEM_PERIOD, VK_OEM_PLUS,
+    VK_PRIOR, VK_RETURN, VK_RIGHT, VK_RWIN, VK_SHIFT, VK_SPACE, VK_TAB, VK_UP,
 };
 
 use crate::actions::Action;
@@ -15,40 +15,34 @@ pub const MODIFIER_SHIFT: u8 = 1 << 1;
 pub const MODIFIER_ALT: u8 = 1 << 2;
 pub const MODIFIER_META: u8 = 1 << 3;
 
-/// Modifier tokens in prefix order; the parsers and the formatter read this one list.
-const MODIFIER_NAMES: [(u8, &str); 4] = [
-    (MODIFIER_CONTROL, "Ctrl"),
-    (MODIFIER_SHIFT, "Shift"),
-    (MODIFIER_ALT, "Alt"),
-    (MODIFIER_META, "Meta"),
+/// Modifier tokens in prefix order with the keys that hold each; every modifier reader takes this list.
+const MODIFIERS: [(u8, &str, &[VIRTUAL_KEY]); 4] = [
+    (MODIFIER_CONTROL, "Ctrl", &[VK_CONTROL]),
+    (MODIFIER_SHIFT, "Shift", &[VK_SHIFT]),
+    (MODIFIER_ALT, "Alt", &[VK_MENU]),
+    (MODIFIER_META, "Meta", &[VK_LWIN, VK_RWIN]),
 ];
 
 fn modifier_from_token(token: &str) -> Option<u8> {
-    MODIFIER_NAMES
+    MODIFIERS
         .iter()
-        .find(|(_, name)| *name == token)
-        .map(|(modifier, _)| *modifier)
+        .find(|(_, name, _)| *name == token)
+        .map(|(modifier, _, _)| *modifier)
+}
+
+/// A key that only holds a modifier; a binding never starts with one.
+pub fn is_modifier_key(virtual_key: u16) -> bool {
+    MODIFIERS
+        .iter()
+        .any(|(_, _, keys)| keys.iter().any(|key| key.0 == virtual_key))
 }
 
 pub fn current_modifiers() -> u8 {
-    use windows::Win32::UI::Input::KeyboardAndMouse::{
-        GetKeyState, VK_CONTROL, VK_LWIN, VK_MENU, VK_RWIN, VK_SHIFT,
-    };
-    let pressed = |key: VIRTUAL_KEY| unsafe { GetKeyState(i32::from(key.0)) } < 0;
-    let mut modifiers = 0u8;
-    if pressed(VK_CONTROL) {
-        modifiers |= MODIFIER_CONTROL;
-    }
-    if pressed(VK_SHIFT) {
-        modifiers |= MODIFIER_SHIFT;
-    }
-    if pressed(VK_MENU) {
-        modifiers |= MODIFIER_ALT;
-    }
-    if pressed(VK_LWIN) || pressed(VK_RWIN) {
-        modifiers |= MODIFIER_META;
-    }
-    modifiers
+    let pressed = |key: &VIRTUAL_KEY| unsafe { GetKeyState(i32::from(key.0)) } < 0;
+    MODIFIERS
+        .iter()
+        .filter(|(_, _, keys)| keys.iter().any(pressed))
+        .fold(0u8, |modifiers, (modifier, _, _)| modifiers | modifier)
 }
 
 #[derive(Clone, Copy, PartialEq, Eq)]
@@ -275,7 +269,7 @@ pub fn format_mouse_encoding(modifiers: u8, base: MouseBase) -> String {
 
 pub fn modifier_prefix(modifiers: u8) -> String {
     let mut prefix = String::new();
-    for (modifier, name) in MODIFIER_NAMES {
+    for (modifier, name, _) in MODIFIERS {
         if modifiers & modifier != 0 {
             prefix.push_str(name);
             prefix.push('+');

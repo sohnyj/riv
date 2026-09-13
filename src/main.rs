@@ -20,7 +20,7 @@ use std::rc::Rc;
 use std::sync::Arc;
 
 use actions::{Action, ActionRequirement, SatisfiedRequirements};
-use bindings::{Bindings, MODIFIER_CONTROL, MouseBase, current_modifiers};
+use bindings::{Bindings, MODIFIER_CONTROL, MouseBase, current_modifiers, is_modifier_key};
 use dialogs::options::WM_APP_OPTIONS_APPLIED;
 use image::animation::Animation;
 use image::color::{self, DisplayLabels};
@@ -68,9 +68,7 @@ use windows::Win32::System::WinRT::{
     CreateDispatcherQueueController, DQTAT_COM_NONE, DQTYPE_THREAD_CURRENT, DispatcherQueueOptions,
 };
 use windows::Win32::UI::HiDpi::GetDpiForWindow;
-use windows::Win32::UI::Input::KeyboardAndMouse::{
-    ReleaseCapture, SetCapture, VK_CONTROL, VK_ESCAPE, VK_LWIN, VK_MENU, VK_RWIN, VK_SHIFT,
-};
+use windows::Win32::UI::Input::KeyboardAndMouse::{ReleaseCapture, SetCapture, VK_ESCAPE};
 use windows::Win32::UI::WindowsAndMessaging::{
     CS_DBLCLKS, CS_HREDRAW, CS_VREDRAW, CW_USEDEFAULT, CreateWindowExW, DefWindowProcW,
     DispatchMessageW, GF_BEGIN, GWL_STYLE, GWLP_USERDATA, GetClientRect, GetCursorPos, GetMessageW,
@@ -2129,10 +2127,7 @@ fn consume_keyboard_binding(window: HWND, message: &MSG) -> bool {
 }
 
 fn dispatch_key(application: &mut Application, window: HWND, virtual_key: u16) -> bool {
-    if [VK_CONTROL, VK_SHIFT, VK_MENU, VK_LWIN, VK_RWIN]
-        .iter()
-        .any(|modifier| modifier.0 == virtual_key)
-    {
+    if is_modifier_key(virtual_key) {
         return false;
     }
     let modifiers = current_modifiers();
