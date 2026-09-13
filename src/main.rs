@@ -181,6 +181,15 @@ const WHEEL_PAN_DIVISOR: f32 = 2.0;
 /// Smallest client area a resize may reach, in logical pixels before DPI scaling.
 const MINIMUM_CLIENT_LOGICAL_PIXELS: (i32, i32) = (320, 240);
 
+/// What a frame is rendered from, kept so the one retry after a device loss can decide again.
+#[derive(Clone, Copy)]
+struct FrameInputs {
+    matrix: [f32; 6],
+    interpolation: D2D1_INTERPOLATION_MODE,
+    clear_color: D2D1_COLOR_F,
+    viewport: Size,
+}
+
 struct Application {
     /// None between a device loss and the next successful rebuild.
     renderer: Option<Renderer>,
@@ -1314,19 +1323,7 @@ impl Application {
         if width == 0 || height == 0 {
             return;
         }
-        // A lost renderer or a failed output switch retries once per paint.
-        if self.renderer.is_none() {
-            let _ = self.rebuild_renderer(window);
-        }
-        if self.output_reconfigure_pending {
-            self.output_reconfigure_pending = false;
-            let color::DisplayColor {
-                capabilities,
-                display_profile,
-                ..
-            } = color::display_color(self.display_watcher.as_ref(), window);
-            let _ = self.reconfigure_display_output(&capabilities, display_profile, true);
-        }
+        self.recover_output(window);
         let viewport = Size {
             width: width as f32,
             height: height as f32,
@@ -1346,7 +1343,49 @@ impl Application {
         let interpolation = self.interpolation_mode();
         let background = self.background_color();
         // Decide first: the panel reports this frame, not the last one.
-        let decision = match self
+        let decision = self.decide_frame_recovering(window, matrix, interpolation);
+        let content = self.overlay_content(background, decision);
+        let clear_color = color::output_color(background, self.output_color_target());
+        let Some(decision) = decision else {
+            return;
+        };
+        if self.renderer.is_none() {
+            return;
+        }
+        let inputs = FrameInputs {
+            matrix,
+            interpolation,
+            clear_color,
+            viewport,
+        };
+        self.present_frame_recovering(window, decision, &inputs, &content);
+        self.preload_after_first_display();
+    }
+
+    /// A lost renderer or a failed output switch retries once per paint.
+    fn recover_output(&mut self, window: HWND) {
+        if self.renderer.is_none() {
+            let _ = self.rebuild_renderer(window);
+        }
+        if self.output_reconfigure_pending {
+            self.output_reconfigure_pending = false;
+            let color::DisplayColor {
+                capabilities,
+                display_profile,
+                ..
+            } = color::display_color(self.display_watcher.as_ref(), window);
+            let _ = self.reconfigure_display_output(&capabilities, display_profile, true);
+        }
+    }
+
+    /// The frame decision; a device failure rebuilds the renderer once and decides again.
+    fn decide_frame_recovering(
+        &mut self,
+        window: HWND,
+        matrix: [f32; 6],
+        interpolation: D2D1_INTERPOLATION_MODE,
+    ) -> Option<FrameDecision> {
+        match self
             .renderer
             .as_mut()
             .map(|renderer| renderer.decide_frame(matrix, interpolation))
@@ -1361,27 +1400,42 @@ impl Application {
                 Err(_) => None,
             },
             None => None,
-        };
-        let content = self.overlay_content(background, decision);
-        let clear_color = color::output_color(background, self.output_color_target());
+        }
+    }
+
+    /// Renders the frame; a device or presentation loss rebuilds once (texture read back) and retries.
+    fn present_frame_recovering(
+        &mut self,
+        window: HWND,
+        decision: FrameDecision,
+        inputs: &FrameInputs,
+        content: &OverlayContent,
+    ) {
+        let FrameInputs {
+            matrix,
+            interpolation,
+            clear_color,
+            viewport,
+        } = *inputs;
         let overlay = &mut self.overlay;
-        let draw = |context: &_| overlay.draw(context, viewport.width, viewport.height, &content);
-        let Some((decision, renderer)) = decision.zip(self.renderer.as_mut()) else {
+        let Some(renderer) = self.renderer.as_mut() else {
             return;
         };
-        if renderer.render(decision, clear_color, draw).is_err() {
-            // Device or presentation loss: rebuild once (reading the texture back first) and retry.
-            if self.rebuild_renderer(window).is_ok()
-                && let Some(renderer) = &mut self.renderer
-                && let Ok(decision) = renderer.decide_frame(matrix, interpolation)
-            {
-                let overlay = &mut self.overlay;
-                let _ = renderer.render(decision, clear_color, |context| {
-                    overlay.draw(context, viewport.width, viewport.height, &content)
-                });
-            }
+        let draw = |context: &_| overlay.draw(context, viewport.width, viewport.height, content);
+        if renderer.render(decision, clear_color, draw).is_err()
+            && self.rebuild_renderer(window).is_ok()
+            && let Some(renderer) = &mut self.renderer
+            && let Ok(decision) = renderer.decide_frame(matrix, interpolation)
+        {
+            let overlay = &mut self.overlay;
+            let _ = renderer.render(decision, clear_color, |context| {
+                overlay.draw(context, viewport.width, viewport.height, content)
+            });
         }
-        // The image is on screen: speculation no longer competes with it.
+    }
+
+    /// The image is on screen: speculation no longer competes with it.
+    fn preload_after_first_display(&mut self) {
         if self.preload_after_display {
             self.preload_after_display = false;
             self.image_core.refresh_preload();
