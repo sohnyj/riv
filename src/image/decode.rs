@@ -303,8 +303,11 @@ pub const DEFAULT_FRAME_DELAY_MILLISECONDS: u32 = 100;
 /// Header probe window; the memory and the file inputs must classify identically.
 const HEADER_PROBE_BYTES: usize = 4096;
 
-/// Highest source depth the HDR transfer tables cover; the table arrays are sized from it.
+/// Highest source depth the HDR transfer tables cover; it bounds the per-depth table array.
 pub(crate) const MAXIMUM_HDR_SOURCE_BITS: u32 = 16;
+
+/// One entry per u16 code: HDR source codes and half bit patterns are both indexed by u16.
+pub(crate) const LOOKUP_TABLE_ENTRIES: usize = 1 << u16::BITS;
 
 /// Meaningful bits of Bgra8 pixels; RgbaHalf keeps the source's own count instead.
 pub(crate) const BGRA8_SOURCE_BITS: u32 = 8;
@@ -1819,17 +1822,22 @@ fn icc_hdr_encoding(icc: &[u8]) -> Option<HdrEncoding> {
 const HLG_PEAK_NITS: f32 = 1000.0;
 
 /// One entry per 16-bit code, allocated on the heap instead of moved from the stack.
-pub(crate) fn boxed_lookup_table<T: Copy + Default + std::fmt::Debug>() -> Box<[T; 65536]> {
-    vec![T::default(); 65536]
+pub(crate) fn boxed_lookup_table<T: Copy + Default + std::fmt::Debug>()
+-> Box<[T; LOOKUP_TABLE_ENTRIES]> {
+    vec![T::default(); LOOKUP_TABLE_ENTRIES]
         .into_boxed_slice()
         .try_into()
-        .expect("65536 entries")
+        .expect("one entry per code")
 }
 
 /// Exact code lookup per source depth, with the full-range expansion folded in.
-fn hdr_transfer_lookup_table(transfer: HdrTransfer, source_bits: u32) -> &'static [f32; 65536] {
+fn hdr_transfer_lookup_table(
+    transfer: HdrTransfer,
+    source_bits: u32,
+) -> &'static [f32; LOOKUP_TABLE_ENTRIES] {
     // One table per source depth, indexed by its bit count; slot 0 stays unused.
-    type TablesByDepth = [OnceLock<Box<[f32; 65536]>>; MAXIMUM_HDR_SOURCE_BITS as usize + 1];
+    type TablesByDepth =
+        [OnceLock<Box<[f32; LOOKUP_TABLE_ENTRIES]>>; MAXIMUM_HDR_SOURCE_BITS as usize + 1];
     static PERCEPTUAL_QUANTIZER_TABLES: TablesByDepth =
         [const { OnceLock::new() }; MAXIMUM_HDR_SOURCE_BITS as usize + 1];
     static HYBRID_LOG_GAMMA_TABLES: TablesByDepth =
@@ -2023,7 +2031,7 @@ pub(crate) fn linearize_hdr_pixels(
 
 fn linearize_block(
     pixels: &mut [u8],
-    transfer_table: &[f32; 65536],
+    transfer_table: &[f32; LOOKUP_TABLE_ENTRIES],
     encoding: HdrEncoding,
     source_maximum: f32,
 ) -> u16 {
@@ -2072,8 +2080,8 @@ fn hybrid_log_gamma_scene_linear(code: f32) -> f32 {
 const PEAK_HISTOGRAM_BINS: usize = 4096;
 
 /// Histogram bin per half bit pattern; built once, two powf per entry.
-fn peak_histogram_bin_table() -> &'static [u16; 65536] {
-    static TABLE: OnceLock<Box<[u16; 65536]>> = OnceLock::new();
+fn peak_histogram_bin_table() -> &'static [u16; LOOKUP_TABLE_ENTRIES] {
+    static TABLE: OnceLock<Box<[u16; LOOKUP_TABLE_ENTRIES]>> = OnceLock::new();
     TABLE.get_or_init(|| {
         let mut table = boxed_lookup_table::<u16>();
         for (bits, bin) in table.iter_mut().enumerate() {
