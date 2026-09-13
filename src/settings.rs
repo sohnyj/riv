@@ -473,12 +473,10 @@ impl SettingsFile {
         if self.options.remember_recents {
             let disk = read_document(&self.path);
             let mut files = self.recent_files();
-            let mut seen: HashSet<String> = files
-                .iter()
-                .map(|(_, path)| path.to_ascii_lowercase())
-                .collect();
+            let mut seen: HashSet<String> =
+                files.iter().map(|(_, path)| recent_key(path)).collect();
             for (name, path) in recent_files_of(&disk) {
-                let key = path.to_ascii_lowercase();
+                let key = recent_key(&path);
                 if self.removed_recent_keys.contains(&key) {
                     continue; // dropped as missing this session
                 }
@@ -517,13 +515,14 @@ impl SettingsFile {
             |name| name.to_string_lossy().into_owned(),
         );
         let mut files = self.recent_files();
+        let key = recent_key(&path_text);
         if files
             .first()
-            .is_some_and(|(_, existing)| existing.eq_ignore_ascii_case(&path_text))
+            .is_some_and(|(_, existing)| recent_key(existing) == key)
         {
             return;
         }
-        files.retain(|(_, existing)| !existing.eq_ignore_ascii_case(&path_text));
+        files.retain(|(_, existing)| recent_key(existing) != key);
         files.insert(0, (name, path_text));
         files.truncate(MAXIMUM_RECENT_FILES);
         self.set_recent_files(&files);
@@ -531,14 +530,14 @@ impl SettingsFile {
 
     /// Drops the entry and records its key so the exit merge cannot restore it.
     pub fn remove_recent_file(&mut self, path: &std::path::Path) {
-        let text = path.to_string_lossy();
+        let key = recent_key(&path.to_string_lossy());
         let mut files = self.recent_files();
         let count = files.len();
-        files.retain(|(_, stored)| !stored.eq_ignore_ascii_case(&text));
+        files.retain(|(_, stored)| recent_key(stored) != key);
         if files.len() != count {
             self.set_recent_files(&files);
         }
-        self.removed_recent_keys.insert(text.to_ascii_lowercase());
+        self.removed_recent_keys.insert(key);
     }
 
     pub fn clear_recent_files(&mut self) {
@@ -546,6 +545,11 @@ impl SettingsFile {
             self.set_recent_files(&[]);
         }
     }
+}
+
+/// Recent entries are the same file when their paths match ignoring ASCII case.
+fn recent_key(path: &str) -> String {
+    path.to_ascii_lowercase()
 }
 
 fn settings_path() -> PathBuf {
