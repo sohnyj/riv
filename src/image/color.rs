@@ -256,6 +256,11 @@ fn monitor_device_profile(window: HWND) -> Option<Vec<u8>> {
 
 /// The display path's default ICC profile, in the scope the display currently uses.
 fn display_path_profile(path: &DISPLAYCONFIG_PATH_INFO) -> Option<Vec<u8>> {
+    read_profile(&display_profile_name(path)?)
+}
+
+/// The default ICC profile's name for the path; None when the display has none set.
+fn display_profile_name(path: &DISPLAYCONFIG_PATH_INFO) -> Option<String> {
     use windows::Win32::Foundation::{HLOCAL, LocalFree};
     use windows::Win32::UI::ColorSystem::{
         CPST_NONE, CPT_ICC, ColorProfileGetDisplayDefault, ColorProfileGetDisplayUserScope,
@@ -268,9 +273,12 @@ fn display_path_profile(path: &DISPLAYCONFIG_PATH_INFO) -> Option<Vec<u8>> {
         .ok()?;
     let profile = unsafe { name.to_string() }.ok();
     let _ = unsafe { LocalFree(Some(HLOCAL(name.0.cast()))) };
-    let profile = profile.filter(|name| !name.is_empty())?;
-    // A bare file name lives in the system color directory; a full path stands alone.
-    let profile = std::path::Path::new(&profile);
+    profile.filter(|name| !name.is_empty())
+}
+
+/// The profile bytes; a bare file name lives in the system color directory, a full path alone.
+fn read_profile(name: &str) -> Option<Vec<u8>> {
+    let profile = std::path::Path::new(name);
     if profile.is_absolute() {
         std::fs::read(profile).ok()
     } else {
