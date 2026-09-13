@@ -272,25 +272,28 @@ pub struct DecodeError {
 }
 
 impl DecodeError {
-    /// A source's outcome: its cancellation flag decides, then its status and message.
-    pub fn from_cancellation_or_status(cancelled: bool, code: i32, message: String) -> Self {
-        if cancelled {
-            return Self::cancelled();
-        }
+    /// A failure riv did not stop, naming no Store codec.
+    fn new(code: ErrorCode, message: String) -> Self {
         Self {
-            code: ErrorCode::status(code),
+            code,
             message,
             cancelled: false,
             store_codec_names: &[],
         }
     }
 
+    /// A source's outcome: its cancellation flag decides, then its status and message.
+    pub fn from_cancellation_or_status(cancelled: bool, code: i32, message: String) -> Self {
+        if cancelled {
+            return Self::cancelled();
+        }
+        Self::new(ErrorCode::status(code), message)
+    }
+
     pub fn cancelled() -> Self {
         Self {
-            code: ErrorCode::None,
-            message: "cancelled".to_string(),
             cancelled: true,
-            store_codec_names: &[],
+            ..Self::new(ErrorCode::None, "cancelled".to_string())
         }
     }
 
@@ -307,12 +310,7 @@ impl DecodeError {
 
 impl From<windows::core::Error> for DecodeError {
     fn from(error: windows::core::Error) -> Self {
-        Self {
-            code: ErrorCode::Hresult(error.code().0),
-            message: error.message(),
-            cancelled: false,
-            store_codec_names: &[],
-        }
+        Self::new(ErrorCode::Hresult(error.code().0), error.message())
     }
 }
 
@@ -2649,12 +2647,7 @@ fn source_size(source: &IWICBitmapSource) -> WindowsResult<(u32, u32)> {
 
 /// Code 0 means "no code", not a real HRESULT; the error overlay omits it.
 pub fn uncoded_error(message: impl std::fmt::Display) -> DecodeError {
-    DecodeError {
-        code: ErrorCode::None,
-        message: message.to_string(),
-        cancelled: false,
-        store_codec_names: &[],
-    }
+    DecodeError::new(ErrorCode::None, message.to_string())
 }
 
 /// The pixel count is over the decode cap; `format_name` is the sentence's subject.
@@ -2682,15 +2675,11 @@ fn png_error(error: png::DecodingError) -> DecodeError {
 
 /// An io failure, whose message already names the OS error the code is kept for.
 pub fn os_error(error: &std::io::Error) -> DecodeError {
-    DecodeError {
-        code: match error.raw_os_error() {
-            Some(value) => ErrorCode::Os(value),
-            None => ErrorCode::None,
-        },
-        message: error.to_string(),
-        cancelled: false,
-        store_codec_names: &[],
-    }
+    let code = match error.raw_os_error() {
+        Some(value) => ErrorCode::Os(value),
+        None => ErrorCode::None,
+    };
+    DecodeError::new(code, error.to_string())
 }
 
 fn decode_apng<Input: BufRead + Seek>(
