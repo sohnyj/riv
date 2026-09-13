@@ -18,6 +18,13 @@ const READ_BLOCK_BYTES: usize = crate::archive::reader::READ_BLOCK_BYTES;
 
 const SUPPORTED_PROTOCOLS: &[&str] = &["http", "https"];
 
+/// curl policy: redirect depth, connection setup ceiling, and the stall detector.
+const MAXIMUM_REDIRECTS: u32 = 10;
+const CONNECT_TIMEOUT_SECONDS: u32 = 5;
+/// A transfer under this average rate for the speed time is a stall and is dropped.
+const MINIMUM_SPEED_BYTES_PER_SECOND: u32 = 1024;
+const SPEED_TIME_SECONDS: u32 = 10;
+
 pub struct NetworkError {
     pub message: String,
     pub code: i32,
@@ -92,6 +99,10 @@ pub fn download(
         return Err(NetworkError::new("Unsupported URL protocol"));
     }
     let maximum_bytes = MAXIMUM_DOWNLOAD_BYTES.to_string();
+    let maximum_redirects = MAXIMUM_REDIRECTS.to_string();
+    let connect_timeout = CONNECT_TIMEOUT_SECONDS.to_string();
+    let minimum_speed = MINIMUM_SPEED_BYTES_PER_SECOND.to_string();
+    let speed_time = SPEED_TIME_SECONDS.to_string();
     let protocol_allowlist = format!("={}", SUPPORTED_PROTOCOLS.join(","));
     let mut child = Command::new(executable_path())
         .args([
@@ -100,7 +111,7 @@ pub fn download(
             "--fail",
             "--location",
             "--max-redirs",
-            "10",
+            maximum_redirects.as_str(),
             "--globoff",
             "--proto",
             protocol_allowlist.as_str(),
@@ -109,12 +120,12 @@ pub fn download(
             "--max-filesize",
             maximum_bytes.as_str(),
             "--connect-timeout",
-            "5",
+            connect_timeout.as_str(),
             // A speed floor drops a stall without a total-time cap on slow-but-real fetches.
             "--speed-limit",
-            "1024",
+            minimum_speed.as_str(),
             "--speed-time",
-            "10",
+            speed_time.as_str(),
             "--output",
             "-",
         ])

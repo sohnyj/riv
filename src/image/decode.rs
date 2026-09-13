@@ -1443,7 +1443,7 @@ fn decode_raw_preview(
 
 /// Preview request: a quarter for float sources, half for the rest, capped near the monitor.
 fn subresolution_target_size(width: u32, height: u32, float_native: bool) -> (u32, u32) {
-    let target = largest_monitor_long_side().min(MAXIMUM_TEXTURE_DIMENSION);
+    let target = raster_target_long_side();
     let longest = width.max(height).max(1);
     let class_divisor: u32 = if float_native { 4 } else { 2 };
     let divisor = class_divisor.max(longest.div_ceil(target));
@@ -1875,6 +1875,9 @@ fn icc_hdr_encoding(icc: &[u8]) -> Option<HdrEncoding> {
 /// Rec. 2100 nominal peak for the HLG OOTF (display-referred mapping).
 const HLG_PEAK_NITS: f32 = 1000.0;
 
+/// BT.2020 luma weights (R, G, B) the HLG OOTF weighs the scene by.
+const BT2020_LUMA_WEIGHTS: [f32; 3] = [0.2627, 0.6780, 0.0593];
+
 /// One entry per 16-bit code, allocated on the heap instead of moved from the stack.
 pub(crate) fn boxed_lookup_table<T: Copy + Default + std::fmt::Debug>()
 -> Box<[T; LOOKUP_TABLE_ENTRIES]> {
@@ -2103,8 +2106,9 @@ fn linearize_block(
         }
         if matches!(encoding.transfer, HdrTransfer::HybridLogGamma) {
             // BT.2100 OOTF: display = peak * scene_luminance^0.2 * scene.
-            let scene_luminance =
-                0.2627 * channel_nits[0] + 0.6780 * channel_nits[1] + 0.0593 * channel_nits[2];
+            let scene_luminance = BT2020_LUMA_WEIGHTS[0] * channel_nits[0]
+                + BT2020_LUMA_WEIGHTS[1] * channel_nits[1]
+                + BT2020_LUMA_WEIGHTS[2] * channel_nits[2];
             let display_scale = HLG_PEAK_NITS * scene_luminance.max(0.0).powf(0.2);
             for nits in &mut channel_nits {
                 *nits *= display_scale;
@@ -2951,7 +2955,7 @@ fn svg_raster_geometry(tree: &resvg::usvg::Tree) -> Option<(u32, u32, f32)> {
     if !(size.width() > 0.0 && size.height() > 0.0) {
         return None;
     }
-    let target = largest_monitor_long_side().min(MAXIMUM_TEXTURE_DIMENSION) as f32;
+    let target = raster_target_long_side() as f32;
     let scale = target / size.width().max(size.height());
     // The scale normalizes the product to the target; max(1.0) also turns an infinite size's NaN into 1.
     let pixel_width = (size.width() * scale).round().max(1.0) as u32;
@@ -2975,6 +2979,14 @@ static LARGEST_MONITOR_LONG_SIDE: AtomicU32 = AtomicU32::new(0);
 pub fn invalidate_monitor_size() {
     LARGEST_MONITOR_LONG_SIDE.store(0, Ordering::Relaxed);
 }
+
+/// Vector and downscaled rasters aim at the largest monitor, capped by the texture limit.
+fn raster_target_long_side() -> u32 {
+    largest_monitor_long_side().min(MAXIMUM_TEXTURE_DIMENSION)
+}
+
+/// When no monitor reports a size, a common full HD long side.
+const DEFAULT_MONITOR_LONG_SIDE_PIXELS: u32 = 1920;
 
 fn largest_monitor_long_side() -> u32 {
     use windows::Win32::Foundation::{LPARAM, RECT};
@@ -3008,7 +3020,11 @@ fn largest_monitor_long_side() -> u32 {
             LPARAM(&raw mut longest as isize),
         )
     };
-    let longest = if longest > 0 { longest as u32 } else { 1920 };
+    let longest = if longest > 0 {
+        longest as u32
+    } else {
+        DEFAULT_MONITOR_LONG_SIDE_PIXELS
+    };
     LARGEST_MONITOR_LONG_SIDE.store(longest, Ordering::Relaxed);
     longest
 }

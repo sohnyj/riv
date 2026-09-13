@@ -47,6 +47,10 @@ const NO_BINDING_TEXT: &str = "None";
 /// WM_RIV_MOUSE_CAPTURED wparam layout: modifiers above this shift, the base index below.
 const MOUSE_CAPTURE_MODIFIER_SHIFT: usize = 8;
 
+/// The remove icon's X: inset and stroke as fractions of the icon square's side.
+const REMOVE_ICON_INSET_DIVISOR: i32 = 4;
+const REMOVE_ICON_STROKE_DIVISOR: i32 = 10;
+
 pub fn capture_keyboard_sequences(
     owner: HWND,
     current: &[String],
@@ -370,8 +374,8 @@ fn paint_sequence_item(draw: &DRAWITEMSTRUCT, device: HDC) {
     if selected {
         let zone = remove_icon_bounds(&draw.rcItem);
         let side = zone.bottom - zone.top;
-        let inset = side / 4;
-        let stroke = (side / 10).max(1);
+        let inset = side / REMOVE_ICON_INSET_DIVISOR;
+        let stroke = (side / REMOVE_ICON_STROKE_DIVISOR).max(1);
         unsafe {
             let pen = CreatePen(PS_SOLID, stroke, REMOVE_ICON_RED);
             let previous = SelectObject(device, pen.into());

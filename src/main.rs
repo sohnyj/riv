@@ -155,6 +155,20 @@ const ANIMATION_TIMER: usize = 3;
 const CURSOR_HIDE_TIMER: usize = 4;
 const FULL_DECODE_TIMER: usize = 5;
 
+/// The RAW preview waits this long for a full decode before it is requested.
+const FULL_DECODE_DELAY_MILLISECONDS: u32 = 250;
+/// How long a timed status text stays up.
+const STATUS_TEXT_MILLISECONDS: u32 = 1000;
+/// Idle time before the fullscreen cursor hides; every movement restarts it.
+const CURSOR_HIDE_IDLE_MILLISECONDS: u32 = 1000;
+
+/// The first window's size when no placement is remembered; the shell picks the position.
+const DEFAULT_WINDOW_SIZE_PIXELS: (i32, i32) = (640, 480);
+
+/// Rec. 601 luma weights for the background color, and the luma a bright background exceeds.
+const REC601_LUMA_WEIGHTS: [f32; 3] = [0.299, 0.587, 0.114];
+const BRIGHT_BACKGROUND_LUMA: f32 = 0.5;
+
 /// How far an action-driven pan moves, in device pixels.
 const PAN_STEP_PIXELS: f32 = 64.0;
 
@@ -842,7 +856,14 @@ impl Application {
     /// A shown preview gets its full decode once navigation stops briefly.
     fn schedule_full_decode(&self, window: HWND) {
         if self.image_core.full_decode_pending() {
-            unsafe { SetTimer(Some(window), FULL_DECODE_TIMER, 250, None) };
+            unsafe {
+                SetTimer(
+                    Some(window),
+                    FULL_DECODE_TIMER,
+                    FULL_DECODE_DELAY_MILLISECONDS,
+                    None,
+                )
+            };
         }
     }
 
@@ -930,7 +951,14 @@ impl Application {
     /// Owns the pill's repaint; callers repaint again only for a view change of their own.
     fn show_status_text(&mut self, window: HWND, text: String) {
         self.status_text = Some(StatusText::Timed(text));
-        unsafe { SetTimer(Some(window), STATUS_TEXT_TIMER, 1000, None) };
+        unsafe {
+            SetTimer(
+                Some(window),
+                STATUS_TEXT_TIMER,
+                STATUS_TEXT_MILLISECONDS,
+                None,
+            )
+        };
         self.request_render(window);
     }
 
@@ -1149,7 +1177,9 @@ impl Application {
             } else {
                 None
             };
-        let brightness = 0.299 * background.r + 0.587 * background.g + 0.114 * background.b;
+        let brightness = REC601_LUMA_WEIGHTS[0] * background.r
+            + REC601_LUMA_WEIGHTS[1] * background.g
+            + REC601_LUMA_WEIGHTS[2] * background.b;
         // The wordmark marks a truly empty window, never a load still running.
         let show_wordmark =
             !centered_message && self.displayed_image.is_none() && self.image_core.holds_no_item();
@@ -1162,7 +1192,7 @@ impl Application {
                 .as_ref()
                 .map(|status| status.text().to_owned()),
             show_wordmark,
-            background_is_bright: brightness > 0.5,
+            background_is_bright: brightness > BRIGHT_BACKGROUND_LUMA,
             output_color_target: self.output_color_target(),
         }
     }
@@ -1546,7 +1576,14 @@ fn center_offset(point: POINT, client: (u32, u32)) -> (f32, f32) {
 }
 
 fn start_cursor_hide_timer(window: HWND) {
-    unsafe { SetTimer(Some(window), CURSOR_HIDE_TIMER, 1000, None) };
+    unsafe {
+        SetTimer(
+            Some(window),
+            CURSOR_HIDE_TIMER,
+            CURSOR_HIDE_IDLE_MILLISECONDS,
+            None,
+        )
+    };
 }
 
 /// True when our window is the topmost one under the pointer.
@@ -2410,8 +2447,8 @@ fn create_main_window(initial_path: Option<&Path>, pending_device: PendingDevice
             WS_OVERLAPPEDWINDOW,
             CW_USEDEFAULT,
             CW_USEDEFAULT,
-            640,
-            480,
+            DEFAULT_WINDOW_SIZE_PIXELS.0,
+            DEFAULT_WINDOW_SIZE_PIXELS.1,
             None,
             None,
             Some(instance.into()),

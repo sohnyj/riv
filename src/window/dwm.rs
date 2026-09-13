@@ -28,6 +28,10 @@ pub fn apply_title_bar_theme(window: HWND, dark: bool) {
     set_attribute(window, DWMWA_USE_IMMERSIVE_DARK_MODE, &dark);
 }
 
+/// Integer perceived-luminance weights (R, G, B) summing to 8; mid gray is 8 * 128.
+const PERCEIVED_LUMA_WEIGHTS: [u32; 3] = [2, 5, 1];
+const DARK_THEME_LUMA_THRESHOLD: u32 = 8 * 128;
+
 /// The system color hook: dark-mode reads plus a posted change message.
 pub struct ThemeWatcher {
     settings: UISettings,
@@ -56,7 +60,9 @@ impl ThemeWatcher {
         self.settings
             .GetColorValue(UIColorType::Foreground)
             .is_ok_and(|color| {
-                5 * u32::from(color.G) + 2 * u32::from(color.R) + u32::from(color.B) > 8 * 128
+                let [red, green, blue] = PERCEIVED_LUMA_WEIGHTS;
+                red * u32::from(color.R) + green * u32::from(color.G) + blue * u32::from(color.B)
+                    > DARK_THEME_LUMA_THRESHOLD
             })
     }
 }

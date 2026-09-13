@@ -78,6 +78,10 @@ const STATE_IMAGE_STYLES: [DFCS_STATE; 4] = [
 ];
 const _: () = assert!(STATE_IMAGE_STYLES.len() == STATE_PARTIAL as usize + 1);
 
+/// Shortcut list column widths as shares of the usable width; the mouse column takes the rest.
+const ACTION_COLUMN_PERCENT: i32 = 36;
+const KEYBOARD_COLUMN_PERCENT: i32 = 32;
+
 /// Shortcut list columns; the header order, the hit test, and the refresh share them.
 const ACTION_COLUMN: i32 = 0;
 const KEYBOARD_COLUMN: i32 = 1;
@@ -1166,8 +1170,8 @@ fn initialize_shortcuts_page(state: &OptionsState) {
     let dpi = crate::window::dpi::dpi_for_window(list);
     let scrollbar_width = unsafe { GetSystemMetricsForDpi(SM_CXVSCROLL, dpi) };
     let usable = bounds.right - bounds.left - scrollbar_width;
-    let action_width = usable * 36 / 100;
-    let keyboard_width = usable * 32 / 100;
+    let action_width = usable * ACTION_COLUMN_PERCENT / 100;
+    let keyboard_width = usable * KEYBOARD_COLUMN_PERCENT / 100;
     let mouse_width = usable - action_width - keyboard_width;
     for (index, title, width) in [
         (ACTION_COLUMN, "Action", action_width),
