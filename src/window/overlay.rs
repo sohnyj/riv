@@ -312,34 +312,13 @@ impl Overlay {
             wrap_width,
             f32::MAX,
         )?;
-        let metrics = cached.metrics;
-        let padding_x = PANEL_PADDING_X_LOGICAL_PIXELS * self.scale;
-        let padding_y = PANEL_PADDING_Y_LOGICAL_PIXELS * self.scale;
-        let margin = PANEL_MARGIN_LOGICAL_PIXELS * self.scale;
-        let width = metrics.width + padding_x * 2.0;
-        let left = match placement {
-            PanelPlacement::TopLeft => margin,
-            PanelPlacement::TopCenter => ((viewport_width - width) / 2.0).max(margin),
-        };
-        let top = margin;
-        let panel = D2D1_ROUNDED_RECT {
-            rect: D2D_RECT_F {
-                left,
-                top,
-                right: left + width,
-                bottom: top + metrics.height + padding_y * 2.0,
-            },
-            radiusX: PANEL_CORNER_RADIUS_LOGICAL_PIXELS * self.scale,
-            radiusY: PANEL_CORNER_RADIUS_LOGICAL_PIXELS * self.scale,
-        };
+        let (panel, text_origin) =
+            panel_geometry(&cached.metrics, placement, viewport_width, self.scale);
         let brushes = brushes_for(&mut self.brushes, context, output_color_target)?;
         unsafe {
             context.FillRoundedRectangle(&raw const panel, &brushes.panel_background);
             context.DrawTextLayout(
-                Vector2 {
-                    X: left + padding_x,
-                    Y: top + padding_y,
-                },
+                text_origin,
                 &cached.layout,
                 &brushes.white,
                 D2D1_DRAW_TEXT_OPTIONS_NONE,
@@ -359,7 +338,6 @@ impl Overlay {
         boxed: bool,
     ) -> Result<()> {
         let padding_x = PANEL_PADDING_X_LOGICAL_PIXELS * self.scale;
-        let padding_y = PANEL_PADDING_Y_LOGICAL_PIXELS * self.scale;
         // The box must fit the viewport, so boxed text wraps inside the margins.
         let inset = if boxed {
             (PANEL_MARGIN_LOGICAL_PIXELS * self.scale + padding_x).min(viewport_width / 2.0)
@@ -379,19 +357,9 @@ impl Overlay {
             viewport_width - inset * 2.0,
             viewport_height,
         )?;
-        let metrics = cached.metrics;
         let brushes = brushes_for(&mut self.brushes, context, content.output_color_target)?;
         if boxed {
-            let panel = D2D1_ROUNDED_RECT {
-                rect: D2D_RECT_F {
-                    left: inset + metrics.left - padding_x,
-                    top: metrics.top - padding_y,
-                    right: inset + metrics.left + metrics.width + padding_x,
-                    bottom: metrics.top + metrics.height + padding_y,
-                },
-                radiusX: PANEL_CORNER_RADIUS_LOGICAL_PIXELS * self.scale,
-                radiusY: PANEL_CORNER_RADIUS_LOGICAL_PIXELS * self.scale,
-            };
+            let panel = centered_panel_rectangle(&cached.metrics, inset, self.scale);
             unsafe { context.FillRoundedRectangle(&raw const panel, &brushes.panel_background) };
         }
         let text_brush = if boxed || !content.background_is_bright {
@@ -408,6 +376,120 @@ impl Overlay {
             );
         }
         Ok(())
+    }
+}
+
+/// A top panel's box and its text origin: the box hugs the text plus padding, at the margin.
+fn panel_geometry(
+    metrics: &DWRITE_TEXT_METRICS,
+    placement: PanelPlacement,
+    viewport_width: f32,
+    scale: f32,
+) -> (D2D1_ROUNDED_RECT, Vector2) {
+    let padding_x = PANEL_PADDING_X_LOGICAL_PIXELS * scale;
+    let padding_y = PANEL_PADDING_Y_LOGICAL_PIXELS * scale;
+    let margin = PANEL_MARGIN_LOGICAL_PIXELS * scale;
+    let width = metrics.width + padding_x * 2.0;
+    let left = match placement {
+        PanelPlacement::TopLeft => margin,
+        PanelPlacement::TopCenter => ((viewport_width - width) / 2.0).max(margin),
+    };
+    let top = margin;
+    let panel = D2D1_ROUNDED_RECT {
+        rect: D2D_RECT_F {
+            left,
+            top,
+            right: left + width,
+            bottom: top + metrics.height + padding_y * 2.0,
+        },
+        radiusX: PANEL_CORNER_RADIUS_LOGICAL_PIXELS * scale,
+        radiusY: PANEL_CORNER_RADIUS_LOGICAL_PIXELS * scale,
+    };
+    let text_origin = Vector2 {
+        X: left + padding_x,
+        Y: top + padding_y,
+    };
+    (panel, text_origin)
+}
+
+/// The box around centered text laid out `inset` from the left edge.
+fn centered_panel_rectangle(
+    metrics: &DWRITE_TEXT_METRICS,
+    inset: f32,
+    scale: f32,
+) -> D2D1_ROUNDED_RECT {
+    let padding_x = PANEL_PADDING_X_LOGICAL_PIXELS * scale;
+    let padding_y = PANEL_PADDING_Y_LOGICAL_PIXELS * scale;
+    D2D1_ROUNDED_RECT {
+        rect: D2D_RECT_F {
+            left: inset + metrics.left - padding_x,
+            top: metrics.top - padding_y,
+            right: inset + metrics.left + metrics.width + padding_x,
+            bottom: metrics.top + metrics.height + padding_y,
+        },
+        radiusX: PANEL_CORNER_RADIUS_LOGICAL_PIXELS * scale,
+        radiusY: PANEL_CORNER_RADIUS_LOGICAL_PIXELS * scale,
+    }
+}
+
+#[cfg(test)]
+mod panel_geometry_tests {
+    use super::*;
+
+    fn metrics(width: f32, height: f32) -> DWRITE_TEXT_METRICS {
+        DWRITE_TEXT_METRICS {
+            left: 3.0,
+            top: 5.0,
+            width,
+            height,
+            ..Default::default()
+        }
+    }
+
+    #[test]
+    fn a_top_left_panel_sits_at_the_margin_and_hugs_the_text() {
+        let (panel, origin) =
+            panel_geometry(&metrics(100.0, 20.0), PanelPlacement::TopLeft, 800.0, 2.0);
+        let margin = PANEL_MARGIN_LOGICAL_PIXELS * 2.0;
+        let padding_x = PANEL_PADDING_X_LOGICAL_PIXELS * 2.0;
+        let padding_y = PANEL_PADDING_Y_LOGICAL_PIXELS * 2.0;
+        assert_eq!((panel.rect.left, panel.rect.top), (margin, margin));
+        assert_eq!(panel.rect.right - panel.rect.left, 100.0 + padding_x * 2.0);
+        assert_eq!(panel.rect.bottom - panel.rect.top, 20.0 + padding_y * 2.0);
+        assert_eq!(
+            (origin.X, origin.Y),
+            (margin + padding_x, margin + padding_y)
+        );
+    }
+
+    #[test]
+    fn a_top_center_panel_is_centered_but_never_left_of_the_margin() {
+        let (centered, _) =
+            panel_geometry(&metrics(100.0, 20.0), PanelPlacement::TopCenter, 800.0, 1.0);
+        let width = centered.rect.right - centered.rect.left;
+        assert_eq!(centered.rect.left, (800.0 - width) / 2.0);
+        let (clamped, _) = panel_geometry(
+            &metrics(1000.0, 20.0),
+            PanelPlacement::TopCenter,
+            800.0,
+            1.0,
+        );
+        assert_eq!(clamped.rect.left, PANEL_MARGIN_LOGICAL_PIXELS);
+    }
+
+    #[test]
+    fn the_centered_box_pads_the_metrics_evenly() {
+        let panel = centered_panel_rectangle(&metrics(100.0, 20.0), 10.0, 1.0);
+        assert_eq!(panel.rect.left, 10.0 + 3.0 - PANEL_PADDING_X_LOGICAL_PIXELS);
+        assert_eq!(
+            panel.rect.right,
+            10.0 + 3.0 + 100.0 + PANEL_PADDING_X_LOGICAL_PIXELS
+        );
+        assert_eq!(panel.rect.top, 5.0 - PANEL_PADDING_Y_LOGICAL_PIXELS);
+        assert_eq!(
+            panel.rect.bottom,
+            5.0 + 20.0 + PANEL_PADDING_Y_LOGICAL_PIXELS
+        );
     }
 }
 
