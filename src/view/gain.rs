@@ -8,10 +8,9 @@ use windows::Win32::Graphics::Direct3D11::{
 use windows::core::Result;
 
 use crate::image::gain_map::GainMapMetadata;
-use crate::view::pass::ConstantBuffer;
+use crate::view::pass::{ConstantBuffer, build_output};
 
-/// DXBC compiled by the build script; the viewer never runs a shader compiler.
-const GAIN_APPLY_SHADER: &[u8] = include_bytes!(concat!(env!("OUT_DIR"), "/gain_apply.dxbc"));
+const GAIN_APPLY_SHADER: &[u8] = build_output!("gain_apply.dxbc");
 
 #[repr(C)]
 struct GainConstants {

@@ -1,7 +1,7 @@
 //! Output-dither settings and inputs for the quantize pass; the math lives in the HLSL.
 
 /// Single-channel f32 texels; the build script runs the void-and-cluster construction.
-pub const BLUE_NOISE_TEXELS: &[u8] = include_bytes!(concat!(env!("OUT_DIR"), "/blue_noise.bin"));
+pub const BLUE_NOISE_TEXELS: &[u8] = crate::view::pass::build_output!("blue_noise.bin");
 /// The square table's edge, read back from the table so the generator stays its one definition.
 pub const BLUE_NOISE_EDGE_TEXELS: u32 = (BLUE_NOISE_TEXELS.len() / size_of::<f32>()).isqrt() as u32;
 

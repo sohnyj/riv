@@ -10,8 +10,15 @@ use windows::Win32::Graphics::Direct3D11::{
 };
 use windows::core::Result;
 
-/// DXBC compiled by the build script; the viewer never runs a shader compiler.
-const VERTEX_SHADER: &[u8] = include_bytes!(concat!(env!("OUT_DIR"), "/fullscreen_triangle.dxbc"));
+/// A build script output embedded by name: DXBC the viewer never compiles, or the noise table.
+macro_rules! build_output {
+    ($name:literal) => {
+        include_bytes!(concat!(env!("OUT_DIR"), "/", $name))
+    };
+}
+pub(crate) use build_output;
+
+const VERTEX_SHADER: &[u8] = build_output!("fullscreen_triangle.dxbc");
 
 /// The fullscreen triangle every pass draws with.
 pub fn create_vertex_shader(device: &ID3D11Device) -> Result<ID3D11VertexShader> {

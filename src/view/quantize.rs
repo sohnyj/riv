@@ -11,12 +11,11 @@ use windows::Win32::Graphics::Dxgi::Common::{DXGI_FORMAT_R32_FLOAT, DXGI_SAMPLE_
 use windows::core::Result;
 
 use crate::view::dither::{BLUE_NOISE_EDGE_TEXELS, BLUE_NOISE_TEXELS, DitherMode};
-use crate::view::pass::ConstantBuffer;
+use crate::view::pass::{ConstantBuffer, build_output};
 
-/// DXBC compiled by the build script; the viewer never runs a shader compiler.
-const COPY_SHADER: &[u8] = include_bytes!(concat!(env!("OUT_DIR"), "/copy.dxbc"));
-const ORDERED_SHADER: &[u8] = include_bytes!(concat!(env!("OUT_DIR"), "/ordered.dxbc"));
-const FRUIT_SHADER: &[u8] = include_bytes!(concat!(env!("OUT_DIR"), "/fruit.dxbc"));
+const COPY_SHADER: &[u8] = build_output!("copy.dxbc");
+const ORDERED_SHADER: &[u8] = build_output!("ordered.dxbc");
+const FRUIT_SHADER: &[u8] = build_output!("fruit.dxbc");
 
 #[repr(C)]
 struct QuantizationConstants {
