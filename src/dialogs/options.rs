@@ -599,12 +599,30 @@ fn apply(dialog: HWND) {
     if !state.is_dirty() {
         return;
     }
-    // Saved sets are re-probed: a failed write keeps Apply enabled, not shown as saved.
+    apply_associations(state);
+    apply_start_menu(state);
+    let owner = state.owner;
+    let payload = applied_options(state, dialog);
+    crate::window::message::send_borrowed(owner, WM_APP_OPTIONS_APPLIED, &payload);
+    let Some(state) = state_mut(dialog) else {
+        return;
+    };
+    state.saved_options = payload.options;
+    state.saved_shortcuts = state.transient_shortcuts.clone();
+    update_buttons(state);
+}
+
+/// Writes the registry when the desired set changed; the saved set is re-probed, not assumed.
+fn apply_associations(state: &mut OptionsState) {
+    // A failed write keeps Apply enabled instead of showing as saved.
     let desired = state.desired_associations();
     if desired != state.saved_associations {
         file_association::set_file_associations(&desired);
         state.saved_associations = registered_associations();
     }
+}
+
+fn apply_start_menu(state: &mut OptionsState) {
     if state.start_menu_desired != state.start_menu_saved {
         if state.start_menu_desired {
             start_menu::create_shortcut();
@@ -613,8 +631,11 @@ fn apply(dialog: HWND) {
         }
         state.start_menu_saved = start_menu::shortcut_exists();
     }
-    let owner = state.owner;
-    let payload = AppliedOptions {
+}
+
+/// What the owner receives: the options and the shortcut rows as (action name, encodings).
+fn applied_options(state: &OptionsState, dialog: HWND) -> AppliedOptions {
+    AppliedOptions {
         dialog,
         options: state.transient_options.clone(),
         keyboard: state
@@ -627,14 +648,7 @@ fn apply(dialog: HWND) {
             .iter()
             .map(|row| (row.action.name().to_string(), row.mouse.clone()))
             .collect(),
-    };
-    crate::window::message::send_borrowed(owner, WM_APP_OPTIONS_APPLIED, &payload);
-    let Some(state) = state_mut(dialog) else {
-        return;
-    };
-    state.saved_options = payload.options;
-    state.saved_shortcuts = state.transient_shortcuts.clone();
-    update_buttons(state);
+    }
 }
 
 unsafe extern "system" fn page_procedure(
