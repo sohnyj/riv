@@ -195,6 +195,31 @@ struct BakedGainMap {
     bitmap: ID2D1Bitmap1,
 }
 
+impl BakedGainMap {
+    /// An FP16 render target of the base's size, wrapped as a D2D bitmap; None when D3D refuses.
+    fn create(
+        d3d_device: &ID3D11Device,
+        d2d_context: &ID2D1DeviceContext,
+        size: (u32, u32),
+    ) -> Option<Self> {
+        let texture = crate::view::texture::create_render_texture(
+            d3d_device,
+            size,
+            DXGI_FORMAT_R16G16B16A16_FLOAT,
+            D3D11_RESOURCE_MISC_FLAG(0),
+        )
+        .ok()?;
+        let render_target_view =
+            crate::view::texture::create_render_target_view(d3d_device, &texture).ok()?;
+        let properties = image_bitmap_properties(PixelStorage::RgbaHalf);
+        let bitmap = Renderer::bitmap_over_texture(d2d_context, &texture, &properties).ok()?;
+        Some(Self {
+            render_target_view,
+            bitmap,
+        })
+    }
+}
+
 pub struct Renderer {
     /// The mode as built, so a caller can compare against a fresh display query.
     output_mode: OutputMode,
@@ -963,32 +988,16 @@ impl Renderer {
         state: &mut GainMapState,
         display_headroom: f32,
     ) -> Option<ID2D1Bitmap1> {
-        if self.gain_pass.is_none() {
-            self.gain_pass = GainMapPass::new(&self.d3d_device).ok();
-        }
+        self.ensure_gain_pass();
         let pass = self.gain_pass.as_ref()?;
         let size = (state.base_image.pixel_width, state.base_image.pixel_height);
         let baked = match &mut state.baked {
             Some(baked) => baked,
-            empty @ None => {
-                let texture = crate::view::texture::create_render_texture(
-                    &self.d3d_device,
-                    size,
-                    DXGI_FORMAT_R16G16B16A16_FLOAT,
-                    D3D11_RESOURCE_MISC_FLAG(0),
-                )
-                .ok()?;
-                let render_target_view =
-                    crate::view::texture::create_render_target_view(&self.d3d_device, &texture)
-                        .ok()?;
-                let properties = image_bitmap_properties(PixelStorage::RgbaHalf);
-                let bitmap =
-                    Self::bitmap_over_texture(&self.d2d_context, &texture, &properties).ok()?;
-                empty.insert(BakedGainMap {
-                    render_target_view,
-                    bitmap,
-                })
-            }
+            empty @ None => empty.insert(BakedGainMap::create(
+                &self.d3d_device,
+                &self.d2d_context,
+                size,
+            )?),
         };
         let weight = state.metadata.weight(display_headroom);
         pass.bake(
@@ -1005,6 +1014,13 @@ impl Renderer {
         )
         .ok()?;
         Some(baked.bitmap.clone())
+    }
+
+    /// The gain pass is built on first use; a failed build leaves the base rendition.
+    fn ensure_gain_pass(&mut self) {
+        if self.gain_pass.is_none() {
+            self.gain_pass = GainMapPass::new(&self.d3d_device).ok();
+        }
     }
 
     /// The baked rendition wires like a linear FP16 source in the base's primaries.
@@ -1370,19 +1386,41 @@ impl Renderer {
     ) -> Result<FrameDecision> {
         // The gain rendition settles first, so the decision and the panel see it.
         self.refresh_gain_bake()?;
-        // DrawImage has no destination rect; fold the display scale into the matrix.
+        let transform = self.frame_transform(matrix);
+        let identity_placement = self.placement_is_identity(matrix, &transform);
+        // Force NEAREST so a 1:1 placement stays pixel-exact, whatever the filter.
+        let draw_interpolation = if identity_placement {
+            D2D1_INTERPOLATION_MODE_NEAREST_NEIGHBOR
+        } else {
+            interpolation
+        };
+        let (quantization_steps, dither) = self.quantization_policy(draw_interpolation);
+        Ok(FrameDecision {
+            transform,
+            draw_interpolation,
+            dither,
+            quantization_steps,
+            identity_placement,
+        })
+    }
+
+    /// The view matrix with the display scale folded in: DrawImage has no destination rect.
+    fn frame_transform(&self, matrix: [f32; 6]) -> Matrix3x2 {
         let scale_x = self.image_display_size.0 / (self.image_pixel_size.0.max(1) as f32);
         let scale_y = self.image_display_size.1 / (self.image_pixel_size.1.max(1) as f32);
-        let transform = Matrix3x2 {
+        Matrix3x2 {
             M11: matrix[0] * scale_x,
             M12: matrix[1] * scale_x,
             M21: matrix[2] * scale_y,
             M22: matrix[3] * scale_y,
             M31: matrix[4],
             M32: matrix[5],
-        };
-        // Fold a 90/270 rotation onto the axes; a 1:1 placement on whole pixels resamples nothing.
-        let identity_placement = if matrix[1] == 0.0 && matrix[2] == 0.0 {
+        }
+    }
+
+    /// A 1:1 placement on whole pixels, with a 90/270 rotation folded onto the axes.
+    fn placement_is_identity(&self, matrix: [f32; 6], transform: &Matrix3x2) -> bool {
+        if matrix[1] == 0.0 && matrix[2] == 0.0 {
             Self::is_pixel_identity(transform.M11, transform.M22, transform.M31, transform.M32)
         } else if matrix[0] == 0.0 && matrix[3] == 0.0 {
             let source_height = self.image_pixel_size.1 as f32;
@@ -1394,27 +1432,22 @@ impl Renderer {
             )
         } else {
             false
-        };
-        // Force NEAREST so a 1:1 placement stays pixel-exact, whatever the filter.
-        let draw_interpolation = if identity_placement {
-            D2D1_INTERPOLATION_MODE_NEAREST_NEIGHBOR
-        } else {
-            interpolation
-        };
+        }
+    }
+
+    /// The quantization steps of the back buffer, when a quantize pass exists, and the dither.
+    fn quantization_policy(
+        &self,
+        draw_interpolation: D2D1_INTERPOLATION_MODE,
+    ) -> (Option<u32>, DitherMode) {
         let backbuffer_bits = Self::backbuffer_bits_for(self.backbuffer_format)
             .filter(|_| self.quantize_pass.is_some());
         let quantization_steps = backbuffer_bits.map(|bits| (1 << bits) - 1);
-        let pass_dither = match backbuffer_bits {
+        let dither = match backbuffer_bits {
             Some(bits) if self.image.is_some() => self.active_dither_mode(draw_interpolation, bits),
             _ => DitherMode::None,
         };
-        Ok(FrameDecision {
-            transform,
-            draw_interpolation,
-            dither: pass_dither,
-            quantization_steps,
-            identity_placement,
-        })
+        (quantization_steps, dither)
     }
 
     /// What the pump waits on; None when the slot is already held or no buffer exists yet.
