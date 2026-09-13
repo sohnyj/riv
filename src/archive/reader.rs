@@ -27,8 +27,8 @@ pub const MEMBER_MISSING_MESSAGE: &str = "Member no longer exists in the archive
 /// libarchive read-ahead block for archive_read_open_filename_w.
 const OPEN_BLOCK_BYTES: usize = 128 * 1024;
 
-/// Extraction chunk; cancellation is checked between chunks.
-const READ_BLOCK_BYTES: usize = 256 * 1024;
+/// Extraction chunk; cancellation is checked between chunks, and the download reads alike.
+pub const READ_BLOCK_BYTES: usize = 256 * 1024;
 
 /// Initial reservation cap; the declared size is attacker controlled.
 const MAXIMUM_MEMBER_RESERVATION_BYTES: u64 = 16 << 20;

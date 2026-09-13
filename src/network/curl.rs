@@ -13,8 +13,8 @@ use windows::Win32::System::Threading::CREATE_NO_WINDOW;
 /// Download ceiling, matching the archive member cap.
 const MAXIMUM_DOWNLOAD_BYTES: u64 = crate::archive::reader::MAXIMUM_MEMBER_BYTES;
 
-/// Receive chunk; cancellation is checked between chunks.
-const READ_BLOCK_BYTES: usize = 256 * 1024;
+/// Receive chunk; the same cancellation granularity as archive extraction.
+const READ_BLOCK_BYTES: usize = crate::archive::reader::READ_BLOCK_BYTES;
 
 const SUPPORTED_PROTOCOLS: &[&str] = &["http", "https"];
 
