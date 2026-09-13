@@ -25,14 +25,17 @@ jobs:
         with:
           fetch-depth: 0
 
-      # A dispatch names the package version; the tag itself is pushed by hand, never by this run.
+      # A dispatch names the package version and releases the dispatched commit; GitHub creates the
+      # tag when the draft is published. A tag push releases that tag.
       - name: Resolve the release tag
         run: |
           if [ "$GITHUB_EVENT_NAME" = "workflow_dispatch" ]; then
             version=$(sed -n 's/^version = "\(.*\)"$/\1/p' Cargo.toml | head -1)
             echo "RELEASE_TAG=v$version" >> "$GITHUB_ENV"
+            echo "RELEASE_REF=$GITHUB_SHA" >> "$GITHUB_ENV"
           else
             echo "RELEASE_TAG=$GITHUB_REF_NAME" >> "$GITHUB_ENV"
+            echo "RELEASE_REF=$GITHUB_REF_NAME" >> "$GITHUB_ENV"
           fi
 
       # The tag must name the package version, whichever path triggered the run.
@@ -87,15 +90,7 @@ jobs:
           path: riv-${{ env.RELEASE_TAG }}.7z
           if-no-files-found: error
 
-      # The notes and the release need the tag on origin; a dispatch made before the push stops here.
-      - name: Check the release tag exists
-        if: github.event_name == 'push' || inputs.upload
-        run: |
-          if ! git rev-parse -q --verify "refs/tags/$RELEASE_TAG" >/dev/null; then
-            echo "Tag $RELEASE_TAG is not on origin; push it first or dispatch with upload off" >&2
-            exit 1
-          fi
-
+      # The commit list runs from the previous tag to the released commit, so it needs no tag of its own.
       - name: Compose the release notes
         if: github.event_name == 'push' || inputs.upload
         run: |
@@ -106,18 +101,23 @@ jobs:
             echo
             echo "## Changes"
             echo
-            previous=$(git describe --tags --abbrev=0 "${RELEASE_TAG}^" 2>/dev/null || true)
-            git log --format='- %s ([%h](https://github.com/sohnyj/riv/commit/%H))' "${previous:+$previous..}$RELEASE_TAG"
+            previous=$(git describe --tags --abbrev=0 "${RELEASE_REF}^" 2>/dev/null || true)
+            git log --format='- %s ([%h](https://github.com/sohnyj/riv/commit/%H))' "${previous:+$previous..}$RELEASE_REF"
           } > "$RUNNER_TEMP/notes.md"
           cat "$RUNNER_TEMP/notes.md"
 
-      # --verify-tag: a dispatch whose tag was never pushed stops here instead of releasing untagged.
+      # A pushed tag is verified; a dispatch targets its commit and the tag appears on publication.
       - name: Create the draft release
         if: github.event_name == 'push' || inputs.upload
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
-          gh release create "$RELEASE_TAG" --draft --verify-tag \
+          if [ "$GITHUB_EVENT_NAME" = "workflow_dispatch" ]; then
+            target=(--target "$GITHUB_SHA")
+          else
+            target=(--verify-tag)
+          fi
+          gh release create "$RELEASE_TAG" --draft "${target[@]}" \
             --title "$RELEASE_TAG" \
             --notes-file "$RUNNER_TEMP/notes.md" \
             "riv-${RELEASE_TAG}.7z"
