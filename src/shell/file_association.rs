@@ -24,8 +24,12 @@ fn file_associations_key() -> String {
     format!("{}\\FileAssociations", capabilities_key())
 }
 
+fn classes_extension_key(extension: &str) -> String {
+    format!("{CLASSES_KEY}\\{extension}")
+}
+
 fn extension_open_with_progids_key(extension: &str) -> String {
-    format!("{CLASSES_KEY}\\{extension}\\{OPEN_WITH_PROGIDS}")
+    format!("{}\\{OPEN_WITH_PROGIDS}", classes_extension_key(extension))
 }
 
 /// An empty name is the key's default value.
@@ -121,7 +125,7 @@ fn remove_extension_leftovers(extension: &str) {
     if registry_key_is_empty(&open_with_progids) {
         registry_delete_tree(&open_with_progids);
     }
-    let extension_key = format!("{CLASSES_KEY}\\{extension}");
+    let extension_key = classes_extension_key(extension);
     if registry_key_is_empty(&extension_key) {
         registry_delete_tree(&extension_key);
     }
