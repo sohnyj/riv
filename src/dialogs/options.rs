@@ -1186,14 +1186,27 @@ fn initialize_shortcuts_page(state: &OptionsState) {
     }
     let dpi = crate::window::dpi::dpi_for_window(list);
     let scrollbar_width = unsafe { GetSystemMetricsForDpi(SM_CXVSCROLL, dpi) };
-    let usable = bounds.right - bounds.left - scrollbar_width;
+    let widths = shortcut_column_widths(bounds.right - bounds.left - scrollbar_width);
+    insert_shortcut_columns(list, widths);
+    insert_shortcut_rows(list, &state.transient_shortcuts);
+}
+
+/// Action, keyboard, and mouse column widths; the mouse column takes what the shares leave.
+fn shortcut_column_widths(usable: i32) -> [i32; 3] {
     let action_width = usable * ACTION_COLUMN_PERCENT / 100;
     let keyboard_width = usable * KEYBOARD_COLUMN_PERCENT / 100;
-    let mouse_width = usable - action_width - keyboard_width;
+    [
+        action_width,
+        keyboard_width,
+        usable - action_width - keyboard_width,
+    ]
+}
+
+fn insert_shortcut_columns(list: HWND, widths: [i32; 3]) {
     for (index, title, width) in [
-        (ACTION_COLUMN, "Action", action_width),
-        (KEYBOARD_COLUMN, "Keyboard", keyboard_width),
-        (MOUSE_COLUMN, "Mouse", mouse_width),
+        (ACTION_COLUMN, "Action", widths[0]),
+        (KEYBOARD_COLUMN, "Keyboard", widths[1]),
+        (MOUSE_COLUMN, "Mouse", widths[2]),
     ] {
         let text = HSTRING::from(title);
         let column = LVCOLUMNW {
@@ -1211,7 +1224,11 @@ fn initialize_shortcuts_page(state: &OptionsState) {
             )
         };
     }
-    for (index, row) in state.transient_shortcuts.iter().enumerate() {
+}
+
+/// One row per action, labeled; the binding columns are filled by refresh_shortcut_rows.
+fn insert_shortcut_rows(list: HWND, rows: &[ShortcutRow]) {
+    for (index, row) in rows.iter().enumerate() {
         let label = HSTRING::from(row.action.label());
         let item = LVITEMW {
             mask: LVIF_TEXT,
@@ -1325,6 +1342,12 @@ fn initialize_association_page(state: &mut OptionsState) {
     let Ok(tree) = (unsafe { GetDlgItem(Some(page), IDC_ASSOCIATION_TREE) }) else {
         return;
     };
+    prepare_association_tree(state, tree);
+    fill_association_tree(state, tree);
+}
+
+/// Tree styling: double buffering and the tristate image list the state images index.
+fn prepare_association_tree(state: &mut OptionsState, tree: HWND) {
     // Double buffering keeps an item from erasing before it repaints.
     unsafe {
         SendMessageW(
@@ -1343,7 +1366,10 @@ fn initialize_association_page(state: &mut OptionsState) {
             Some(LPARAM(state.state_images.0)),
         )
     };
+}
 
+/// One tree item per format group, expanding multi-extension groups; the model fills alongside.
+fn fill_association_tree(state: &mut OptionsState, tree: HWND) {
     for (name, extension_list) in image::formats::sorted_format_groups() {
         if extension_list.len() == 1 {
             let extension = crate::text::dotted_extension(extension_list[0]);
