@@ -2506,8 +2506,8 @@ fn open_in_new_window(path: &Path) -> std::io::Result<()> {
     Ok(())
 }
 
-/// Opens everything after the first path in its own window; one dialog reports what never started.
-fn open_others_in_new_windows(window: HWND, paths: &[PathBuf]) {
+/// Spawns a window per path after the first; the failure count and the first error, if any.
+fn spawn_others(paths: &[PathBuf]) -> Option<(usize, std::io::Error)> {
     let mut failures = 0;
     let mut first_failure = None;
     for path in paths.iter().skip(1) {
@@ -2516,7 +2516,12 @@ fn open_others_in_new_windows(window: HWND, paths: &[PathBuf]) {
             first_failure.get_or_insert(error);
         }
     }
-    let Some(error) = first_failure else {
+    first_failure.map(|error| (failures, error))
+}
+
+/// Opens everything after the first path in its own window; one dialog reports what never started.
+fn open_others_in_new_windows(window: HWND, paths: &[PathBuf]) {
+    let Some((failures, error)) = spawn_others(paths) else {
         return;
     };
     let headline = if failures == 1 {
