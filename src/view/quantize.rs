@@ -53,7 +53,7 @@ impl QuantizePass {
         };
         let noise_data = D3D11_SUBRESOURCE_DATA {
             pSysMem: BLUE_NOISE_TEXELS.as_ptr().cast(),
-            SysMemPitch: BLUE_NOISE_EDGE_TEXELS * 4,
+            SysMemPitch: BLUE_NOISE_EDGE_TEXELS * size_of::<f32>() as u32,
             ..Default::default()
         };
         let mut noise_texture = None;

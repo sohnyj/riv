@@ -65,6 +65,9 @@ use crate::dialogs::modal::DWLP_USER;
 
 const GROUP_FLAG: isize = 0x1000_0000;
 
+/// CHOOSECOLOR's lpCustColors array holds exactly this many entries.
+const CUSTOM_COLOR_SLOTS: usize = 16;
+
 const STATE_UNCHECKED: isize = 1;
 const STATE_CHECKED: isize = 2;
 const STATE_PARTIAL: isize = 3;
@@ -137,7 +140,7 @@ struct OptionsState {
     /// Ignore control notifications during programmatic sync.
     syncing: bool,
     state_images: HIMAGELIST,
-    custom_colors: [COLORREF; 16],
+    custom_colors: [COLORREF; CUSTOM_COLOR_SLOTS],
     /// Fonts owned by the About page, freed when the dialog closes.
     about_fonts: about::AboutFonts,
 }
@@ -246,7 +249,7 @@ pub fn show(owner: HWND, snapshot: OptionsSnapshot) {
         groups: Vec::new(),
         syncing: false,
         state_images: HIMAGELIST::default(),
-        custom_colors: [COLORREF(0x00FF_FFFF); 16],
+        custom_colors: [COLORREF(0x00FF_FFFF); CUSTOM_COLOR_SLOTS],
         about_fonts: about::AboutFonts::default(),
     };
     crate::dialogs::modal::run_modal(owner, IDD_OPTIONS, frame_procedure, &raw mut state as isize);

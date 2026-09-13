@@ -31,6 +31,8 @@ use crate::dialogs::resource::{
 };
 
 use crate::dialogs::modal::{DWLP_USER, state_mut};
+use windows::Win32::UI::WindowsAndMessaging::{GetWindowTextLengthW, GetWindowTextW};
+
 use crate::window::message::{
     high_word, high_word_signed, low_word, pack_words, point_from_packed,
 };
@@ -298,6 +300,14 @@ fn remove_icon_bounds(item: &RECT) -> RECT {
         right: item.right,
         bottom: item.bottom,
     }
+}
+
+/// The control's text, read into a buffer sized from GetWindowTextLengthW.
+fn window_text(window: HWND) -> String {
+    let length = unsafe { GetWindowTextLengthW(window) };
+    let mut text = vec![0u16; usize::try_from(length).unwrap_or(0) + 1]; // + 1 for the NUL
+    let copied = unsafe { GetWindowTextW(window, &mut text) };
+    String::from_utf16_lossy(&text[..usize::try_from(copied).unwrap_or(0)])
 }
 
 /// Reads a list item into a buffer sized from LB_GETTEXTLEN (LB_GETTEXT has no bound).
@@ -666,11 +676,7 @@ unsafe extern "system" fn mouse_field_procedure(
             LRESULT(0)
         }
         WM_PAINT => {
-            let mut text = [0u16; 128];
-            let length = unsafe {
-                windows::Win32::UI::WindowsAndMessaging::GetWindowTextW(field, &mut text)
-            };
-            let current = String::from_utf16_lossy(&text[..length as usize]);
+            let current = window_text(field);
             let hint = current.is_empty() || current == NO_BINDING_TEXT;
             paint_field(
                 field,
