@@ -328,11 +328,7 @@ fn decode_exr_with(
         error_message.len(),
     );
     if status != 0 {
-        let text = CStr::from_bytes_until_nul(&error_message)
-            .map_or("EXR decode failed", |message| {
-                message.to_str().unwrap_or("EXR decode failed")
-            });
-        return Err(uncoded_error(text));
+        return Err(uncoded_error(exr_error_text(&error_message)));
     }
     // A file that shrank between the probe and the read leaves the tail untouched.
     pixels.truncate(width as usize * height as usize * 8);
@@ -355,6 +351,13 @@ fn decode_exr_with(
         gain_map: None,
         gain_map_plane: None,
     })
+}
+
+/// The shim's message when it wrote one; the generic sentence otherwise.
+fn exr_error_text(error_message: &[u8]) -> &str {
+    const GENERIC: &str = "EXR decode failed";
+    CStr::from_bytes_until_nul(error_message)
+        .map_or(GENERIC, |message| message.to_str().unwrap_or(GENERIC))
 }
 
 const HEIF_COLORSPACE_RGB: c_int = 1;
@@ -574,27 +577,81 @@ fn decode_heif_primary_image(
         )
     }
     .into_result();
-    let icc_profile = {
-        let profile_bytes = unsafe { heif_image_handle_get_raw_color_profile_size(handle) };
-        if profile_bytes > 0 {
-            try_zeroed_buffer(profile_bytes).and_then(|mut buffer| {
-                unsafe {
-                    heif_image_handle_get_raw_color_profile(handle, buffer.as_mut_ptr().cast())
-                }
-                .into_result()
-                .ok()
-                .map(|()| Arc::from(buffer))
-            })
-        } else {
-            None
-        }
-    };
+    let icc_profile = heif_icc_profile(handle);
     unsafe { heif_image_handle_release(handle) };
     decode_result?;
 
+    let plane = match heif_plane(image, hdr_encoding, storage) {
+        Ok(plane) => plane,
+        Err(error) => {
+            unsafe { heif_image_release(image) };
+            return Err(error);
+        }
+    };
+    // The cap bounds pixel_count, so row_bytes * height cannot overflow usize here.
+    let total_bytes = plane.row_bytes * plane.height as usize;
+    let Some(mut pixels) = try_zeroed_buffer(total_bytes) else {
+        unsafe { heif_image_release(image) };
+        return Err(out_of_memory_error("HEIF"));
+    };
+    copy_heif_rows(&plane, hdr_encoding, &mut pixels);
+    unsafe { heif_image_release(image) };
+    // The copied codes are still PQ/HLG; the shared pass makes them premultiplied linear.
+    let peak_luminance_nits = hdr_encoding.and_then(|encoding| {
+        let maximum_bits =
+            linearize_hdr_pixels(&mut pixels, encoding, plane.source_bits_per_channel as u32);
+        peak_luminance_with_maximum_bits(&pixels, maximum_bits)
+    });
+    Ok(DecodedImage {
+        width: plane.width as u32,
+        height: plane.height as u32,
+        pixel_width: plane.width as u32,
+        pixel_height: plane.height as u32,
+        format_name,
+        icc_profile,
+        exif: None,
+        storage,
+        source_bits_per_channel: plane.source_bits_per_channel as u32,
+        peak_luminance_nits,
+        source_primaries: hdr_encoding.map(HdrEncoding::source_primaries),
+        frames: vec![Frame::still(pixels)],
+        frames_truncated: false,
+        gain_map: None,
+        gain_map_plane: None,
+    })
+}
+
+/// The handle's raw ICC profile, when it carries one that fits in memory.
+fn heif_icc_profile(handle: *mut HeifImageHandle) -> Option<Arc<[u8]>> {
+    let profile_bytes = unsafe { heif_image_handle_get_raw_color_profile_size(handle) };
+    if profile_bytes == 0 {
+        return None;
+    }
+    let mut buffer = try_zeroed_buffer(profile_bytes)?;
+    unsafe { heif_image_handle_get_raw_color_profile(handle, buffer.as_mut_ptr().cast()) }
+        .into_result()
+        .ok()
+        .map(|()| Arc::from(buffer))
+}
+
+/// A decoded image's interleaved plane, validated; the pointer lives as long as the image.
+struct HeifPlane {
+    plane: *const u8,
+    stride: usize,
+    row_bytes: usize,
+    width: c_int,
+    height: c_int,
+    /// The 16-bit words hold codes of the source depth, not of the full range.
+    source_bits_per_channel: c_int,
+}
+
+fn heif_plane(
+    image: *const HeifImage,
+    hdr_encoding: Option<HdrEncoding>,
+    storage: PixelStorage,
+) -> Result<HeifPlane, DecodeError> {
     let width = unsafe { heif_image_get_width(image, HEIF_CHANNEL_INTERLEAVED) };
     let height = unsafe { heif_image_get_height(image, HEIF_CHANNEL_INTERLEAVED) };
-    // The 16-bit words hold codes of the source depth, not of the full range.
     let source_bits_per_channel = match hdr_encoding {
         Some(_) => unsafe { heif_image_get_bits_per_pixel_range(image, HEIF_CHANNEL_INTERLEAVED) },
         None => 8,
@@ -609,54 +666,33 @@ fn decode_heif_primary_image(
         || !(1..=MAXIMUM_HDR_SOURCE_BITS as c_int).contains(&source_bits_per_channel)
         || i64::from(stride) < row_bytes
     {
-        unsafe { heif_image_release(image) };
         return Err(uncoded_error("HEIF image plane unavailable"));
     }
-    let row_bytes = row_bytes as usize;
     let pixel_count = width as usize * height as usize;
     if pixel_count > MAXIMUM_FALLBACK_PIXELS {
-        unsafe { heif_image_release(image) };
         return Err(too_many_pixels_error("HEIF"));
     }
-    // The cap bounds pixel_count, so row_bytes * height cannot overflow usize here.
-    let total_bytes = row_bytes * height as usize;
-    let Some(mut pixels) = try_zeroed_buffer(total_bytes) else {
-        unsafe { heif_image_release(image) };
-        return Err(out_of_memory_error("HEIF"));
-    };
-    for (row, output_row) in pixels.chunks_exact_mut(row_bytes).enumerate() {
-        let row_pointer = unsafe { plane.add(row * stride as usize) };
-        let row_pixels = unsafe { std::slice::from_raw_parts(row_pointer, row_bytes) };
+    Ok(HeifPlane {
+        plane,
+        stride: stride as usize,
+        row_bytes: row_bytes as usize,
+        width,
+        height,
+        source_bits_per_channel,
+    })
+}
+
+/// Copies the rows out; SDR rows premultiply on the way, HDR codes stay as libheif wrote them.
+fn copy_heif_rows(plane: &HeifPlane, hdr_encoding: Option<HdrEncoding>, pixels: &mut [u8]) {
+    for (row, output_row) in pixels.chunks_exact_mut(plane.row_bytes).enumerate() {
+        let row_pointer = unsafe { plane.plane.add(row * plane.stride) };
+        let row_pixels = unsafe { std::slice::from_raw_parts(row_pointer, plane.row_bytes) };
         match hdr_encoding {
             // The codes stay as libheif wrote them; the transfer table expands them.
             Some(_) => output_row.copy_from_slice(row_pixels),
             None => premultiplied_bgra_from_rgba(row_pixels, output_row),
         }
     }
-    unsafe { heif_image_release(image) };
-    // The copied codes are still PQ/HLG; the shared pass makes them premultiplied linear.
-    let peak_luminance_nits = hdr_encoding.and_then(|encoding| {
-        let maximum_bits =
-            linearize_hdr_pixels(&mut pixels, encoding, source_bits_per_channel as u32);
-        peak_luminance_with_maximum_bits(&pixels, maximum_bits)
-    });
-    Ok(DecodedImage {
-        width: width as u32,
-        height: height as u32,
-        pixel_width: width as u32,
-        pixel_height: height as u32,
-        format_name,
-        icc_profile,
-        exif: None,
-        storage,
-        source_bits_per_channel: source_bits_per_channel as u32,
-        peak_luminance_nits,
-        source_primaries: hdr_encoding.map(HdrEncoding::source_primaries),
-        frames: vec![Frame::still(pixels)],
-        frames_truncated: false,
-        gain_map: None,
-        gain_map_plane: None,
-    })
 }
 
 /// Composes only the first frame when maximum_frames is 1, for the animation two-stage path.
