@@ -46,7 +46,7 @@ use window::message::{high_word, high_word_signed, low_word, point_from_packed};
 use window::overlay::{self, Overlay, OverlayContent};
 use windows::System::DispatcherQueueController;
 use windows::Win32::Foundation::{
-    HANDLE, HWND, LPARAM, LRESULT, POINT, RECT, WAIT_EVENT, WAIT_OBJECT_0, WPARAM,
+    HANDLE, HMODULE, HWND, LPARAM, LRESULT, POINT, RECT, WAIT_EVENT, WAIT_OBJECT_0, WPARAM,
 };
 use windows::Win32::Graphics::Direct2D::Common::D2D1_COLOR_F;
 use windows::Win32::Graphics::Direct2D::D2D1_INTERPOLATION_MODE;
@@ -928,14 +928,17 @@ impl Application {
         };
         let frame_count = animation.frame_count();
         let _ = unsafe { KillTimer(Some(window), ANIMATION_TIMER) };
-        // The frame-step pill holds until resume or an image change, so no timer.
-        let _ = unsafe { KillTimer(Some(window), STATUS_TEXT_TIMER) };
-        self.status_text = Some(StatusText::Sticky(format!(
-            "Frame: {} / {}",
-            frame_index + 1,
-            frame_count
-        )));
+        self.show_sticky_status_text(
+            window,
+            format!("Frame: {} / {}", frame_index + 1, frame_count),
+        );
         self.render_animation_frame(window, frame_index);
+    }
+
+    /// A status text that holds until resume or an image change, so the timer is stopped.
+    fn show_sticky_status_text(&mut self, window: HWND, text: String) {
+        let _ = unsafe { KillTimer(Some(window), STATUS_TEXT_TIMER) };
+        self.status_text = Some(StatusText::Sticky(text));
     }
 
     /// One slideshow tick: an animated item holds until its loop ends, then the show steps.
@@ -2365,44 +2368,60 @@ fn begin_pointer_press(window: HWND, lparam: LPARAM) {
     }
 }
 
-fn apply_gesture(application: &mut Application, window: HWND, lparam: LPARAM) -> bool {
-    use windows::Win32::UI::Input::Touch::{
-        CloseGestureInfoHandle, GESTUREINFO, GID_PAN, GID_ZOOM, GetGestureInfo, HGESTUREINFO,
-    };
+/// A gesture riv acts on, decoded from GESTUREINFO; the location is in screen coordinates.
+enum Gesture {
+    Zoom { distance: f32, location: POINT },
+    Pan { position: (i32, i32) },
+}
 
-    let handle = HGESTUREINFO(lparam.0 as *mut _);
+/// Reads the gesture the message carries; None when it is unreadable or one riv ignores.
+fn read_gesture(handle: windows::Win32::UI::Input::Touch::HGESTUREINFO) -> Option<(Gesture, bool)> {
+    use windows::Win32::UI::Input::Touch::{GESTUREINFO, GID_PAN, GID_ZOOM, GetGestureInfo};
     let mut information = GESTUREINFO {
         cbSize: size_of::<GESTUREINFO>() as u32,
         ..Default::default()
     };
-    if unsafe { GetGestureInfo(handle, &raw mut information) }.is_err() {
-        return false;
-    }
+    unsafe { GetGestureInfo(handle, &raw mut information) }.ok()?;
     let began = information.dwFlags & GF_BEGIN != 0;
-    let handled = match information.dwID {
-        identifier if identifier == GID_ZOOM.0 => {
+    let location = POINT {
+        x: i32::from(information.ptsLocation.x),
+        y: i32::from(information.ptsLocation.y),
+    };
+    let gesture = match information.dwID {
+        identifier if identifier == GID_ZOOM.0 => Gesture::Zoom {
             // The zoom distance is the low word; GESTUREINFO documents the high word as 0 here.
-            let distance = information.ullArguments as u32 as f32;
+            distance: information.ullArguments as u32 as f32,
+            location,
+        },
+        identifier if identifier == GID_PAN.0 => Gesture::Pan {
+            position: (location.x, location.y),
+        },
+        _ => return None,
+    };
+    Some((gesture, began))
+}
+
+fn apply_gesture(application: &mut Application, window: HWND, lparam: LPARAM) -> bool {
+    use windows::Win32::UI::Input::Touch::{CloseGestureInfoHandle, HGESTUREINFO};
+
+    let handle = HGESTUREINFO(lparam.0 as *mut _);
+    let Some((gesture, began)) = read_gesture(handle) else {
+        return false;
+    };
+    match gesture {
+        Gesture::Zoom { distance, location } => {
             if began {
                 application.gesture_zoom_distance = Some(distance);
             } else if let Some(previous) = application.gesture_zoom_distance.replace(distance)
                 && previous > 0.0
             {
-                let mut hotpoint = POINT {
-                    x: i32::from(information.ptsLocation.x),
-                    y: i32::from(information.ptsLocation.y),
-                };
+                let mut hotpoint = location;
                 let _ = unsafe { ScreenToClient(window, &raw mut hotpoint) };
                 let anchor = center_offset(hotpoint, client_size(window));
                 application.zoom_at(window, distance / previous, Some(anchor));
             }
-            true
         }
-        identifier if identifier == GID_PAN.0 => {
-            let position = (
-                i32::from(information.ptsLocation.x),
-                i32::from(information.ptsLocation.y),
-            );
+        Gesture::Pan { position } => {
             if began {
                 application.gesture_pan_point = Some(position);
             } else if let Some(previous) = application.gesture_pan_point.replace(position) {
@@ -2412,14 +2431,10 @@ fn apply_gesture(application: &mut Application, window: HWND, lparam: LPARAM) ->
                     (position.1 - previous.1) as f32,
                 );
             }
-            true
         }
-        _ => false,
-    };
-    if handled {
-        let _ = unsafe { CloseGestureInfoHandle(handle) };
     }
-    handled
+    let _ = unsafe { CloseGestureInfoHandle(handle) };
+    true
 }
 
 fn main() -> Result<()> {
@@ -2428,35 +2443,7 @@ fn main() -> Result<()> {
 
     unsafe { OleInitialize(None) }?;
 
-    if OsVersion::current() < MINIMUM_WINDOWS_VERSION {
-        fail_fast_dialog(
-            "This version of Windows isn't supported.",
-            &format!("{MINIMUM_WINDOWS_VERSION_NAME} or later is required."),
-        );
-        return Ok(());
-    }
-    if process_is_elevated() {
-        fail_fast_dialog(
-            "Running as administrator is blocked.",
-            "Start from a normal user session.",
-        );
-        return Ok(());
-    }
-    if !settings::save_directory_is_writable() {
-        fail_fast_dialog(
-            "Settings can't be saved here.",
-            "This folder isn't writable. Move the executable to a writable folder.",
-        );
-        return Ok(());
-    }
-    if settings::settings_document_is_unreadable()
-        && !dialogs::message::confirm_message(
-            None,
-            APPLICATION_NAME,
-            "Settings can't be read. Start with default settings?",
-            "Starting with defaults overwrites the settings file the next time settings are saved.",
-        )
-    {
+    if !startup_preconditions_satisfied() {
         return Ok(());
     }
 
@@ -2467,8 +2454,60 @@ fn main() -> Result<()> {
     let argument_path = std::env::args_os().nth(1).map(std::path::PathBuf::from);
 
     let instance = unsafe { GetModuleHandleW(None)? };
-    let class_name = HSTRING::from(APPLICATION_NAME);
+    register_window_class(instance)?;
 
+    let window = match create_main_window(argument_path.as_deref(), pending_device) {
+        Ok(window) => window,
+        Err(error) => {
+            fail_fast_dialog("The window couldn't be created.", &error.to_string());
+            return Err(error);
+        }
+    };
+
+    run_message_loop(window);
+    dialogs::paint::end_buffered_painting();
+    Ok(())
+}
+
+/// The OS version, the elevation, and the settings location; each failure has told the user why.
+fn startup_preconditions_satisfied() -> bool {
+    if OsVersion::current() < MINIMUM_WINDOWS_VERSION {
+        fail_fast_dialog(
+            "This version of Windows isn't supported.",
+            &format!("{MINIMUM_WINDOWS_VERSION_NAME} or later is required."),
+        );
+        return false;
+    }
+    if process_is_elevated() {
+        fail_fast_dialog(
+            "Running as administrator is blocked.",
+            "Start from a normal user session.",
+        );
+        return false;
+    }
+    if !settings::save_directory_is_writable() {
+        fail_fast_dialog(
+            "Settings can't be saved here.",
+            "This folder isn't writable. Move the executable to a writable folder.",
+        );
+        return false;
+    }
+    if settings::settings_document_is_unreadable()
+        && !dialogs::message::confirm_message(
+            None,
+            APPLICATION_NAME,
+            "Settings can't be read. Start with default settings?",
+            "Starting with defaults overwrites the settings file the next time settings are saved.",
+        )
+    {
+        return false;
+    }
+    true
+}
+
+/// The main window class: the application icon, the arrow cursor, and no background brush.
+fn register_window_class(instance: HMODULE) -> Result<()> {
+    let class_name = HSTRING::from(APPLICATION_NAME);
     let application_icon = unsafe { LoadIconW(Some(instance.into()), APPLICATION_ICON_ID)? };
     let window_class = WNDCLASSEXW {
         cbSize: size_of::<WNDCLASSEXW>() as u32,
@@ -2485,17 +2524,6 @@ fn main() -> Result<()> {
     };
     let class_atom = unsafe { RegisterClassExW(&raw const window_class) };
     assert!(class_atom != 0, "RegisterClassExW failed");
-
-    let window = match create_main_window(argument_path.as_deref(), pending_device) {
-        Ok(window) => window,
-        Err(error) => {
-            fail_fast_dialog("The window couldn't be created.", &error.to_string());
-            return Err(error);
-        }
-    };
-
-    run_message_loop(window);
-    dialogs::paint::end_buffered_painting();
     Ok(())
 }
 
@@ -2614,36 +2642,43 @@ fn create_main_window(initial_path: Option<&Path>, pending_device: PendingDevice
     unsafe {
         SetWindowLongPtrW(window, GWLP_USERDATA, Box::into_raw(application) as isize);
     }
-    {
-        use windows::Win32::System::SystemServices::{GC_PAN, GC_ZOOM};
-        use windows::Win32::UI::Input::Touch::{
-            GESTURECONFIG, GID_PAN, GID_ZOOM, SetGestureConfig,
-        };
-        let configurations = [
-            GESTURECONFIG {
-                dwID: GID_ZOOM,
-                dwWant: GC_ZOOM.0,
-                dwBlock: 0,
-            },
-            GESTURECONFIG {
-                dwID: GID_PAN,
-                dwWant: GC_PAN.0,
-                dwBlock: 0,
-            },
-        ];
-        let _ = unsafe {
-            SetGestureConfig(
-                window,
-                0,
-                &configurations,
-                size_of::<GESTURECONFIG>() as u32,
-            )
-        };
-    }
+    configure_gestures(window);
     if let Some(application) = application_from_window(window) {
         application.restore_window_placement(window);
     }
     // The placement pumped WM_SIZE, so re-fetch instead of reusing the reference across it.
+    prepare_first_show(window);
+    Ok(window)
+}
+
+/// Asks for zoom and pan gestures; the touch input then arrives as WM_GESTURE.
+fn configure_gestures(window: HWND) {
+    use windows::Win32::System::SystemServices::{GC_PAN, GC_ZOOM};
+    use windows::Win32::UI::Input::Touch::{GESTURECONFIG, GID_PAN, GID_ZOOM, SetGestureConfig};
+    let configurations = [
+        GESTURECONFIG {
+            dwID: GID_ZOOM,
+            dwWant: GC_ZOOM.0,
+            dwBlock: 0,
+        },
+        GESTURECONFIG {
+            dwID: GID_PAN,
+            dwWant: GC_PAN.0,
+            dwBlock: 0,
+        },
+    ];
+    let _ = unsafe {
+        SetGestureConfig(
+            window,
+            0,
+            &configurations,
+            size_of::<GESTURECONFIG>() as u32,
+        )
+    };
+}
+
+/// Theme, drop target, title, and the first frame, then the deferred show.
+fn prepare_first_show(window: HWND) {
     if let Some(application) = application_from_window(window) {
         application.refresh_title_bar_theme(window);
         application.drop_target = drag_drop::register(window).ok();
@@ -2652,7 +2687,6 @@ fn create_main_window(initial_path: Option<&Path>, pending_device: PendingDevice
         // Presented before the first show, so the class brush never flashes.
         let _ = unsafe { PostMessageW(Some(window), WM_APP_SHOW_WINDOW, WPARAM(0), LPARAM(0)) };
     }
-    Ok(window)
 }
 
 fn open_in_new_window(path: &Path) -> std::io::Result<()> {
