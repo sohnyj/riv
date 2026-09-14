@@ -15,7 +15,7 @@ pub fn dpi_for_window(window: HWND) -> u32 {
 }
 
 /// Window size holding a logical client size, framed and scaled at the window's own DPI.
-pub fn window_size_for_client(window: HWND, width: i32, height: i32) -> Option<(i32, i32)> {
+pub fn window_size_for_client(window: HWND, width: i32, height: i32) -> (i32, i32) {
     let dpi = dpi_for_window(window);
     let scale = |logical: i32| logical * dpi as i32 / USER_DEFAULT_SCREEN_DPI as i32;
     let mut window_bounds = RECT {
@@ -34,9 +34,9 @@ pub fn window_size_for_client(window: HWND, width: i32, height: i32) -> Option<(
             dpi,
         )
     }
-    .ok()?;
-    Some((
+    .expect("the frame size of an existing window at its own DPI");
+    (
         window_bounds.right - window_bounds.left,
         window_bounds.bottom - window_bounds.top,
-    ))
+    )
 }
