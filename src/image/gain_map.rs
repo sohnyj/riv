@@ -101,7 +101,7 @@ pub fn jpeg_carries_mpf(mut reader: impl Read + Seek) -> bool {
     while let Some((kind, length)) = next_segment(&mut reader) {
         let mut remaining = length;
         if kind == APPLICATION_2 && remaining >= MPF_IDENTIFIER.len() {
-            let mut identifier = [0u8; 4];
+            let mut identifier = [0u8; MPF_IDENTIFIER.len()];
             if reader.read_exact(&mut identifier).is_err() {
                 return false;
             }
@@ -135,7 +135,7 @@ fn next_segment(reader: &mut impl Read) -> Option<(u8, usize)> {
             return None;
         }
         let kind = marker[1];
-        if kind == START_OF_IMAGE || kind == 0x01 || (0xD0..=0xD7).contains(&kind) {
+        if kind == START_OF_IMAGE || kind == TEMPORARY || RESTART_MARKERS.contains(&kind) {
             continue;
         }
         if kind == END_OF_IMAGE || kind == START_OF_SCAN {
@@ -162,6 +162,9 @@ const END_OF_IMAGE: u8 = 0xD9;
 const START_OF_SCAN: u8 = 0xDA;
 const APPLICATION_1: u8 = 0xE1;
 const APPLICATION_2: u8 = 0xE2;
+/// Standalone markers with no segment: TEM and the restart markers.
+const TEMPORARY: u8 = 0x01;
+const RESTART_MARKERS: std::ops::RangeInclusive<u8> = 0xD0..=0xD7;
 
 /// Payload range of each marker segment before the scan data, in file order.
 fn segment_payloads(jpeg: &[u8]) -> Vec<(u8, Range<usize>)> {
@@ -185,6 +188,9 @@ fn segment_payloads(jpeg: &[u8]) -> Vec<(u8, Range<usize>)> {
 const MPF_IDENTIFIER: &[u8] = b"MPF\0";
 const MP_ENTRY_TAG: u16 = 0xB002;
 const MP_ENTRY_BYTES: usize = 16;
+/// A TIFF IFD: a two-byte entry count, then twelve-byte entries.
+const IFD_COUNT_BYTES: usize = 2;
+const IFD_ENTRY_BYTES: usize = 12;
 
 /// TIFF-order reads anchored at the MP header, in the index's declared endianness.
 struct MpfReader<'bytes> {
@@ -268,7 +274,7 @@ fn mp_entry_list(reader: &MpfReader) -> Option<MpEntryList> {
     let index_ifd = reader.read_u32(4)? as usize;
     let entry_count = reader.read_u16(index_ifd)? as usize;
     for index in 0..entry_count {
-        let entry = index_ifd + 2 + index * 12;
+        let entry = index_ifd + IFD_COUNT_BYTES + index * IFD_ENTRY_BYTES;
         if reader.read_u16(entry)? != MP_ENTRY_TAG {
             continue;
         }
@@ -289,6 +295,11 @@ fn mp_entry_list(reader: &MpfReader) -> Option<MpEntryList> {
 
 const XMP_IDENTIFIER: &[u8] = b"http://ns.adobe.com/xap/1.0/\0";
 const HDRGM_NAMESPACE: &str = "http://ns.adobe.com/hdr-gain-map/1.0/";
+/// A namespace prefix longer than this is not one a writer would bind.
+const MAXIMUM_NAMESPACE_PREFIX_BYTES: usize = 32;
+const XMLNS_ATTRIBUTE_PREFIX: &str = "xmlns:";
+const RDF_ITEM_OPEN: &str = "<rdf:li";
+const RDF_ITEM_CLOSE: &str = "</rdf:li";
 
 /// Gain map parameters from the JPEG's XMP packet, when one declares hdrgm.
 fn hdrgm_metadata(gain_map_jpeg: &[u8]) -> Option<GainMapMetadata> {
@@ -312,15 +323,15 @@ fn hdrgm_metadata(gain_map_jpeg: &[u8]) -> Option<GainMapMetadata> {
 /// The prefix the packet binds to the hdrgm namespace, usually "hdrgm".
 fn hdrgm_prefix(xml: &str) -> Option<&str> {
     let mut rest = xml;
-    while let Some(position) = rest.find("xmlns:") {
-        rest = &rest[position + 6..];
+    while let Some(position) = rest.find(XMLNS_ATTRIBUTE_PREFIX) {
+        rest = &rest[position + XMLNS_ATTRIBUTE_PREFIX.len()..];
         let equals = rest.find('=')?;
         let prefix = &rest[..equals];
         let value = &rest[equals + 1..];
         let unquoted = value.strip_prefix('"').or_else(|| value.strip_prefix('\''));
         if unquoted.is_some_and(|value| value.starts_with(HDRGM_NAMESPACE))
             && !prefix.is_empty()
-            && prefix.len() <= 32
+            && prefix.len() <= MAXIMUM_NAMESPACE_PREFIX_BYTES
             && prefix
                 .chars()
                 .all(|character| character.is_ascii_alphanumeric())
@@ -349,13 +360,13 @@ fn property_values<'xml>(xml: &'xml str, prefix: &str, name: &str) -> Option<Vec
     let body = element.get(body_open..body_close)?;
     let mut items = Vec::new();
     let mut rest = body;
-    while let Some(position) = rest.find("<rdf:li") {
+    while let Some(position) = rest.find(RDF_ITEM_OPEN) {
         let item = &rest[position..];
         let item_open = item.find('>')? + 1;
-        let item_close = item.find("</rdf:li")?;
+        let item_close = item.find(RDF_ITEM_CLOSE)?;
         let text = item.get(item_open..item_close)?;
         items.push(text.trim());
-        rest = &item[item_close + 8..];
+        rest = &item[item_close + RDF_ITEM_CLOSE.len()..];
     }
     if items.is_empty() {
         items.push(body.trim());

@@ -8,11 +8,12 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use windows::core::HSTRING;
 
 use crate::image::decode::{
-    DEFAULT_FRAME_DELAY_MILLISECONDS, DecodeError, DecodedImage, Frame, FrameBlend,
+    BGRA8_PIXEL_BYTES, DEFAULT_FRAME_DELAY_MILLISECONDS, DecodeError, DecodedImage, FrameBlend,
     FrameCompositor, FrameDisposal, FrameRegion, HdrEncoding, MAXIMUM_HDR_SOURCE_BITS,
-    PixelStorage, canvas_too_large_error, cicp_hdr_encoding, linearize_hdr_pixels,
-    out_of_memory_error, peak_luminance_from_half_pixels, peak_luminance_with_maximum_bits,
-    premultiplied_bgra_from_rgba, too_many_pixels_error, try_zeroed_buffer, uncoded_error,
+    PixelStorage, RGBA_HALF_PIXEL_BYTES, canvas_too_large_error, cicp_hdr_encoding,
+    linearize_hdr_pixels, out_of_memory_error, peak_luminance_from_half_pixels,
+    peak_luminance_with_maximum_bits, premultiplied_bgra_from_rgba, too_many_pixels_error,
+    try_zeroed_buffer, uncoded_error,
 };
 
 /// Must match the built libwebpdemux ABI or WebPDemuxInternal returns null.
@@ -130,7 +131,7 @@ fn compose_webp_frames(
         }
         let frame_width = iterator.width as u32;
         let frame_height = iterator.height as u32;
-        let frame_bytes = frame_width as usize * frame_height as usize * 4;
+        let frame_bytes = frame_width as usize * frame_height as usize * BGRA8_PIXEL_BYTES;
         // Grown fallibly in place: vec-style growth would abort where an error must show.
         if frame_pixels
             .try_reserve_exact(frame_bytes.saturating_sub(frame_pixels.len()))
@@ -146,7 +147,7 @@ fn compose_webp_frames(
                 iterator.fragment.size,
                 frame_pixels.as_mut_ptr(),
                 frame_pixels.len(),
-                iterator.width * 4,
+                iterator.width * BGRA8_PIXEL_BYTES as c_int,
             )
         };
         if decoded.is_null() {
@@ -193,7 +194,7 @@ fn compose_webp_frames(
 }
 
 fn premultiply_bgra_in_place(pixels: &mut [u8]) {
-    for pixel in pixels.as_chunks_mut::<4>().0 {
+    for pixel in pixels.as_chunks_mut::<BGRA8_PIXEL_BYTES>().0 {
         // Uniform four-lane multiply; the alpha lane's 255 factor leaves it unchanged.
         let multipliers = [pixel[3], pixel[3], pixel[3], 255];
         for (channel, multiplier) in pixel.iter_mut().zip(multipliers) {
@@ -310,7 +311,7 @@ fn decode_exr_with(
         return Err(too_many_pixels_error("EXR"));
     }
     // The shim writes associated-alpha linear RGBA halves (the FP16 storage layout).
-    let Some(mut pixels) = try_zeroed_buffer(pixel_count * 8) else {
+    let Some(mut pixels) = try_zeroed_buffer(pixel_count * RGBA_HALF_PIXEL_BYTES) else {
         return Err(out_of_memory_error("EXR"));
     };
     let mut width: c_int = 0;
@@ -328,25 +329,19 @@ fn decode_exr_with(
         return Err(uncoded_error(exr_error_text(&error_message)));
     }
     // A file that shrank between the probe and the read leaves the tail untouched.
-    pixels.truncate(width as usize * height as usize * 8);
+    pixels.truncate(width as usize * height as usize * RGBA_HALF_PIXEL_BYTES);
     let peak_luminance_nits = peak_luminance_from_half_pixels(&pixels);
+    // EXR chromaticities are ignored, so nothing states the primaries.
     Ok(DecodedImage {
-        width: width as u32,
-        height: height as u32,
-        pixel_width: width as u32,
-        pixel_height: height as u32,
-        format_name,
-        icc_profile: None,
-        exif: None,
-        storage: PixelStorage::RgbaHalf,
-        source_bits_per_channel: 16,
         peak_luminance_nits,
-        // EXR chromaticities are ignored, so nothing states the primaries.
-        source_primaries: None,
-        frames: vec![Frame::still(pixels)],
-        frames_truncated: false,
-        gain_map: None,
-        gain_map_plane: None,
+        ..DecodedImage::still(
+            width as u32,
+            height as u32,
+            format_name,
+            PixelStorage::RgbaHalf,
+            16,
+            pixels,
+        )
     })
 }
 
@@ -597,21 +592,17 @@ fn decode_heif_primary_image(
         peak_luminance_with_maximum_bits(&pixels, maximum_bits)
     });
     Ok(DecodedImage {
-        width: plane.width as u32,
-        height: plane.height as u32,
-        pixel_width: plane.width as u32,
-        pixel_height: plane.height as u32,
-        format_name,
         icc_profile,
-        exif: None,
-        storage,
-        source_bits_per_channel: plane.source_bits_per_channel as u32,
         peak_luminance_nits,
         source_primaries: hdr_encoding.map(HdrEncoding::source_primaries),
-        frames: vec![Frame::still(pixels)],
-        frames_truncated: false,
-        gain_map: None,
-        gain_map_plane: None,
+        ..DecodedImage::still(
+            plane.width as u32,
+            plane.height as u32,
+            format_name,
+            storage,
+            plane.source_bits_per_channel as u32,
+            pixels,
+        )
     })
 }
 
@@ -765,7 +756,7 @@ fn compose_avif_frames(
     let Some(mut compositor) = FrameCompositor::new(canvas_width, canvas_height) else {
         return Err(canvas_too_large_error("AVIF"));
     };
-    let frame_bytes = canvas_width as usize * canvas_height as usize * 4;
+    let frame_bytes = canvas_width as usize * canvas_height as usize * BGRA8_PIXEL_BYTES;
     let Some(mut frame_pixels) = try_zeroed_buffer(frame_bytes) else {
         return Err(out_of_memory_error("AVIF"));
     };
@@ -837,7 +828,7 @@ fn premultiplied_bgra_from_sequence_image(
     let mut stride: c_int = 0;
     let plane =
         unsafe { heif_image_get_plane_readonly(image, HEIF_CHANNEL_INTERLEAVED, &raw mut stride) };
-    let row_bytes = i64::from(canvas_width) * 4;
+    let row_bytes = i64::from(canvas_width) * BGRA8_PIXEL_BYTES as i64;
     if plane.is_null()
         || i64::from(width) != i64::from(canvas_width)
         || i64::from(height) != i64::from(canvas_height)

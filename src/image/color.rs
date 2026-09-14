@@ -316,7 +316,7 @@ fn capabilities_from(information: Option<&AdvancedColorInfo>, window: HWND) -> D
     let nits = |value: Option<f32>| value.filter(|nits| *nits > 0.0);
     DisplayCapabilities {
         hdr,
-        bits_per_color: bits_per_color(window).unwrap_or(8),
+        bits_per_color: bits_per_color(window).unwrap_or(UNKNOWN_WIRE_DEPTH_BITS),
         maximum_luminance_nits: nits(
             information.and_then(|information| information.MaxLuminanceInNits().ok()),
         ),
@@ -490,6 +490,9 @@ fn window_display_path(window: HWND) -> Option<DISPLAYCONFIG_PATH_INFO> {
     }
     None
 }
+
+/// The wire depth assumed when the query fails: the SDR common case.
+const UNKNOWN_WIRE_DEPTH_BITS: u32 = 8;
 
 /// Wire depth of the window's display, from the active DXGI output description.
 fn bits_per_color(window: HWND) -> Option<u32> {

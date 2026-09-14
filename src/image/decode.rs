@@ -52,6 +52,16 @@ pub enum PixelStorage {
     RgbaHalf,
 }
 
+/// Bytes of one pixel per storage, for the loops that walk pixel buffers by hand.
+pub(crate) const BGRA8_PIXEL_BYTES: usize = PixelStorage::Bgra8.bytes_per_pixel() as usize;
+pub(crate) const RGBA_HALF_PIXEL_BYTES: usize = PixelStorage::RgbaHalf.bytes_per_pixel() as usize;
+
+/// Threads assumed when the OS does not report its core count.
+pub const ASSUMED_PARALLELISM: usize = 2;
+
+/// The message of a cancelled decode, download, or extraction; the flag decides, never the text.
+pub const CANCELLED_MESSAGE: &str = "cancelled";
+
 impl PixelStorage {
     pub const fn bytes_per_pixel(self) -> u32 {
         match self {
@@ -161,6 +171,22 @@ impl DecodedImage {
             frames_truncated: false,
             gain_map: None,
             gain_map_plane: None,
+        }
+    }
+
+    /// A one-frame result at its own size in the given storage; metadata and HDR fields start unset.
+    pub fn still(
+        width: u32,
+        height: u32,
+        format_name: &'static str,
+        storage: PixelStorage,
+        source_bits_per_channel: u32,
+        pixels: Vec<u8>,
+    ) -> Self {
+        Self {
+            storage,
+            source_bits_per_channel,
+            ..Self::bgra8(width, height, format_name, vec![Frame::still(pixels)])
         }
     }
 
@@ -282,7 +308,7 @@ impl DecodeError {
     pub fn cancelled() -> Self {
         Self {
             cancelled: true,
-            ..Self::new(ErrorCode::None, "cancelled".to_string())
+            ..Self::new(ErrorCode::None, CANCELLED_MESSAGE.to_string())
         }
     }
 
@@ -347,6 +373,8 @@ pub(crate) const LOOKUP_TABLE_ENTRIES: usize = 1 << u16::BITS;
 
 /// Meaningful bits of Bgra8 pixels; RgbaHalf keeps the source's own count instead.
 pub(crate) const BGRA8_SOURCE_BITS: u32 = 8;
+/// WIC's 64bppRGBA conversion: the depth the PQ/HLG codes are expanded to.
+const WIC_RGBA64_BITS_PER_CHANNEL: u32 = 16;
 
 // Shrinking the budget below one full-size canvas would need a per-canvas check in FrameCompositor::new.
 const _: () = assert!(
@@ -853,7 +881,7 @@ fn png_has_animation_control(header: &[u8]) -> bool {
     let mut offset = 8; // past the PNG signature
     // A forged length pushes the offset at most one chunk past the header; usize holds it on x64.
     while let Some(chunk_header) = header.get(offset..offset + 8) {
-        let length = u32::from_be_bytes(chunk_header[..4].try_into().unwrap()) as usize;
+        let length = read_u32_be(chunk_header, 0).expect("the header holds eight bytes") as usize;
         let chunk_type = &chunk_header[4..8];
         match chunk_type {
             b"acTL" => return true,
@@ -1441,7 +1469,13 @@ fn decode_raw_preview(
 fn subresolution_target_size(width: u32, height: u32, float_native: bool) -> (u32, u32) {
     let target = raster_target_long_side();
     let longest = width.max(height).max(1);
-    let class_divisor: u32 = if float_native { 4 } else { 2 };
+    const FLOAT_PREVIEW_DIVISOR: u32 = 4;
+    const INTEGER_PREVIEW_DIVISOR: u32 = 2;
+    let class_divisor = if float_native {
+        FLOAT_PREVIEW_DIVISOR
+    } else {
+        INTEGER_PREVIEW_DIVISOR
+    };
     let divisor = class_divisor.max(longest.div_ceil(target));
     ((width / divisor).max(1), (height / divisor).max(1))
 }
@@ -1740,8 +1774,8 @@ fn decode_frame_source(
         storage.bytes_per_pixel(),
         cancellation,
     )?;
-    let linearized_maximum_bits =
-        hdr_encoding.map(|encoding| linearize_hdr_pixels(&mut pixels, encoding, 16));
+    let linearized_maximum_bits = hdr_encoding
+        .map(|encoding| linearize_hdr_pixels(&mut pixels, encoding, WIC_RGBA64_BITS_PER_CHANNEL));
     // Half-stored pixels are linear light regardless of the conversion route.
     let peak_luminance_nits = (storage == PixelStorage::RgbaHalf)
         .then(|| match linearized_maximum_bits {
@@ -1757,21 +1791,20 @@ fn decode_frame_source(
         icc_profile.as_deref(),
     );
     Ok(DecodedImage {
-        width,
-        height,
         pixel_width,
         pixel_height,
-        format_name,
         icc_profile,
         exif,
-        storage,
-        source_bits_per_channel,
         peak_luminance_nits,
         source_primaries,
-        frames: vec![Frame::still(pixels)],
-        frames_truncated: false,
-        gain_map: None,
-        gain_map_plane: None,
+        ..DecodedImage::still(
+            width,
+            height,
+            format_name,
+            storage,
+            source_bits_per_channel,
+            pixels,
+        )
     })
 }
 
@@ -1873,7 +1906,7 @@ impl HdrEncoding {
 
 fn read_u32_be(bytes: &[u8], offset: usize) -> Option<u32> {
     Some(u32::from_be_bytes(
-        bytes.get(offset..offset + 4)?.try_into().ok()?,
+        *bytes.get(offset..)?.first_chunk::<4>()?,
     ))
 }
 
@@ -2066,8 +2099,9 @@ const PARALLEL_BLOCK_MINIMUM_PIXELS: usize = 262_144;
 fn parallel_block_bytes(total_bytes: usize, bytes_per_pixel: usize) -> usize {
     let pixel_count = total_bytes / bytes_per_pixel;
     static CORES: OnceLock<usize> = OnceLock::new();
-    let cores =
-        *CORES.get_or_init(|| std::thread::available_parallelism().map_or(1, |count| count.get()));
+    let cores = *CORES.get_or_init(|| {
+        std::thread::available_parallelism().map_or(ASSUMED_PARALLELISM, |count| count.get())
+    });
     let blocks = cores
         .min(pixel_count / PARALLEL_BLOCK_MINIMUM_PIXELS)
         .max(1);
@@ -2126,7 +2160,7 @@ fn linearize_block(
     source_maximum: f32,
 ) -> u16 {
     let mut maximum_bits = 0u16;
-    for pixel in pixels.as_chunks_mut::<8>().0 {
+    for pixel in pixels.as_chunks_mut::<RGBA_HALF_PIXEL_BYTES>().0 {
         let mut channel_nits = [0.0f32; 3];
         for (channel, nits) in channel_nits.iter_mut().enumerate() {
             let code = u16::from_le_bytes([pixel[channel * 2], pixel[channel * 2 + 1]]);
@@ -2200,7 +2234,7 @@ pub fn peak_luminance_from_half_pixels(pixels: &[u8]) -> Option<f32> {
 
 /// Peak from a known channel maximum, skipping the scan that would recompute it.
 pub(crate) fn peak_luminance_with_maximum_bits(pixels: &[u8], maximum_bits: u16) -> Option<f32> {
-    if pixels.len() < 8 {
+    if pixels.len() < RGBA_HALF_PIXEL_BYTES {
         return None;
     }
     let maximum_linear = half_to_f32(maximum_bits);
@@ -2209,7 +2243,7 @@ pub(crate) fn peak_luminance_with_maximum_bits(pixels: &[u8], maximum_bits: u16)
         return Some(maximum_linear * SDR_REFERENCE_WHITE_NITS);
     }
     const SUBSAMPLE_MINIMUM_PIXELS: usize = 4_000_000;
-    let pixel_count = pixels.len() / 8;
+    let pixel_count = pixels.len() / RGBA_HALF_PIXEL_BYTES;
     let (histogram, sample_count) =
         maxima_histogram(pixels, pixel_count >= SUBSAMPLE_MINIMUM_PIXELS);
     let percentile_bin = percentile_bin(&histogram, sample_count);
@@ -2220,14 +2254,14 @@ pub(crate) fn peak_luminance_with_maximum_bits(pixels: &[u8], maximum_bits: u16)
 /// Per-pixel channel maxima binned in PQ code space, and how many pixels were sampled.
 fn maxima_histogram(pixels: &[u8], subsample: bool) -> ([u32; PEAK_HISTOGRAM_BINS], u32) {
     let bin_table = peak_histogram_bin_table();
-    let pixel_count = pixels.len() / 8;
+    let pixel_count = pixels.len() / RGBA_HALF_PIXEL_BYTES;
     let mut histogram = [0u32; PEAK_HISTOGRAM_BINS];
     let mut sample_count = 0u32;
     // Jittered subsampling: a fixed stride aliases with periodic image structure.
     let mut jitter_state = 0x9E37_79B9u32;
     let mut index = 0usize;
     while index < pixel_count {
-        let pixel = &pixels[index * 8..index * 8 + 8];
+        let pixel = &pixels[index * RGBA_HALF_PIXEL_BYTES..(index + 1) * RGBA_HALF_PIXEL_BYTES];
         let mut maximum_bits = 0u16;
         for channel in 0..3 {
             let bits = u16::from_le_bytes([pixel[channel * 2], pixel[channel * 2 + 1]]);
@@ -2239,7 +2273,8 @@ fn maxima_histogram(pixels: &[u8], subsample: bool) -> ([u32; PEAK_HISTOGRAM_BIN
             jitter_state = jitter_state
                 .wrapping_mul(1_664_525)
                 .wrapping_add(1_013_904_223);
-            index += 1 + (jitter_state >> 29) as usize;
+            const JITTER_STRIDE_SHIFT: u32 = 29; // the top three bits pick a stride of 1..=8
+            index += 1 + (jitter_state >> JITTER_STRIDE_SHIFT) as usize;
         } else {
             index += 1;
         }
@@ -2264,7 +2299,7 @@ fn percentile_bin(histogram: &[u32; PEAK_HISTOGRAM_BINS], sample_count: u32) -> 
 /// Per-channel maxima; the discarded alpha lane keeps the stride regular.
 fn channel_maxima_from_half_pixels(pixels: &[u8]) -> [u16; 4] {
     let mut channel_maxima = [0u16; 4];
-    for pixel in pixels.as_chunks::<8>().0 {
+    for pixel in pixels.as_chunks::<RGBA_HALF_PIXEL_BYTES>().0 {
         for (channel, maximum) in channel_maxima.iter_mut().enumerate() {
             let bits = u16::from_le_bytes([pixel[channel * 2], pixel[channel * 2 + 1]]);
             *maximum = (*maximum).max(positive_normal_half_bits(bits));
@@ -2282,14 +2317,20 @@ fn positive_normal_half_bits(bits: u16) -> u16 {
     }
 }
 
+/// IEEE half layout: the sign bit, the field masks, and the bias gap to a single's exponent.
+const HALF_SIGN_BIT: u16 = 0x8000;
+const HALF_EXPONENT_MASK: u16 = 0x1F;
+const HALF_MANTISSA_MASK: u16 = 0x03FF;
+const HALF_TO_SINGLE_EXPONENT_BIAS: u32 = 112;
+
 /// Peak-scan only: negatives, subnormals, and non-finite values map to 0.
 fn half_to_f32(bits: u16) -> f32 {
-    let exponent = (bits >> 10) & 0x1F;
-    if bits & 0x8000 != 0 || exponent == 0 || exponent == 31 {
+    let exponent = (bits >> 10) & HALF_EXPONENT_MASK;
+    if bits & HALF_SIGN_BIT != 0 || exponent == 0 || exponent == HALF_EXPONENT_MASK {
         return 0.0;
     }
-    let mantissa = u32::from(bits & 0x03FF);
-    f32::from_bits(((u32::from(exponent) + 112) << 23) | (mantissa << 13))
+    let mantissa = u32::from(bits & HALF_MANTISSA_MASK);
+    f32::from_bits(((u32::from(exponent) + HALF_TO_SINGLE_EXPONENT_BIAS) << 23) | (mantissa << 13))
 }
 
 /// Round-to-nearest-even; overflow clamps to the half maximum, NaN maps to 0.
@@ -2300,17 +2341,21 @@ fn f32_to_half(value: f32) -> u16 {
     if value.is_nan() {
         return 0;
     }
-    let sign = if value.is_sign_negative() { 0x8000 } else { 0 };
+    let sign = if value.is_sign_negative() {
+        HALF_SIGN_BIT
+    } else {
+        0
+    };
     let magnitude = value.abs();
     if magnitude < MINIMUM_NORMAL {
         let units = (magnitude / SUBNORMAL_UNIT).round() as u16;
-        return sign | units.min(0x03FF);
+        return sign | units.min(HALF_MANTISSA_MASK);
     }
     if magnitude > HALF_MAXIMUM {
         return sign | 0x7BFF;
     }
     let bits = magnitude.to_bits();
-    let exponent = ((bits >> 23) & 0xFF) - 112;
+    let exponent = ((bits >> 23) & 0xFF) - HALF_TO_SINGLE_EXPONENT_BIAS;
     let mantissa = bits & 0x007F_FFFF;
     let mut half = (exponent << 10) | (mantissa >> 13);
     let remainder = mantissa & 0x1FFF;
@@ -2518,16 +2563,18 @@ fn blend_over(
         return;
     };
     for row in 0..visible_height {
-        let source_start = row * source_width as usize * 4;
-        let canvas_start = ((top as usize + row) * canvas_width as usize + left as usize) * 4;
-        let source_row = &source[source_start..source_start + visible_width * 4];
-        let canvas_row = &mut canvas[canvas_start..canvas_start + visible_width * 4];
+        let source_start = row * source_width as usize * BGRA8_PIXEL_BYTES;
+        let canvas_start =
+            ((top as usize + row) * canvas_width as usize + left as usize) * BGRA8_PIXEL_BYTES;
+        let source_row = &source[source_start..source_start + visible_width * BGRA8_PIXEL_BYTES];
+        let canvas_row =
+            &mut canvas[canvas_start..canvas_start + visible_width * BGRA8_PIXEL_BYTES];
         // Branch-free over-composite; premultiplied sources make the alpha 0/255 shortcuts redundant.
         for (canvas_pixel, source_pixel) in canvas_row
-            .as_chunks_mut::<4>()
+            .as_chunks_mut::<BGRA8_PIXEL_BYTES>()
             .0
             .iter_mut()
-            .zip(source_row.as_chunks::<4>().0)
+            .zip(source_row.as_chunks::<BGRA8_PIXEL_BYTES>().0)
         {
             let inverse_alpha = 255 - u32::from(source_pixel[3]);
             for (canvas_channel, source_channel) in canvas_pixel.iter_mut().zip(source_pixel) {
@@ -2554,8 +2601,9 @@ fn clear_rectangle(
         return;
     };
     for row in 0..visible_height {
-        let start = ((top as usize + row) * canvas_width as usize + left as usize) * 4;
-        canvas[start..start + visible_width * 4].fill(0);
+        let start =
+            ((top as usize + row) * canvas_width as usize + left as usize) * BGRA8_PIXEL_BYTES;
+        canvas[start..start + visible_width * BGRA8_PIXEL_BYTES].fill(0);
     }
 }
 
@@ -2718,7 +2766,17 @@ pub fn canvas_too_large_error(format_name: &str) -> DecodeError {
 
 /// A pixel buffer reservation failed.
 pub fn out_of_memory_error(format_name: &str) -> DecodeError {
-    uncoded_error(format!("{format_name} is too large to fit in memory"))
+    uncoded_error(out_of_memory_message(format_name))
+}
+
+/// The sentence for a subject whose buffer could not be reserved; downloads and members share it.
+pub fn out_of_memory_message(subject: &str) -> String {
+    format!("{subject} is too large to fit in memory")
+}
+
+/// The sentence for a subject past a GiB limit; downloads and archive members share it.
+pub fn exceeds_gib_limit_message(subject: &str, maximum_bytes: u64) -> String {
+    format!("{subject} exceeds the {} GiB limit", maximum_bytes >> 30)
 }
 
 /// The png crate wraps a read failure; its os code is kept like any other io failure.
@@ -2841,10 +2899,10 @@ fn decode_apng<Input: BufRead + Seek>(
 /// Straight RGBA to premultiplied BGRA; both slices hold the same pixel count.
 pub fn premultiplied_bgra_from_rgba(source: &[u8], output: &mut [u8]) {
     for (source_pixel, output_pixel) in source
-        .as_chunks::<4>()
+        .as_chunks::<BGRA8_PIXEL_BYTES>()
         .0
         .iter()
-        .zip(output.as_chunks_mut::<4>().0)
+        .zip(output.as_chunks_mut::<BGRA8_PIXEL_BYTES>().0)
     {
         // Uniform four-lane multiply; the alpha lane's 255 factor leaves it unchanged.
         let alpha = u16::from(source_pixel[3]);
@@ -2884,14 +2942,14 @@ fn pixels_to_premultiplied_bgra_into(
     output.resize(output_bytes, 0);
     match color_type {
         png::ColorType::Rgba => {
-            premultiplied_bgra_from_rgba(&pixels[..pixel_count * 4], output);
+            premultiplied_bgra_from_rgba(&pixels[..pixel_count * BGRA8_PIXEL_BYTES], output);
         }
         png::ColorType::Rgb => {
             for (source_pixel, output_pixel) in pixels[..pixel_count * 3]
                 .as_chunks::<3>()
                 .0
                 .iter()
-                .zip(output.as_chunks_mut::<4>().0)
+                .zip(output.as_chunks_mut::<BGRA8_PIXEL_BYTES>().0)
             {
                 output_pixel[0] = source_pixel[2];
                 output_pixel[1] = source_pixel[1];
@@ -2902,7 +2960,7 @@ fn pixels_to_premultiplied_bgra_into(
         png::ColorType::Grayscale => {
             for (&gray, output_pixel) in pixels[..pixel_count]
                 .iter()
-                .zip(output.as_chunks_mut::<4>().0)
+                .zip(output.as_chunks_mut::<BGRA8_PIXEL_BYTES>().0)
             {
                 *output_pixel = [gray, gray, gray, 255];
             }
@@ -2912,7 +2970,7 @@ fn pixels_to_premultiplied_bgra_into(
                 .as_chunks::<2>()
                 .0
                 .iter()
-                .zip(output.as_chunks_mut::<4>().0)
+                .zip(output.as_chunks_mut::<BGRA8_PIXEL_BYTES>().0)
             {
                 let alpha = u16::from(source_pixel[1]);
                 let gray = (u16::from(source_pixel[0]) * alpha / 255) as u8;
@@ -2970,7 +3028,7 @@ fn decode_svg(bytes: &[u8], format_name: &'static str) -> Result<DecodedImage, D
         &mut pixmap.as_mut(),
     );
     let mut pixels = pixmap.take();
-    for pixel in pixels.as_chunks_mut::<4>().0 {
+    for pixel in pixels.as_chunks_mut::<BGRA8_PIXEL_BYTES>().0 {
         let swapped = [pixel[2], pixel[1], pixel[0], pixel[3]];
         pixel.copy_from_slice(&swapped);
     }

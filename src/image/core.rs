@@ -6,9 +6,11 @@ use std::os::windows::fs::MetadataExt;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Condvar, Mutex, MutexGuard, mpsc};
-use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
+#[cfg(test)]
+use std::time::UNIX_EPOCH;
+use std::time::{Duration, Instant, SystemTime};
 
-use windows::Win32::Foundation::HWND;
+use windows::Win32::Foundation::{ERROR_FILE_NOT_FOUND, ERROR_PATH_NOT_FOUND, HWND};
 use windows::Win32::Storage::FileSystem::FILE_ATTRIBUTE_HIDDEN;
 use windows::Win32::UI::WindowsAndMessaging::WM_APP;
 use windows::core::HSTRING;
@@ -184,6 +186,11 @@ impl ListingScope {
         match self {
             Self::Directory(path) | Self::Archive(path) => path,
         }
+    }
+
+    /// The scope as the item a failure is reported against.
+    fn location(&self) -> ItemLocation {
+        ItemLocation::File(self.path().to_path_buf())
     }
 
     /// The listing a path opens as a whole: a folder or an archive; None for an item.
@@ -604,8 +611,10 @@ impl ImageCore {
             self.opposite_steps = 0;
             return;
         }
+        // The second consecutive step against the direction flips it; one is a glance back.
+        const DIRECTION_FLIP_STEPS: u32 = 2;
         self.opposite_steps += 1;
-        if self.opposite_steps >= 2 {
+        if self.opposite_steps >= DIRECTION_FLIP_STEPS {
             self.navigating_backward = backward;
             self.opposite_steps = 0;
         }
@@ -861,8 +870,7 @@ impl ImageCore {
                 if pending.purpose != ScanPurpose::OpenFirstEntry {
                     return ListingInstall::Discarded;
                 }
-                self.request =
-                    ViewRequest::Failed(ItemLocation::File(scan.scope.path().to_path_buf()), error);
+                self.request = ViewRequest::Failed(scan.scope.location(), error);
                 return ListingInstall::Opened {
                     outcome: LoadOutcome::Failed,
                 };
@@ -907,10 +915,7 @@ impl ImageCore {
                 ListingScope::Directory(_) => "Folder contains no supported images",
                 ListingScope::Archive(_) => "Archive contains no supported images",
             };
-            self.request = ViewRequest::Failed(
-                ItemLocation::File(scope.path().to_path_buf()),
-                decode::uncoded_error(message),
-            );
+            self.request = ViewRequest::Failed(scope.location(), decode::uncoded_error(message));
             return LoadOutcome::Failed;
         };
         self.load_item(&first)
@@ -1016,7 +1021,7 @@ impl ImageCore {
             ItemLocation::File(path) => match std::fs::metadata(path) {
                 Ok(file) => Ok(ItemMetadata {
                     file_size: file.len(),
-                    modified: file.modified().ok(),
+                    modified: Some(file_time(file.modified())),
                 }),
                 Err(error) => Err(decode::os_error(&error)),
             },
@@ -1197,15 +1202,13 @@ impl ImageCore {
 
     /// The just-attempted plain-file open failed synchronously as not-found; scans report later.
     pub fn open_failed_missing(&self, path: &Path) -> bool {
-        const ERROR_FILE_NOT_FOUND: i32 = 2;
-        const ERROR_PATH_NOT_FOUND: i32 = 3;
         let Some((location, error)) = self.request.failure() else {
             return false;
         };
-        if !matches!(
-            error.code,
-            ErrorCode::Os(ERROR_FILE_NOT_FOUND | ERROR_PATH_NOT_FOUND)
-        ) {
+        // raw_os_error is i32 where the Win32 constants are u32; the values are the same.
+        let not_found =
+            [ERROR_FILE_NOT_FOUND, ERROR_PATH_NOT_FOUND].map(|code| ErrorCode::Os(code.0 as i32));
+        if !not_found.contains(&error.code) {
             return false;
         }
         let Ok(path) = std::path::absolute(path) else {
@@ -1957,14 +1960,19 @@ fn scan_folder(directory: &Path, options: &CoreOptions) -> std::io::Result<Vec<L
             location: ItemLocation::File(path),
             wide_name,
             file_size: metadata.len(),
-            modified: metadata.modified().unwrap_or(UNIX_EPOCH),
-            created: metadata.created().unwrap_or(UNIX_EPOCH),
+            modified: file_time(metadata.modified()),
+            created: file_time(metadata.created()),
             format_name,
             weight: DecodedWeight::Unknown,
         });
     }
     sort_entries(&mut entries, options);
     Ok(entries)
+}
+
+/// Windows records every file time, so the std accessor cannot fail here.
+fn file_time(time: std::io::Result<SystemTime>) -> SystemTime {
+    time.expect("Windows keeps every file time")
 }
 
 /// Entry for an image member; other member types drop out of the listing.
@@ -2045,6 +2053,19 @@ struct DecodeJob {
     speculative: bool,
 }
 
+impl DecodeJob {
+    /// A guess and every non-full kind open on the first frame; only a guess stops there.
+    fn opens_on_first_frame(&self) -> bool {
+        self.speculative || self.kind != JobKind::Full
+    }
+}
+
+/// A worker that panicked while holding the queue leaves it poisoned; nothing recovers from that.
+const DECODE_QUEUE_POISONED: &str = "decode queue poisoned";
+
+/// More decode workers than this only contend for the upload device and memory.
+const MAXIMUM_DECODE_WORKERS: usize = 8;
+
 struct PoolShared {
     queue: Mutex<VecDeque<DecodeJob>>,
     upload_device: Mutex<Option<UploadDevice>>,
@@ -2054,7 +2075,7 @@ struct PoolShared {
 impl PoolShared {
     /// The job queue; the lock is poisoned only by a worker that panicked holding it.
     fn queue(&self) -> MutexGuard<'_, VecDeque<DecodeJob>> {
-        self.queue.lock().expect("decode queue poisoned")
+        self.queue.lock().expect(DECODE_QUEUE_POISONED)
     }
 
     /// Blocks until a job is posted; the queue comes back locked.
@@ -2062,7 +2083,7 @@ impl PoolShared {
         &'a self,
         queue: MutexGuard<'a, VecDeque<DecodeJob>>,
     ) -> MutexGuard<'a, VecDeque<DecodeJob>> {
-        self.available.wait(queue).expect("decode queue poisoned")
+        self.available.wait(queue).expect(DECODE_QUEUE_POISONED)
     }
 
     fn upload_device(&self) -> MutexGuard<'_, Option<UploadDevice>> {
@@ -2083,8 +2104,10 @@ impl DecodePool {
             upload_device: Mutex::new(None),
             available: Condvar::new(),
         });
-        let worker_count =
-            std::thread::available_parallelism().map_or(2, |count| count.get().min(8));
+        let worker_count = std::thread::available_parallelism()
+            .map_or(decode::ASSUMED_PARALLELISM, |count| {
+                count.get().min(MAXIMUM_DECODE_WORKERS)
+            });
         for _ in 0..worker_count {
             let shared = shared.clone();
             std::thread::spawn(move || worker_loop(&shared, window));
@@ -2228,7 +2251,7 @@ fn decode_job(
                 return None; // the full decode is submitted separately
             }
             // An animation opens on its first frame; a guess stops there.
-            if (job.speculative || job.kind != JobKind::Full)
+            if job.opens_on_first_frame()
                 && let Some(first_frame) =
                     decode::decode_animation_first_frame(path, &job.cancellation)
             {
@@ -2244,7 +2267,7 @@ fn decode_job(
                 Ok(member_bytes) => {
                     let extension = job.location.extension_lowercase();
                     // An animation opens on its first frame; a guess stops there.
-                    if (job.speculative || job.kind != JobKind::Full)
+                    if job.opens_on_first_frame()
                         && let Some(first_frame) = decode::decode_animation_first_frame_bytes(
                             &member_bytes,
                             extension.as_deref(),

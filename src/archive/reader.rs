@@ -115,19 +115,21 @@ impl ArchiveError {
     }
 
     fn exceeds_member_limit() -> Self {
-        Self::new(format!(
-            "Archive member exceeds the {} GiB limit",
-            MAXIMUM_MEMBER_BYTES >> 30
+        Self::new(crate::image::decode::exceeds_gib_limit_message(
+            "Archive member",
+            MAXIMUM_MEMBER_BYTES,
         ))
     }
 
     fn out_of_memory() -> Self {
-        Self::new("Archive member is too large to fit in memory")
+        Self::new(crate::image::decode::out_of_memory_message(
+            "Archive member",
+        ))
     }
 
     fn cancelled() -> Self {
         Self {
-            message: "cancelled".to_string(),
+            message: crate::image::decode::CANCELLED_MESSAGE.to_string(),
             code: 0,
             cancelled: true,
         }

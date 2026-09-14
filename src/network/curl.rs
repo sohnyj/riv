@@ -44,7 +44,7 @@ impl NetworkError {
 
     fn cancelled() -> Self {
         Self {
-            message: "cancelled".to_string(),
+            message: crate::image::decode::CANCELLED_MESSAGE.to_string(),
             code: 0,
             cancelled: true,
         }
@@ -174,14 +174,15 @@ fn read_body(
             }
         };
         if body.len() as u64 + read_bytes as u64 > MAXIMUM_DOWNLOAD_BYTES {
-            return Err(NetworkError::new(format!(
-                "Download exceeds the {} GiB limit",
-                MAXIMUM_DOWNLOAD_BYTES >> 30
-            )));
+            return Err(NetworkError::new(
+                crate::image::decode::exceeds_gib_limit_message("Download", MAXIMUM_DOWNLOAD_BYTES),
+            ));
         }
         let chunk = &block[..read_bytes];
         if body.try_reserve(chunk.len()).is_err() {
-            return Err(NetworkError::new("Download is too large to fit in memory"));
+            return Err(NetworkError::new(
+                crate::image::decode::out_of_memory_message("Download"),
+            ));
         }
         body.extend_from_slice(chunk);
         progress(body.len() as u64);
