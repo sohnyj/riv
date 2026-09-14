@@ -507,7 +507,9 @@ impl ScannedListing {
     /// Enumerates and sorts the scope's contents: the worker half of submit_scan.
     fn scan(scope: ListingScope, options: &CoreOptions) -> Self {
         let result = match &scope {
-            ListingScope::Directory(directory) => Ok(scan_folder(directory, options)),
+            ListingScope::Directory(directory) => {
+                scan_folder(directory, options).map_err(|error| decode::os_error(&error))
+            }
             ListingScope::Archive(archive) => enumerate_archive(archive, options),
         };
         Self {
@@ -856,8 +858,8 @@ impl ImageCore {
         let entries = match scan.result {
             Ok(entries) => entries,
             Err(error) => {
-                // A refresh that failed to enumerate leaves the listing it was refreshing.
-                if pending.purpose == ScanPurpose::Refresh {
+                // A refresh or cover scan that failed to enumerate leaves the listing it had.
+                if pending.purpose != ScanPurpose::OpenFirstEntry {
                     return ListingInstall::Discarded;
                 }
                 self.request =
@@ -1383,7 +1385,10 @@ impl ImageCore {
     }
 
     fn rescan_folder(&mut self, directory: &Path) {
-        let mut entries = scan_folder(directory, &self.options);
+        // A folder that stopped listing keeps the listing it had; opening it again reports why.
+        let Ok(mut entries) = scan_folder(directory, &self.options) else {
+            return;
+        };
         self.carry_weights_into(&mut entries);
         // A dropped anchor keeps its place here too, as the scan arrival already does.
         self.missing_anchor = self.missing_anchor_for(&entries);
@@ -1917,10 +1922,8 @@ fn hash_path_identity<H: Hasher>(path: &Path, state: &mut H) {
     state.write_u8(0xFF);
 }
 
-fn scan_folder(directory: &Path, options: &CoreOptions) -> Vec<ListingEntry> {
-    let Ok(reader) = std::fs::read_dir(directory) else {
-        return Vec::new();
-    };
+fn scan_folder(directory: &Path, options: &CoreOptions) -> std::io::Result<Vec<ListingEntry>> {
+    let reader = std::fs::read_dir(directory)?;
     let mut entries = Vec::new();
     for entry in reader.flatten() {
         let Ok(metadata) = entry.metadata() else {
@@ -1962,7 +1965,7 @@ fn scan_folder(directory: &Path, options: &CoreOptions) -> Vec<ListingEntry> {
         });
     }
     sort_entries(&mut entries, options);
-    entries
+    Ok(entries)
 }
 
 /// Entry for an image member; other member types drop out of the listing.
@@ -3206,6 +3209,22 @@ mod listing_scan_tests {
         assert!(!core.listing_scan_pending());
     }
 
+    #[test]
+    fn an_unreadable_folder_scan_carries_the_os_error() {
+        let file = std::env::temp_dir().join("riv-not-a-folder.txt");
+        std::fs::write(&file, b"x").expect("write");
+        let scan = ScannedListing::scan(ListingScope::Directory(file.clone()), &core().options);
+        let Err(error) = scan.result else {
+            panic!("a file does not list as a folder");
+        };
+        assert!(
+            matches!(error.code, decode::ErrorCode::Os(_)),
+            "{}",
+            error.message
+        );
+        let _ = std::fs::remove_file(file);
+    }
+
     /// A request that fails on the spot still takes the view from whatever was loading.
     #[test]
     fn a_failed_load_drops_the_previous_wait() {
@@ -3604,6 +3623,7 @@ mod listing_inclusion_tests {
 
     fn names(directory: &Path, options: &CoreOptions) -> Vec<String> {
         scan_folder(directory, options)
+            .expect("a temporary folder lists")
             .iter()
             .map(|entry| entry.wide_name.to_string())
             .collect()
