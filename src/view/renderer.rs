@@ -70,6 +70,9 @@ const PRESENTATION_BUFFER_COUNT: usize = 2;
 /// The FP16 scRGB backbuffer of HDR and ACM-on wide gamut output; DWM quantizes it.
 const SCRGB_BACKBUFFER_FORMAT: DXGI_FORMAT = DXGI_FORMAT_R16G16B16A16_FLOAT;
 
+/// Offsets within this of a whole pixel count as whole; the source then copies unresampled.
+const WHOLE_PIXEL_OFFSET_TOLERANCE: f32 = 1e-4;
+
 /// The 8-bit backbuffer of plain SDR output; the app quantizes and dithers it.
 const SDR_BACKBUFFER_FORMAT: DXGI_FORMAT = DXGI_FORMAT_B8G8R8A8_UNORM;
 
@@ -205,7 +208,7 @@ impl BakedGainMap {
         let texture = crate::view::texture::create_render_texture(
             d3d_device,
             size,
-            DXGI_FORMAT_R16G16B16A16_FLOAT,
+            PixelStorage::RgbaHalf.dxgi_format(),
             D3D11_RESOURCE_MISC_FLAG(0),
         )
         .ok()?;
@@ -623,14 +626,8 @@ impl Renderer {
             mode.display_profile.as_deref(),
         );
 
-        let mut presenter = CompositionPresenter::new(&d3d_device, window)?;
+        let presenter = CompositionPresenter::new(&d3d_device, window)?;
         presenter.set_color_space(color_space)?;
-        presenter.ensure_buffers(
-            &d3d_device,
-            backbuffer_format,
-            (width, height),
-            PRESENTATION_BUFFER_COUNT,
-        )?;
         let mode_effects = Self::create_mode_effects(
             &d2d_context,
             is_hdr_output,
@@ -721,7 +718,7 @@ impl Renderer {
 
     /// Recomputes the cached output label after a format, mode, or gamut change.
     fn refresh_output_label(&mut self) {
-        self.output_label = if self.backbuffer_format == SCRGB_BACKBUFFER_FORMAT {
+        self.output_label = if self.is_scrgb_output() {
             "FP16 scRGB".to_string()
         } else {
             self.sdr_output_label()
@@ -862,11 +859,16 @@ impl Renderer {
     }
 
     pub fn resize(&mut self, width: u32, height: u32) -> Result<()> {
+        self.release_targets();
+        self.backbuffer_size = (width, height);
+        self.create_target()
+    }
+
+    /// Drops every reference into the presentation ring before it is retargeted or rebuilt.
+    fn release_targets(&mut self) {
         unsafe { self.d2d_context.SetTarget(None) };
         self.target = None;
         self.scene_shader_resource_view = None;
-        self.backbuffer_size = (width, height);
-        self.create_target()
     }
 
     /// Switches the output mode in place; the window keeps its presentation surface.
@@ -888,11 +890,8 @@ impl Renderer {
             );
         self.luminances = luminances;
 
-        // Release every buffer reference before the ring is retargeted.
-        unsafe { self.d2d_context.SetTarget(None) };
-        self.target = None;
+        self.release_targets();
         self.effect_output = None;
-        self.scene_shader_resource_view = None;
 
         let (format, color_space) =
             Self::mode_format_and_color_space(is_hdr_output, is_sdr_wide_gamut);
@@ -1134,12 +1133,7 @@ impl Renderer {
             CPUAccessFlags: D3D11_CPU_ACCESS_READ.0 as u32,
             ..image.texture_description()
         };
-        let mut staging = None;
-        unsafe {
-            self.d3d_device
-                .CreateTexture2D(&raw const description, None, Some(&raw mut staging))?
-        };
-        let staging = staging.expect("CreateTexture2D succeeded without texture");
+        let staging = crate::view::texture::create_texture(&self.d3d_device, &description, None)?;
         let pitch = image.row_pitch() as usize;
         let mut pixels =
             try_zeroed_buffer(image.frame_byte_length()).ok_or_else(windows::core::Error::empty)?;
@@ -1551,8 +1545,8 @@ impl Renderer {
     fn is_pixel_identity(scale_x: f32, scale_y: f32, offset_x: f32, offset_y: f32) -> bool {
         is_unit_scale(scale_x.abs())
             && is_unit_scale(scale_y.abs())
-            && (offset_x - offset_x.round()).abs() < 1e-4
-            && (offset_y - offset_y.round()).abs() < 1e-4
+            && (offset_x - offset_x.round()).abs() < WHOLE_PIXEL_OFFSET_TOLERANCE
+            && (offset_y - offset_y.round()).abs() < WHOLE_PIXEL_OFFSET_TOLERANCE
     }
 
     /// The frame's output dither; a draw that makes no new values has nothing to dither.

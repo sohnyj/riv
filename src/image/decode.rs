@@ -2055,16 +2055,8 @@ fn upload_immutable_texture(
         SysMemPitch: row_pitch,
         ..Default::default()
     };
-    let mut texture = None;
-    unsafe {
-        upload_device.device.CreateTexture2D(
-            &raw const *description,
-            Some(&raw const subresource),
-            Some(&raw mut texture),
-        )
-    }
-    .ok()?;
-    texture
+    crate::view::texture::create_texture(&upload_device.device, description, Some(&subresource))
+        .ok()
 }
 
 /// Pixels per worker block; smaller buffers stay on one thread.

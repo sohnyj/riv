@@ -109,3 +109,20 @@ impl GainMapPass {
         Ok(())
     }
 }
+
+#[cfg(test)]
+mod constant_buffer_tests {
+    use crate::view::pass::constant_buffer_mirror::{hlsl_members, rust_fields};
+
+    /// A member added on one side only would read garbage on the other.
+    #[test]
+    fn the_gain_constants_mirror_the_shader_cbuffer() {
+        assert_eq!(
+            rust_fields(include_str!("gain.rs"), "GainConstants"),
+            hlsl_members(
+                include_str!("../../res/shaders/gain_apply.hlsl"),
+                "GainConstants"
+            )
+        );
+    }
+}

@@ -55,21 +55,10 @@ impl QuantizePass {
             SysMemPitch: BLUE_NOISE_EDGE_TEXELS * size_of::<f32>() as u32,
             ..Default::default()
         };
-        let mut noise_texture = None;
-        let mut blue_noise_view = None;
-        unsafe {
-            device.CreateTexture2D(
-                &raw const noise_description,
-                Some(&raw const noise_data),
-                Some(&raw mut noise_texture),
-            )?;
-            let noise_texture = noise_texture.expect("CreateTexture2D succeeded without texture");
-            device.CreateShaderResourceView(
-                &noise_texture,
-                None,
-                Some(&raw mut blue_noise_view),
-            )?;
-        }
+        let noise_texture =
+            crate::view::texture::create_texture(device, &noise_description, Some(&noise_data))?;
+        let blue_noise_view =
+            crate::view::texture::create_shader_resource_view(device, &noise_texture)?;
         Ok(Self {
             vertex_shader: crate::view::pass::create_vertex_shader(device)?,
             copy_shader: crate::view::pass::create_pixel_shader(device, COPY_SHADER)?,
@@ -79,8 +68,7 @@ impl QuantizePass {
                 device,
             )?,
             written_steps: Cell::new(None),
-            blue_noise_view: blue_noise_view
-                .expect("CreateShaderResourceView succeeded without view"),
+            blue_noise_view,
         })
     }
 
@@ -126,6 +114,22 @@ impl QuantizePass {
             &[Some(scene.clone()), Some(self.blue_noise_view.clone())],
             target,
             target_size,
+        );
+    }
+}
+
+#[cfg(test)]
+mod constant_buffer_tests {
+    use crate::view::pass::constant_buffer_mirror::{hlsl_members, rust_fields};
+
+    #[test]
+    fn the_quantization_constants_mirror_the_shader_cbuffer() {
+        assert_eq!(
+            rust_fields(include_str!("quantize.rs"), "QuantizationConstants"),
+            hlsl_members(
+                include_str!("../../res/shaders/ps_shared.hlsl"),
+                "QuantizationConstants"
+            )
         );
     }
 }

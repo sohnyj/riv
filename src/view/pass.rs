@@ -124,3 +124,42 @@ pub fn draw_fullscreen<Constants>(
         context.OMSetRenderTargets(None, None);
     }
 }
+
+#[cfg(test)]
+pub(crate) mod constant_buffer_mirror {
+    /// The cbuffer's members as (HLSL type, name), in declaration order.
+    pub fn hlsl_members(source: &str, cbuffer: &str) -> Vec<(String, String)> {
+        source
+            .lines()
+            .map(str::trim)
+            .skip_while(|line| !line.starts_with(&format!("cbuffer {cbuffer} ")))
+            .skip(1)
+            .take_while(|line| *line != "};")
+            .filter(|line| line.ends_with(';'))
+            .filter_map(|line| {
+                let (kind, name) = line.trim_end_matches(';').split_once(' ')?;
+                Some((kind.to_string(), name.to_string()))
+            })
+            .collect()
+    }
+
+    /// The struct's fields as (HLSL type, name): [f32; N] is floatN and f32 is float.
+    pub fn rust_fields(source: &str, name: &str) -> Vec<(String, String)> {
+        source
+            .lines()
+            .map(str::trim)
+            .skip_while(|line| *line != format!("struct {name} {{"))
+            .skip(1)
+            .take_while(|line| *line != "}")
+            .filter(|line| !line.starts_with("///"))
+            .filter_map(|line| {
+                let (field, kind) = line.trim_end_matches(',').split_once(": ")?;
+                let hlsl_kind = match kind {
+                    "f32" => "float".to_string(),
+                    kind => format!("float{}", kind.strip_prefix("[f32; ")?.strip_suffix(']')?),
+                };
+                Some((hlsl_kind, field.to_string()))
+            })
+            .collect()
+    }
+}

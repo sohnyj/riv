@@ -39,6 +39,9 @@ pub struct Size {
 /// Scales within this of 1 are 1:1: the origin snaps to whole pixels and the renderer copies.
 const UNIT_SCALE_TOLERANCE: f32 = 1e-6;
 
+/// (cosine, sine) of each rotation quadrant; the quadrant is always 0..4.
+const QUADRANT_ROTATIONS: [(f32, f32); 4] = [(1.0, 0.0), (0.0, 1.0), (-1.0, 0.0), (0.0, -1.0)];
+
 pub fn is_unit_scale(scale: f32) -> bool {
     (scale - 1.0).abs() < UNIT_SCALE_TOLERANCE
 }
@@ -196,12 +199,7 @@ impl ViewTransform {
     }
 
     pub fn matrix(&self, viewport: Size, image: Size) -> [f32; 6] {
-        let (cosine, sine) = match self.rotation_quadrant {
-            0 => (1.0, 0.0),
-            1 => (0.0, 1.0),
-            2 => (-1.0, 0.0),
-            _ => (0.0, -1.0),
-        };
+        let (cosine, sine) = QUADRANT_ROTATIONS[self.rotation_quadrant as usize];
         let scale_x = self.scale * if self.mirrored { -1.0 } else { 1.0 };
         let scale_y = self.scale * if self.flipped { -1.0 } else { 1.0 };
         let center_x = image.width / 2.0;

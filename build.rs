@@ -46,8 +46,14 @@ fn main() {
 
     // The package version is the single source: manifest substitution + VERSIONINFO.
     let version = env::var("CARGO_PKG_VERSION").unwrap();
-    let processed_manifest = write_manifest(&output_directory, &version);
-    let generated_source = write_resource_script(&output_directory, &processed_manifest, &version);
+    let four_part_version = format!("{version}.0");
+    let processed_manifest = write_manifest(&output_directory, &four_part_version);
+    let generated_source = write_resource_script(
+        &output_directory,
+        &processed_manifest,
+        &version,
+        &four_part_version,
+    );
     let compiled_resource = compile_resources(&output_directory, &generated_source);
     println!("cargo:rustc-link-arg-bins={}", compiled_resource.display());
 
@@ -66,22 +72,33 @@ fn write_blue_noise_table(output_directory: &Path) {
     }
 }
 
-/// The manifest with the package version substituted; the path llvm-rc embeds.
-fn write_manifest(output_directory: &Path, version: &str) -> PathBuf {
-    let four_part = format!("{version}.0");
+/// VERSIONINFO language and code page: en-US, Unicode.
+const LANGUAGE_ID: u16 = 0x0409;
+const CODE_PAGE: u16 = 0x04B0;
+
+/// The manifest with the four-part version substituted; the path llvm-rc embeds.
+fn write_manifest(output_directory: &Path, four_part_version: &str) -> PathBuf {
     let manifest_template = std::fs::read_to_string("res/riv.manifest").expect("manifest readable");
     let processed_manifest = output_directory.join("riv.manifest");
     std::fs::write(
         &processed_manifest,
-        manifest_template.replace("@VERSION@", &four_part),
+        manifest_template.replace("@VERSION@", four_part_version),
     )
     .expect("manifest writable");
     processed_manifest
 }
 
 /// The resource script that includes riv.rc and adds the manifest and VERSIONINFO.
-fn write_resource_script(output_directory: &Path, manifest: &Path, version: &str) -> PathBuf {
-    let numeric = format!("{version}.0").replace('.', ",");
+fn write_resource_script(
+    output_directory: &Path,
+    manifest: &Path,
+    version: &str,
+    four_part_version: &str,
+) -> PathBuf {
+    let comma_separated_version = four_part_version.replace('.', ",");
+    let language_block = format!("{LANGUAGE_ID:04X}{CODE_PAGE:04X}");
+    let language_id = format!("0x{LANGUAGE_ID:04X}");
+    let code_page = format!("0x{CODE_PAGE:04X}");
     // 24 = RT_MANIFEST, 1 = CREATEPROCESS_MANIFEST_RESOURCE_ID
     let generated_source = output_directory.join("app.rc");
     let generated = format!(
@@ -89,14 +106,14 @@ fn write_resource_script(output_directory: &Path, manifest: &Path, version: &str
             "#include \"riv.rc\"\n",
             "1 24 \"{manifest}\"\n",
             "1 VERSIONINFO\n",
-            "FILEVERSION {numeric}\n",
-            "PRODUCTVERSION {numeric}\n",
+            "FILEVERSION {comma_separated_version}\n",
+            "PRODUCTVERSION {comma_separated_version}\n",
             "FILEOS 0x40004L\n", // VOS_NT_WINDOWS32
             "FILETYPE 0x1L\n",   // VFT_APP
             "BEGIN\n",
             "  BLOCK \"StringFileInfo\"\n",
             "  BEGIN\n",
-            "    BLOCK \"040904B0\"\n", // en-US, Unicode
+            "    BLOCK \"{language_block}\"\n",
             "  BEGIN\n",
             "      VALUE \"FileDescription\", \"{description}\"\n",
             "      VALUE \"FileVersion\", \"{version}\"\n",
@@ -108,13 +125,16 @@ fn write_resource_script(output_directory: &Path, manifest: &Path, version: &str
             "  END\n",
             "  BLOCK \"VarFileInfo\"\n",
             "  BEGIN\n",
-            "    VALUE \"Translation\", 0x0409, 0x04B0\n",
+            "    VALUE \"Translation\", {language_id}, {code_page}\n",
             "  END\n",
             "END\n",
         ),
         manifest = manifest.display(),
-        numeric = numeric,
+        comma_separated_version = comma_separated_version,
         version = version,
+        language_block = language_block,
+        language_id = language_id,
+        code_page = code_page,
         description = env::var("CARGO_PKG_DESCRIPTION").unwrap(),
     );
     std::fs::write(&generated_source, generated).expect("generated rc writable");
