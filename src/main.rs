@@ -477,7 +477,7 @@ impl Application {
             open_with_enumeration_pending: false,
         };
         application.adopt_display_capabilities(&capabilities);
-        application.apply_renderer_state();
+        application.apply_renderer_state()?;
         application.overlay.set_scale(device_pixel_ratio);
         application.register_upload_device();
         Ok(application)
@@ -528,8 +528,11 @@ impl Application {
         let previous_boost = self.sdr_white_boost;
         self.adopt_display_capabilities(&capabilities);
         if (previous_boost - self.sdr_white_boost).abs() > f32::EPSILON {
-            if let Some(renderer) = &mut self.renderer {
-                renderer.set_sdr_white_boost(self.sdr_white_boost);
+            // A boost the effect refuses is a device failure; the next frame rebuilds and retries.
+            if let Some(renderer) = &mut self.renderer
+                && renderer.set_sdr_white_boost(self.sdr_white_boost).is_err()
+            {
+                self.renderer = None;
             }
             stale = true;
         }
@@ -569,11 +572,9 @@ impl Application {
         let reconfigured = self
             .renderer
             .as_mut()
-            .is_some_and(|renderer| renderer.reconfigure_output(mode, luminances).is_ok());
+            .is_some_and(|renderer| renderer.reconfigure_output(mode, luminances).is_ok())
+            && self.apply_renderer_state().is_ok();
         self.output_reconfigure_pending = !reconfigured;
-        if reconfigured {
-            self.apply_renderer_state();
-        }
         true
     }
 
@@ -1198,7 +1199,7 @@ impl Application {
             create_device()?,
         )?);
         self.register_upload_device();
-        self.apply_renderer_state();
+        self.apply_renderer_state()?;
         Ok(())
     }
 
@@ -1225,11 +1226,11 @@ impl Application {
     }
 
     /// Reapplies the application-held state after a renderer rebuild or reconfigure.
-    fn apply_renderer_state(&mut self) {
+    fn apply_renderer_state(&mut self) -> Result<()> {
         let Some(renderer) = &mut self.renderer else {
-            return;
+            return Ok(());
         };
-        renderer.set_sdr_white_boost(self.sdr_white_boost);
+        renderer.set_sdr_white_boost(self.sdr_white_boost)?;
         renderer.set_display_headroom(self.display_headroom);
         renderer.set_dither_setting(DitherMode::from_setting(self.settings.options.dither_mode));
         if let Some(image) = &self.displayed_image {
@@ -1248,6 +1249,7 @@ impl Application {
                 self.image_core.reload_current();
             }
         }
+        Ok(())
     }
 
     fn overlay_content(

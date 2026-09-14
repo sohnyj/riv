@@ -925,11 +925,12 @@ impl Renderer {
         self.create_target()
     }
 
-    pub fn set_sdr_white_boost(&mut self, boost: f32) {
+    pub fn set_sdr_white_boost(&mut self, boost: f32) -> Result<()> {
         self.sdr_white_boost = boost;
         if let Some(effect) = &self.mode_effects.white_level {
-            let _ = set_white_level_input(effect, SDR_REFERENCE_WHITE_NITS * self.sdr_white_boost);
+            set_white_level_input(effect, SDR_REFERENCE_WHITE_NITS * self.sdr_white_boost)?;
         }
+        Ok(())
     }
 
     /// Display peak over current SDR white; None (failed peak query) keeps the base rendition.
