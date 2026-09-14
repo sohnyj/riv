@@ -172,6 +172,9 @@ const BRIGHT_BACKGROUND_LUMA: f32 = 0.5;
 /// How far an action-driven pan moves, in device pixels.
 const PAN_STEP_PIXELS: f32 = 64.0;
 
+/// Title of the failure dialogs for the Open action; the menu label carries the ellipsis.
+const OPEN_TITLE: &str = "Open";
+
 /// The rotate status by quadrant; the quadrant is always 0..4.
 const ROTATION_STATUS: [&str; 4] = ["Rotate: 0°", "Rotate: R90°", "Rotate: 180°", "Rotate: L90°"];
 
@@ -1970,7 +1973,19 @@ fn dispatch_action(application: &mut Application, window: HWND, action: Action) 
                 .settings
                 .last_file_dialog_directory()
                 .map(str::to_owned);
-            let paths = open_dialog::show(window, last_directory.as_deref());
+            let paths = match open_dialog::show(window, last_directory.as_deref()) {
+                Ok(paths) => paths,
+                Err(error) => {
+                    dialogs::message::show_message(
+                        Some(window),
+                        OPEN_TITLE,
+                        "Can't open the selected files.",
+                        &error.to_string(),
+                        dialogs::message::CLOSE_BUTTON,
+                    );
+                    Vec::new()
+                }
+            };
             open_others_in_new_windows(window, &paths);
             if let Some(first) = paths.first()
                 && let Some(application) = application_from_window(window)
@@ -2818,7 +2833,7 @@ fn open_others_in_new_windows(window: HWND, paths: &[PathBuf]) {
     };
     dialogs::message::show_message(
         Some(window),
-        "Open",
+        OPEN_TITLE,
         headline,
         &error.to_string(),
         dialogs::message::CLOSE_BUTTON,

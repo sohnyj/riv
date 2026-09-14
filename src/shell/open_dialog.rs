@@ -6,15 +6,16 @@ use windows::Win32::Foundation::HWND;
 use windows::Win32::System::Com::{CLSCTX_INPROC_SERVER, CoCreateInstance, CoTaskMemFree};
 use windows::Win32::UI::Shell::Common::COMDLG_FILTERSPEC;
 use windows::Win32::UI::Shell::{
-    FOS_ALLOWMULTISELECT, FOS_FILEMUSTEXIST, FileOpenDialog, IFileOpenDialog, IShellItem,
-    IShellItemArray, SHCreateItemFromParsingName, SIGDN_FILESYSPATH,
+    FOS_ALLOWMULTISELECT, FOS_FILEMUSTEXIST, FOS_FORCEFILESYSTEM, FileOpenDialog, IFileOpenDialog,
+    IShellItem, IShellItemArray, SHCreateItemFromParsingName, SIGDN_FILESYSPATH,
 };
 use windows::core::{HSTRING, PCWSTR};
 
 use crate::image;
 
-pub fn show(window: HWND, initial_directory: Option<&str>) -> Vec<PathBuf> {
-    select_files(window, initial_directory).unwrap_or_default()
+/// The selected paths; a dismissed dialog selects nothing, any other failure is the caller's.
+pub fn show(window: HWND, initial_directory: Option<&str>) -> windows::core::Result<Vec<PathBuf>> {
+    select_files(window, initial_directory)
 }
 
 /// A filter per format in the file association order, then the two catch-alls and where they begin.
@@ -62,7 +63,9 @@ fn select_files(
         // One-based; the dialog opens on everything riv reads, not on a single format.
         dialog.SetFileTypeIndex(supported_position as u32 + 1)?;
         let options = dialog.GetOptions()?;
-        dialog.SetOptions(options | FOS_ALLOWMULTISELECT | FOS_FILEMUSTEXIST)?;
+        // Every result must name a file system path, or reading it back would fail.
+        dialog
+            .SetOptions(options | FOS_ALLOWMULTISELECT | FOS_FILEMUSTEXIST | FOS_FORCEFILESYSTEM)?;
         if let Some(directory) = initial_directory
             && let Ok(folder) =
                 SHCreateItemFromParsingName::<_, _, IShellItem>(&HSTRING::from(directory), None)
