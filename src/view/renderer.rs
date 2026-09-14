@@ -1220,18 +1220,14 @@ impl Renderer {
         {
             return Ok(());
         }
-        let destination_context = if scrgb_destination {
-            self.scrgb_color_context.clone()
-        } else {
-            sdr_destination(
-                self.display_color_context.as_ref(),
-                &self.srgb_color_context,
-            )
-            .clone()
-        };
         let source_context = self.resolve_source_context(storage, source_primaries, icc_profile)?;
+        let destination_context = if scrgb_destination {
+            &self.scrgb_color_context
+        } else {
+            self.sdr_destination_context()
+        };
         let color_management = &self.mode_effects.color_management;
-        wire_color_management(color_management, &source_context, &destination_context)?;
+        wire_color_management(color_management, &source_context, destination_context)?;
         unsafe { color_management.SetInput(0, bitmap, true) };
         let converted = unsafe { color_management.GetOutput() }?;
         self.effect_output = Some(self.wire_scene(converted, tone_map_peak, hdr_content)?);

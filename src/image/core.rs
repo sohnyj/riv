@@ -123,16 +123,16 @@ impl ItemLocation {
                 .map(|name| name.to_string_lossy().into_owned()),
             Self::ArchiveMember { archive, member } => {
                 // The member's immediate parent within the archive, else the archive file.
-                let segments: Vec<&str> = member
-                    .split(['/', '\\'])
+                member
+                    .rsplit(['/', '\\'])
                     .filter(|part| !part.is_empty())
-                    .collect();
-                match segments.len() {
-                    count if count >= 2 => Some(segments[count - 2].to_string()),
-                    _ => archive
-                        .file_name()
-                        .map(|name| name.to_string_lossy().into_owned()),
-                }
+                    .nth(1)
+                    .map(str::to_string)
+                    .or_else(|| {
+                        archive
+                            .file_name()
+                            .map(|name| name.to_string_lossy().into_owned())
+                    })
             }
             Self::Url(_) => None,
         }
@@ -557,8 +557,9 @@ pub enum LoadOutcome {
 
 impl ImageCore {
     pub fn new(window: HWND, options: CoreOptions) -> Self {
+        let window = window.0 as isize;
         Self {
-            pool: DecodePool::new(window.0 as isize),
+            pool: DecodePool::new(window),
             options,
             listing_scope: None,
             entries: Vec::new(),
@@ -573,7 +574,7 @@ impl ImageCore {
             releaser: ImageReleaser::new(),
             pending_scan: None,
             missing_anchor: None,
-            window: window.0 as isize,
+            window,
         }
     }
 
@@ -1318,15 +1319,15 @@ impl ImageCore {
         }
         // A preview post always carries Ok; the pattern only unpacks the image.
         if matches!(completion.stage, DecodeStage::PreviewFinal)
-            && let Ok(image) = &completion.result
+            && let Ok(image) = completion.result
         {
             self.cache_image(
                 completion.location.clone(),
                 CacheEntry {
                     metadata: completion.metadata,
                     preview: true,
-                    image: image.clone(),
-                    texture: completion.texture.clone(),
+                    image,
+                    texture: completion.texture,
                 },
             );
             if is_pending {
@@ -1348,26 +1349,26 @@ impl ImageCore {
         match completion.result {
             Ok(image) => {
                 self.record_arrived_weight(&completion.location, &image);
-                self.cache_image(
-                    completion.location.clone(),
-                    CacheEntry {
-                        metadata: completion.metadata,
-                        preview: false,
-                        image: image.clone(),
-                        texture: completion.texture.clone(),
-                    },
-                );
+                let entry = CacheEntry {
+                    metadata: completion.metadata,
+                    preview: false,
+                    image,
+                    texture: completion.texture,
+                };
                 if is_pending {
-                    self.show_image(CurrentImage {
-                        location: completion.location,
-                        image,
-                        texture: completion.texture,
+                    let shown = CurrentImage {
+                        location: completion.location.clone(),
+                        image: entry.image.clone(),
+                        texture: entry.texture.clone(),
                         metadata: completion.metadata,
-                    });
+                    };
+                    self.cache_image(completion.location, entry);
+                    self.show_image(shown);
                     self.request = ViewRequest::Idle;
                     // Preload starts once this image is on screen.
                     Some(LoadOutcome::Shown)
                 } else {
+                    self.cache_image(completion.location, entry);
                     self.evict_cache();
                     None
                 }

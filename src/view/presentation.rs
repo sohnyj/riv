@@ -1,6 +1,6 @@
 //! Presentation-manager buffers composed by DWM, never promoted to independent flip.
 
-use windows::Win32::Foundation::{CloseHandle, HANDLE, HWND, RECT, WAIT_OBJECT_0};
+use windows::Win32::Foundation::{HANDLE, HWND, RECT, WAIT_OBJECT_0};
 use windows::Win32::Graphics::CompositionSwapchain::{
     IPresentationBuffer, IPresentationFactory, IPresentationManager, IPresentationSurface,
 };
@@ -21,7 +21,7 @@ use windows::Win32::Graphics::Dxgi::{DXGI_ERROR_UNSUPPORTED, IDXGIDevice};
 use windows::Win32::System::LibraryLoader::{GetProcAddress, LoadLibraryW};
 use windows::Win32::System::Threading::WaitForSingleObjectEx;
 use windows::Win32::UI::WindowsAndMessaging::{WINDOW_EX_STYLE, WS_EX_NOREDIRECTIONBITMAP};
-use windows::core::{GUID, HRESULT, IUnknown, Interface, Result, s, w};
+use windows::core::{GUID, HRESULT, IUnknown, Interface, Owned, Result, s, w};
 
 /// The presentation factory refuses devices created without this flag.
 pub const REQUIRED_DEVICE_FLAG: D3D11_CREATE_DEVICE_FLAG =
@@ -33,39 +33,27 @@ pub const REQUIRED_WINDOW_STYLE: WINDOW_EX_STYLE = WS_EX_NOREDIRECTIONBITMAP;
 pub struct BufferSlot {
     pub buffer: IPresentationBuffer,
     pub texture: ID3D11Texture2D,
-    available_event: HANDLE,
+    available_event: Owned<HANDLE>,
     /// D2D draws here when the pass is absent; None when the quantize pass writes the buffer.
     pub d2d_target: Option<ID2D1Bitmap1>,
     pub render_target_view: Option<ID3D11RenderTargetView>,
 }
 
-impl Drop for BufferSlot {
-    fn drop(&mut self) {
-        let _ = unsafe { CloseHandle(self.available_event) };
-    }
-}
-
 pub struct CompositionPresenter {
-    manager: IPresentationManager,
-    surface: IPresentationSurface,
-    lost_event: HANDLE,
-    surface_handle: HANDLE,
+    // Declared first: the buffers drop before the manager and the handles they came from.
     buffers: Vec<BufferSlot>,
     next_buffer_index: usize,
     /// Format, size, and count of the current ring, so an unchanged target skips reallocation.
     allocated_ring: Option<(DXGI_FORMAT, (u32, u32), usize)>,
+    manager: IPresentationManager,
+    surface: IPresentationSurface,
+    lost_event: Owned<HANDLE>,
+    /// Held for the surface's lifetime; nothing reads it after creation.
+    _surface_handle: Owned<HANDLE>,
     _composition_device: IDCompositionDevice,
     _composition_target: IDCompositionTarget,
     _composition_visual: IDCompositionVisual,
     _composition_content: IUnknown,
-}
-
-impl Drop for CompositionPresenter {
-    fn drop(&mut self) {
-        self.buffers.clear();
-        let _ = unsafe { CloseHandle(self.lost_event) };
-        let _ = unsafe { CloseHandle(self.surface_handle) };
-    }
 }
 
 /// Resolved at run time: wine's dcomp.dll lacks the export and the test executable must load there.
@@ -152,40 +140,25 @@ impl CompositionPresenter {
         // dcomp.h COMPOSITIONOBJECT_ALL_ACCESS.
         let access = (COMPOSITIONOBJECT_READ | COMPOSITIONOBJECT_WRITE) as u32;
         let manager = unsafe { factory.CreatePresentationManager() }?;
-        let lost_event = unsafe { manager.GetLostEvent() }?;
-        let surface_handle = match unsafe { DCompositionCreateSurfaceHandle(access, None) } {
-            Ok(handle) => handle,
-            Err(error) => {
-                let _ = unsafe { CloseHandle(lost_event) };
-                return Err(error);
-            }
-        };
-        let bound = (|| {
-            let surface = unsafe { manager.CreatePresentationSurface(surface_handle) }?;
-            unsafe { surface.SetAlphaMode(DXGI_ALPHA_MODE_IGNORE) }?;
-            let tree = build_visual_tree(d3d_device, window, surface_handle)?;
-            Ok((surface, tree))
-        })();
-        match bound {
-            Ok((surface, (device, target, visual, content))) => Ok(Self {
-                manager,
-                surface,
-                lost_event,
-                surface_handle,
-                buffers: Vec::new(),
-                next_buffer_index: 0,
-                allocated_ring: None,
-                _composition_device: device,
-                _composition_target: target,
-                _composition_visual: visual,
-                _composition_content: content,
-            }),
-            Err(error) => {
-                let _ = unsafe { CloseHandle(lost_event) };
-                let _ = unsafe { CloseHandle(surface_handle) };
-                Err(error)
-            }
-        }
+        let lost_event = unsafe { Owned::new(manager.GetLostEvent()?) };
+        let surface_handle = unsafe { Owned::new(DCompositionCreateSurfaceHandle(access, None)?) };
+        let surface = unsafe { manager.CreatePresentationSurface(*surface_handle) }?;
+        unsafe { surface.SetAlphaMode(DXGI_ALPHA_MODE_IGNORE) }?;
+        let (device, target, visual, content) =
+            build_visual_tree(d3d_device, window, *surface_handle)?;
+        Ok(Self {
+            buffers: Vec::new(),
+            next_buffer_index: 0,
+            allocated_ring: None,
+            manager,
+            surface,
+            lost_event,
+            _surface_handle: surface_handle,
+            _composition_device: device,
+            _composition_target: target,
+            _composition_visual: visual,
+            _composition_content: content,
+        })
     }
 
     pub fn set_color_space(&self, color_space: DXGI_COLOR_SPACE_TYPE) -> Result<()> {
@@ -229,7 +202,7 @@ impl CompositionPresenter {
                 self.manager
                     .AddBufferFromResource(&texture.cast::<IUnknown>()?)
             }?;
-            let available_event = unsafe { buffer.GetAvailableEvent() }?;
+            let available_event = unsafe { Owned::new(buffer.GetAvailableEvent()?) };
             self.buffers.push(BufferSlot {
                 buffer,
                 texture,
@@ -257,12 +230,12 @@ impl CompositionPresenter {
 
     /// The event the pump waits on before the next frame; signaled while the buffer is free.
     pub fn next_available_event(&self) -> Option<HANDLE> {
-        self.next_slot().map(|slot| slot.available_event)
+        self.next_slot().map(|slot| *slot.available_event)
     }
 
     /// The composition system dropped this manager; the renderer must be rebuilt.
     pub fn is_lost(&self) -> bool {
-        let waited = unsafe { WaitForSingleObjectEx(self.lost_event, 0, false) };
+        let waited = unsafe { WaitForSingleObjectEx(*self.lost_event, 0, false) };
         waited == WAIT_OBJECT_0
     }
 

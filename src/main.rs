@@ -282,14 +282,15 @@ struct Application {
 
 /// A status pill: Timed auto-expires, Sticky holds until the image or playback changes.
 enum StatusText {
-    Timed(String),
-    Sticky(String),
+    Timed(Rc<str>),
+    Sticky(Rc<str>),
 }
 
 impl StatusText {
-    fn text(&self) -> &str {
+    /// The overlay shares the text per frame instead of copying it.
+    fn shared_text(&self) -> Rc<str> {
         match self {
-            StatusText::Timed(text) | StatusText::Sticky(text) => text,
+            StatusText::Timed(text) | StatusText::Sticky(text) => Rc::clone(text),
         }
     }
 }
@@ -1000,7 +1001,7 @@ impl Application {
     /// A status text that holds until resume or an image change, so the timer is stopped.
     fn show_sticky_status_text(&mut self, window: HWND, text: String) {
         let _ = unsafe { KillTimer(Some(window), STATUS_TEXT_TIMER) };
-        self.status_text = Some(StatusText::Sticky(text));
+        self.status_text = Some(StatusText::Sticky(Rc::from(text)));
     }
 
     /// One slideshow tick: an animated item holds until its loop ends, then the show steps.
@@ -1063,7 +1064,7 @@ impl Application {
 
     /// Owns the pill's repaint; callers repaint again only for a view change of their own.
     fn show_status_text(&mut self, window: HWND, text: String) {
-        self.status_text = Some(StatusText::Timed(text));
+        self.status_text = Some(StatusText::Timed(Rc::from(text)));
         unsafe {
             SetTimer(
                 Some(window),
@@ -1302,10 +1303,7 @@ impl Application {
             error_text,
             download_text,
             information_text,
-            status_text: self
-                .status_text
-                .as_ref()
-                .map(|status| status.text().to_owned()),
+            status_text: self.status_text.as_ref().map(StatusText::shared_text),
             show_wordmark,
             background_is_bright: brightness > BRIGHT_BACKGROUND_LUMA,
             output_color_target: self.output_color_target(),
@@ -1904,10 +1902,8 @@ fn dispatch_action(application: &mut Application, window: HWND, action: Action) 
         Action::Recent(index) => {
             let path = application
                 .settings
-                .recent_files()
-                .into_iter()
-                .nth(usize::from(index))
-                .map(|(_, path)| PathBuf::from(path));
+                .recent_file_path(usize::from(index))
+                .map(PathBuf::from);
             if let Some(path) = path {
                 open_recent_path(application, window, &path);
             }

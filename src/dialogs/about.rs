@@ -9,7 +9,7 @@ use windows::Win32::UI::Controls::NMLINK;
 use windows::Win32::UI::WindowsAndMessaging::{
     GetDlgItem, SendMessageW, SetDlgItemTextW, WM_SETFONT,
 };
-use windows::core::{HSTRING, w};
+use windows::core::{HSTRING, PCWSTR, w};
 
 use crate::dialogs::resource::{
     IDC_ABOUT_BUILD, IDC_ABOUT_LINK, IDC_ABOUT_TITLE, IDC_ABOUT_VERSION,
@@ -154,13 +154,9 @@ fn place_link(link: HWND, width: i32, top: i32, fallback_height: i32) {
 fn open_link(url_wide: &[u16]) {
     use windows::Win32::UI::Shell::ShellExecuteW;
     use windows::Win32::UI::WindowsAndMessaging::SW_SHOWNORMAL;
-    let length = url_wide
-        .iter()
-        .position(|unit| *unit == 0)
-        .unwrap_or(url_wide.len());
-    let url = HSTRING::from_wide(&url_wide[..length]);
-    // A failure shows the shell's own error UI; the app has nothing to add.
-    unsafe { ShellExecuteW(None, w!("open"), &url, None, None, SW_SHOWNORMAL) };
+    // szUrl is NUL-terminated, so the shell reads it in place; a failure shows the shell's own UI.
+    let url = PCWSTR::from_raw(url_wide.as_ptr());
+    unsafe { ShellExecuteW(None, w!("open"), url, None, None, SW_SHOWNORMAL) };
 }
 
 fn set_font(page: HWND, control: i32, font: HFONT) {

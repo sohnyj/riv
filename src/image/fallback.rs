@@ -588,7 +588,7 @@ fn decode_heif_primary_image(
     // The copied codes are still PQ/HLG; the shared pass makes them premultiplied linear.
     let peak_luminance_nits = hdr_encoding.and_then(|encoding| {
         let maximum_bits =
-            linearize_hdr_pixels(&mut pixels, encoding, plane.source_bits_per_channel as u32);
+            linearize_hdr_pixels(&mut pixels, encoding, plane.source_bits_per_channel);
         peak_luminance_with_maximum_bits(&pixels, maximum_bits)
     });
     Ok(DecodedImage {
@@ -596,11 +596,11 @@ fn decode_heif_primary_image(
         peak_luminance_nits,
         source_primaries: hdr_encoding.map(HdrEncoding::source_primaries),
         ..DecodedImage::still(
-            plane.width as u32,
-            plane.height as u32,
+            plane.width,
+            plane.height,
             format_name,
             storage,
-            plane.source_bits_per_channel as u32,
+            plane.source_bits_per_channel,
             pixels,
         )
     })
@@ -624,10 +624,10 @@ struct HeifPlane {
     plane: *const u8,
     stride: usize,
     row_bytes: usize,
-    width: c_int,
-    height: c_int,
+    width: u32,
+    height: u32,
     /// The 16-bit words hold codes of the source depth, not of the full range.
-    source_bits_per_channel: c_int,
+    source_bits_per_channel: u32,
 }
 
 fn heif_plane(
@@ -661,9 +661,9 @@ fn heif_plane(
         plane,
         stride: stride as usize,
         row_bytes: row_bytes as usize,
-        width,
-        height,
-        source_bits_per_channel,
+        width: width as u32,
+        height: height as u32,
+        source_bits_per_channel: source_bits_per_channel as u32,
     })
 }
 

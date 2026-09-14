@@ -291,18 +291,17 @@ fn recent_files_array(document: &Value) -> Option<&Vec<Value>> {
         .as_array()
 }
 
+/// One recent entry as (name, path); a malformed entry is skipped, not an error.
+fn recent_file_entry(entry: &Value) -> Option<(String, String)> {
+    Some((
+        entry.get(KEY_RECENT_FILE_NAME)?.as_str()?.to_string(),
+        entry.get(KEY_RECENT_FILE_PATH)?.as_str()?.to_string(),
+    ))
+}
+
 fn recent_files_of(document: &Value) -> Vec<(String, String)> {
     recent_files_array(document)
-        .map(|list| {
-            list.iter()
-                .filter_map(|entry| {
-                    Some((
-                        entry.get(KEY_RECENT_FILE_NAME)?.as_str()?.to_string(),
-                        entry.get(KEY_RECENT_FILE_PATH)?.as_str()?.to_string(),
-                    ))
-                })
-                .collect()
-        })
+        .map(|list| list.iter().filter_map(recent_file_entry).collect())
         .unwrap_or_default()
 }
 
@@ -467,6 +466,16 @@ impl SettingsFile {
         // A hand-edited document can exceed the maximum; every reader sees at most that many.
         files.truncate(MAXIMUM_RECENT_FILES);
         files
+    }
+
+    /// The path at one position of the list `recent_files` would build, without building it.
+    pub fn recent_file_path(&self, index: usize) -> Option<String> {
+        recent_files_array(&self.document)?
+            .iter()
+            .filter_map(recent_file_entry)
+            .take(MAXIMUM_RECENT_FILES)
+            .nth(index)
+            .map(|(_, path)| path)
     }
 
     /// Whether the list holds anything, for callers that would drop the list they built.

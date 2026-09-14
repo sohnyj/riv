@@ -112,7 +112,7 @@ fn warn_conflict(dialog: HWND, encoding: &str, owner_label: &str) {
         "Shortcut",
         "Shortcut already used.",
         &format!("\"{encoding}\" is already bound to \"{owner_label}\""),
-        "OK",
+        w!("OK"),
     );
 }
 

@@ -9,7 +9,7 @@ use windows::Win32::UI::WindowsAndMessaging::{IDNO, IDOK, IDYES};
 use windows::core::{HRESULT, HSTRING, PCWSTR, w};
 
 /// The dismiss label every plain failure dialog passes.
-pub const CLOSE_BUTTON: &str = "Close";
+pub const CLOSE_BUTTON: PCWSTR = w!("Close");
 
 /// The confirmation pair; the delete confirmation shares this vocabulary.
 pub const YES_BUTTON: PCWSTR = w!("Yes");
@@ -59,14 +59,19 @@ pub fn configuration(
 }
 
 /// One-message task dialog titled after the action; the headline leads the message.
-pub fn show_message(owner: Option<HWND>, title: &str, headline: &str, detail: &str, button: &str) {
+pub fn show_message(
+    owner: Option<HWND>,
+    title: &str,
+    headline: &str,
+    detail: &str,
+    button: PCWSTR,
+) {
     let title = HSTRING::from(title);
     let text = body_text(headline, detail);
     // Labeled here, not by the system: the settings dialog writes its own buttons too.
-    let button_text = HSTRING::from(button);
     let buttons = [TASKDIALOG_BUTTON {
         nButtonID: IDOK.0,
-        pszButtonText: PCWSTR(button_text.as_ptr()),
+        pszButtonText: button,
     }];
     let configuration = configuration(owner, &title, &text, &buttons);
     let _ = unsafe { TaskDialogIndirect(&raw const configuration, None, None, None) };

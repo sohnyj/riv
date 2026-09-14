@@ -69,7 +69,7 @@ pub struct OverlayContent {
     /// Centered like an error while a remote image downloads (no image is up then).
     pub download_text: Option<String>,
     pub information_text: Option<Rc<str>>,
-    pub status_text: Option<String>,
+    pub status_text: Option<Rc<str>>,
     /// Centered "riv" wordmark for the empty-window state.
     pub show_wordmark: bool,
     pub background_is_bright: bool,

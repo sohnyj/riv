@@ -758,9 +758,12 @@ pub fn format_name_for_extension(extension: &str) -> Option<&'static str> {
 }
 
 fn descriptor_for_extension(extension: &str) -> Option<&'static FormatDescriptor> {
-    REGISTRY
-        .iter()
-        .find(|descriptor| descriptor.extensions.contains(&extension))
+    REGISTRY.iter().find(|descriptor| {
+        descriptor
+            .extensions
+            .iter()
+            .any(|known| known.eq_ignore_ascii_case(extension))
+    })
 }
 
 pub fn descriptor_for_content(path: &Path) -> Option<&'static FormatDescriptor> {
@@ -899,8 +902,10 @@ pub fn weight_depends_on_display(extension: &str) -> bool {
 }
 
 fn descriptor_for_path(path: &Path) -> Option<&'static FormatDescriptor> {
-    let by_extension = crate::text::lowercase_extension(path)
-        .and_then(|extension| descriptor_for_extension(&extension));
+    let by_extension = path
+        .extension()
+        .and_then(|extension| extension.to_str())
+        .and_then(descriptor_for_extension);
     if let Some(descriptor) = by_extension {
         // Reading the header costs a file read, so only descriptors with a refinement pay it.
         if descriptor.content_refinement.is_none() {
@@ -919,10 +924,7 @@ fn descriptor_for_bytes(
     extension: Option<&str>,
 ) -> Option<&'static FormatDescriptor> {
     let header = &bytes[..bytes.len().min(HEADER_PROBE_BYTES)];
-    match extension
-        .map(str::to_lowercase)
-        .and_then(|extension| descriptor_for_extension(&extension))
-    {
+    match extension.and_then(descriptor_for_extension) {
         Some(descriptor) => Some(refine_by_content(descriptor, header)),
         None => {
             descriptor_for_magic(header).map(|descriptor| refine_by_content(descriptor, header))
@@ -1398,7 +1400,7 @@ fn probe_webp_weight(input: &DecodeInput<'_>) -> Option<u64> {
 
 /// Extension-only descriptor lookup, so the UI-thread checks do no I/O.
 fn descriptor_for_path_extension(path: &Path) -> Option<&'static FormatDescriptor> {
-    descriptor_for_extension(&crate::text::lowercase_extension(path)?)
+    descriptor_for_extension(path.extension()?.to_str()?)
 }
 
 /// A file whose decode runs preview first; magic probing never yields these formats.
