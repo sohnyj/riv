@@ -106,11 +106,9 @@ fn compose_webp_frames(
     maximum_frames: usize,
     cancellation: &AtomicBool,
 ) -> Result<DecodedImage, DecodeError> {
+    // libwebp rejects a zero canvas, zero frames, and negative offsets before the demuxer exists.
     let canvas_width = unsafe { WebPDemuxGetI(demuxer, WEBP_FF_CANVAS_WIDTH) };
     let canvas_height = unsafe { WebPDemuxGetI(demuxer, WEBP_FF_CANVAS_HEIGHT) };
-    if canvas_width == 0 || canvas_height == 0 {
-        return Err(uncoded_error("WebP canvas has no size"));
-    }
     let mut iterator: WebPIterator = unsafe { std::mem::zeroed() };
     if unsafe { WebPDemuxGetFrame(demuxer, 1, &raw mut iterator) } == 0 {
         return Err(uncoded_error("WebP has no frames"));
@@ -127,11 +125,11 @@ fn compose_webp_frames(
             return Err(DecodeError::cancelled());
         }
         // The demuxer's frame count is real, so the budget is known after frame one.
-        if !compositor.accepts_another(u64::from(iterator.frame_count.max(1) as u32)) {
+        if !compositor.accepts_another(u64::from(iterator.frame_count as u32)) {
             break;
         }
-        let frame_width = iterator.width.max(0) as u32;
-        let frame_height = iterator.height.max(0) as u32;
+        let frame_width = iterator.width as u32;
+        let frame_height = iterator.height as u32;
         let frame_bytes = frame_width as usize * frame_height as usize * 4;
         // Grown fallibly in place: vec-style growth would abort where an error must show.
         if frame_pixels
@@ -148,7 +146,7 @@ fn compose_webp_frames(
                 iterator.fragment.size,
                 frame_pixels.as_mut_ptr(),
                 frame_pixels.len(),
-                frame_width as c_int * 4,
+                iterator.width * 4,
             )
         };
         if decoded.is_null() {
@@ -159,8 +157,8 @@ fn compose_webp_frames(
         let duration_milliseconds = iterator.duration_milliseconds;
         compositor.add_frame(FrameRegion {
             pixels: &frame_pixels,
-            left: iterator.x_offset.max(0) as u32,
-            top: iterator.y_offset.max(0) as u32,
+            left: iterator.x_offset as u32,
+            top: iterator.y_offset as u32,
             width: frame_width,
             height: frame_height,
             blend: if iterator.blend_method == WEBP_MUX_NO_BLEND {
@@ -242,8 +240,7 @@ fn probe_exr_wide_dimensions(wide_path: &HSTRING) -> Option<(u32, u32)> {
     let mut width: c_int = 0;
     let mut height: c_int = 0;
     let status = unsafe { riv_exr_probe(wide_path.as_ptr(), &raw mut width, &raw mut height) };
-    // A contract-breaking negative extent must not sign-wrap the cast; the HEIF path checks too.
-    (status == 0 && width > 0 && height > 0).then_some((width as u32, height as u32))
+    (status == 0).then_some((width as u32, height as u32))
 }
 
 pub fn probe_exr_bytes_dimensions(bytes: &[u8]) -> Option<(u32, u32)> {
@@ -252,7 +249,7 @@ pub fn probe_exr_bytes_dimensions(bytes: &[u8]) -> Option<(u32, u32)> {
     let status = unsafe {
         riv_exr_probe_memory(bytes.as_ptr(), bytes.len(), &raw mut width, &raw mut height)
     };
-    (status == 0 && width > 0 && height > 0).then_some((width as u32, height as u32))
+    (status == 0).then_some((width as u32, height as u32))
 }
 
 pub fn decode_exr(path: &Path, format_name: &'static str) -> Result<DecodedImage, DecodeError> {
@@ -353,11 +350,11 @@ fn decode_exr_with(
     })
 }
 
-/// The shim's message when it wrote one; the generic sentence otherwise.
-fn exr_error_text(error_message: &[u8]) -> &str {
-    const GENERIC: &str = "EXR decode failed";
+/// The shim's message; every failing path writes one.
+fn exr_error_text(error_message: &[u8]) -> Cow<'_, str> {
     CStr::from_bytes_until_nul(error_message)
-        .map_or(GENERIC, |message| message.to_str().unwrap_or(GENERIC))
+        .expect("the zeroed buffer ends in NUL")
+        .to_string_lossy()
 }
 
 const HEIF_COLORSPACE_RGB: c_int = 1;
@@ -403,11 +400,8 @@ impl HeifError {
         if self.code == 0 {
             return Ok(());
         }
-        let text = if self.message.is_null() {
-            Cow::Borrowed("HEIF decode failed")
-        } else {
-            unsafe { CStr::from_ptr(self.message) }.to_string_lossy()
-        };
+        // libheif documents the message as always set.
+        let text = unsafe { CStr::from_ptr(self.message) }.to_string_lossy();
         Err(uncoded_error(text))
     }
 }

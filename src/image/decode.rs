@@ -1337,7 +1337,7 @@ fn probe_apng_weight<Input: BufRead + Seek>(input: Input) -> Option<u64> {
 /// The raster size tracks the largest monitor, like decode_svg.
 fn probe_svg_weight(bytes: &[u8]) -> Option<u64> {
     let tree = parse_svg_tree(bytes).ok()?;
-    let (pixel_width, pixel_height, _) = svg_raster_geometry(&tree)?;
+    let (pixel_width, pixel_height, _) = svg_raster_geometry(&tree);
     Some(decoded_weight(
         pixel_width,
         pixel_height,
@@ -1630,10 +1630,7 @@ fn enforce_device_limit(
     // u64 stride: a native EXR/HEIF width near u32::MAX would overflow width*bytes_per_pixel.
     let stride = u32::try_from(u64::from(width) * u64::from(bytes_per_pixel))
         .map_err(|_| uncoded_error("Image stride exceeds the addressable range"))?;
-    let frame = decoded
-        .frames
-        .first_mut()
-        .ok_or_else(|| uncoded_error("Image has no frames"))?;
+    let frame = &mut decoded.frames[0];
     let (pixels, scaled_width, scaled_height) = with_wic_factory(|factory| {
         let bitmap = unsafe {
             factory.CreateBitmapFromMemory(width, height, pixel_format, stride, &frame.pixels)?
@@ -2120,7 +2117,6 @@ pub(crate) fn linearize_hdr_pixels(
     encoding: HdrEncoding,
     source_bits: u32,
 ) -> u16 {
-    let source_bits = source_bits.clamp(1, MAXIMUM_HDR_SOURCE_BITS);
     let transfer_table = hdr_transfer_lookup_table(encoding.transfer, source_bits);
     let source_maximum = ((1u32 << source_bits) - 1) as f32;
     map_pixel_blocks(pixels, 8, |block| {
@@ -2781,7 +2777,7 @@ fn decode_apng<Input: BufRead + Seek>(
 
     let buffer_size = reader
         .output_buffer_size()
-        .ok_or_else(|| uncoded_error("APNG output buffer size overflow"))?;
+        .expect("the canvas is within the texture axis, so its buffer size fits");
     let Some(mut buffer) = try_zeroed_buffer(buffer_size) else {
         return Err(out_of_memory_error("APNG"));
     };
@@ -2973,10 +2969,9 @@ fn copy_rectangle(
 
 fn decode_svg(bytes: &[u8], format_name: &'static str) -> Result<DecodedImage, DecodeError> {
     let tree = parse_svg_tree(bytes)?;
-    let (pixel_width, pixel_height, scale) =
-        svg_raster_geometry(&tree).ok_or_else(|| uncoded_error("SVG has no intrinsic size"))?;
+    let (pixel_width, pixel_height, scale) = svg_raster_geometry(&tree);
     let mut pixmap = resvg::tiny_skia::Pixmap::new(pixel_width, pixel_height)
-        .ok_or_else(|| uncoded_error("SVG raster target allocation failed"))?;
+        .expect("the raster is at least one texel on each side and within the texture axis");
     resvg::render(
         &tree,
         resvg::tiny_skia::Transform::from_scale(scale, scale),
@@ -3004,17 +2999,14 @@ fn parse_svg_tree(bytes: &[u8]) -> Result<resvg::usvg::Tree, DecodeError> {
 }
 
 /// Raster size and scale at the largest monitor's long side; probe and decode must agree.
-fn svg_raster_geometry(tree: &resvg::usvg::Tree) -> Option<(u32, u32, f32)> {
+fn svg_raster_geometry(tree: &resvg::usvg::Tree) -> (u32, u32, f32) {
+    // usvg's Size is positive and finite on both axes, so the scale is too.
     let size = tree.size();
-    if !(size.width() > 0.0 && size.height() > 0.0) {
-        return None;
-    }
     let target = raster_target_long_side() as f32;
     let scale = target / size.width().max(size.height());
-    // The scale normalizes the product to the target; max(1.0) also turns an infinite size's NaN into 1.
     let pixel_width = (size.width() * scale).round().max(1.0) as u32;
     let pixel_height = (size.height() * scale).round().max(1.0) as u32;
-    Some((pixel_width, pixel_height, scale))
+    (pixel_width, pixel_height, scale)
 }
 
 fn font_database() -> &'static std::sync::Arc<resvg::usvg::fontdb::Database> {
