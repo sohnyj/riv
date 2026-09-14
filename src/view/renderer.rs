@@ -192,7 +192,7 @@ struct GainMapState {
     adopted_conditions: Option<BakeConditions>,
 }
 
-/// The bake target and its D2D wrap; the bitmap keeps the texture alive.
+/// The bake target and its D2D wrap; the bitmap holds the texture.
 struct BakedGainMap {
     render_target_view: ID3D11RenderTargetView,
     bitmap: ID2D1Bitmap1,
@@ -235,7 +235,7 @@ pub struct Renderer {
     /// The adapter's per-resource ceiling, fixed per device; read once at build.
     upload_maximum_frame_bytes: u64,
     d3d_context: ID3D11DeviceContext,
-    /// Declared before d2d_context: effects must release while their context lives.
+    /// Declared before d2d_context: effects must release before their context does.
     mode_effects: ModeEffects,
     d2d_context: ID2D1DeviceContext,
     /// Fullscreen quantizing copy from the UNORM16 scene to the 8-bit backbuffer.
@@ -299,7 +299,7 @@ impl FrameDecision {
 
 impl Drop for Renderer {
     fn drop(&mut self) {
-        // Release the per-buffer D2D wrappers while the device is alive.
+        // Release the per-buffer D2D wrappers while the device still exists.
         for slot in self.presenter.buffers_mut() {
             slot.d2d_target = None;
             slot.render_target_view = None;
@@ -1203,7 +1203,7 @@ impl Renderer {
         let icc_bytes = icc_profile.map(|profile| &**profile);
         self.effect_output = None;
         self.note_source_gamut(source_primaries, icc_bytes);
-        // Unwire the previous bitmap now, so a failure return does not keep it alive.
+        // Unwire the previous bitmap now, so a failure return does not hold it.
         unsafe { self.mode_effects.color_management.SetInput(0, None, true) };
         // HDR passes through; SDR maps content above SDR white to the target.
         let hdr_content = peak_luminance_nits.is_some_and(|peak| peak > SDR_REFERENCE_WHITE_NITS);
@@ -1358,7 +1358,7 @@ impl Renderer {
         self.gain_state = None;
         self.image = None;
         self.effect_output = None;
-        // Unwire the previous bitmap so the effect does not keep it alive.
+        // Unwire the previous bitmap so the effect does not hold it.
         unsafe { self.mode_effects.color_management.SetInput(0, None, true) };
     }
 

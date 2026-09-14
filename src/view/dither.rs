@@ -1,4 +1,4 @@
-//! Output-dither settings and inputs for the quantize pass; the math lives in the HLSL.
+//! Output-dither settings and inputs for the quantize pass; the math is in the HLSL.
 
 /// Single-channel f32 texels; the build script runs the void-and-cluster construction.
 pub const BLUE_NOISE_TEXELS: &[u8] = crate::view::pass::build_output!("blue_noise.bin");

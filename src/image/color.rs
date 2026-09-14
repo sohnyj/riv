@@ -276,7 +276,7 @@ fn display_profile_name(path: &DISPLAYCONFIG_PATH_INFO) -> Option<String> {
     profile.filter(|name| !name.is_empty())
 }
 
-/// The profile bytes; a bare file name lives in the system color directory, a full path alone.
+/// The profile bytes; a bare file name is under the system color directory, a full path alone.
 fn read_profile(name: &str) -> Option<Vec<u8>> {
     let profile = std::path::Path::new(name);
     if profile.is_absolute() {
@@ -286,7 +286,7 @@ fn read_profile(name: &str) -> Option<Vec<u8>> {
     }
 }
 
-/// The system color directory, where installed ICC profiles live.
+/// The system color directory, where installed ICC profiles are kept.
 fn color_directory() -> Option<std::path::PathBuf> {
     use windows::Win32::UI::ColorSystem::GetColorDirectoryW;
     use windows::core::{PCWSTR, PWSTR};

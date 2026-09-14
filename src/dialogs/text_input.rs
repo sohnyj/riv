@@ -1,4 +1,4 @@
-//! Shared single-edit input dialog; both templates live in riv.rc with the rest.
+//! Shared single-edit input dialog; both templates are in riv.rc with the rest.
 
 use windows::Win32::Foundation::{HWND, LPARAM, WPARAM};
 use windows::Win32::UI::Controls::EM_SETSEL;

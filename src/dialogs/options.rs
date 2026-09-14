@@ -697,7 +697,7 @@ unsafe extern "system" fn page_procedure(
             apply_page_command(state, page, control, notification)
         }
         WM_NOTIFY => {
-            // State only inside a matched branch: item insertions notify here while an initializer's borrow is live.
+            // State only inside a matched branch: item insertions notify here while an initializer's borrow is held.
             let header = unsafe { &*(lparam.0 as *const NMHDR) };
             match header.idFrom as i32 {
                 IDC_SHORTCUTS_LIST if header.code == NM_DBLCLK => {

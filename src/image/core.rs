@@ -385,7 +385,7 @@ impl ImageReleaser {
     }
 
     fn release(&self, image: Arc<DecodedImage>) {
-        // The receiver lives as long as the process, so a send cannot fail.
+        // The receiver exists as long as the process, so a send cannot fail.
         self.sender.send(image).expect("image releaser thread gone");
     }
 }

@@ -640,7 +640,7 @@ fn heif_icc_profile(handle: *mut HeifImageHandle) -> Option<Arc<[u8]>> {
         .map(|()| Arc::from(buffer))
 }
 
-/// A decoded image's interleaved plane, validated; the pointer lives as long as the image.
+/// A decoded image's interleaved plane, validated; the pointer is valid as long as the image.
 struct HeifPlane {
     plane: *const u8,
     stride: usize,

@@ -30,7 +30,8 @@ pub fn center_on_owner(dialog: HWND) {
     let mut owner_bounds = RECT::default();
     let mut dialog_bounds = RECT::default();
     unsafe { GetWindowRect(owner, &raw mut owner_bounds) }.expect("an existing owner has bounds");
-    unsafe { GetWindowRect(dialog, &raw mut dialog_bounds) }.expect("an existing dialog has bounds");
+    unsafe { GetWindowRect(dialog, &raw mut dialog_bounds) }
+        .expect("an existing dialog has bounds");
     let width = dialog_bounds.right - dialog_bounds.left;
     let height = dialog_bounds.bottom - dialog_bounds.top;
     let x = owner_bounds.left + (owner_bounds.right - owner_bounds.left - width) / 2;

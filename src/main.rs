@@ -100,7 +100,7 @@ const APPLICATION_NAME: &str = "riv";
 /// Shortcut and registry capability description; Cargo.toml owns the wording.
 const APPLICATION_DESCRIPTION: &str = env!("CARGO_PKG_DESCRIPTION");
 
-/// The running executable: settings live beside it, and the shell registers and spawns it.
+/// The running executable: settings are kept beside it, and the shell registers and spawns it.
 pub fn executable_path() -> PathBuf {
     std::env::current_exe().expect("the running module always has a path")
 }
@@ -216,7 +216,7 @@ struct Application {
     display_watcher: Option<color::DisplayWatcher>,
     /// Dark-mode reads and change events for the system colors.
     theme_watcher: Option<dwm::ThemeWatcher>,
-    /// Keeps the thread's dispatcher queue alive; the watcher's events need one.
+    /// Holds the thread's dispatcher queue; the watcher's events need one.
     _dispatcher_queue_controller: Option<DispatcherQueueController>,
     /// A failed output mode switch retries on the next paint.
     output_reconfigure_pending: bool,
@@ -1213,7 +1213,7 @@ impl Application {
         Ok(())
     }
 
-    /// Reads the current texture back while its device is alive; a removed one falls through.
+    /// Reads the current texture back while its device still exists; a removed one falls through.
     fn recover_current_pixels(&mut self) {
         let Some(renderer) = &self.renderer else {
             return;
@@ -1703,7 +1703,8 @@ fn core_options(options: &Options) -> CoreOptions {
 
 fn client_size(window: HWND) -> (u32, u32) {
     let mut bounds = RECT::default();
-    unsafe { GetClientRect(window, &raw mut bounds) }.expect("an existing window has a client area");
+    unsafe { GetClientRect(window, &raw mut bounds) }
+        .expect("an existing window has a client area");
     (
         (bounds.right - bounds.left) as u32,
         (bounds.bottom - bounds.top) as u32,
@@ -2792,8 +2793,9 @@ fn configure_gestures(window: HWND) {
 fn prepare_first_show(window: HWND) {
     if let Some(application) = application_from_window(window) {
         application.refresh_title_bar_theme(window);
-        application.drop_target =
-            Some(drag_drop::register(window).expect("an existing window after OleInitialize registers"));
+        application.drop_target = Some(
+            drag_drop::register(window).expect("an existing window after OleInitialize registers"),
+        );
         application.update_window_title(window);
         application.render(window);
         // Presented before the first show, so the class brush never flashes.
