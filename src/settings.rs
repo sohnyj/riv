@@ -283,11 +283,16 @@ pub struct SettingsFile {
     removed_recent_keys: HashSet<String>,
 }
 
-fn recent_files_of(document: &Value) -> Vec<(String, String)> {
+/// The recents array where the document keeps it; None when the section or key is absent.
+fn recent_files_array(document: &Value) -> Option<&Vec<Value>> {
     document
-        .get(SECTION_RECENTS)
-        .and_then(|recents| recents.get(KEY_RECENT_FILES))
-        .and_then(Value::as_array)
+        .get(SECTION_RECENTS)?
+        .get(KEY_RECENT_FILES)?
+        .as_array()
+}
+
+fn recent_files_of(document: &Value) -> Vec<(String, String)> {
+    recent_files_array(document)
         .map(|list| {
             list.iter()
                 .filter_map(|entry| {
@@ -466,11 +471,7 @@ impl SettingsFile {
 
     /// Whether the list holds anything, for callers that would drop the list they built.
     pub fn has_recent_files(&self) -> bool {
-        self.document
-            .get(SECTION_RECENTS)
-            .and_then(|recents| recents.get(KEY_RECENT_FILES))
-            .and_then(Value::as_array)
-            .is_some_and(|list| !list.is_empty())
+        recent_files_array(&self.document).is_some_and(|list| !list.is_empty())
     }
 
     /// Fold other instances' recents back in (union, this session first) before writing.

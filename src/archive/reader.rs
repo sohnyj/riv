@@ -167,13 +167,15 @@ fn entry_is_listable(api: &Api, entry: *mut ArchiveEntry) -> Result<bool, Archiv
     Ok(regular && readable)
 }
 
+/// The size the header declares, when it declares one; a negative declaration reads as 0.
+fn declared_bytes(api: &Api, entry: *mut ArchiveEntry) -> Option<u64> {
+    (unsafe { (api.entry_size_is_set)(entry) } != 0)
+        .then(|| unsafe { (api.entry_size)(entry) }.max(0) as u64)
+}
+
 /// The listing entry: the declared size (0 when unset) and the modified time.
 fn member_from_entry(api: &Api, entry: *mut ArchiveEntry, name: String) -> ArchiveMember {
-    let uncompressed_bytes = if unsafe { (api.entry_size_is_set)(entry) } != 0 {
-        unsafe { (api.entry_size)(entry) }.max(0) as u64
-    } else {
-        0
-    };
+    let uncompressed_bytes = declared_bytes(api, entry).unwrap_or(0);
     let modified_seconds = unsafe { (api.entry_mtime)(entry) }.max(0) as u64;
     ArchiveMember {
         name,
@@ -199,8 +201,7 @@ pub fn read_member(
         if unsafe { (reader.api.entry_is_data_encrypted)(entry) } != 0 {
             return Err(ArchiveError::new("Archive member is encrypted"));
         }
-        let declared_bytes = unsafe { (reader.api.entry_size_is_set)(entry) != 0 }
-            .then(|| unsafe { (reader.api.entry_size)(entry) }.max(0) as u64);
+        let declared_bytes = declared_bytes(reader.api, entry);
         if declared_bytes.is_some_and(|bytes| bytes > MAXIMUM_MEMBER_BYTES) {
             return Err(ArchiveError::exceeds_member_limit());
         }

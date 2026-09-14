@@ -80,19 +80,19 @@ pub unsafe fn borrowed_payload<'payload, T: 'static>(
     was_sent::<T>(pointer, message).then(|| unsafe { &*(pointer as *const T) })
 }
 
+const WORD_MASK: usize = u16::MAX as usize;
+
 /// Two 16-bit halves in one message parameter; `high_word` and `low_word` read them back.
 pub fn pack_words(high: u32, low: u32) -> usize {
-    ((high as usize & 0xFFFF) << 16) | (low as usize & 0xFFFF)
+    ((high as usize & WORD_MASK) << u16::BITS) | (low as usize & WORD_MASK)
 }
 
-/// Low 16 bits of a packed message parameter.
 pub fn low_word(value: usize) -> u32 {
-    (value & 0xFFFF) as u32
+    (value & WORD_MASK) as u32
 }
 
-/// High 16 bits of a packed message parameter.
 pub fn high_word(value: usize) -> u32 {
-    ((value >> 16) & 0xFFFF) as u32
+    ((value >> u16::BITS) & WORD_MASK) as u32
 }
 
 /// High 16 bits read as the signed value a wheel delta carries.

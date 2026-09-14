@@ -337,8 +337,9 @@ fn draw_field_text(device: HDC, rect: RECT, text: &mut [u16], color: COLORREF) {
     unsafe {
         SetBkMode(device, TRANSPARENT);
         SetTextColor(device, color);
+        const FIELD_TEXT_INDENT_PIXELS: i32 = 4;
         let mut bounds = rect;
-        bounds.left += 4;
+        bounds.left += FIELD_TEXT_INDENT_PIXELS;
         DrawTextW(
             device,
             text,

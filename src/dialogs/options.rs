@@ -359,10 +359,11 @@ fn initialize_frame(state: &mut OptionsState) {
     }
 
     // Labels sit tight against the tab edges at the default padding.
+    const TAB_LABEL_PADDING_DIALOG_UNITS: i32 = 8;
     let mut padding = RECT {
         left: 0,
         top: 0,
-        right: 8,
+        right: TAB_LABEL_PADDING_DIALOG_UNITS,
         bottom: 0,
     };
     if unsafe { MapDialogRect(dialog, &raw mut padding) }.is_ok() {

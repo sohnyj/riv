@@ -33,34 +33,49 @@ unsafe extern "system" fn center_when_created(
     S_OK
 }
 
+/// The body every dialog shows: the lead sentence, a blank line, the detail.
+pub fn body_text(lead: &str, detail: &str) -> HSTRING {
+    // A main instruction would draw the lead larger and in color, so it goes in the content.
+    HSTRING::from(format!("{lead}\n\n{detail}"))
+}
+
+/// The configuration every dialog starts from; the strings and buttons outlive the call.
+pub fn configuration(
+    owner: Option<HWND>,
+    title: &HSTRING,
+    content: &HSTRING,
+    buttons: &[TASKDIALOG_BUTTON],
+) -> TASKDIALOGCONFIG {
+    TASKDIALOGCONFIG {
+        cbSize: size_of::<TASKDIALOGCONFIG>() as u32,
+        hwndParent: owner.unwrap_or_default(),
+        pszWindowTitle: PCWSTR(title.as_ptr()),
+        pszContent: PCWSTR(content.as_ptr()),
+        cButtons: buttons.len() as u32,
+        pButtons: buttons.as_ptr(),
+        pfCallback: centering_callback(owner),
+        ..Default::default()
+    }
+}
+
 /// One-message task dialog titled after the action; the headline leads the message.
 pub fn show_message(owner: Option<HWND>, title: &str, headline: &str, detail: &str, button: &str) {
     let title = HSTRING::from(title);
-    // A main instruction would draw the headline larger and in color.
-    let text = HSTRING::from(format!("{headline}\n\n{detail}"));
+    let text = body_text(headline, detail);
     // Labeled here, not by the system: the settings dialog writes its own buttons too.
     let button_text = HSTRING::from(button);
     let buttons = [TASKDIALOG_BUTTON {
         nButtonID: IDOK.0,
         pszButtonText: PCWSTR(button_text.as_ptr()),
     }];
-    let configuration = TASKDIALOGCONFIG {
-        cbSize: size_of::<TASKDIALOGCONFIG>() as u32,
-        hwndParent: owner.unwrap_or_default(),
-        pszWindowTitle: PCWSTR(title.as_ptr()),
-        pszContent: PCWSTR(text.as_ptr()),
-        cButtons: buttons.len() as u32,
-        pButtons: buttons.as_ptr(),
-        pfCallback: centering_callback(owner),
-        ..Default::default()
-    };
+    let configuration = configuration(owner, &title, &text, &buttons);
     let _ = unsafe { TaskDialogIndirect(&raw const configuration, None, None, None) };
 }
 
 /// Yes/No question defaulting to No, which the dismissals answer with; true when Yes was pressed.
 pub fn confirm_message(owner: Option<HWND>, title: &str, question: &str, detail: &str) -> bool {
     let title = HSTRING::from(title);
-    let text = HSTRING::from(format!("{question}\n\n{detail}"));
+    let text = body_text(question, detail);
     let buttons = [
         TASKDIALOG_BUTTON {
             nButtonID: IDYES.0,
@@ -72,16 +87,9 @@ pub fn confirm_message(owner: Option<HWND>, title: &str, question: &str, detail:
         },
     ];
     let configuration = TASKDIALOGCONFIG {
-        cbSize: size_of::<TASKDIALOGCONFIG>() as u32,
         dwFlags: TDF_ALLOW_DIALOG_CANCELLATION,
-        hwndParent: owner.unwrap_or_default(),
-        pszWindowTitle: PCWSTR(title.as_ptr()),
-        pszContent: PCWSTR(text.as_ptr()),
-        cButtons: buttons.len() as u32,
-        pButtons: buttons.as_ptr(),
         nDefaultButton: IDNO.0,
-        pfCallback: centering_callback(owner),
-        ..Default::default()
+        ..configuration(owner, &title, &text, &buttons)
     };
     let mut pressed = IDNO.0;
     let shown =

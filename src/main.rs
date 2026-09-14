@@ -304,10 +304,7 @@ struct WindowRestore {
 impl WindowRestore {
     /// Reads both, since snapping moves the rect the window occupies but not its placement.
     fn capture(window: HWND) -> Self {
-        let mut placement = WINDOWPLACEMENT {
-            length: size_of::<WINDOWPLACEMENT>() as u32,
-            ..Default::default()
-        };
+        let mut placement = empty_window_placement();
         unsafe { GetWindowPlacement(window, &raw mut placement) }
             .expect("an existing window has a placement");
         let mut bounds = RECT::default();
@@ -694,10 +691,9 @@ impl Application {
         if maximized {
             // The restore rect a placement carries is in workspace coordinates, as it was saved.
             let placement = WINDOWPLACEMENT {
-                length: size_of::<WINDOWPLACEMENT>() as u32,
                 showCmd: SW_HIDE.0 as u32,
                 rcNormalPosition: saved_bounds,
-                ..Default::default()
+                ..empty_window_placement()
             };
             let _ = unsafe { SetWindowPlacement(window, &raw const placement) };
             return;
@@ -1325,7 +1321,10 @@ impl Application {
             .as_ref()
             .map_or("", |renderer| renderer.output_label());
         let scaling_description = self.scaling_description(frame);
-        let dither_description = frame.map_or("None", FrameDecision::dither_description);
+        let dither_description = frame.map_or(
+            DitherMode::None.description(),
+            FrameDecision::dither_description,
+        );
         let tone_map = self.renderer.as_ref().map(Renderer::tone_map_luminances);
         let ultra_hdr_applied = self
             .renderer
@@ -2212,6 +2211,14 @@ fn toggle_fullscreen(window: HWND) {
     if let Some(application) = application_from_window(window) {
         application.update_cursor_autohide(window);
         application.request_render(window);
+    }
+}
+
+/// A placement with its length set, which every placement call requires.
+fn empty_window_placement() -> WINDOWPLACEMENT {
+    WINDOWPLACEMENT {
+        length: size_of::<WINDOWPLACEMENT>() as u32,
+        ..Default::default()
     }
 }
 

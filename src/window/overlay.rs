@@ -682,13 +682,17 @@ fn append_exif_lines(lines: &mut Vec<String>, exif: &crate::image::decode::ExifM
         lines.push(format!("Metering mode: {text}"));
     }
     if let Some(flash) = exif.flash {
-        let fired = flash & 0x1 != 0;
-        let mode = (flash >> 3) & 0x3;
+        // EXIF Flash: bit 0 fired, bits 3-4 the mode.
+        const FLASH_FIRED_BIT: u32 = 0x1;
+        const FLASH_MODE_SHIFT: u32 = 3;
+        const FLASH_MODE_MASK: u32 = 0x3;
+        const FLASH_MODES: [(u32, &str); 3] =
+            [(1, ", compulsory"), (2, ", compulsory"), (3, ", auto")];
+        let fired = flash & FLASH_FIRED_BIT != 0;
+        let mode = (flash >> FLASH_MODE_SHIFT) & FLASH_MODE_MASK;
         let mut text = String::from(if fired { "Fired" } else { "Didn't fire" });
-        match mode {
-            1 | 2 => text.push_str(", compulsory"),
-            3 => text.push_str(", auto"),
-            _ => {}
+        if let Some((_, suffix)) = FLASH_MODES.iter().find(|(code, _)| *code == mode) {
+            text.push_str(suffix);
         }
         lines.push(format!("Flash: {text}"));
     }

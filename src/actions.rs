@@ -379,6 +379,13 @@ impl Action {
 
 #[cfg(test)]
 mod action_table_tests {
+    /// A snapshot indexes by discriminant and fills in ALL order, so the two must agree.
+    #[test]
+    fn requirements_are_listed_at_their_discriminants() {
+        for index in 0..super::ActionRequirement::ALL.len() {
+            assert_eq!(super::ActionRequirement::ALL[index] as usize, index);
+        }
+    }
     use super::*;
 
     /// The variant spelling has no run-time form, so the table is read as source text.

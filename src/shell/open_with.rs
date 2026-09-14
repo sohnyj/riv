@@ -132,7 +132,8 @@ fn handlers_for(dotted_extension: &HSTRING) -> Vec<IAssocHandler> {
     };
     let mut handlers = Vec::new();
     loop {
-        let mut batch: [Option<IAssocHandler>; 8] = Default::default();
+        const HANDLER_BATCH_COUNT: usize = 8;
+        let mut batch: [Option<IAssocHandler>; HANDLER_BATCH_COUNT] = Default::default();
         let mut fetched = 0u32;
         if unsafe { enumerator.Next(&mut batch, Some(&raw mut fetched)) }.is_err() || fetched == 0 {
             break;

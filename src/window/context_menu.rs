@@ -333,9 +333,11 @@ impl<'a> MenuBuilder<'a> {
 
 /// Popup rows are taller than the menu bar row this metric names; the quarter is measured margin.
 fn menu_row_height(dpi: u32) -> i32 {
+    // Measured: popup rows run about a quarter taller than the menu bar's.
+    const POPUP_ROW_EXTRA_DIVISOR: i32 = 4;
     // Nonzero: the query fails only for an invalid index or DPI, and callers pass a real DPI.
     let bar_row = unsafe { GetSystemMetricsForDpi(SM_CYMENU, dpi) };
-    bar_row + bar_row / 4
+    bar_row + bar_row / POPUP_ROW_EXTRA_DIVISOR
 }
 
 /// The title bar and top frame of a normal window, which the menu leaves clear.

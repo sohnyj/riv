@@ -32,6 +32,15 @@ pub fn register(window: HWND) -> Result<IDropTarget> {
     Ok(target)
 }
 
+/// An accepted drag copies; anything else shows the no-drop cursor.
+fn drop_effect(accepts: bool) -> DROPEFFECT {
+    if accepts {
+        DROPEFFECT_COPY
+    } else {
+        DROPEFFECT_NONE
+    }
+}
+
 fn drop_format() -> FORMATETC {
     FORMATETC {
         cfFormat: CF_HDROP.0,
@@ -57,8 +66,9 @@ fn dropped_paths(data_object: Option<&IDataObject>) -> Vec<PathBuf> {
     let drop_handle = HDROP(unsafe { medium.u.hGlobal }.0);
     let count = unsafe { DragQueryFileW(drop_handle, 0xFFFF_FFFF, None) };
     let mut paths = Vec::new();
-    // One buffer for the whole drop; a long path can reach 32767 wide characters.
-    let mut buffer = vec![0u16; 32768];
+    // One buffer for the whole drop.
+    const PATH_BUFFER_UNITS: usize = 32767 + 1; // the longest path and its NUL
+    let mut buffer = vec![0u16; PATH_BUFFER_UNITS];
     for index in 0..count {
         let length = unsafe { DragQueryFileW(drop_handle, index, Some(buffer.as_mut_slice())) };
         if length > 0 {
@@ -79,12 +89,7 @@ impl IDropTarget_Impl for DropTarget_Impl {
     ) -> Result<()> {
         let accepts = has_paths(data_object.as_ref());
         self.accepts_current_drag.set(accepts);
-        let drop_effect = if accepts {
-            DROPEFFECT_COPY
-        } else {
-            DROPEFFECT_NONE
-        };
-        unsafe { *effect = drop_effect };
+        unsafe { *effect = drop_effect(accepts) };
         Ok(())
     }
 
@@ -94,12 +99,7 @@ impl IDropTarget_Impl for DropTarget_Impl {
         _point: &POINTL,
         effect: *mut DROPEFFECT,
     ) -> Result<()> {
-        let drop_effect = if self.accepts_current_drag.get() {
-            DROPEFFECT_COPY
-        } else {
-            DROPEFFECT_NONE
-        };
-        unsafe { *effect = drop_effect };
+        unsafe { *effect = drop_effect(self.accepts_current_drag.get()) };
         Ok(())
     }
 
@@ -115,15 +115,13 @@ impl IDropTarget_Impl for DropTarget_Impl {
         effect: *mut DROPEFFECT,
     ) -> Result<()> {
         let paths = dropped_paths(data_object.as_ref());
+        unsafe { *effect = drop_effect(!paths.is_empty()) };
         if !paths.is_empty() {
             crate::window::message::post_boxed(
                 self.window.0 as isize,
                 WM_APP_DROP_PATHS,
                 Box::new(paths),
             );
-            unsafe { *effect = DROPEFFECT_COPY };
-        } else {
-            unsafe { *effect = DROPEFFECT_NONE };
         }
         Ok(())
     }

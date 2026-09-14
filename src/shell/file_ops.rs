@@ -46,8 +46,7 @@ pub struct DeleteConfirmation {
 /// `details` carries the file facts, one per line, the first being the name.
 pub fn confirm_delete(window: HWND, details: &str, permanent: bool) -> DeleteConfirmation {
     let wording = delete_wording(permanent);
-    // The question goes in the content: a main instruction would enlarge and color it.
-    let content = format!("{}\n\n{details}", wording.question);
+    let content = crate::dialogs::message::body_text(wording.question, details);
     let verification = wording.ask_again.then_some(w!("Don't ask again"));
     let answer = ask_yes_no(window, wording.title, &content, verification);
     DeleteConfirmation {
@@ -89,11 +88,10 @@ struct YesNoAnswer {
 fn ask_yes_no(
     window: HWND,
     title: &str,
-    content: &str,
+    content: &HSTRING,
     verification: Option<PCWSTR>,
 ) -> YesNoAnswer {
     let title = HSTRING::from(title);
-    let content = HSTRING::from(content);
     let buttons = [
         TASKDIALOG_BUTTON {
             nButtonID: IDYES.0,
@@ -105,16 +103,9 @@ fn ask_yes_no(
         },
     ];
     let mut configuration = TASKDIALOGCONFIG {
-        cbSize: size_of::<TASKDIALOGCONFIG>() as u32,
-        hwndParent: window,
         dwFlags: TDF_ALLOW_DIALOG_CANCELLATION,
-        pszWindowTitle: PCWSTR(title.as_ptr()),
-        pszContent: PCWSTR(content.as_ptr()),
-        cButtons: buttons.len() as u32,
-        pButtons: buttons.as_ptr(),
         nDefaultButton: IDYES.0,
-        pfCallback: crate::dialogs::message::centering_callback(Some(window)),
-        ..Default::default()
+        ..crate::dialogs::message::configuration(Some(window), &title, content, &buttons)
     };
     if let Some(verification) = verification {
         configuration.pszVerificationText = verification;
