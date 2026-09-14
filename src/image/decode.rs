@@ -372,6 +372,21 @@ fn apng_frame_delay_milliseconds(delay_num: u16, delay_den: u16) -> u32 {
     (u32::from(delay_num) * 1000 / denominator).max(MINIMUM_APNG_DELAY_MILLISECONDS)
 }
 
+/// A frame region for the compositor tests; the blend and disposal are irrelevant to them.
+#[cfg(test)]
+fn test_region(pixels: &[u8], width: u32, height: u32, left: u32, top: u32) -> FrameRegion<'_> {
+    FrameRegion {
+        pixels,
+        left,
+        top,
+        width,
+        height,
+        blend: FrameBlend::Over,
+        disposal: FrameDisposal::Keep,
+        delay_milliseconds: 0,
+    }
+}
+
 #[cfg(test)]
 mod apng_delay_tests {
     use super::{MINIMUM_APNG_DELAY_MILLISECONDS, apng_frame_delay_milliseconds};
@@ -501,20 +516,10 @@ impl FrameCompositor {
     /// Composes the region, keeps the result as a frame, then applies the disposal.
     pub fn add_frame(&mut self, region: FrameRegion) {
         let restored = (region.disposal == FrameDisposal::Previous).then(|| self.canvas.clone());
-        let compose = match region.blend {
-            FrameBlend::Over => blend_over,
-            FrameBlend::Replace => copy_rectangle,
-        };
-        compose(
-            &mut self.canvas,
-            self.width,
-            self.height,
-            region.pixels,
-            region.width,
-            region.height,
-            region.left,
-            region.top,
-        );
+        match region.blend {
+            FrameBlend::Over => self.blend_over(&region),
+            FrameBlend::Replace => self.copy_rectangle(&region),
+        }
         // Restoring swaps the snapshot back in, so the composed canvas moves into the frame.
         let pixels = match restored {
             Some(previous) => std::mem::replace(&mut self.canvas, previous),
@@ -2567,47 +2572,42 @@ fn visible_rectangle(
     (visible_width > 0 && visible_height > 0).then_some((visible_width, visible_height))
 }
 
-/// Premultiplied source-over blend, clipped to the canvas.
-#[expect(clippy::too_many_arguments)]
-fn blend_over(
-    canvas: &mut [u8],
-    canvas_width: u32,
-    canvas_height: u32,
-    source: &[u8],
-    source_width: u32,
-    source_height: u32,
-    left: u32,
-    top: u32,
-) {
-    let Some((visible_width, visible_height)) = visible_rectangle(
-        canvas_width,
-        canvas_height,
-        source_width,
-        source_height,
-        left,
-        top,
-    ) else {
-        return;
-    };
-    for row in 0..visible_height {
-        let source_start = row * source_width as usize * BGRA8_PIXEL_BYTES;
-        let canvas_start =
-            ((top as usize + row) * canvas_width as usize + left as usize) * BGRA8_PIXEL_BYTES;
-        let source_row = &source[source_start..source_start + visible_width * BGRA8_PIXEL_BYTES];
-        let canvas_row =
-            &mut canvas[canvas_start..canvas_start + visible_width * BGRA8_PIXEL_BYTES];
-        // Branch-free over-composite; premultiplied sources make the alpha 0/255 shortcuts redundant.
-        for (canvas_pixel, source_pixel) in canvas_row
-            .as_chunks_mut::<BGRA8_PIXEL_BYTES>()
-            .0
-            .iter_mut()
-            .zip(source_row.as_chunks::<BGRA8_PIXEL_BYTES>().0)
-        {
-            let inverse_alpha = 255 - u32::from(source_pixel[3]);
-            for (canvas_channel, source_channel) in canvas_pixel.iter_mut().zip(source_pixel) {
-                let blended = u32::from(*source_channel)
-                    + (u32::from(*canvas_channel) * inverse_alpha + 127) / 255;
-                *canvas_channel = blended.min(255) as u8;
+impl FrameCompositor {
+    /// Premultiplied source-over blend of the region, clipped to the canvas.
+    fn blend_over(&mut self, region: &FrameRegion) {
+        let Some((visible_width, visible_height)) = visible_rectangle(
+            self.width,
+            self.height,
+            region.width,
+            region.height,
+            region.left,
+            region.top,
+        ) else {
+            return;
+        };
+        let (source, source_width) = (region.pixels, region.width as usize);
+        let (canvas, canvas_width) = (&mut self.canvas, self.width as usize);
+        let (left, top) = (region.left as usize, region.top as usize);
+        for row in 0..visible_height {
+            let source_start = row * source_width * BGRA8_PIXEL_BYTES;
+            let canvas_start = ((top + row) * canvas_width + left) * BGRA8_PIXEL_BYTES;
+            let source_row =
+                &source[source_start..source_start + visible_width * BGRA8_PIXEL_BYTES];
+            let canvas_row =
+                &mut canvas[canvas_start..canvas_start + visible_width * BGRA8_PIXEL_BYTES];
+            // Branch-free over-composite; premultiplied sources make the alpha 0/255 shortcuts redundant.
+            for (canvas_pixel, source_pixel) in canvas_row
+                .as_chunks_mut::<BGRA8_PIXEL_BYTES>()
+                .0
+                .iter_mut()
+                .zip(source_row.as_chunks::<BGRA8_PIXEL_BYTES>().0)
+            {
+                let inverse_alpha = 255 - u32::from(source_pixel[3]);
+                for (canvas_channel, source_channel) in canvas_pixel.iter_mut().zip(source_pixel) {
+                    let blended = u32::from(*source_channel)
+                        + (u32::from(*canvas_channel) * inverse_alpha + 127) / 255;
+                    *canvas_channel = blended.min(255) as u8;
+                }
             }
         }
     }
@@ -3010,34 +3010,29 @@ fn pixels_to_premultiplied_bgra_into(
     Ok(())
 }
 
-#[expect(clippy::too_many_arguments)]
-fn copy_rectangle(
-    canvas: &mut [u8],
-    canvas_width: u32,
-    canvas_height: u32,
-    source: &[u8],
-    source_width: u32,
-    source_height: u32,
-    left: u32,
-    top: u32,
-) {
-    let Some((visible_width, visible_height)) = visible_rectangle(
-        canvas_width,
-        canvas_height,
-        source_width,
-        source_height,
-        left,
-        top,
-    ) else {
-        return;
-    };
-    let bytes_per_pixel = PixelStorage::Bgra8.bytes_per_pixel() as usize;
-    for row in 0..visible_height {
-        let source_start = row * source_width as usize * bytes_per_pixel;
-        let canvas_start =
-            ((top as usize + row) * canvas_width as usize + left as usize) * bytes_per_pixel;
-        canvas[canvas_start..canvas_start + visible_width * bytes_per_pixel]
-            .copy_from_slice(&source[source_start..source_start + visible_width * bytes_per_pixel]);
+impl FrameCompositor {
+    /// Copies the region over the canvas, clipped to it.
+    fn copy_rectangle(&mut self, region: &FrameRegion) {
+        let Some((visible_width, visible_height)) = visible_rectangle(
+            self.width,
+            self.height,
+            region.width,
+            region.height,
+            region.left,
+            region.top,
+        ) else {
+            return;
+        };
+        let (source_width, canvas_width) = (region.width as usize, self.width as usize);
+        let (left, top) = (region.left as usize, region.top as usize);
+        for row in 0..visible_height {
+            let source_start = row * source_width * BGRA8_PIXEL_BYTES;
+            let canvas_start = ((top + row) * canvas_width + left) * BGRA8_PIXEL_BYTES;
+            self.canvas[canvas_start..canvas_start + visible_width * BGRA8_PIXEL_BYTES]
+                .copy_from_slice(
+                    &region.pixels[source_start..source_start + visible_width * BGRA8_PIXEL_BYTES],
+                );
+        }
     }
 }
 
@@ -3273,12 +3268,15 @@ mod compositor_tests {
     #[test]
     fn frames_placed_past_the_canvas_edge_are_clipped_without_panicking() {
         // left past the width with a bottom row still visible used to index past the end.
-        let mut canvas = vec![0u8; 10 * 10 * 4];
+        let mut compositor = FrameCompositor::new(10, 10).expect("a small canvas");
         let source = vec![255u8; 4];
-        blend_over(&mut canvas, 10, 10, &source, 1, 1, 15, 9);
-        copy_rectangle(&mut canvas, 10, 10, &source, 1, 1, 15, 9);
-        clear_rectangle(&mut canvas, 10, 10, 15, 9, 1, 1);
-        assert!(canvas.iter().all(|&byte| byte == 0), "nothing is visible");
+        compositor.blend_over(&test_region(&source, 1, 1, 15, 9));
+        compositor.copy_rectangle(&test_region(&source, 1, 1, 15, 9));
+        clear_rectangle(&mut compositor.canvas, 10, 10, 15, 9, 1, 1);
+        assert!(
+            compositor.canvas.iter().all(|&byte| byte == 0),
+            "nothing is visible"
+        );
     }
 
     /// One opaque pixel of the given blue, in the premultiplied BGRA the compositor takes.
@@ -3911,18 +3909,20 @@ mod compositing_tests {
     #[test]
     fn blend_over_matches_the_scalar_reference() {
         let source = premultiplied_pixels(64 * 64, 7);
-        let mut canvas = premultiplied_pixels(64 * 64, 1234);
-        let mut expected = canvas.clone();
+        let mut compositor = FrameCompositor::new(64, 64).expect("a small canvas");
+        compositor.canvas = premultiplied_pixels(64 * 64, 1234);
+        let mut expected = compositor.canvas.clone();
         blend_over_reference(&mut expected, &source);
-        blend_over(&mut canvas, 64, 64, &source, 64, 64, 0, 0);
-        assert_eq!(canvas, expected);
+        compositor.blend_over(&test_region(&source, 64, 64, 0, 0));
+        assert_eq!(compositor.canvas, expected);
     }
 
     #[test]
     fn blend_over_clips_an_offset_frame_to_the_canvas() {
         let source = premultiplied_pixels(8 * 8, 42);
-        let mut canvas = premultiplied_pixels(16 * 16, 9);
-        let mut expected = canvas.clone();
+        let mut compositor = FrameCompositor::new(16, 16).expect("a small canvas");
+        compositor.canvas = premultiplied_pixels(16 * 16, 9);
+        let mut expected = compositor.canvas.clone();
         // Rows 0..4 of the visible 4x4 window, blended one pixel at a time.
         for row in 0..4usize {
             for column in 0..4usize {
@@ -3934,8 +3934,8 @@ mod compositing_tests {
                 );
             }
         }
-        blend_over(&mut canvas, 16, 16, &source, 8, 8, 12, 12);
-        assert_eq!(canvas, expected);
+        compositor.blend_over(&test_region(&source, 8, 8, 12, 12));
+        assert_eq!(compositor.canvas, expected);
     }
 
     #[test]
@@ -3944,11 +3944,12 @@ mod compositing_tests {
         const WIDTH: u32 = 1920;
         const HEIGHT: u32 = 1080;
         let source = premultiplied_pixels((WIDTH * HEIGHT) as usize, 99);
-        let mut canvas = premultiplied_pixels((WIDTH * HEIGHT) as usize, 5);
+        let mut compositor = FrameCompositor::new(WIDTH, HEIGHT).expect("a full HD canvas");
+        compositor.canvas = premultiplied_pixels((WIDTH * HEIGHT) as usize, 5);
         for _ in 0..3 {
             let start = std::time::Instant::now();
             for _ in 0..50 {
-                blend_over(&mut canvas, WIDTH, HEIGHT, &source, WIDTH, HEIGHT, 0, 0);
+                compositor.blend_over(&test_region(&source, WIDTH, HEIGHT, 0, 0));
             }
             println!("blend_over 50 frames elapsed={:?}", start.elapsed());
         }
