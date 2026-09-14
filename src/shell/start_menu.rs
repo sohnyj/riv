@@ -32,9 +32,7 @@ pub fn create_shortcut() {
         let link: IShellLinkW = CoCreateInstance(&ShellLink, None, CLSCTX_INPROC_SERVER)?;
         link.SetPath(&HSTRING::from(executable.as_path()))?;
         link.SetDescription(&HSTRING::from(crate::APPLICATION_DESCRIPTION))?;
-        if let Some(directory) = executable.parent() {
-            link.SetWorkingDirectory(&HSTRING::from(directory))?;
-        }
+        link.SetWorkingDirectory(&HSTRING::from(crate::executable_directory().as_path()))?;
         let persist: IPersistFile = link.cast()?;
         persist.Save(&HSTRING::from(path.as_path()), true)
     })();

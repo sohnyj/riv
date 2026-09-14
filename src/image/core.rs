@@ -1167,9 +1167,7 @@ impl ImageCore {
         let pixels = read_back(uploaded, &current.image).ok()?;
         // without_pixels here just clones the metadata; the image is already slim.
         let mut restored = current.image.without_pixels();
-        if let Some(frame) = restored.frames.first_mut() {
-            frame.pixels = pixels;
-        }
+        restored.frames[0].pixels = pixels;
         let restored = Arc::new(restored);
         current.image = restored.clone();
         current.texture = None;
@@ -1760,9 +1758,11 @@ impl ImageCore {
             if total <= plan.budget {
                 break;
             }
-            if let Some(entry) = self.cache.remove(&location) {
-                self.releaser.release(entry.image);
-            }
+            let entry = self
+                .cache
+                .remove(&location)
+                .expect("ranked from this cache's own keys");
+            self.releaser.release(entry.image);
             total -= cost;
         }
     }
@@ -2125,8 +2125,10 @@ impl DecodePool {
         if let Some(position) = queue
             .iter()
             .position(|job| job.kind != JobKind::Probe && job.location == *location)
-            && let Some(mut job) = queue.remove(position)
         {
+            let mut job = queue
+                .remove(position)
+                .expect("the position was found in this queue");
             job.speculative = false; // the pending item waits on it now
             queue.push_front(job);
         }

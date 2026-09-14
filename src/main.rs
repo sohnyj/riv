@@ -104,6 +104,14 @@ pub fn executable_path() -> PathBuf {
     std::env::current_exe().expect("the running module always has a path")
 }
 
+/// The executable's folder: the settings file and the Start Menu shortcut's working directory.
+pub fn executable_directory() -> PathBuf {
+    executable_path()
+        .parent()
+        .expect("the executable path always names a directory")
+        .to_path_buf()
+}
+
 /// The title-bar text setting: what `update_window_title` composes for the caption.
 #[derive(Clone, Copy)]
 pub enum TitleBarText {
@@ -819,12 +827,10 @@ impl Application {
 
     /// A replacement of another pixel width (preview to full) keeps the size on screen.
     fn keep_on_screen_size(&mut self, image_width: u32) {
-        let previous_width = self
-            .displayed_image
-            .as_ref()
-            .map_or(0, |previous| previous.width);
-        if previous_width > 0 && image_width > 0 && previous_width != image_width {
-            self.view_transform.scale *= previous_width as f32 / image_width as f32;
+        if let Some(previous) = &self.displayed_image
+            && previous.width != image_width
+        {
+            self.view_transform.scale *= previous.width as f32 / image_width as f32;
         }
     }
 
@@ -1230,9 +1236,10 @@ impl Application {
 
     /// Reapplies the application-held state after a renderer rebuild or reconfigure.
     fn apply_renderer_state(&mut self) -> Result<()> {
-        let Some(renderer) = &mut self.renderer else {
-            return Ok(());
-        };
+        let renderer = self
+            .renderer
+            .as_mut()
+            .expect("every caller has just built or reconfigured the renderer");
         renderer.set_sdr_white_boost(self.sdr_white_boost)?;
         renderer.set_display_headroom(self.display_headroom);
         renderer.set_dither_setting(DitherMode::from_setting(self.settings.options.dither_mode));
@@ -1395,9 +1402,6 @@ impl Application {
         let Some(decision) = decision else {
             return;
         };
-        if self.renderer.is_none() {
-            return;
-        }
         let inputs = FrameInputs {
             matrix,
             interpolation,

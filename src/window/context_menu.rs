@@ -417,9 +417,7 @@ pub fn show(
     // Destroying the menu takes its submenus with it.
     let _ = unsafe { DestroyMenu(menu) };
     let identifier = selected.0 as usize;
-    (identifier > 0)
-        .then(|| builder.entries.get(identifier - 1).copied())
-        .flatten()
+    (identifier > 0).then(|| builder.entries[identifier - 1])
 }
 
 #[cfg(test)]

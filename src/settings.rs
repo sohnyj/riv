@@ -578,10 +578,7 @@ fn merge_recent_files(
 }
 
 fn settings_path() -> PathBuf {
-    crate::executable_path()
-        .parent()
-        .expect("the executable path always names a directory")
-        .join("riv.json")
+    crate::executable_directory().join("riv.json")
 }
 
 fn write_options(document: &mut Value, options: &Options) {

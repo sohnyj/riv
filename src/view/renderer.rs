@@ -728,7 +728,7 @@ impl Renderer {
     }
 
     /// Linear light in the given primaries; D65, which every gamut riv can state uses.
-    fn create_linear_color_context(&self, primaries: [[f32; 2]; 3]) -> Option<ID2D1ColorContext> {
+    fn create_linear_color_context(&self, primaries: [[f32; 2]; 3]) -> Result<ID2D1ColorContext> {
         // D65 tristimulus normalized to Y = 1, the form whitePointXZ takes.
         const D65_WHITE_POINT_XZ: Vector2 = Vector2 {
             X: 0.9505,
@@ -742,14 +742,8 @@ impl Renderer {
             whitePointXZ: D65_WHITE_POINT_XZ,
             gamma: D2D1_GAMMA1_G10,
         };
-        unsafe {
-            self.d2d_context
-                .cast::<ID2D1DeviceContext5>()
-                .ok()?
-                .CreateColorContextFromSimpleColorProfile(&raw const profile)
-        }
-        .ok()
-        .map(Into::into)
+        let context: ID2D1DeviceContext5 = self.d2d_context.cast()?;
+        Ok(unsafe { context.CreateColorContextFromSimpleColorProfile(&raw const profile) }?.into())
     }
 
     /// Whether this source profile, or untagged sRGB, is already the SDR destination space.
@@ -859,10 +853,9 @@ impl Renderer {
         if quantizing {
             self.create_scene_target()
         } else {
-            if let Some(target) = &first_target {
-                unsafe { self.d2d_context.SetTarget(target) };
-            }
-            self.target = first_target;
+            let target = first_target.expect("the ring holds at least one buffer");
+            unsafe { self.d2d_context.SetTarget(&target) };
+            self.target = Some(target);
             Ok(())
         }
     }
@@ -1145,7 +1138,7 @@ impl Renderer {
             self.d3d_device
                 .CreateTexture2D(&raw const description, None, Some(&raw mut staging))?
         };
-        let staging = staging.ok_or_else(windows::core::Error::empty)?;
+        let staging = staging.expect("CreateTexture2D succeeded without texture");
         let pitch = image.row_pitch() as usize;
         let mut pixels =
             try_zeroed_buffer(image.frame_byte_length()).ok_or_else(windows::core::Error::empty)?;
@@ -1243,7 +1236,7 @@ impl Renderer {
             )
             .clone()
         };
-        let source_context = self.resolve_source_context(storage, source_primaries, icc_profile);
+        let source_context = self.resolve_source_context(storage, source_primaries, icc_profile)?;
         let color_management = &self.mode_effects.color_management;
         wire_color_management(color_management, &source_context, &destination_context)?;
         unsafe { color_management.SetInput(0, bitmap, true) };
@@ -1270,7 +1263,7 @@ impl Renderer {
         storage: PixelStorage,
         source_primaries: Option<[[f32; 2]; 3]>,
         icc_profile: Option<&Arc<[u8]>>,
-    ) -> ID2D1ColorContext {
+    ) -> Result<ID2D1ColorContext> {
         let icc_bytes = icc_profile.map(|profile| &**profile);
         // FP16 pixels are linear light in the stated primaries; scRGB covers unknown ones.
         match storage {
@@ -1279,13 +1272,13 @@ impl Renderer {
                 if let Some(primaries) = source_primaries
                     && self.linear_source_primaries != Some(primaries)
                 {
-                    self.linear_source_context = self.create_linear_color_context(primaries);
+                    self.linear_source_context = Some(self.create_linear_color_context(primaries)?);
                     self.linear_source_primaries = Some(primaries);
                 }
-                source_primaries
+                Ok(source_primaries
                     .and(self.linear_source_context.as_ref())
                     .unwrap_or(&self.scrgb_color_context)
-                    .clone()
+                    .clone())
             }
             PixelStorage::Bgra8 => {
                 if self.source_icc_profile.as_deref() != icc_bytes {
@@ -1294,7 +1287,8 @@ impl Renderer {
                 }
                 let d2d_context = &self.d2d_context;
                 let srgb_color_context = &self.srgb_color_context;
-                self.source_color_context
+                let context = self
+                    .source_color_context
                     .get_or_insert_with(|| {
                         // A profile D2D rejects reads as untagged: sRGB.
                         icc_bytes
@@ -1309,7 +1303,8 @@ impl Renderer {
                             })
                             .unwrap_or_else(|| srgb_color_context.clone())
                     })
-                    .clone()
+                    .clone();
+                Ok(context)
             }
         }
     }
@@ -1441,8 +1436,7 @@ impl Renderer {
         &self,
         draw_interpolation: D2D1_INTERPOLATION_MODE,
     ) -> (Option<u32>, DitherMode) {
-        let backbuffer_bits = Self::backbuffer_bits_for(self.backbuffer_format)
-            .filter(|_| self.quantize_pass.is_some());
+        let backbuffer_bits = Self::backbuffer_bits_for(self.backbuffer_format);
         let quantization_steps = backbuffer_bits.map(|bits| (1 << bits) - 1);
         let dither = match backbuffer_bits {
             Some(bits) if self.image.is_some() => self.active_dither_mode(draw_interpolation, bits),

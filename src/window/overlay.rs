@@ -224,7 +224,6 @@ impl Overlay {
     }
 
     pub fn set_scale(&mut self, scale: f32) {
-        let scale = scale.max(0.5);
         if (scale - self.scale).abs() < f32::EPSILON {
             return;
         }
