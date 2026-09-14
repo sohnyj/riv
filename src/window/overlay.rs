@@ -530,20 +530,33 @@ fn create_text_formats(
     Ok((text_format, centered_format, wordmark_format))
 }
 
-#[expect(clippy::too_many_arguments)]
+/// How the current image is being presented: the renderer's and display's side of the panel.
+pub struct PresentationDescription<'text> {
+    pub output_label: &'text str,
+    pub scaling_description: &'text str,
+    pub dither_description: &'text str,
+    pub tone_map: Option<ToneMapLuminances>,
+    pub ultra_hdr_applied: bool,
+    pub color_mode: &'text str,
+    pub display_description: &'text str,
+}
+
 pub fn build_information_text(
     file_name: &str,
     location_text: &str,
     image: &DecodedImage,
     metadata: ItemMetadata,
-    output_label: &str,
-    scaling_description: &str,
-    dither_description: &str,
-    tone_map: Option<ToneMapLuminances>,
-    ultra_hdr_applied: bool,
-    color_mode: &str,
-    display_description: &str,
+    presentation: &PresentationDescription,
 ) -> String {
+    let PresentationDescription {
+        output_label,
+        scaling_description,
+        dither_description,
+        tone_map,
+        ultra_hdr_applied,
+        color_mode,
+        display_description,
+    } = *presentation;
     let color_profile = match &image.icc_profile {
         Some(icc_profile) => crate::image::icc::profile_description(icc_profile)
             .unwrap_or_else(|| "Embedded".to_string()),
@@ -1088,6 +1101,22 @@ mod information_text_tests {
         }
     }
 
+    /// An SDR sRGB display with bilinear scaling and no dither, the panel's common case.
+    fn sdr_presentation(
+        output_label: &str,
+        tone_map: Option<ToneMapLuminances>,
+    ) -> PresentationDescription<'_> {
+        PresentationDescription {
+            output_label,
+            scaling_description: "Bilinear",
+            dither_description: "None",
+            tone_map,
+            ultra_hdr_applied: false,
+            color_mode: "SDR",
+            display_description: "sRGB",
+        }
+    }
+
     #[test]
     fn bit_depth_always_appears() {
         let image = image("PNG", PixelStorage::Bgra8, 8);
@@ -1099,13 +1128,7 @@ mod information_text_tests {
                 file_size: 100,
                 ..ItemMetadata::default()
             },
-            "8-bit sRGB",
-            "Bilinear",
-            "None",
-            None,
-            false,
-            "SDR",
-            "sRGB",
+            &sdr_presentation("8-bit sRGB", None),
         );
         assert!(text.contains("Bit depth: 8-bit"));
     }
@@ -1121,13 +1144,7 @@ mod information_text_tests {
                 file_size: 100,
                 ..ItemMetadata::default()
             },
-            "8-bit sRGB",
-            "Bilinear",
-            "None",
-            None,
-            false,
-            "SDR",
-            "sRGB",
+            &sdr_presentation("8-bit sRGB", None),
         );
         assert!(untagged.contains("Color profile: None"));
         image.icc_profile = Some(Arc::from(&[0u8; 4][..]));
@@ -1139,13 +1156,7 @@ mod information_text_tests {
                 file_size: 100,
                 ..ItemMetadata::default()
             },
-            "8-bit sRGB",
-            "Bilinear",
-            "None",
-            None,
-            false,
-            "SDR",
-            "sRGB",
+            &sdr_presentation("8-bit sRGB", None),
         );
         assert!(unparsable.contains("Color profile: Embedded"));
     }
@@ -1170,13 +1181,7 @@ mod information_text_tests {
                 file_size: 100,
                 ..ItemMetadata::default()
             },
-            "HDR10",
-            "Bilinear",
-            "None",
-            Some(tone_map),
-            false,
-            "SDR",
-            "sRGB",
+            &sdr_presentation("HDR10", Some(tone_map)),
         );
         assert!(text.contains("Content peak: 1000 nits"), "{text}");
         assert!(text.contains("Display peak: 600 nits"));
@@ -1205,13 +1210,7 @@ mod information_text_tests {
                 file_size: 100,
                 ..ItemMetadata::default()
             },
-            "HDR10",
-            "Bilinear",
-            "None",
-            Some(tone_map),
-            false,
-            "SDR",
-            "sRGB",
+            &sdr_presentation("HDR10", Some(tone_map)),
         );
         assert!(!text.contains("Display peak"), "{text}");
         assert!(text.contains("Display full: 400 nits"), "{text}");
@@ -1237,13 +1236,7 @@ mod information_text_tests {
                 file_size: 100,
                 ..ItemMetadata::default()
             },
-            "8-bit sRGB",
-            "Bilinear",
-            "None",
-            Some(tone_map),
-            false,
-            "SDR",
-            "sRGB",
+            &sdr_presentation("8-bit sRGB", Some(tone_map)),
         );
         // SDR display: tone-map target shown, HDR-only caps hidden.
         assert!(text.contains("Tone map: 203 nits"), "{text}");

@@ -1344,13 +1344,15 @@ impl Application {
                 &current.location.display_text(),
                 &current.image,
                 metadata,
-                output_label,
-                scaling_description,
-                dither_description,
-                tone_map,
-                ultra_hdr_applied,
-                self.display_labels.color_mode,
-                &display_description,
+                &overlay::PresentationDescription {
+                    output_label,
+                    scaling_description,
+                    dither_description,
+                    tone_map,
+                    ultra_hdr_applied,
+                    color_mode: self.display_labels.color_mode,
+                    display_description: &display_description,
+                },
             );
             let location = current.location.clone();
             self.information_text_cache = Some(InformationTextCache {
