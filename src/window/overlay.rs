@@ -227,6 +227,7 @@ impl Overlay {
         if (scale - self.scale).abs() < f32::EPSILON {
             return;
         }
+        // A failed reshape keeps the previous DPI's formats; the next DPI change tries again.
         if let Ok((text_format, centered_format, wordmark_format)) =
             create_text_formats(&self.dwrite_factory, scale)
         {

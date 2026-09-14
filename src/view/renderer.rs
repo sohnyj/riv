@@ -585,6 +585,7 @@ impl Renderer {
             context: d3d_context,
         } = device;
         let dxgi_device: IDXGIDevice = d3d_device.cast()?;
+        // An adapter that will not describe itself gets the floor; larger frames upload from the CPU.
         let upload_maximum_frame_bytes = maximum_resource_bytes(
             unsafe { dxgi_device.GetAdapter() }
                 .and_then(|adapter| unsafe { adapter.GetDesc() })

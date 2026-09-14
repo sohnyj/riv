@@ -43,7 +43,7 @@ const WM_RIV_KEYBOARD_REMOVE: u32 = WM_APP + 0x42;
 
 const REMOVE_ICON_RED: COLORREF = COLORREF(0x001C_2BC4); // BGR of #C42B1C
 
-/// Unbound-field placeholder; the field procedure's paint branch recovers it by string comparison.
+/// Drawn in place of an unbound field's empty text; never stored in the field.
 const NO_BINDING_TEXT: &str = "None";
 
 /// WM_RIV_MOUSE_CAPTURED wparam layout: modifiers above this shift, the base index below.
@@ -281,7 +281,7 @@ unsafe extern "system" fn mouse_procedure(
 fn set_mouse_field_text(dialog: HWND, binding: Option<&str>) {
     let field = unsafe { GetDlgItem(Some(dialog), IDC_CAPTURE_MOUSE_FIELD) }
         .expect("the mouse capture template carries the field");
-    let _ = unsafe { SetWindowTextW(field, &HSTRING::from(binding.unwrap_or(NO_BINDING_TEXT))) };
+    let _ = unsafe { SetWindowTextW(field, &HSTRING::from(binding.unwrap_or(""))) };
     let _ = unsafe { InvalidateRect(Some(field), None, false) };
 }
 
@@ -689,16 +689,8 @@ unsafe extern "system" fn mouse_field_procedure(
         }
         WM_PAINT => {
             let current = window_text(field);
-            let hint = current.is_empty() || current == NO_BINDING_TEXT;
-            paint_field(
-                field,
-                if current.is_empty() {
-                    NO_BINDING_TEXT
-                } else {
-                    &current
-                },
-                hint,
-            );
+            let hint = current.is_empty();
+            paint_field(field, if hint { NO_BINDING_TEXT } else { &current }, hint);
             LRESULT(0)
         }
         _ => unsafe { DefWindowProcW(field, message, wparam, lparam) },

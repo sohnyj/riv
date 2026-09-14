@@ -10,7 +10,6 @@ use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 use windows::Win32::Foundation::HWND;
 use windows::Win32::Storage::FileSystem::FILE_ATTRIBUTE_HIDDEN;
-use windows::Win32::System::Com::{COINIT_MULTITHREADED, CoInitializeEx};
 use windows::Win32::UI::WindowsAndMessaging::WM_APP;
 use windows::core::HSTRING;
 
@@ -2169,9 +2168,7 @@ impl From<curl::NetworkError> for DecodeError {
 }
 
 fn worker_loop(shared: &PoolShared, window: isize) {
-    unsafe { CoInitializeEx(None, COINIT_MULTITHREADED) }
-        .ok()
-        .expect("CoInitializeEx MTA failed");
+    crate::initialize_multithreaded_com();
     loop {
         let job = next_job(shared);
         if job.kind == JobKind::Probe {

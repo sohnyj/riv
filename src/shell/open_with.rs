@@ -3,7 +3,7 @@
 use std::path::Path;
 
 use windows::Win32::Foundation::HWND;
-use windows::Win32::System::Com::{COINIT_MULTITHREADED, CoInitializeEx, IDataObject};
+use windows::Win32::System::Com::IDataObject;
 use windows::Win32::UI::Shell::{
     ASSOC_FILTER_RECOMMENDED, ASSOCF_INIT_IGNOREUNKNOWN, ASSOCSTR_EXECUTABLE, AssocQueryStringW,
     BHID_DataObject, IAssocHandler, IShellItem, OAIF_ALLOW_REGISTRATION, OAIF_EXEC, OPENASINFO,
@@ -28,12 +28,10 @@ pub struct OpenWithList {
 pub fn enumerate_in_background(window: HWND, extension: String) {
     let window_handle = window.0 as isize;
     std::thread::spawn(move || {
-        let initialized = unsafe { CoInitializeEx(None, COINIT_MULTITHREADED) }.is_ok();
+        crate::initialize_multithreaded_com();
         let list = Box::new(enumerate(extension));
         crate::window::message::post_boxed(window_handle, WM_APP_OPEN_WITH_LIST, list);
-        if initialized {
-            unsafe { windows::Win32::System::Com::CoUninitialize() };
-        }
+        unsafe { windows::Win32::System::Com::CoUninitialize() };
     });
 }
 

@@ -54,6 +54,7 @@ use windows::Win32::Graphics::Gdi::{
     HBRUSH, HMONITOR, InvalidateRect, MONITOR_DEFAULTTONEAREST, MonitorFromWindow, SC_SCREENSAVE,
     ScreenToClient, ValidateRect,
 };
+use windows::Win32::System::Com::{COINIT_MULTITHREADED, CoInitializeEx};
 use windows::Win32::System::LibraryLoader::GetModuleHandleW;
 use windows::Win32::System::Ole::{IDropTarget, OleInitialize, RevokeDragDrop};
 use windows::Win32::System::Power::{
@@ -102,6 +103,13 @@ const APPLICATION_DESCRIPTION: &str = env!("CARGO_PKG_DESCRIPTION");
 /// The running executable: settings live beside it, and the shell registers and spawns it.
 pub fn executable_path() -> PathBuf {
     std::env::current_exe().expect("the running module always has a path")
+}
+
+/// Every worker thread that touches COM enters the multithreaded apartment first.
+pub fn initialize_multithreaded_com() {
+    unsafe { CoInitializeEx(None, COINIT_MULTITHREADED) }
+        .ok()
+        .expect("a new thread enters the multithreaded apartment");
 }
 
 /// The executable's folder: the settings file and the Start Menu shortcut's working directory.
@@ -2789,7 +2797,8 @@ fn configure_gestures(window: HWND) {
 fn prepare_first_show(window: HWND) {
     if let Some(application) = application_from_window(window) {
         application.refresh_title_bar_theme(window);
-        application.drop_target = drag_drop::register(window).ok();
+        application.drop_target =
+            Some(drag_drop::register(window).expect("an existing window after OleInitialize registers"));
         application.update_window_title(window);
         application.render(window);
         // Presented before the first show, so the class brush never flashes.
@@ -2845,9 +2854,8 @@ fn process_is_elevated() -> bool {
     use windows::Win32::System::Threading::{GetCurrentProcess, OpenProcessToken};
 
     let mut token = windows::Win32::Foundation::HANDLE::default();
-    if unsafe { OpenProcessToken(GetCurrentProcess(), TOKEN_QUERY, &raw mut token) }.is_err() {
-        return false;
-    }
+    unsafe { OpenProcessToken(GetCurrentProcess(), TOKEN_QUERY, &raw mut token) }
+        .expect("a process opens its own token for query");
     let mut elevation_type = TOKEN_ELEVATION_TYPE::default();
     let mut returned = 0u32;
     let elevated = unsafe {
