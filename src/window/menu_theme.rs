@@ -5,7 +5,7 @@ use windows::Win32::System::LibraryLoader::{
 };
 use windows::core::{PCSTR, w};
 
-type SetPreferredAppMode = unsafe extern "system" fn(i32) -> i32;
+type SetPreferredAppModeFunction = unsafe extern "system" fn(i32) -> i32;
 
 /// AllowDark follows the system app theme, matching the title bar.
 const PREFERRED_APP_MODE_ALLOW_DARK: i32 = 1;
@@ -24,6 +24,7 @@ pub fn enable_dark_menus() {
     else {
         return;
     };
-    let set_preferred_app_mode: SetPreferredAppMode = unsafe { std::mem::transmute(address) };
+    let set_preferred_app_mode: SetPreferredAppModeFunction =
+        unsafe { std::mem::transmute(address) };
     unsafe { set_preferred_app_mode(PREFERRED_APP_MODE_ALLOW_DARK) };
 }

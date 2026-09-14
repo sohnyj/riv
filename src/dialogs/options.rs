@@ -544,8 +544,8 @@ fn fit_page_controls(page: HWND, stretched_control: i32, right_following_control
     let mut client = RECT::default();
     unsafe { MapDialogRect(page, &raw mut template) }.expect("a dialog page maps its units");
     unsafe { GetClientRect(page, &raw mut client) }.expect("an existing page has a client area");
-    let widen = client.right - template.right;
-    let heighten = client.bottom - template.bottom;
+    let client_extra_width = client.right - template.right;
+    let client_extra_height = client.bottom - template.bottom;
     let place = |control: i32, offset_x: i32, extra_width: i32, extra_height: i32| {
         let Ok(handle) = (unsafe { GetDlgItem(Some(page), control) }) else {
             return;
@@ -563,8 +563,13 @@ fn fit_page_controls(page: HWND, stretched_control: i32, right_following_control
             )
         };
     };
-    place(stretched_control, 0, widen, heighten);
-    place(right_following_control, widen, 0, 0);
+    place(
+        stretched_control,
+        0,
+        client_extra_width,
+        client_extra_height,
+    );
+    place(right_following_control, client_extra_width, 0, 0);
 }
 
 fn update_buttons(state: &OptionsState) {

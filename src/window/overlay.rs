@@ -595,17 +595,17 @@ pub fn build_information_text(
         .gain_map
         .filter(|_| ultra_hdr_applied)
         .map(|gain_map| gain_map.capacity_peak_nits());
-    if let Some(peak) = image.peak_luminance_nits.or(gain_peak) {
-        metrics.push(format!("Content peak: {peak:.0} nits"));
+    if let Some(content_peak) = image.peak_luminance_nits.or(gain_peak) {
+        metrics.push(format!("Content peak: {content_peak:.0} nits"));
         if let Some(tone_map) = tone_map {
             if tone_map.hdr_display {
-                if let Some(peak) = tone_map.display_peak_nits {
-                    metrics.push(format!("Display peak: {peak:.0} nits"));
+                if let Some(display_peak) = tone_map.display_peak_nits {
+                    metrics.push(format!("Display peak: {display_peak:.0} nits"));
                 }
                 if let Some(full_frame) = tone_map.display_full_frame_nits {
                     metrics.push(format!("Display full: {full_frame:.0} nits"));
                 }
-            } else if peak > color::SDR_REFERENCE_WHITE_NITS {
+            } else if content_peak > color::SDR_REFERENCE_WHITE_NITS {
                 metrics.push(format!("Tone map: {:.0} nits", tone_map.output_target_nits));
             }
         }
@@ -645,8 +645,8 @@ fn append_exif_lines(lines: &mut Vec<String>, exif: &crate::image::decode::ExifM
     if let Some(model) = &exif.camera_model {
         lines.push(format!("Camera model: {model}"));
     }
-    if let Some(focal) = exif.focal_length_millimeters {
-        lines.push(format!("Focal length: {}mm", trim_number(focal, 1)));
+    if let Some(focal_length) = exif.focal_length_millimeters {
+        lines.push(format!("Focal length: {}mm", trim_number(focal_length, 1)));
     }
     if let Some(f_stop) = exif.f_stop {
         lines.push(format!("Aperture: f/{}", trim_number(f_stop, 1)));

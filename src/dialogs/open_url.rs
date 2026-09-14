@@ -4,9 +4,9 @@ use windows::Win32::Foundation::HWND;
 
 use crate::dialogs::text_input::{self, TextInputRequest};
 
-pub fn show(window: HWND) -> Option<String> {
+pub fn show(owner: HWND) -> Option<String> {
     text_input::show(
-        window,
+        owner,
         &TextInputRequest {
             template: crate::dialogs::resource::IDD_OPEN_URL,
             initial_text: "",

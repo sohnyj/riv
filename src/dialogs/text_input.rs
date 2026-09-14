@@ -27,14 +27,14 @@ struct TextInputState {
 }
 
 /// Runs the modal dialog; Some(text as entered) on OK.
-pub fn show(window: HWND, request: &TextInputRequest) -> Option<String> {
+pub fn show(owner: HWND, request: &TextInputRequest) -> Option<String> {
     let mut state = TextInputState {
         initial_text: HSTRING::from(request.initial_text),
         selection: request.selection,
         accepted_text: None,
     };
     let dialog_result = crate::dialogs::modal::run_modal(
-        window,
+        owner,
         request.template,
         dialog_procedure,
         &raw mut state as isize,

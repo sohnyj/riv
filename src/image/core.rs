@@ -413,7 +413,7 @@ pub struct ImageCore {
     upload_device_generation: Option<u64>,
     cache: HashMap<ItemLocation, CacheEntry>,
     pub current: Option<CurrentImage>,
-    /// The deeper preload reach aims along this direction.
+    /// The deeper preload reach follows this direction.
     navigating_backward: bool,
     /// Consecutive steps against that direction; the second one flips it.
     opposite_steps: u32,
@@ -577,7 +577,7 @@ impl ImageCore {
         }
     }
 
-    /// Aims the preload at a declared direction (slideshow start).
+    /// Sets the preload direction ahead of any navigation (slideshow start).
     pub fn set_navigation_direction(&mut self, backward: bool) {
         self.navigating_backward = backward;
         self.opposite_steps = 0;
@@ -717,7 +717,7 @@ impl ImageCore {
             });
             return Some(LoadOutcome::Pending);
         }
-        // A reload re-decodes the item and re-collects the listing it sits in.
+        // A reload re-decodes the item and re-collects the listing it belongs to.
         let outcome = self.load_item(&location);
         self.submit_refresh_scan();
         Some(outcome)
@@ -811,7 +811,7 @@ impl ImageCore {
             .expect("listing scan thread spawn failed");
     }
 
-    /// What an anchor the incoming listing dropped now sits behind, if it sat in it at all.
+    /// What an anchor the incoming listing dropped now falls behind, if it was in it at all.
     fn missing_anchor_for(&self, incoming: &[ListingEntry]) -> Option<MissingAnchor> {
         let anchor = self.navigation_anchor()?;
         let index = match self.anchor_index() {
@@ -1019,9 +1019,9 @@ impl ImageCore {
     fn item_metadata(&self, location: &ItemLocation) -> Result<ItemMetadata, DecodeError> {
         match location {
             ItemLocation::File(path) => match std::fs::metadata(path) {
-                Ok(file) => Ok(ItemMetadata {
-                    file_size: file.len(),
-                    modified: Some(file_time(file.modified())),
+                Ok(metadata) => Ok(ItemMetadata {
+                    file_size: metadata.len(),
+                    modified: Some(file_time(metadata.modified())),
                 }),
                 Err(error) => Err(decode::os_error(&error)),
             },
@@ -1271,12 +1271,12 @@ impl ImageCore {
         }
         let anchor = self.anchor_index();
         let length = self.entries.len();
-        let looped = self.options.loop_within_folder;
+        let loop_enabled = self.options.loop_within_folder;
         let index = match command {
             NavigationCommand::First => 0,
             NavigationCommand::Last => length - 1,
-            NavigationCommand::Next => step_index(anchor, 1, length, looped)?,
-            NavigationCommand::Previous => step_index(anchor, -1, length, looped)?,
+            NavigationCommand::Next => step_index(anchor, 1, length, loop_enabled)?,
+            NavigationCommand::Previous => step_index(anchor, -1, length, loop_enabled)?,
         };
         Some(self.entries[index].location.clone())
     }
@@ -1717,7 +1717,7 @@ impl ImageCore {
         }
     }
 
-    /// Leaving the preload targets removes the entry whole; returning is a fresh preload.
+    /// An entry outside the preload targets is removed whole; one back inside is a fresh preload.
     fn drop_entries_outside(&mut self, targets: &HashSet<ItemLocation>) {
         let cache = &mut self.cache;
         let releaser = &self.releaser;
@@ -1761,7 +1761,7 @@ impl ImageCore {
             })
             .collect();
         ranked.sort_by_key(|(_, _, key)| std::cmp::Reverse(*key));
-        for (location, cost, _) in ranked {
+        for (location, weight, _) in ranked {
             if total <= plan.budget {
                 break;
             }
@@ -1770,7 +1770,7 @@ impl ImageCore {
                 .remove(&location)
                 .expect("ranked from this cache's own keys");
             self.releaser.release(entry.image);
-            total -= cost;
+            total -= weight;
         }
     }
 }
@@ -1790,7 +1790,7 @@ fn playlist_window_start(total: usize, anchor: Option<usize>, capacity: usize) -
 fn anchor_start(anchor: AnchorIndex, forward: bool) -> Option<isize> {
     match anchor {
         AnchorIndex::Listed(index) => Some(index as isize),
-        // A missing anchor sits between two entries, so both directions stop next to it.
+        // A missing anchor lies between two entries, so both directions stop next to it.
         AnchorIndex::Missing(index) => Some(index as isize - isize::from(forward)),
         AnchorIndex::Unlisted => None,
     }
@@ -1872,7 +1872,12 @@ fn is_deferred_two_stage(location: &ItemLocation) -> bool {
 }
 
 /// One step from the anchor index; None past a non-looping end.
-fn step_index(anchor: AnchorIndex, direction: isize, length: usize, looped: bool) -> Option<usize> {
+fn step_index(
+    anchor: AnchorIndex,
+    direction: isize,
+    length: usize,
+    loop_enabled: bool,
+) -> Option<usize> {
     if length == 0 {
         return None;
     }
@@ -1881,7 +1886,7 @@ fn step_index(anchor: AnchorIndex, direction: isize, length: usize, looped: bool
     let start =
         anchor_start(anchor, direction > 0).unwrap_or(if direction > 0 { -1 } else { length });
     let index = start + direction;
-    if looped {
+    if loop_enabled {
         Some(index.rem_euclid(length) as usize)
     } else {
         (0..length).contains(&index).then_some(index as usize)
@@ -2058,6 +2063,15 @@ impl DecodeJob {
     fn opens_on_first_frame(&self) -> bool {
         self.speculative || self.kind != JobKind::Full
     }
+
+    /// The stage a first frame posts as: a guess ends with it, a full decode continues past it.
+    fn first_frame_stage(&self) -> DecodeStage {
+        if self.speculative {
+            DecodeStage::PreviewFinal
+        } else {
+            DecodeStage::Preview
+        }
+    }
 }
 
 /// A worker that panicked while holding the queue leaves it poisoned; nothing recovers from that.
@@ -2217,19 +2231,15 @@ fn next_job(shared: &PoolShared) -> DecodeJob {
     }
 }
 
-/// A preview stage result for the job; `last` marks the preview as the job's final post.
-fn post_preview(window: isize, job: &DecodeJob, image: DecodedImage, last: bool) {
+/// Posts a preview-stage result for the job.
+fn post_preview(window: isize, job: &DecodeJob, image: DecodedImage, stage: DecodeStage) {
     post_boxed(
         window,
         WM_APP_DECODE_COMPLETE,
         Box::new(DecodeCompletion {
             location: job.location.clone(),
             metadata: job.metadata,
-            stage: if last {
-                DecodeStage::PreviewFinal
-            } else {
-                DecodeStage::Preview
-            },
+            stage,
             result: Ok(Arc::new(image)),
             texture: None,
         }),
@@ -2247,7 +2257,7 @@ fn decode_job(
             if job.kind != JobKind::Full
                 && let Some(preview) = decode::decode_two_stage_preview(path, &job.cancellation)
             {
-                post_preview(window, job, preview, true);
+                post_preview(window, job, preview, DecodeStage::PreviewFinal);
                 return None; // the full decode is submitted separately
             }
             // An animation opens on its first frame; a guess stops there.
@@ -2255,7 +2265,7 @@ fn decode_job(
                 && let Some(first_frame) =
                     decode::decode_animation_first_frame(path, &job.cancellation)
             {
-                post_preview(window, job, first_frame, job.speculative);
+                post_preview(window, job, first_frame, job.first_frame_stage());
                 if job.speculative {
                     return None;
                 }
@@ -2274,7 +2284,7 @@ fn decode_job(
                             &job.cancellation,
                         )
                     {
-                        post_preview(window, job, first_frame, job.speculative);
+                        post_preview(window, job, first_frame, job.first_frame_stage());
                         if job.speculative {
                             return None;
                         }
@@ -3209,7 +3219,7 @@ mod listing_scan_tests {
     }
 
     #[test]
-    fn a_failed_archive_enumerate_surfaces_as_the_error() {
+    fn a_failed_archive_enumerate_is_reported_as_the_error() {
         let archive = std::env::temp_dir().join("riv-archive-error.zip");
         let mut core = core();
         assert_eq!(core.load_path(&archive), LoadOutcome::Pending);
@@ -3404,7 +3414,7 @@ mod navigation_direction_tests {
     }
 
     #[test]
-    fn a_declared_direction_aims_at_once() {
+    fn a_declared_direction_takes_effect_at_once() {
         let mut core = core();
         core.set_navigation_direction(true);
         assert_eq!(core.preload_plan().direction, -1);
@@ -3452,7 +3462,7 @@ mod deleted_item_tests {
     }
 
     #[test]
-    fn a_deleted_item_leaves_the_cache_with_it() {
+    fn a_deleted_item_is_dropped_from_the_cache() {
         let file = |index: usize| {
             ItemLocation::File(PathBuf::from(format!("C:\\pictures\\{index:03}.png")))
         };

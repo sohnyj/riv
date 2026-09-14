@@ -19,31 +19,31 @@ use std::path::{Path, PathBuf};
 use std::rc::Rc;
 use std::sync::Arc;
 
-use actions::{Action, ActionRequirement, SatisfiedRequirements};
-use bindings::{Bindings, MODIFIER_CONTROL, MouseBase, current_modifiers, is_modifier_key};
-use dialogs::options::WM_APP_OPTIONS_APPLIED;
-use image::animation::Animation;
-use image::color::{self, DisplayLabels};
-use image::core::{
+use crate::actions::{Action, ActionRequirement, SatisfiedRequirements};
+use crate::bindings::{Bindings, MODIFIER_CONTROL, MouseBase, current_modifiers, is_modifier_key};
+use crate::dialogs::options::WM_APP_OPTIONS_APPLIED;
+use crate::image::animation::Animation;
+use crate::image::color::{self, DisplayLabels};
+use crate::image::core::{
     CoreOptions, DecodeCompletion, DownloadProgress, ImageCore, ItemLocation, ListingInstall,
     LoadOutcome, NavigationCommand, ProbeCompletion, ScannedListing, SortMode,
     WM_APP_DECODE_COMPLETE, WM_APP_DOWNLOAD_PROGRESS, WM_APP_LISTING_READY, WM_APP_PROBE_COMPLETE,
 };
-use image::decode::{DecodedImage, UploadedTexture};
-use settings::{DEFAULT_BACKGROUND_COLOR, Options, SettingsFile};
-use shell::drag_drop::{self, WM_APP_DROP_PATHS};
-use shell::open_with::{self, OpenWithList, WM_APP_OPEN_WITH_LIST};
-use shell::{clipboard, file_ops, open_dialog};
-use view::dither::DitherMode;
-use view::renderer::{
+use crate::image::decode::{DecodedImage, UploadedTexture};
+use crate::settings::{DEFAULT_BACKGROUND_COLOR, Options, SettingsFile};
+use crate::shell::drag_drop::{self, WM_APP_DROP_PATHS};
+use crate::shell::open_with::{self, OpenWithList, WM_APP_OPEN_WITH_LIST};
+use crate::shell::{clipboard, file_operations, open_dialog};
+use crate::view::dither::DitherMode;
+use crate::view::renderer::{
     self, FrameDecision, GraphicsDevice, OutputMode, PendingDevice, Renderer, ScalingFilter,
     ToneMapLuminances, create_device,
 };
-use view::transform::{FitMode, Size, ViewTransform};
-use window::context_menu::{self, MenuSelection, MenuState, MenuTarget};
-use window::dwm;
-use window::message::{high_word, high_word_signed, low_word, point_from_packed};
-use window::overlay::{self, Overlay, OverlayContent};
+use crate::view::transform::{FitMode, Size, ViewTransform};
+use crate::window::context_menu::{self, MenuSelection, MenuState, MenuTarget};
+use crate::window::dwm;
+use crate::window::message::{high_word, high_word_signed, low_word, point_from_packed};
+use crate::window::overlay::{self, Overlay, OverlayContent};
 use windows::System::DispatcherQueueController;
 use windows::Win32::Foundation::{
     HANDLE, HMODULE, HWND, LPARAM, LRESULT, POINT, RECT, WAIT_EVENT, WAIT_OBJECT_0, WPARAM,
@@ -331,7 +331,7 @@ impl WindowRestore {
     }
 
     /// Puts the window back where it was, frame change included.
-    fn put_back(self, window: HWND) {
+    fn apply(self, window: HWND) {
         if self.maximized() {
             let _ = unsafe { SetWindowPlacement(window, &raw const self.placement) };
             let _ = unsafe {
@@ -821,8 +821,8 @@ impl Application {
             let _ = self.rebuild_renderer(window);
         }
         self.restart_animation(window);
-        self.announce_truncation(window);
-        self.restart_slideshow_clock();
+        self.show_truncation_status(window);
+        self.mark_slideshow_item_shown();
         if !same_view {
             self.start_open_with_enumeration(window);
         }
@@ -881,7 +881,7 @@ impl Application {
     }
 
     /// Says so when the animation was cut to its first frame by the byte budget.
-    fn announce_truncation(&mut self, window: HWND) {
+    fn show_truncation_status(&mut self, window: HWND) {
         if self
             .displayed_image
             .as_ref()
@@ -898,7 +898,7 @@ impl Application {
     }
 
     /// A shown item gets its full slideshow interval from now.
-    fn restart_slideshow_clock(&mut self) {
+    fn mark_slideshow_item_shown(&mut self) {
         if let Some(shown) = &mut self.slideshow_item_shown_at {
             *shown = std::time::Instant::now();
         }
@@ -1152,7 +1152,7 @@ impl Application {
             self.stop_slideshow(window);
         } else {
             self.restart_slideshow_timer(window);
-            // The declared direction aims the preload before the first tick.
+            // The declared direction sets the preload targets before the first tick.
             self.image_core
                 .set_navigation_direction(self.settings.options.slideshow_backward());
             self.slideshow_item_shown_at = Some(std::time::Instant::now());
@@ -2024,7 +2024,7 @@ fn dispatch_action(application: &mut Application, window: HWND, action: Action) 
                 .current_containing_file()
                 .map(Path::to_path_buf);
             if let Some(file) = file {
-                file_ops::show_in_explorer(window, &file);
+                file_operations::show_in_explorer(window, &file);
             }
         }
         Action::Delete | Action::DeletePermanently => {
@@ -2108,7 +2108,7 @@ fn delete_current_file(application: &mut Application, window: HWND, permanent: b
     } else {
         NavigationCommand::Next
     };
-    let deletion = file_ops::delete_file(window, &path, permanent);
+    let deletion = file_operations::delete_file(window, &path, permanent);
     // The shell's error dialog pumped messages, so re-fetch instead of reusing the reference across it.
     let Some(application) = application_from_window(window) else {
         return;
@@ -2122,7 +2122,7 @@ fn confirm_deletion(application: &Application, window: HWND, path: &Path, perman
         return true;
     }
     let details = application.delete_details(path);
-    let confirmation = file_ops::confirm_delete(window, &details, permanent);
+    let confirmation = file_operations::confirm_delete(window, &details, permanent);
     if !confirmation.confirmed {
         return false;
     }
@@ -2170,12 +2170,12 @@ fn rename_current_file(application: &mut Application, window: HWND) {
     let Some(application) = application_from_window(window) else {
         return;
     };
-    match file_ops::rename_file(&path, &new_name) {
+    match file_operations::rename_file(&path, &new_name) {
         Ok(new_path) => {
             application.image_core.rescan_listing();
             open_external_path(application, window, &new_path);
         }
-        Err(error) => file_ops::show_rename_error(window, &error),
+        Err(error) => file_operations::show_rename_error(window, &error),
     }
 }
 
@@ -2186,7 +2186,7 @@ fn toggle_fullscreen(window: HWND) {
     if let Some(restore) = application.fullscreen_restore.take() {
         let style = unsafe { GetWindowLongPtrW(window, GWL_STYLE) } as u32;
         unsafe { SetWindowLongPtrW(window, GWL_STYLE, (style | WS_OVERLAPPEDWINDOW.0) as isize) };
-        restore.put_back(window);
+        restore.apply(window);
     } else {
         application.fullscreen_restore = Some(WindowRestore::capture(window));
 

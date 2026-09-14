@@ -126,7 +126,7 @@ const SDR_TONE_MAP_TARGET_NITS: f32 = 203.0;
 /// HDR tone-map target when the monitor reports no peak luminance.
 const HDR_PEAK_FALLBACK_NITS: f32 = 600.0;
 
-/// What the tone map aims at, kept apart from what the display actually reported.
+/// The tone map's target luminance, kept apart from what the display actually reported.
 #[derive(Clone, Copy, PartialEq)]
 pub struct DisplayLuminances {
     pub target_nits: f32,
@@ -291,14 +291,14 @@ fn color_directory() -> Option<std::path::PathBuf> {
     use windows::Win32::UI::ColorSystem::GetColorDirectoryW;
     use windows::core::{PCWSTR, PWSTR};
 
-    let mut length = 0u32;
-    let _ = unsafe { GetColorDirectoryW(PCWSTR::null(), None, &raw mut length) };
-    let mut buffer = vec![0u16; (length as usize).div_ceil(2)];
+    let mut buffer_bytes = 0u32;
+    let _ = unsafe { GetColorDirectoryW(PCWSTR::null(), None, &raw mut buffer_bytes) };
+    let mut buffer = vec![0u16; (buffer_bytes as usize).div_ceil(2)];
     unsafe {
         GetColorDirectoryW(
             PCWSTR::null(),
             Some(PWSTR(buffer.as_mut_ptr())),
-            &raw mut length,
+            &raw mut buffer_bytes,
         )
     }
     .as_bool()

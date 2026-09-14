@@ -1012,17 +1012,17 @@ fn find_and_decode_gain_map(
     crate::image::gain_map::GainMapMetadata,
     crate::image::gain_map::GainMapPlane,
 )> {
-    let (bytes, found) = find_gain_map(input)?;
+    let (bytes, ultra_hdr) = find_gain_map(input)?;
     // The gain map carries no orientation of its own; it follows the base frame's.
     let orientation = declared_orientation(&bytes).ok()?;
     let plane = decode_gain_map_plane(
-        bytes.get(found.gain_map_range.clone())?,
+        bytes.get(ultra_hdr.gain_map_range.clone())?,
         orientation,
         base_width,
         base_height,
         cancellation,
     )?;
-    Some((found.metadata, plane))
+    Some((ultra_hdr.metadata, plane))
 }
 
 /// The whole file and where its Ultra HDR gain map sits; a header without MPF skips the read.
@@ -1036,8 +1036,8 @@ fn find_gain_map<'a>(
         }
     }
     let bytes = input.read_all().ok()?;
-    let found = crate::image::gain_map::find_ultra_hdr(&bytes)?;
-    Some((bytes, found))
+    let ultra_hdr = crate::image::gain_map::find_ultra_hdr(&bytes)?;
+    Some((bytes, ultra_hdr))
 }
 
 /// The EXIF orientation the image bytes declare; 1 when they declare none.
@@ -3076,7 +3076,7 @@ pub fn invalidate_monitor_size() {
     LARGEST_MONITOR_LONG_SIDE.store(0, Ordering::Relaxed);
 }
 
-/// Vector and downscaled rasters aim at the largest monitor, capped by the texture limit.
+/// Vector and downscaled rasters are sized for the largest monitor, capped by the texture limit.
 fn raster_target_long_side() -> u32 {
     largest_monitor_long_side().min(MAXIMUM_TEXTURE_DIMENSION)
 }

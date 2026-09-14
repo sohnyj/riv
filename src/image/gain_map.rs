@@ -45,7 +45,7 @@ pub struct GainMapPlane {
 }
 
 impl GainMapPlane {
-    /// The spec keeps the gain map at or below the base size; anything larger is corrupt.
+    /// The Ultra HDR format keeps the gain map at or below the base size; anything larger is corrupt.
     pub fn size_fits_within(width: u32, height: u32, base_width: u32, base_height: u32) -> bool {
         width > 0 && height > 0 && width <= base_width && height <= base_height
     }
@@ -195,7 +195,7 @@ const IFD_ENTRY_BYTES: usize = 12;
 /// TIFF-order reads anchored at the MP header, in the index's declared endianness.
 struct MpfReader<'bytes> {
     file: &'bytes [u8],
-    header: usize,
+    header_offset: usize,
     little_endian: bool,
 }
 
@@ -203,7 +203,7 @@ impl MpfReader<'_> {
     fn read_u16(&self, offset: usize) -> Option<u16> {
         let bytes = self
             .file
-            .get(self.header + offset..self.header + offset + 2)?;
+            .get(self.header_offset + offset..self.header_offset + offset + 2)?;
         let value = u16::from_be_bytes(bytes.try_into().ok()?);
         Some(if self.little_endian {
             value.swap_bytes()
@@ -215,7 +215,7 @@ impl MpfReader<'_> {
     fn read_u32(&self, offset: usize) -> Option<u32> {
         let bytes = self
             .file
-            .get(self.header + offset..self.header + offset + 4)?;
+            .get(self.header_offset + offset..self.header_offset + offset + 4)?;
         let value = u32::from_be_bytes(bytes.try_into().ok()?);
         Some(if self.little_endian {
             value.swap_bytes()
@@ -232,15 +232,15 @@ fn mpf_secondary_ranges(file: &[u8]) -> Vec<Range<usize>> {
         if marker != APPLICATION_2 || !file[payload.clone()].starts_with(MPF_IDENTIFIER) {
             continue;
         }
-        let header = payload.start + MPF_IDENTIFIER.len();
-        let little_endian = match file.get(header..header + 4) {
+        let header_offset = payload.start + MPF_IDENTIFIER.len();
+        let little_endian = match file.get(header_offset..header_offset + 4) {
             Some(b"II\x2A\x00") => true,
             Some(b"MM\x00\x2A") => false,
             _ => continue,
         };
         let reader = MpfReader {
             file,
-            header,
+            header_offset,
             little_endian,
         };
         let Some(entries) = mp_entry_list(&reader) else {
@@ -257,7 +257,7 @@ fn mpf_secondary_ranges(file: &[u8]) -> Vec<Range<usize>> {
             if offset == 0 {
                 continue;
             }
-            let start = header + offset as usize;
+            let start = header_offset + offset as usize;
             ranges.push(start..start + size as usize);
         }
     }
@@ -284,7 +284,10 @@ fn mp_entry_list(reader: &MpfReader) -> Option<MpEntryList> {
         }
         let offset = reader.read_u32(entry + 8)? as usize;
         // The declared size is a claim; the entries still have to sit inside the file.
-        let available = reader.file.len().saturating_sub(reader.header + offset);
+        let available = reader
+            .file
+            .len()
+            .saturating_sub(reader.header_offset + offset);
         return Some(MpEntryList {
             offset,
             count: byte_count.min(available) / MP_ENTRY_BYTES,
@@ -507,7 +510,7 @@ mod metadata_tests {
         file[header + 14..header + 18].copy_from_slice(&u32::MAX.to_be_bytes());
         let reader = MpfReader {
             file: &file,
-            header,
+            header_offset: header,
             little_endian: false,
         };
         let entries = mp_entry_list(&reader).expect("entry list");

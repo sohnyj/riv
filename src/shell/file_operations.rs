@@ -1,5 +1,3 @@
-//! File operations: recycle/permanent delete, rename, Explorer select.
-
 use std::path::{Path, PathBuf};
 
 use windows::Win32::Foundation::{E_ABORT, HWND};

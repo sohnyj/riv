@@ -4,13 +4,13 @@ use windows::Win32::Foundation::HWND;
 
 use crate::dialogs::text_input::{self, TextInputRequest};
 
-pub fn show(window: HWND, current_name: &str) -> Option<String> {
+pub fn show(owner: HWND, current_name: &str) -> Option<String> {
     let stem_length = current_name.rfind('.').filter(|dot| *dot > 0).map_or_else(
         || current_name.encode_utf16().count(),
         |dot| current_name[..dot].encode_utf16().count(),
     );
     text_input::show(
-        window,
+        owner,
         &TextInputRequest {
             template: crate::dialogs::resource::IDD_RENAME,
             initial_text: current_name,

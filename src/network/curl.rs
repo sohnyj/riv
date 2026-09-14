@@ -52,7 +52,7 @@ impl NetworkError {
 }
 
 /// System32\curl.exe, in-box since Windows 10 1803; the startup version check guarantees it.
-fn executable_path() -> PathBuf {
+fn curl_executable_path() -> PathBuf {
     let mut buffer = [0u16; MAX_PATH as usize];
     let length = unsafe { GetSystemDirectoryW(Some(&mut buffer)) } as usize;
     crate::text::path_from_wide(&buffer[..length]).join("curl.exe")
@@ -119,7 +119,7 @@ fn spawn_curl(url: &str) -> Result<Child, NetworkError> {
     let minimum_speed = MINIMUM_SPEED_BYTES_PER_SECOND.to_string();
     let speed_time = SPEED_TIME_SECONDS.to_string();
     let protocol_allowlist = format!("={}", SUPPORTED_PROTOCOLS.join(","));
-    Command::new(executable_path())
+    Command::new(curl_executable_path())
         .args([
             "--silent",
             "--show-error",
