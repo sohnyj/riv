@@ -139,8 +139,9 @@ fn shaped_text<'a>(
     });
     if stale {
         let wide = HSTRING::from(text);
+        let layout_width = wrap_width.max(1.0);
         let layout = unsafe {
-            dwrite_factory.CreateTextLayout(&wide, format, wrap_width.max(1.0), maximum_height)
+            dwrite_factory.CreateTextLayout(&wide, format, layout_width, maximum_height)
         }?;
         let mut metrics = DWRITE_TEXT_METRICS::default();
         unsafe { layout.GetMetrics(&raw mut metrics)? };
@@ -160,7 +161,8 @@ fn solid_brush(
     color: D2D1_COLOR_F,
     target: color::OutputColorTarget,
 ) -> Result<ID2D1SolidColorBrush> {
-    unsafe { context.CreateSolidColorBrush(&color::output_color(color, target), None) }
+    let encoded = color::output_color(color, target);
+    unsafe { context.CreateSolidColorBrush(&encoded, None) }
 }
 
 /// The overlay's three colors as brushes; the target decides what each one encodes.

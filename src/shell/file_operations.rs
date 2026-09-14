@@ -125,25 +125,26 @@ fn ask_yes_no(
 }
 
 pub fn delete_file(window: HWND, path: &Path, permanent: bool) -> Result<()> {
+    // No FOF_NOERRORUI: the shell's own error dialog is the failure surface.
+    let mut flags = FOF_NOCONFIRMATION | FOF_SILENT;
+    if !permanent {
+        flags |= FOF_ALLOWUNDO;
+    }
+    let item_path = HSTRING::from(path);
+    let operation: IFileOperation =
+        unsafe { CoCreateInstance(&FileOperation, None, CLSCTX_INPROC_SERVER)? };
     unsafe {
-        let operation: IFileOperation =
-            CoCreateInstance(&FileOperation, None, CLSCTX_INPROC_SERVER)?;
         operation.SetOwnerWindow(window)?;
-        // No FOF_NOERRORUI: the shell's own error dialog is the failure surface.
-        let mut flags = FOF_NOCONFIRMATION | FOF_SILENT;
-        if !permanent {
-            flags |= FOF_ALLOWUNDO;
-        }
         operation.SetOperationFlags(flags)?;
-        let item: IShellItem = SHCreateItemFromParsingName(&HSTRING::from(path), None)?;
+        let item: IShellItem = SHCreateItemFromParsingName(&item_path, None)?;
         operation.DeleteItem(&item, None)?;
         operation.PerformOperations()?;
-        // PerformOperations reports success even when the shell aborted the deletion.
-        if operation.GetAnyOperationsAborted()?.as_bool() {
-            return Err(windows::core::Error::from_hresult(E_ABORT));
-        }
-        Ok(())
     }
+    // PerformOperations reports success even when the shell aborted the deletion.
+    if unsafe { operation.GetAnyOperationsAborted()? }.as_bool() {
+        return Err(windows::core::Error::from_hresult(E_ABORT));
+    }
+    Ok(())
 }
 
 /// Rejects names that would move the file, alias it to another, or hit a device.

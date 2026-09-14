@@ -602,11 +602,9 @@ impl Renderer {
             d2d_device.CreateDeviceContext(D2D1_DEVICE_CONTEXT_OPTIONS_NONE)?
         };
         // Default effect precision is the input's 8bpc UNORM, which clamps >1.0 boosts.
-        unsafe {
-            let mut rendering_controls = d2d_context.GetRenderingControls();
-            rendering_controls.bufferPrecision = D2D1_BUFFER_PRECISION_16BPC_FLOAT;
-            d2d_context.SetRenderingControls(&raw const rendering_controls);
-        }
+        let mut rendering_controls = unsafe { d2d_context.GetRenderingControls() };
+        rendering_controls.bufferPrecision = D2D1_BUFFER_PRECISION_16BPC_FLOAT;
+        unsafe { d2d_context.SetRenderingControls(&raw const rendering_controls) };
         let (backbuffer_format, color_space) =
             Self::mode_format_and_color_space(is_hdr_output, is_sdr_wide_gamut);
         // D2D draws the UNORM16 scene and the pass quantizes it; FP16 leaves that to DWM.
@@ -1063,12 +1061,13 @@ impl Renderer {
             return Ok(());
         }
         let properties = image_bitmap_properties(image.storage);
+        let size = D2D_SIZE_U {
+            width: image.pixel_width,
+            height: image.pixel_height,
+        };
         let bitmap = unsafe {
             self.d2d_context.CreateBitmap(
-                D2D_SIZE_U {
-                    width: image.pixel_width,
-                    height: image.pixel_height,
-                },
+                size,
                 Some(frame_pixels.as_ptr().cast()),
                 image.row_pitch(),
                 &raw const properties,
@@ -1466,7 +1465,19 @@ impl Renderer {
             return Err(windows::core::Error::empty());
         }
         self.consume_frame_slot();
-        // Without the pass, D2D draws into this frame's own buffer.
+        self.retarget_frame_buffer();
+        unsafe { self.d2d_context.BeginDraw() };
+        self.draw_scene(&decision, clear_color);
+        // Overlay failure must not block presenting the frame.
+        let overlay_result = draw_overlay(&self.d2d_context);
+        unsafe { self.d2d_context.EndDraw(None, None) }?;
+        self.quantize_into_backbuffer(&decision);
+        self.presenter.present_next(&self.d3d_context)?;
+        overlay_result
+    }
+
+    /// Without the pass, D2D draws into this frame's own buffer.
+    fn retarget_frame_buffer(&self) {
         if self.quantize_pass.is_none()
             && let Some(target) = self
                 .presenter
@@ -1475,43 +1486,45 @@ impl Renderer {
         {
             unsafe { self.d2d_context.SetTarget(target) };
         }
-        unsafe {
-            self.d2d_context.BeginDraw();
-            self.d2d_context.Clear(Some(&raw const clear_color));
-            if let Some(image) = &self.image {
-                self.d2d_context.SetTransform(&raw const decision.transform);
-                match &self.effect_output {
-                    Some(output) => self.d2d_context.DrawImage(
-                        output,
-                        None,
-                        None,
+    }
+
+    /// Clears, then draws the image through the effect chain or straight when nothing is wired.
+    fn draw_scene(&self, decision: &FrameDecision, clear_color: D2D1_COLOR_F) {
+        unsafe { self.d2d_context.Clear(Some(&raw const clear_color)) };
+        let Some(image) = &self.image else {
+            return;
+        };
+        unsafe { self.d2d_context.SetTransform(&raw const decision.transform) };
+        match &self.effect_output {
+            Some(output) => unsafe {
+                self.d2d_context.DrawImage(
+                    output,
+                    None,
+                    None,
+                    decision.draw_interpolation,
+                    D2D1_COMPOSITE_MODE_SOURCE_OVER,
+                )
+            },
+            // The source is already in the destination space, so color management is unwired.
+            None => {
+                let destination = image_pixel_rect(self.image_pixel_size);
+                unsafe {
+                    self.d2d_context.DrawBitmap(
+                        image,
+                        Some(&raw const destination),
+                        1.0,
                         decision.draw_interpolation,
-                        D2D1_COMPOSITE_MODE_SOURCE_OVER,
-                    ),
-                    // The source is already in the destination space, so color management is unwired.
-                    None => {
-                        let destination = D2D_RECT_F {
-                            left: 0.0,
-                            top: 0.0,
-                            right: self.image_pixel_size.0 as f32,
-                            bottom: self.image_pixel_size.1 as f32,
-                        };
-                        self.d2d_context.DrawBitmap(
-                            image,
-                            Some(&raw const destination),
-                            1.0,
-                            decision.draw_interpolation,
-                            None,
-                            None,
-                        );
-                    }
-                }
-                self.d2d_context.SetTransform(&Matrix3x2::identity());
+                        None,
+                        None,
+                    )
+                };
             }
         }
-        // Overlay failure must not block presenting the frame.
-        let overlay_result = draw_overlay(&self.d2d_context);
-        unsafe { self.d2d_context.EndDraw(None, None) }?;
+        unsafe { self.d2d_context.SetTransform(&Matrix3x2::identity()) };
+    }
+
+    /// Runs the dithered quantize pass from the scene into this frame's buffer, when there is one.
+    fn quantize_into_backbuffer(&self, decision: &FrameDecision) {
         let quantize_target = self
             .presenter
             .next_slot()
@@ -1531,8 +1544,6 @@ impl Renderer {
                 quantization_steps,
             );
         }
-        self.presenter.present_next(&self.d3d_context)?;
-        overlay_result
     }
 
     /// A whole-pixel 1:1 placement (unit scale, integer offset) that resamples nothing.
@@ -1562,5 +1573,29 @@ impl Renderer {
             return DitherMode::None;
         }
         self.dither_setting
+    }
+}
+
+/// The whole image at 1:1 in image space; the transform places it.
+fn image_pixel_rect(pixel_size: (u32, u32)) -> D2D_RECT_F {
+    D2D_RECT_F {
+        left: 0.0,
+        top: 0.0,
+        right: pixel_size.0 as f32,
+        bottom: pixel_size.1 as f32,
+    }
+}
+
+#[cfg(test)]
+mod image_rect_tests {
+    use super::image_pixel_rect;
+
+    #[test]
+    fn the_image_rect_spans_its_pixel_size_from_the_origin() {
+        let rect = image_pixel_rect((640, 480));
+        assert_eq!(
+            (rect.left, rect.top, rect.right, rect.bottom),
+            (0.0, 0.0, 640.0, 480.0)
+        );
     }
 }

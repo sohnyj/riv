@@ -1518,6 +1518,14 @@ impl ImageCore {
 
     /// Queues candidates while their weights fit the budget; unknown weights probe first.
     fn submit_preload_decodes(&mut self, candidates: &[usize], budget: u64) {
+        if self.submit_weight_probes(candidates) {
+            return; // one pass per settled target set, re-run by probe completions
+        }
+        self.submit_decodes_within_budget(candidates, budget);
+    }
+
+    /// Probes every candidate of unknown weight; true while any weight is still unknown.
+    fn submit_weight_probes(&mut self, candidates: &[usize]) -> bool {
         let mut awaiting_probes = false;
         for &index in candidates {
             let entry = &self.entries[index];
@@ -1530,9 +1538,11 @@ impl ImageCore {
                 self.submit_probe(location);
             }
         }
-        if awaiting_probes {
-            return; // one pass per settled target set, re-run by probe completions
-        }
+        awaiting_probes
+    }
+
+    /// Queues the known-weight candidates the budget admits, in priority order.
+    fn submit_decodes_within_budget(&mut self, candidates: &[usize], budget: u64) {
         let submittable: Vec<(usize, u64)> = candidates
             .iter()
             .filter_map(|&index| {

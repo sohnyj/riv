@@ -8,8 +8,8 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use windows::core::HSTRING;
 
 use crate::image::decode::{
-    BGRA8_PIXEL_BYTES, DEFAULT_FRAME_DELAY_MILLISECONDS, DecodeError, DecodedImage, FrameBlend,
-    FrameCompositor, FrameDisposal, FrameRegion, HdrEncoding, MAXIMUM_HDR_SOURCE_BITS,
+    BGRA8_PIXEL_BYTES, DEFAULT_FRAME_DELAY_MILLISECONDS, DecodeError, DecodedImage, Frame,
+    FrameBlend, FrameCompositor, FrameDisposal, FrameRegion, HdrEncoding, MAXIMUM_HDR_SOURCE_BITS,
     PixelStorage, RGBA_HALF_PIXEL_BYTES, canvas_too_large_error, cicp_hdr_encoding,
     linearize_hdr_pixels, out_of_memory_error, peak_luminance_from_half_pixels,
     peak_luminance_with_maximum_bits, premultiplied_bgra_from_rgba, too_many_pixels_error,
@@ -114,54 +114,50 @@ fn compose_webp_frames(
     if unsafe { WebPDemuxGetFrame(demuxer, 1, &raw mut iterator) } == 0 {
         return Err(uncoded_error("WebP has no frames"));
     }
+    let composed = compose_webp_iterator(
+        &mut iterator,
+        canvas_width,
+        canvas_height,
+        maximum_frames,
+        cancellation,
+    );
+    unsafe { WebPDemuxReleaseIterator(&raw mut iterator) };
+    let (frames, frames_truncated) = composed?;
+    Ok(DecodedImage {
+        frames_truncated,
+        ..DecodedImage::bgra8(canvas_width, canvas_height, format_name, frames)
+    })
+}
+
+/// Composes the frames from the iterator's current one on; the caller releases the iterator.
+fn compose_webp_iterator(
+    iterator: &mut WebPIterator,
+    canvas_width: u32,
+    canvas_height: u32,
+    maximum_frames: usize,
+    cancellation: &AtomicBool,
+) -> Result<(Vec<Frame>, bool), DecodeError> {
     let Some(mut compositor) = FrameCompositor::new(canvas_width, canvas_height) else {
-        unsafe { WebPDemuxReleaseIterator(&raw mut iterator) };
         return Err(canvas_too_large_error("WebP"));
     };
     // Reused across frames; the decoder writes every byte it is given.
     let mut frame_pixels: Vec<u8> = Vec::new();
     loop {
         if cancellation.load(Ordering::Relaxed) {
-            unsafe { WebPDemuxReleaseIterator(&raw mut iterator) };
             return Err(DecodeError::cancelled());
         }
         // The demuxer's frame count is real, so the budget is known after frame one.
         if !compositor.accepts_another(u64::from(iterator.frame_count as u32)) {
             break;
         }
-        let frame_width = iterator.width as u32;
-        let frame_height = iterator.height as u32;
-        let frame_bytes = frame_width as usize * frame_height as usize * BGRA8_PIXEL_BYTES;
-        // Grown fallibly in place: vec-style growth would abort where an error must show.
-        if frame_pixels
-            .try_reserve_exact(frame_bytes.saturating_sub(frame_pixels.len()))
-            .is_err()
-        {
-            unsafe { WebPDemuxReleaseIterator(&raw mut iterator) };
-            return Err(out_of_memory_error("WebP"));
-        }
-        frame_pixels.resize(frame_bytes, 0);
-        let decoded = unsafe {
-            WebPDecodeBGRAInto(
-                iterator.fragment.bytes,
-                iterator.fragment.size,
-                frame_pixels.as_mut_ptr(),
-                frame_pixels.len(),
-                iterator.width * BGRA8_PIXEL_BYTES as c_int,
-            )
-        };
-        if decoded.is_null() {
-            unsafe { WebPDemuxReleaseIterator(&raw mut iterator) };
-            return Err(uncoded_error("WebP frame decode failed"));
-        }
-        premultiply_bgra_in_place(&mut frame_pixels);
+        decode_webp_frame(iterator, &mut frame_pixels)?;
         let duration_milliseconds = iterator.duration_milliseconds;
         compositor.add_frame(FrameRegion {
             pixels: &frame_pixels,
             left: iterator.x_offset as u32,
             top: iterator.y_offset as u32,
-            width: frame_width,
-            height: frame_height,
+            width: iterator.width as u32,
+            height: iterator.height as u32,
             blend: if iterator.blend_method == WEBP_MUX_NO_BLEND {
                 FrameBlend::Replace
             } else {
@@ -180,17 +176,42 @@ fn compose_webp_frames(
             },
         });
         if compositor.frames_so_far() >= maximum_frames
-            || unsafe { WebPDemuxNextFrame(&raw mut iterator) } == 0
+            || unsafe { WebPDemuxNextFrame(iterator) } == 0
         {
             break;
         }
     }
-    let (frames, frames_truncated) = compositor.finish();
-    unsafe { WebPDemuxReleaseIterator(&raw mut iterator) };
-    Ok(DecodedImage {
-        frames_truncated,
-        ..DecodedImage::bgra8(canvas_width, canvas_height, format_name, frames)
-    })
+    Ok(compositor.finish())
+}
+
+/// Decodes the iterator's frame into the reused buffer, premultiplied.
+fn decode_webp_frame(
+    iterator: &WebPIterator,
+    frame_pixels: &mut Vec<u8>,
+) -> Result<(), DecodeError> {
+    let frame_bytes = iterator.width as usize * iterator.height as usize * BGRA8_PIXEL_BYTES;
+    // Grown fallibly in place: vec-style growth would abort where an error must show.
+    if frame_pixels
+        .try_reserve_exact(frame_bytes.saturating_sub(frame_pixels.len()))
+        .is_err()
+    {
+        return Err(out_of_memory_error("WebP"));
+    }
+    frame_pixels.resize(frame_bytes, 0);
+    let decoded = unsafe {
+        WebPDecodeBGRAInto(
+            iterator.fragment.bytes,
+            iterator.fragment.size,
+            frame_pixels.as_mut_ptr(),
+            frame_pixels.len(),
+            iterator.width * BGRA8_PIXEL_BYTES as c_int,
+        )
+    };
+    if decoded.is_null() {
+        return Err(uncoded_error("WebP frame decode failed"));
+    }
+    premultiply_bgra_in_place(frame_pixels);
+    Ok(())
 }
 
 fn premultiply_bgra_in_place(pixels: &mut [u8]) {
@@ -669,7 +690,11 @@ fn heif_plane(
 
 /// Copies the rows out; SDR rows premultiply on the way, HDR codes stay as libheif wrote them.
 fn copy_heif_rows(plane: &HeifPlane, hdr_encoding: Option<HdrEncoding>, pixels: &mut [u8]) {
-    for (row, output_row) in pixels.chunks_exact_mut(plane.row_bytes).enumerate() {
+    // The plane has height rows; a longer buffer is not read past them.
+    let rows = pixels
+        .chunks_exact_mut(plane.row_bytes)
+        .take(plane.height as usize);
+    for (row, output_row) in rows.enumerate() {
         let row_pointer = unsafe { plane.plane.add(row * plane.stride) };
         let row_pixels = unsafe { std::slice::from_raw_parts(row_pointer, plane.row_bytes) };
         match hdr_encoding {
@@ -836,7 +861,11 @@ fn premultiplied_bgra_from_sequence_image(
         return Err(uncoded_error("AVIF frame differs from its sequence header"));
     }
     let row_bytes = row_bytes as usize;
-    for (row, output_row) in frame_pixels.chunks_exact_mut(row_bytes).enumerate() {
+    // The plane has canvas_height rows; a longer buffer is not read past them.
+    let rows = frame_pixels
+        .chunks_exact_mut(row_bytes)
+        .take(canvas_height as usize);
+    for (row, output_row) in rows.enumerate() {
         let row_pixels =
             unsafe { std::slice::from_raw_parts(plane.add(row * stride as usize), row_bytes) };
         premultiplied_bgra_from_rgba(row_pixels, output_row);

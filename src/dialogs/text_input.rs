@@ -55,19 +55,19 @@ unsafe extern "system" fn dialog_procedure(
             unsafe { SetWindowLongPtrW(dialog, DWLP_USER, lparam.0) };
             crate::dialogs::placement::center_on_owner(dialog);
             let state = unsafe { &*(lparam.0 as *const TextInputState) };
-            unsafe {
-                let _ = SetDlgItemTextW(dialog, IDC_TEXT_INPUT, &state.initial_text);
-                if let Ok(edit) = GetDlgItem(Some(dialog), IDC_TEXT_INPUT) {
-                    if let Some((start, end)) = state.selection {
+            let _ = unsafe { SetDlgItemTextW(dialog, IDC_TEXT_INPUT, &state.initial_text) };
+            if let Ok(edit) = unsafe { GetDlgItem(Some(dialog), IDC_TEXT_INPUT) } {
+                if let Some((start, end)) = state.selection {
+                    unsafe {
                         SendMessageW(
                             edit,
                             EM_SETSEL,
                             Some(WPARAM(start)),
                             Some(LPARAM(end as isize)),
-                        );
-                    }
-                    let _ = SetFocus(Some(edit));
+                        )
+                    };
                 }
+                let _ = unsafe { SetFocus(Some(edit)) };
             }
             0 // FALSE: focus set explicitly
         }

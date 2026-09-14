@@ -89,28 +89,30 @@ pub enum InvokeOutcome {
 }
 
 pub fn invoke(path: &Path, executable_path: &str) -> InvokeOutcome {
-    let Some(extension) = crate::text::lowercase_extension(path) else {
+    let Some(handler) = matching_handler(path, executable_path) else {
         return InvokeOutcome::HandlerMissing;
     };
-    let dotted_extension = HSTRING::from(crate::text::dotted_extension(&extension));
-    for handler in handlers_for(&dotted_extension) {
-        if handler_executable_path(&handler)
-            .is_some_and(|name| name.eq_ignore_ascii_case(executable_path))
-        {
-            let launched = (|| -> Result<()> {
-                unsafe {
-                    let item: IShellItem = SHCreateItemFromParsingName(&HSTRING::from(path), None)?;
-                    let data_object: IDataObject = item.BindToHandler(None, &BHID_DataObject)?;
-                    handler.Invoke(&data_object)
-                }
-            })();
-            return match launched {
-                Ok(()) => InvokeOutcome::Invoked,
-                Err(error) => InvokeOutcome::Failed(error),
-            };
+    let launched = (|| -> Result<()> {
+        unsafe {
+            let item: IShellItem = SHCreateItemFromParsingName(&HSTRING::from(path), None)?;
+            let data_object: IDataObject = item.BindToHandler(None, &BHID_DataObject)?;
+            handler.Invoke(&data_object)
         }
+    })();
+    match launched {
+        Ok(()) => InvokeOutcome::Invoked,
+        Err(error) => InvokeOutcome::Failed(error),
     }
-    InvokeOutcome::HandlerMissing
+}
+
+/// The handler registered for the path's extension whose executable matches, re-enumerated now.
+fn matching_handler(path: &Path, executable_path: &str) -> Option<IAssocHandler> {
+    let extension = crate::text::lowercase_extension(path)?;
+    let dotted_extension = HSTRING::from(crate::text::dotted_extension(&extension));
+    handlers_for(&dotted_extension).into_iter().find(|handler| {
+        handler_executable_path(handler)
+            .is_some_and(|name| name.eq_ignore_ascii_case(executable_path))
+    })
 }
 
 pub fn show_open_with_dialog(window: HWND, path: &Path) {

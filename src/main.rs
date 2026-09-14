@@ -1030,7 +1030,6 @@ impl Application {
         }
     }
 
-    /// Resizes or rebuilds the output for the new client size, draws it, and remembers the placement.
     fn on_window_resized(&mut self, window: HWND, width: u32, height: u32) {
         // A size change inside the modal loop still needs every frame drawn.
         self.window_moving = false;
@@ -1046,7 +1045,6 @@ impl Application {
             self.render(window);
             let _ = unsafe { ValidateRect(Some(window), None) };
         }
-        self.remember_window_placement(window);
     }
 
     fn render_animation_frame(&mut self, window: HWND, frame_index: usize) {
@@ -2437,13 +2435,11 @@ fn dispatch_wheel(application: &mut Application, window: HWND, wheel_delta: i16)
 fn apply_options_from_dialog(window: HWND, payload: &dialogs::options::AppliedOptions) {
     let mut save_error = None;
     if let Some(application) = application_from_window(window) {
-        application.settings.set_options(&payload.options);
-        application
+        save_error = application
             .settings
-            .set_binding_overrides(&payload.keyboard, &payload.mouse);
-        save_error = application.settings.save_merging_recents().err();
+            .store_applied(&payload.options, &payload.keyboard, &payload.mouse)
+            .err();
         application.apply_options(window);
-        application.request_render(window);
     }
     // The dialog pumps messages, so the borrow above ends before it opens.
     if let Some(error) = save_error {
@@ -2943,6 +2939,7 @@ extern "system" fn window_procedure(
                 let width = low_word(lparam.0 as usize);
                 let height = high_word(lparam.0 as usize);
                 application.on_window_resized(window, width, height);
+                application.remember_window_placement(window);
             }
             LRESULT(0)
         }

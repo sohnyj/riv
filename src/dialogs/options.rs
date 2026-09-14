@@ -1451,25 +1451,26 @@ fn create_tristate_images() -> HIMAGELIST {
     }
     let screen = unsafe { GetDC(None) };
     for style in STATE_IMAGE_STYLES {
+        let whole = RECT {
+            left: 0,
+            top: 0,
+            right: STATE_IMAGE_EDGE_PIXELS,
+            bottom: STATE_IMAGE_EDGE_PIXELS,
+        };
+        let mut bounds = RECT {
+            left: 1,
+            top: 1,
+            right: STATE_IMAGE_EDGE_PIXELS - 1,
+            bottom: STATE_IMAGE_EDGE_PIXELS - 1,
+        };
         unsafe {
             let memory = CreateCompatibleDC(Some(screen));
             let bitmap =
                 CreateCompatibleBitmap(screen, STATE_IMAGE_EDGE_PIXELS, STATE_IMAGE_EDGE_PIXELS);
             let previous = SelectObject(memory, bitmap.into());
-            let mut bounds = RECT {
-                left: 1,
-                top: 1,
-                right: STATE_IMAGE_EDGE_PIXELS - 1,
-                bottom: STATE_IMAGE_EDGE_PIXELS - 1,
-            };
             FillRect(
                 memory,
-                &RECT {
-                    left: 0,
-                    top: 0,
-                    right: STATE_IMAGE_EDGE_PIXELS,
-                    bottom: STATE_IMAGE_EDGE_PIXELS,
-                },
+                &raw const whole,
                 GetSysColorBrush(windows::Win32::Graphics::Gdi::COLOR_WINDOW),
             );
             let _ = DrawFrameControl(memory, &raw mut bounds, DFC_BUTTON, style);
@@ -1686,13 +1687,8 @@ fn combo_selection(page: HWND, control: i32) -> u32 {
 }
 
 fn set_check(page: HWND, control: i32, checked: bool) {
-    let _ = unsafe {
-        CheckDlgButton(
-            page,
-            control,
-            if checked { BST_CHECKED } else { BST_UNCHECKED },
-        )
-    };
+    let state = if checked { BST_CHECKED } else { BST_UNCHECKED };
+    let _ = unsafe { CheckDlgButton(page, control, state) };
 }
 
 fn is_checked(page: HWND, control: i32) -> bool {

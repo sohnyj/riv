@@ -347,6 +347,18 @@ impl SettingsFile {
         self.options = Options::from_document(&self.document);
     }
 
+    /// Stores what the settings dialog applied and writes the file; the session keeps it either way.
+    pub fn store_applied(
+        &mut self,
+        options: &Options,
+        keyboard: &[(String, Vec<String>)],
+        mouse: &[(String, Vec<String>)],
+    ) -> std::io::Result<()> {
+        self.set_options(options);
+        self.set_binding_overrides(keyboard, mouse);
+        self.save_merging_recents()
+    }
+
     pub fn set_options(&mut self, options: &Options) {
         write_options(&mut self.document, options);
         self.options = Options::from_document(&self.document);

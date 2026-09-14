@@ -27,14 +27,20 @@ pub fn create_shortcut() {
     let Some(path) = shortcut_path() else {
         return;
     };
-    let executable = crate::executable_path();
-    let _: Result<()> = (|| unsafe {
-        let link: IShellLinkW = CoCreateInstance(&ShellLink, None, CLSCTX_INPROC_SERVER)?;
-        link.SetPath(&HSTRING::from(executable.as_path()))?;
-        link.SetDescription(&HSTRING::from(crate::APPLICATION_DESCRIPTION))?;
-        link.SetWorkingDirectory(&HSTRING::from(crate::executable_directory().as_path()))?;
+    let target = HSTRING::from(crate::executable_path().as_path());
+    let description = HSTRING::from(crate::APPLICATION_DESCRIPTION);
+    let working_directory = HSTRING::from(crate::executable_directory().as_path());
+    let link_path = HSTRING::from(path.as_path());
+    let _: Result<()> = (|| {
+        let link: IShellLinkW =
+            unsafe { CoCreateInstance(&ShellLink, None, CLSCTX_INPROC_SERVER)? };
+        unsafe {
+            link.SetPath(&target)?;
+            link.SetDescription(&description)?;
+            link.SetWorkingDirectory(&working_directory)?;
+        }
         let persist: IPersistFile = link.cast()?;
-        persist.Save(&HSTRING::from(path.as_path()), true)
+        unsafe { persist.Save(&link_path, true) }
     })();
 }
 

@@ -125,8 +125,8 @@ impl<'a> MenuBuilder<'a> {
         text: &str,
         access_key: Option<char>,
     ) -> Result<()> {
-        let escaped = mark_access_key(escape_ampersands(text), access_key);
-        unsafe { AppendMenuW(menu, flags, identifier, &HSTRING::from(escaped.as_str())) }
+        let escaped = HSTRING::from(mark_access_key(escape_ampersands(text), access_key).as_str());
+        unsafe { AppendMenuW(menu, flags, identifier, &escaped) }
     }
 
     /// An action's label with its shortcut in a tab-separated column.

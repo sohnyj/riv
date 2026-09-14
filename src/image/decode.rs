@@ -362,6 +362,31 @@ const GIF_DISPOSAL_RESTORE_PREVIOUS: u32 = 3;
 const APNG_DEFAULT_DELAY_DENOMINATOR: u32 = 100;
 const MINIMUM_APNG_DELAY_MILLISECONDS: u32 = 10;
 
+/// An fcTL delay in milliseconds: num/den seconds, a zero den meaning centiseconds, never too short.
+fn apng_frame_delay_milliseconds(delay_num: u16, delay_den: u16) -> u32 {
+    let denominator = if delay_den == 0 {
+        APNG_DEFAULT_DELAY_DENOMINATOR
+    } else {
+        u32::from(delay_den)
+    };
+    (u32::from(delay_num) * 1000 / denominator).max(MINIMUM_APNG_DELAY_MILLISECONDS)
+}
+
+#[cfg(test)]
+mod apng_delay_tests {
+    use super::{MINIMUM_APNG_DELAY_MILLISECONDS, apng_frame_delay_milliseconds};
+
+    #[test]
+    fn the_delay_is_the_fraction_in_milliseconds_with_centiseconds_when_den_is_zero() {
+        assert_eq!(apng_frame_delay_milliseconds(1, 2), 500);
+        assert_eq!(apng_frame_delay_milliseconds(3, 0), 30);
+        assert_eq!(
+            apng_frame_delay_milliseconds(0, 5),
+            MINIMUM_APNG_DELAY_MILLISECONDS
+        );
+    }
+}
+
 /// Header probe window; the memory and the file inputs must classify identically.
 const HEADER_PROBE_BYTES: usize = 4096;
 
@@ -2866,11 +2891,6 @@ fn decode_apng<Input: BufRead + Seek>(
             &mut region_pixels,
         )?;
 
-        let delay_denominator = if frame_control.delay_den == 0 {
-            APNG_DEFAULT_DELAY_DENOMINATOR
-        } else {
-            u32::from(frame_control.delay_den)
-        };
         compositor.add_frame(FrameRegion {
             pixels: &region_pixels,
             left: frame_control.x_offset,
@@ -2886,8 +2906,10 @@ fn decode_apng<Input: BufRead + Seek>(
                 png::DisposeOp::Previous => FrameDisposal::Previous,
                 png::DisposeOp::None => FrameDisposal::Keep,
             },
-            delay_milliseconds: (u32::from(frame_control.delay_num) * 1000 / delay_denominator)
-                .max(MINIMUM_APNG_DELAY_MILLISECONDS),
+            delay_milliseconds: apng_frame_delay_milliseconds(
+                frame_control.delay_num,
+                frame_control.delay_den,
+            ),
         });
     }
     let (frames, frames_truncated) = compositor.finish();

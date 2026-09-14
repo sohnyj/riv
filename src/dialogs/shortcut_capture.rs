@@ -334,12 +334,12 @@ fn listbox_item_text(listbox: HWND, item_index: u32) -> Vec<u16> {
 
 /// Left-aligned, vertically-centered text one field indent in from `rect`.
 fn draw_field_text(device: HDC, rect: RECT, text: &mut [u16], color: COLORREF) {
+    const FIELD_TEXT_INDENT_PIXELS: i32 = 4;
+    let mut bounds = rect;
+    bounds.left += FIELD_TEXT_INDENT_PIXELS;
     unsafe {
         SetBkMode(device, TRANSPARENT);
         SetTextColor(device, color);
-        const FIELD_TEXT_INDENT_PIXELS: i32 = 4;
-        let mut bounds = rect;
-        bounds.left += FIELD_TEXT_INDENT_PIXELS;
         DrawTextW(
             device,
             text,
@@ -357,28 +357,17 @@ fn draw_sequence_item(draw: &DRAWITEMSTRUCT) {
 
 fn paint_sequence_item(draw: &DRAWITEMSTRUCT, device: HDC) {
     let selected = draw.itemState.0 & ODS_SELECTED.0 != 0;
-    unsafe {
-        FillRect(
-            device,
-            &raw const draw.rcItem,
-            GetSysColorBrush(if selected {
-                COLOR_HIGHLIGHT
-            } else {
-                COLOR_WINDOW
-            }),
-        );
-    }
+    let (background, text_color) = if selected {
+        (COLOR_HIGHLIGHT, COLOR_HIGHLIGHTTEXT)
+    } else {
+        (COLOR_WINDOW, COLOR_WINDOWTEXT)
+    };
+    unsafe { FillRect(device, &raw const draw.rcItem, GetSysColorBrush(background)) };
     if draw.itemID == u32::MAX {
         return; // empty list: background only
     }
     let mut text = listbox_item_text(draw.hwndItem, draw.itemID);
-    let color = COLORREF(unsafe {
-        GetSysColor(if selected {
-            COLOR_HIGHLIGHTTEXT
-        } else {
-            COLOR_WINDOWTEXT
-        })
-    });
+    let color = COLORREF(unsafe { GetSysColor(text_color) });
     draw_field_text(device, draw.rcItem, &mut text, color);
     if selected {
         draw_remove_icon(device, remove_icon_bounds(&draw.rcItem));

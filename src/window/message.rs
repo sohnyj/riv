@@ -7,31 +7,53 @@ use std::sync::{LazyLock, Mutex};
 use windows::Win32::Foundation::{HWND, LPARAM, LRESULT, WPARAM};
 use windows::Win32::UI::WindowsAndMessaging::{PostMessageW, SendMessageW};
 
-/// Payload pointers handed to the window, each with the message and type it went out as.
-static SENT_PAYLOADS: LazyLock<Mutex<HashMap<usize, (u32, TypeId)>>> =
+/// How a payload pointer went out: its message, its type, and whether the receiver owns it.
+struct SentPayload {
+    message: u32,
+    payload: TypeId,
+    owned: bool,
+}
+
+impl SentPayload {
+    fn carries<T: 'static>(&self, message: u32) -> bool {
+        self.message == message && self.payload == TypeId::of::<T>()
+    }
+}
+
+/// Payload pointers handed to the window, keyed by address.
+static SENT_PAYLOADS: LazyLock<Mutex<HashMap<usize, SentPayload>>> =
     LazyLock::new(|| Mutex::new(HashMap::new()));
 
-fn record_sent<T: 'static>(pointer: usize, message: u32) {
-    lock_sent().insert(pointer, (message, TypeId::of::<T>()));
+fn record_sent<T: 'static>(pointer: usize, message: u32, owned: bool) {
+    lock_sent().insert(
+        pointer,
+        SentPayload {
+            message,
+            payload: TypeId::of::<T>(),
+            owned,
+        },
+    );
 }
 
 fn remove_sent(pointer: usize) {
     lock_sent().remove(&pointer);
 }
 
-/// Whether this pointer went out with this message carrying a `T`.
+/// Whether this pointer went out with this message carrying a `T`, owned or borrowed.
 fn was_sent<T: 'static>(pointer: usize, message: u32) -> bool {
-    lock_sent().get(&pointer) == Some(&(message, TypeId::of::<T>()))
+    lock_sent()
+        .get(&pointer)
+        .is_some_and(|sent| sent.carries::<T>(message))
 }
 
-fn lock_sent() -> std::sync::MutexGuard<'static, HashMap<usize, (u32, TypeId)>> {
+fn lock_sent() -> std::sync::MutexGuard<'static, HashMap<usize, SentPayload>> {
     SENT_PAYLOADS.lock().expect("payload registry poisoned")
 }
 
 /// Posts an owned payload; a refused post reclaims it, an undispatched one lasts until exit.
 pub fn post_boxed<T: 'static>(window: isize, message: u32, payload: Box<T>) {
     let pointer = Box::into_raw(payload);
-    record_sent::<T>(pointer as usize, message);
+    record_sent::<T>(pointer as usize, message, true);
     let posted = unsafe {
         PostMessageW(
             Some(HWND(window as *mut core::ffi::c_void)),
@@ -46,13 +68,16 @@ pub fn post_boxed<T: 'static>(window: isize, message: u32, payload: Box<T>) {
     }
 }
 
-/// The posted payload, or None when that pointer never went out with this message as a `T`.
+/// The posted payload, or None unless that pointer went out owned, with this message, as a `T`.
 pub unsafe fn take_boxed<T: 'static>(message: u32, lparam: LPARAM) -> Option<Box<T>> {
     let pointer = lparam.0 as usize;
     {
         // One locked check-and-remove, so the pointer is reclaimed exactly once.
         let mut payloads = lock_sent();
-        if payloads.get(&pointer) != Some(&(message, TypeId::of::<T>())) {
+        let owned = payloads
+            .get(&pointer)
+            .is_some_and(|sent| sent.owned && sent.carries::<T>(message));
+        if !owned {
             return None;
         }
         payloads.remove(&pointer);
@@ -63,7 +88,7 @@ pub unsafe fn take_boxed<T: 'static>(message: u32, lparam: LPARAM) -> Option<Box
 /// Sends a borrowed payload, readable by the window procedure for the length of the call.
 pub fn send_borrowed<T: 'static>(window: HWND, message: u32, payload: &T) -> LRESULT {
     let pointer = std::ptr::from_ref(payload) as usize;
-    record_sent::<T>(pointer, message);
+    record_sent::<T>(pointer, message, false);
     let message_result =
         unsafe { SendMessageW(window, message, None, Some(LPARAM(pointer as isize))) };
     remove_sent(pointer);
@@ -123,7 +148,7 @@ mod payload_tests {
     #[test]
     fn a_payload_belongs_to_the_message_it_went_out_with() {
         let pointer = Box::into_raw(Box::new(7u64));
-        record_sent::<u64>(pointer as usize, 0x8001);
+        record_sent::<u64>(pointer as usize, 0x8001, true);
         let lparam = LPARAM(pointer as isize);
         assert!(unsafe { take_boxed::<u64>(0x8002, lparam) }.is_none());
         let taken = unsafe { take_boxed::<u64>(0x8001, lparam) };
@@ -131,9 +156,21 @@ mod payload_tests {
     }
 
     #[test]
+    fn a_borrowed_payload_is_never_taken_as_owned() {
+        // Reclaiming a sender's stack value as a Box would free memory nobody allocated.
+        let value = 7u64;
+        let pointer = std::ptr::from_ref(&value) as usize;
+        record_sent::<u64>(pointer, 0x8004, false);
+        let lparam = LPARAM(pointer as isize);
+        assert!(unsafe { take_boxed::<u64>(0x8004, lparam) }.is_none());
+        assert_eq!(unsafe { borrowed_payload::<u64>(0x8004, lparam) }, Some(&7));
+        remove_sent(pointer);
+    }
+
+    #[test]
     fn a_payload_taken_as_the_wrong_type_is_refused() {
         let pointer = Box::into_raw(Box::new(7u64));
-        record_sent::<u64>(pointer as usize, 0x8003);
+        record_sent::<u64>(pointer as usize, 0x8003, true);
         let lparam = LPARAM(pointer as isize);
         assert!(unsafe { take_boxed::<u32>(0x8003, lparam) }.is_none());
         // The refusal leaves the registration, so the right type still reclaims the payload.
