@@ -378,7 +378,7 @@ fn initialize_frame(state: &mut OptionsState) {
 /// Where a page sits inside the tab, in the frame's coordinates.
 fn page_area(dialog: HWND, tab: HWND) -> RECT {
     // TCM_ADJUSTRECT only insets, so it reads the same before or after the mapping.
-    let mut area = crate::dialogs::placement::control_bounds(dialog, tab).unwrap_or_default();
+    let mut area = crate::dialogs::placement::control_bounds(dialog, tab);
     unsafe {
         SendMessageW(
             tab,
@@ -541,20 +541,15 @@ fn fit_page_controls(page: HWND, stretched_control: i32, right_following_control
         bottom: PAGE_TEMPLATE_HEIGHT_DIALOG_UNITS,
     };
     let mut client = RECT::default();
-    if unsafe { MapDialogRect(page, &raw mut template) }.is_err()
-        || unsafe { GetClientRect(page, &raw mut client) }.is_err()
-    {
-        return;
-    }
+    unsafe { MapDialogRect(page, &raw mut template) }.expect("a dialog page maps its units");
+    unsafe { GetClientRect(page, &raw mut client) }.expect("an existing page has a client area");
     let widen = client.right - template.right;
     let heighten = client.bottom - template.bottom;
     let place = |control: i32, offset_x: i32, extra_width: i32, extra_height: i32| {
         let Ok(handle) = (unsafe { GetDlgItem(Some(page), control) }) else {
             return;
         };
-        let Some(bounds) = crate::dialogs::placement::control_bounds(page, handle) else {
-            return;
-        };
+        let bounds = crate::dialogs::placement::control_bounds(page, handle);
         let _ = unsafe {
             SetWindowPos(
                 handle,

@@ -74,9 +74,7 @@ fn layout_centered(page: HWND) {
         GetClientRect, SWP_NOACTIVATE, SWP_NOZORDER, SetWindowPos,
     };
     let mut client = RECT::default();
-    if unsafe { GetClientRect(page, &raw mut client) }.is_err() {
-        return;
-    }
+    unsafe { GetClientRect(page, &raw mut client) }.expect("an existing page has a client area");
     let width = client.right - client.left;
     let height = client.bottom - client.top;
 
@@ -91,9 +89,7 @@ fn layout_centered(page: HWND) {
         let Ok(control) = (unsafe { GetDlgItem(Some(page), id) }) else {
             return;
         };
-        let Some(bounds) = crate::dialogs::placement::control_bounds(page, control) else {
-            return;
-        };
+        let bounds = crate::dialogs::placement::control_bounds(page, control);
         placements.push((id, control, bounds.top, bounds.bottom - bounds.top));
     }
 

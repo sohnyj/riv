@@ -412,9 +412,7 @@ fn draw_remove_icon(device: HDC, zone: RECT) {
 
 fn erase_below_last_item(listbox: HWND, device: HDC) {
     let mut client = RECT::default();
-    if unsafe { GetClientRect(listbox, &raw mut client) }.is_err() {
-        return;
-    }
+    unsafe { GetClientRect(listbox, &raw mut client) }.expect("an existing list has a client area");
     let count = unsafe { SendMessageW(listbox, LB_GETCOUNT, None, None) }.0;
     let top = unsafe { SendMessageW(listbox, LB_GETTOPINDEX, None, None) }.0;
     let height = unsafe { SendMessageW(listbox, LB_GETITEMHEIGHT, None, None) }.0;
@@ -546,10 +544,7 @@ fn paint_field(field: HWND, text: &str, hint: bool) {
     let bounds = paint.rcPaint;
     // The text is placed in the client rectangle, so a partial repaint does not shift it.
     let mut client = RECT::default();
-    if unsafe { GetClientRect(field, &raw mut client) }.is_err() {
-        let _ = unsafe { EndPaint(field, &raw const paint) };
-        return;
-    }
+    unsafe { GetClientRect(field, &raw mut client) }.expect("an existing field has a client area");
     crate::dialogs::paint::draw_buffered(target, bounds, |device| {
         unsafe { FillRect(device, &raw const bounds, GetSysColorBrush(COLOR_WINDOW)) };
         let font = field_font(field);

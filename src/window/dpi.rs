@@ -1,10 +1,23 @@
 //! DPI queries and DPI-scaled window sizing.
 
 use windows::Win32::Foundation::{HWND, RECT};
+use windows::Win32::Graphics::Gdi::{GetMonitorInfoW, HMONITOR, MONITORINFO};
 use windows::Win32::UI::HiDpi::{AdjustWindowRectExForDpi, GetDpiForWindow};
 use windows::Win32::UI::WindowsAndMessaging::{
     GWL_STYLE, GetWindowLongPtrW, USER_DEFAULT_SCREEN_DPI, WINDOW_EX_STYLE, WINDOW_STYLE,
 };
+
+/// The monitor's rectangles; a handle from a nearest-monitor query always resolves.
+pub fn monitor_information(monitor: HMONITOR) -> MONITORINFO {
+    let mut information = MONITORINFO {
+        cbSize: size_of::<MONITORINFO>() as u32,
+        ..Default::default()
+    };
+    unsafe { GetMonitorInfoW(monitor, &raw mut information) }
+        .ok()
+        .expect("a monitor from a nearest-monitor query exists");
+    information
+}
 
 pub fn dpi_for_window(window: HWND) -> u32 {
     unsafe { GetDpiForWindow(window) }

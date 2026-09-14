@@ -3,9 +3,7 @@
 use std::collections::HashMap;
 
 use windows::Win32::Foundation::{HWND, RECT};
-use windows::Win32::Graphics::Gdi::{
-    GetMonitorInfoW, MONITOR_DEFAULTTONEAREST, MONITORINFO, MonitorFromWindow,
-};
+use windows::Win32::Graphics::Gdi::{MONITOR_DEFAULTTONEAREST, MonitorFromWindow};
 use windows::Win32::UI::HiDpi::{AdjustWindowRectExForDpi, GetSystemMetricsForDpi};
 use windows::Win32::UI::WindowsAndMessaging::{
     AppendMenuW, CreatePopupMenu, DestroyMenu, HMENU, MENU_ITEM_FLAGS, MF_CHECKED, MF_DISABLED,
@@ -21,9 +19,6 @@ pub const OPEN_WITH_SUBMENU_LABEL: &str = "Open with";
 
 /// What one menu level is meant to hold, whatever the display measures.
 const MENU_LEVEL_CAPACITY: usize = 25;
-
-/// Names to show when the display cannot be measured: what a 720p screen holds at the heaviest scaling.
-const UNMEASURED_CAPACITY: usize = 9;
 
 #[derive(Clone, Copy)]
 pub enum MenuSelection {
@@ -374,14 +369,7 @@ fn capacity_for_height(usable_height: i32, row_height: i32) -> usize {
 /// Names the display shows with the taskbar and the title bar left clear.
 pub fn playlist_capacity(window: HWND) -> usize {
     let monitor = unsafe { MonitorFromWindow(window, MONITOR_DEFAULTTONEAREST) };
-    let mut monitor_information = MONITORINFO {
-        cbSize: size_of::<MONITORINFO>() as u32,
-        ..Default::default()
-    };
-    // Without a measurement, guess low so the menu still fits a small display.
-    if !unsafe { GetMonitorInfoW(monitor, &raw mut monitor_information) }.as_bool() {
-        return UNMEASURED_CAPACITY;
-    }
+    let monitor_information = crate::window::dpi::monitor_information(monitor);
     let dpi = crate::window::dpi::dpi_for_window(window);
     // The work area already excludes the taskbar.
     let work_height = monitor_information.rcWork.bottom - monitor_information.rcWork.top;
@@ -650,8 +638,6 @@ mod menu_structure_tests {
             let names = capacity_for_height(height, 35);
             assert!(names % 2 == 1, "{names} names for {height} pixels");
         }
-        // Where the unmeasured count comes from: a 720p work area at 200% scaling.
-        assert_eq!(capacity_for_height(624 - 62, 47), UNMEASURED_CAPACITY);
     }
 
     #[test]

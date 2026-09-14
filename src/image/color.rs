@@ -431,8 +431,8 @@ fn window_display_path(window: HWND) -> Option<DISPLAYCONFIG_PATH_INFO> {
     let mut monitor_information = MONITORINFOEXW::default();
     monitor_information.monitorInfo.cbSize = size_of::<MONITORINFOEXW>() as u32;
     unsafe { GetMonitorInfoW(monitor, &raw mut monitor_information.monitorInfo) }
-        .as_bool()
-        .then_some(())?;
+        .ok()
+        .expect("the monitor nearest an existing window exists");
     let device_name = monitor_information.szDevice;
 
     let mut path_count = 0u32;

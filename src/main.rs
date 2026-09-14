@@ -51,8 +51,8 @@ use windows::Win32::Foundation::{
 use windows::Win32::Graphics::Direct2D::Common::D2D1_COLOR_F;
 use windows::Win32::Graphics::Direct2D::D2D1_INTERPOLATION_MODE;
 use windows::Win32::Graphics::Gdi::{
-    GetMonitorInfoW, HBRUSH, HMONITOR, InvalidateRect, MONITOR_DEFAULTTONEAREST, MONITORINFO,
-    MonitorFromWindow, SC_SCREENSAVE, ScreenToClient, ValidateRect,
+    HBRUSH, HMONITOR, InvalidateRect, MONITOR_DEFAULTTONEAREST, MonitorFromWindow, SC_SCREENSAVE,
+    ScreenToClient, ValidateRect,
 };
 use windows::Win32::System::LibraryLoader::GetModuleHandleW;
 use windows::Win32::System::Ole::{IDropTarget, OleInitialize, RevokeDragDrop};
@@ -300,9 +300,10 @@ impl WindowRestore {
             length: size_of::<WINDOWPLACEMENT>() as u32,
             ..Default::default()
         };
-        let _ = unsafe { GetWindowPlacement(window, &raw mut placement) };
+        unsafe { GetWindowPlacement(window, &raw mut placement) }
+            .expect("an existing window has a placement");
         let mut bounds = RECT::default();
-        let _ = unsafe { GetWindowRect(window, &raw mut bounds) };
+        unsafe { GetWindowRect(window, &raw mut bounds) }.expect("an existing window has bounds");
         Self { placement, bounds }
     }
 
@@ -1703,8 +1704,7 @@ fn core_options(options: &Options) -> CoreOptions {
 
 fn client_size(window: HWND) -> (u32, u32) {
     let mut bounds = RECT::default();
-    // A failed query reads as an empty client area, which every caller skips or clamps.
-    let _ = unsafe { GetClientRect(window, &raw mut bounds) };
+    unsafe { GetClientRect(window, &raw mut bounds) }.expect("an existing window has a client area");
     (
         (bounds.right - bounds.left) as u32,
         (bounds.bottom - bounds.top) as u32,
@@ -2184,12 +2184,7 @@ fn toggle_fullscreen(window: HWND) {
         application.fullscreen_restore = Some(WindowRestore::capture(window));
 
         let monitor = unsafe { MonitorFromWindow(window, MONITOR_DEFAULTTONEAREST) };
-        let mut monitor_information = MONITORINFO {
-            cbSize: size_of::<MONITORINFO>() as u32,
-            ..Default::default()
-        };
-        let _ = unsafe { GetMonitorInfoW(monitor, &raw mut monitor_information) };
-        let bounds = monitor_information.rcMonitor;
+        let bounds = window::dpi::monitor_information(monitor).rcMonitor;
 
         let style = unsafe { GetWindowLongPtrW(window, GWL_STYLE) } as u32;
         unsafe { SetWindowLongPtrW(window, GWL_STYLE, (style & !WS_OVERLAPPEDWINDOW.0) as isize) };
@@ -2214,7 +2209,7 @@ fn toggle_fullscreen(window: HWND) {
 
 fn window_center(window: HWND) -> (i32, i32) {
     let mut bounds = RECT::default();
-    let _ = unsafe { GetWindowRect(window, &raw mut bounds) };
+    unsafe { GetWindowRect(window, &raw mut bounds) }.expect("an existing window has bounds");
     (
         (bounds.left + bounds.right) / 2,
         (bounds.top + bounds.bottom) / 2,
