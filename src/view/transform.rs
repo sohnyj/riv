@@ -1,6 +1,6 @@
 //! Pure view-transform math: fit, zoom, pan, rotation.
 
-/// Fit axis, from the `fitmode` setting.
+/// Fit axis, from the `fit_mode` setting.
 #[derive(Clone, Copy, PartialEq, Eq)]
 pub enum FitMode {
     Width,

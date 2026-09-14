@@ -22,40 +22,40 @@ pub const MAXIMUM_SLIDESHOW_INTERVAL_SECONDS: u32 = 600;
 pub const DEFAULT_BACKGROUND_COLOR: (u8, u8, u8) = (0x21, 0x21, 0x21);
 
 /// riv.json option keys; the read and the write name the same constant.
-const KEY_BACKGROUND_COLOR_ENABLED: &str = "backgroundcolorenabled";
-const KEY_BACKGROUND_COLOR: &str = "backgroundcolor";
-const KEY_TITLE_BAR_TEXT: &str = "titlebartext";
-const KEY_CONTROL_DRAG_WINDOW: &str = "ctrldragwindow";
-const KEY_REMEMBER_WINDOW_PLACEMENT: &str = "rememberwindowplacement";
-const KEY_HIDE_CURSOR_FULLSCREEN: &str = "hidecursorfullscreen";
+const KEY_BACKGROUND_COLOR_ENABLED: &str = "background_color_enabled";
+const KEY_BACKGROUND_COLOR: &str = "background_color";
+const KEY_TITLE_BAR_TEXT: &str = "title_bar_text";
+const KEY_CONTROL_DRAG_WINDOW: &str = "ctrl_drag_window";
+const KEY_REMEMBER_WINDOW_PLACEMENT: &str = "remember_window_placement";
+const KEY_HIDE_CURSOR_FULLSCREEN: &str = "hide_cursor_fullscreen";
 const KEY_SCALING_FILTER: &str = "scaling";
-const KEY_FIT_MODE: &str = "fitmode";
-const KEY_ZOOM_STEP_PERCENT: &str = "zoomstep";
+const KEY_FIT_MODE: &str = "fit_mode";
+const KEY_ZOOM_STEP_PERCENT: &str = "zoom_step";
 const KEY_DITHER_MODE: &str = "dither";
-const KEY_FRACTIONAL_WHEEL_ZOOM: &str = "fractionalwheelzoom";
-const KEY_CURSOR_ZOOM: &str = "cursorzoom";
-const KEY_SORT_FILES_BY: &str = "sortfilesby";
-const KEY_SORT_DESCENDING: &str = "sortdescending";
+const KEY_FRACTIONAL_WHEEL_ZOOM: &str = "fractional_wheel_zoom";
+const KEY_CURSOR_ZOOM: &str = "cursor_zoom";
+const KEY_SORT_FILES_BY: &str = "sort_files_by";
+const KEY_SORT_DESCENDING: &str = "sort_descending";
 const KEY_PRELOADING: &str = "preloading";
-const KEY_LOOP_WITHIN_FOLDER: &str = "loopwithinfolder";
-const KEY_SLIDESHOW_DIRECTION: &str = "slideshowdirection";
-const KEY_SLIDESHOW_INTERVAL_SECONDS: &str = "slideshowinterval";
-const KEY_AFTER_DELETION: &str = "afterdeletion";
-const KEY_ASK_DELETE: &str = "askdelete";
-const KEY_DETECT_FORMAT_BY_CONTENT: &str = "detectformatbycontent";
-const KEY_REMEMBER_RECENTS: &str = "rememberrecents";
-const KEY_SKIP_HIDDEN: &str = "skiphidden";
+const KEY_LOOP_WITHIN_FOLDER: &str = "loop_within_folder";
+const KEY_SLIDESHOW_DIRECTION: &str = "slideshow_direction";
+const KEY_SLIDESHOW_INTERVAL_SECONDS: &str = "slideshow_interval";
+const KEY_AFTER_DELETION: &str = "after_deletion";
+const KEY_ASK_DELETE: &str = "ask_delete";
+const KEY_DETECT_FORMAT_BY_CONTENT: &str = "detect_format_by_content";
+const KEY_REMEMBER_RECENTS: &str = "remember_recents";
+const KEY_SKIP_HIDDEN: &str = "skip_hidden";
 
 /// riv.json sections and their inner keys; the read and the write name the same constant.
 const SECTION_OPTIONS: &str = "options";
 const SECTION_RECENTS: &str = "recents";
-const SECTION_KEYBOARD_BINDINGS: &str = "keyboardbindings";
-const SECTION_MOUSE_BINDINGS: &str = "mousebindings";
-const SECTION_WINDOW_PLACEMENT: &str = "windowplacement";
-const KEY_RECENT_FILES: &str = "recentfiles";
+const SECTION_KEYBOARD_BINDINGS: &str = "keyboard_bindings";
+const SECTION_MOUSE_BINDINGS: &str = "mouse_bindings";
+const SECTION_WINDOW_PLACEMENT: &str = "window_placement";
+const KEY_RECENT_FILES: &str = "recent_files";
 const KEY_RECENT_FILE_NAME: &str = "name";
 const KEY_RECENT_FILE_PATH: &str = "path";
-const KEY_LAST_FILE_DIALOG_DIRECTORY: &str = "lastfiledialogdirectory";
+const KEY_LAST_FILE_DIALOG_DIRECTORY: &str = "last_file_dialog_directory";
 const KEY_PLACEMENT_X: &str = "x";
 const KEY_PLACEMENT_Y: &str = "y";
 const KEY_PLACEMENT_WIDTH: &str = "width";
@@ -802,13 +802,13 @@ mod option_bounds_tests {
     #[test]
     fn out_of_range_indexes_fall_back_to_defaults() {
         let document = serde_json::json!({ "options": {
-            "titlebartext": 9,
+            "title_bar_text": 9,
             "scaling": 9,
-            "fitmode": 9,
+            "fit_mode": 9,
             "preloading": 9,
             "dither": 9,
-            "sortfilesby": 9,
-            "afterdeletion": 9,
+            "sort_files_by": 9,
+            "after_deletion": 9,
         }});
         let options = Options::from_document(&document);
         let default = Options::default();
@@ -825,8 +825,8 @@ mod option_bounds_tests {
     fn values_past_u32_fall_back_instead_of_wrapping() {
         // 2^32 + 2 truncated to 2, which passed the choice check as a valid index.
         let document = serde_json::json!({ "options": {
-            "titlebartext": 4_294_967_298u64,
-            "zoomstep": 4_294_967_296u64,
+            "title_bar_text": 4_294_967_298u64,
+            "zoom_step": 4_294_967_296u64,
         }});
         let options = Options::from_document(&document);
         let default = Options::default();
@@ -837,19 +837,19 @@ mod option_bounds_tests {
     #[test]
     fn writing_replaces_sections_that_are_not_objects() {
         // The reader already ignores these; the writer used to panic on them.
-        let mut document = serde_json::json!({ "options": 3, "keyboardbindings": "x" });
+        let mut document = serde_json::json!({ "options": 3, "keyboard_bindings": "x" });
         let sections = document.as_object_mut().expect("document is an object");
         object_section(sections, "options");
-        object_section(sections, "keyboardbindings");
+        object_section(sections, "keyboard_bindings");
         assert!(sections["options"].is_object());
-        assert!(sections["keyboardbindings"].is_object());
+        assert!(sections["keyboard_bindings"].is_object());
     }
 
     #[test]
     fn numeric_values_clamp_to_their_ranges() {
         let document = serde_json::json!({ "options": {
-            "zoomstep": 0,
-            "slideshowinterval": 100_000,
+            "zoom_step": 0,
+            "slideshow_interval": 100_000,
         }});
         let options = Options::from_document(&document);
         assert_eq!(options.zoom_step_percent, 1);
@@ -859,11 +859,11 @@ mod option_bounds_tests {
     #[test]
     fn in_range_values_are_kept() {
         let document = serde_json::json!({ "options": {
-            "titlebartext": 2,
+            "title_bar_text": 2,
             "scaling": 3,
-            "fitmode": 1,
+            "fit_mode": 1,
             "preloading": 2,
-            "zoomstep": 200,
+            "zoom_step": 200,
         }});
         let options = Options::from_document(&document);
         assert_eq!(options.title_bar_text, 2);
@@ -890,7 +890,7 @@ mod document_readability_tests {
             ("riv-readability-object.json", br#"{"options": {}}"#, false),
             (
                 "riv-readability-truncated.json",
-                br#"{"options": {"zoomstep": "#,
+                br#"{"options": {"zoom_step": "#,
                 true,
             ),
             ("riv-readability-array.json", b"[]", true),
@@ -912,12 +912,12 @@ mod document_readability_tests {
     fn mistyped_values_read_as_defaults() {
         // Each value differs from its default and has a JSON type the reader does not take.
         let document = serde_json::json!({ "options": {
-            "zoomstep": "50",
-            "cursorzoom": 0,
-            "slideshowinterval": -5,
-            "slideshowdirection": 0.0,
-            "backgroundcolor": 0x112233,
-            "sortdescending": "true",
+            "zoom_step": "50",
+            "cursor_zoom": 0,
+            "slideshow_interval": -5,
+            "slideshow_direction": 0.0,
+            "background_color": 0x112233,
+            "sort_descending": "true",
         }});
         assert!(Options::from_document(&document) == Options::default());
     }
@@ -1022,15 +1022,15 @@ mod window_placement_bounds_tests {
 
     #[test]
     fn a_placement_past_i32_drops_the_restore_instead_of_wrapping() {
-        let stored = settings_with(serde_json::json!({ "windowplacement": {
+        let stored = settings_with(serde_json::json!({ "window_placement": {
             "x": 100, "y": -200, "width": 640, "height": 480, "maximized": true } }));
         assert_eq!(stored.window_placement(), Some((100, -200, 640, 480, true)));
         // 2^32 used to fold to x = 0 and restore a place never saved.
-        let wrapped = settings_with(serde_json::json!({ "windowplacement": {
+        let wrapped = settings_with(serde_json::json!({ "window_placement": {
             "x": 4_294_967_296i64, "y": 0, "width": 640, "height": 480 } }));
         assert_eq!(wrapped.window_placement(), None);
         // 2^32 + 1 used to fold to width 1 and pass the positive filter.
-        let folded = settings_with(serde_json::json!({ "windowplacement": {
+        let folded = settings_with(serde_json::json!({ "window_placement": {
             "x": 0, "y": 0, "width": 4_294_967_297i64, "height": 480 } }));
         assert_eq!(folded.window_placement(), None);
     }
@@ -1038,10 +1038,10 @@ mod window_placement_bounds_tests {
     #[test]
     fn a_placement_sum_past_i32_drops_the_restore() {
         // Each field fits i32, but the right edge x + width the consumer builds does not.
-        let summed = settings_with(serde_json::json!({ "windowplacement": {
+        let summed = settings_with(serde_json::json!({ "window_placement": {
             "x": 2_000_000_000, "y": 0, "width": 2_000_000_000, "height": 480 } }));
         assert_eq!(summed.window_placement(), None);
-        let summed_vertical = settings_with(serde_json::json!({ "windowplacement": {
+        let summed_vertical = settings_with(serde_json::json!({ "window_placement": {
             "x": 0, "y": 2_000_000_000, "width": 640, "height": 2_000_000_000 } }));
         assert_eq!(summed_vertical.window_placement(), None);
     }
@@ -1099,29 +1099,29 @@ mod stored_key_tests {
     fn a_hand_written_document_reads_every_documented_key() {
         // Literal spellings: the round-trip tests share constants, so only this catches a rename.
         let document = serde_json::json!({ "options": {
-            "backgroundcolorenabled": true,
-            "backgroundcolor": "#112233",
-            "titlebartext": 2,
-            "ctrldragwindow": false,
-            "rememberwindowplacement": false,
-            "hidecursorfullscreen": false,
+            "background_color_enabled": true,
+            "background_color": "#112233",
+            "title_bar_text": 2,
+            "ctrl_drag_window": false,
+            "remember_window_placement": false,
+            "hide_cursor_fullscreen": false,
             "scaling": 2,
-            "fitmode": 1,
-            "zoomstep": 50,
+            "fit_mode": 1,
+            "zoom_step": 50,
             "dither": 0,
-            "fractionalwheelzoom": false,
-            "cursorzoom": false,
-            "sortfilesby": 2,
-            "sortdescending": true,
+            "fractional_wheel_zoom": false,
+            "cursor_zoom": false,
+            "sort_files_by": 2,
+            "sort_descending": true,
             "preloading": 2,
-            "loopwithinfolder": false,
-            "slideshowdirection": 0,
-            "slideshowinterval": 10,
-            "afterdeletion": 0,
-            "askdelete": false,
-            "detectformatbycontent": true,
-            "rememberrecents": false,
-            "skiphidden": false,
+            "loop_within_folder": false,
+            "slideshow_direction": 0,
+            "slideshow_interval": 10,
+            "after_deletion": 0,
+            "ask_delete": false,
+            "detect_format_by_content": true,
+            "remember_recents": false,
+            "skip_hidden": false,
         }});
         let expected = Options {
             background_color_enabled: true,
@@ -1192,6 +1192,9 @@ mod stored_key_tests {
             "loopfoldersenabled": false,
             "fractionalzoom": false,
             "slideshowreversed": true,
+            "titlebartext": 2,
+            "zoomstep": 50,
+            "loopwithinfolder": false,
         }});
         assert!(Options::from_document(&document) == Options::default());
     }
@@ -1201,8 +1204,8 @@ mod stored_key_tests {
         let settings = SettingsFile {
             path: PathBuf::new(),
             document: serde_json::json!({
-                "keyboardbindings": { "reload": ["F5"] },
-                "mousebindings": { "togglezoom": ["Double-click"] },
+                "keyboard_bindings": { "reload": ["F5"] },
+                "mouse_bindings": { "toggle_zoom": ["Double-click"] },
             }),
             options: Options::default(),
             removed_recent_keys: HashSet::new(),
@@ -1215,7 +1218,7 @@ mod stored_key_tests {
         assert!(
             settings
                 .mouse_bindings()
-                .is_some_and(|map| map.contains_key("togglezoom"))
+                .is_some_and(|map| map.contains_key("toggle_zoom"))
         );
     }
 }
@@ -1263,14 +1266,14 @@ mod recent_files_tests {
             .map(|index| serde_json::json!({ "name": format!("{index}.png"), "path": format!("C:\\p\\{index}.png") }))
             .collect();
         let mut settings = in_memory();
-        settings.document = serde_json::json!({ "recents": { "recentfiles": entries } });
+        settings.document = serde_json::json!({ "recents": { "recent_files": entries } });
         assert_eq!(settings.recent_files().len(), MAXIMUM_RECENT_FILES);
     }
 
     #[test]
     fn the_exit_merge_unions_without_bringing_back_removals() {
         let path = std::env::temp_dir().join("riv-recents-merge.json");
-        let disk = serde_json::json!({ "recents": { "recentfiles": [
+        let disk = serde_json::json!({ "recents": { "recent_files": [
             { "name": "a.png", "path": "C:\\d\\a.png" },
             { "name": "b.png", "path": "C:\\d\\b.png" },
         ]}});

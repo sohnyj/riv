@@ -101,25 +101,25 @@ const ACTION_TABLE: &[(Action, &str, &str, ActionRequirement)] = &[
     (Action::Open, "open", "Open...", ActionRequirement::Window),
     (
         Action::OpenUrl,
-        "openurl",
+        "open_url",
         "Open URL...",
         ActionRequirement::Window,
     ),
     (
         Action::PasteUrl,
-        "pasteurl",
+        "paste_url",
         "Paste URL",
         ActionRequirement::Window,
     ),
     (
         Action::ClearRecents,
-        "clearrecents",
+        "clear_recents",
         "Clear recents",
         ActionRequirement::RecentFiles,
     ),
     (
         Action::OtherApplication,
-        "otherapplication",
+        "other_application",
         "Other application...",
         ActionRequirement::FileOnDisk,
     ),
@@ -137,25 +137,25 @@ const ACTION_TABLE: &[(Action, &str, &str, ActionRequirement)] = &[
     ),
     (
         Action::FirstFile,
-        "firstfile",
+        "first_file",
         "First file",
         ActionRequirement::NavigationTargets,
     ),
     (
         Action::PreviousFile,
-        "previousfile",
+        "previous_file",
         "Previous file",
         ActionRequirement::NavigationTargets,
     ),
     (
         Action::NextFile,
-        "nextfile",
+        "next_file",
         "Next file",
         ActionRequirement::NavigationTargets,
     ),
     (
         Action::LastFile,
-        "lastfile",
+        "last_file",
         "Last file",
         ActionRequirement::NavigationTargets,
     ),
@@ -167,31 +167,31 @@ const ACTION_TABLE: &[(Action, &str, &str, ActionRequirement)] = &[
     ),
     (
         Action::PreviousFrame,
-        "previousframe",
+        "previous_frame",
         "Previous frame",
         ActionRequirement::Animation,
     ),
     (
         Action::NextFrame,
-        "nextframe",
+        "next_frame",
         "Next frame",
         ActionRequirement::Animation,
     ),
     (
         Action::DecreaseSpeed,
-        "decreasespeed",
+        "decrease_speed",
         "Decrease speed",
         ActionRequirement::Animation,
     ),
     (
         Action::IncreaseSpeed,
-        "increasespeed",
+        "increase_speed",
         "Increase speed",
         ActionRequirement::Animation,
     ),
     (
         Action::ResetSpeed,
-        "resetspeed",
+        "reset_speed",
         "Reset speed",
         ActionRequirement::Animation,
     ),
@@ -204,62 +204,62 @@ const ACTION_TABLE: &[(Action, &str, &str, ActionRequirement)] = &[
     (Action::Reload, "reload", "Reload", ActionRequirement::Image),
     (
         Action::ToggleFitMode,
-        "togglefitmode",
+        "toggle_fit_mode",
         "Toggle fit mode",
         ActionRequirement::Image,
     ),
     (
         Action::PreserveZoom,
-        "preservezoom",
+        "preserve_zoom",
         "Preserve zoom",
         ActionRequirement::Image,
     ),
     (
         Action::ZoomIn,
-        "zoomin",
+        "zoom_in",
         "Zoom in",
         ActionRequirement::Image,
     ),
     (
         Action::ZoomOut,
-        "zoomout",
+        "zoom_out",
         "Zoom out",
         ActionRequirement::Image,
     ),
     (
         Action::ToggleZoom,
-        "togglezoom",
+        "toggle_zoom",
         "Toggle zoom",
         ActionRequirement::Image,
     ),
-    (Action::PanUp, "panup", "Pan up", ActionRequirement::Image),
+    (Action::PanUp, "pan_up", "Pan up", ActionRequirement::Image),
     (
         Action::PanDown,
-        "pandown",
+        "pan_down",
         "Pan down",
         ActionRequirement::Image,
     ),
     (
         Action::PanLeft,
-        "panleft",
+        "pan_left",
         "Pan left",
         ActionRequirement::Image,
     ),
     (
         Action::PanRight,
-        "panright",
+        "pan_right",
         "Pan right",
         ActionRequirement::Image,
     ),
     (
         Action::RotateLeft,
-        "rotateleft",
+        "rotate_left",
         "Rotate left",
         ActionRequirement::Image,
     ),
     (
         Action::RotateRight,
-        "rotateright",
+        "rotate_right",
         "Rotate right",
         ActionRequirement::Image,
     ),
@@ -267,7 +267,7 @@ const ACTION_TABLE: &[(Action, &str, &str, ActionRequirement)] = &[
     (Action::Flip, "flip", "Flip", ActionRequirement::Image),
     (
         Action::ShowInExplorer,
-        "showinexplorer",
+        "show_in_explorer",
         "Show in Explorer",
         ActionRequirement::ContainingFile,
     ),
@@ -285,13 +285,13 @@ const ACTION_TABLE: &[(Action, &str, &str, ActionRequirement)] = &[
     ),
     (
         Action::DeletePermanently,
-        "deletepermanently",
+        "delete_permanently",
         "Delete permanently",
         ActionRequirement::FileOnDisk,
     ),
     (
         Action::ToggleSlideshow,
-        "toggleslideshow",
+        "toggle_slideshow",
         "Toggle slideshow",
         ActionRequirement::NavigationTargets,
     ),
@@ -303,13 +303,13 @@ const ACTION_TABLE: &[(Action, &str, &str, ActionRequirement)] = &[
     ),
     (
         Action::ToggleFullscreen,
-        "togglefullscreen",
+        "toggle_fullscreen",
         "Toggle fullscreen",
         ActionRequirement::Window,
     ),
     (
         Action::AlwaysOnTop,
-        "alwaysontop",
+        "always_on_top",
         "Always on top",
         ActionRequirement::Window,
     ),
@@ -412,8 +412,7 @@ mod action_table_tests {
         let differing: Vec<_> = rows
             .iter()
             .filter(|(variant, name, label)| {
-                let folded = variant.to_lowercase();
-                folded != *name || folded != letters(label)
+                snake_case(variant) != *name || label_words(label) != *name
             })
             .collect();
         assert!(differing.is_empty(), "variant, name, label: {differing:?}");
@@ -423,12 +422,29 @@ mod action_table_tests {
         text.split_once('"')?.1.split_once('"')
     }
 
-    /// A label's spacing and its ellipsis are not part of the word.
-    fn letters(label: &str) -> String {
+    /// Each capital letter of a variant starts a word.
+    fn snake_case(variant: &str) -> String {
+        let mut name = String::new();
+        for character in variant.chars() {
+            if character.is_ascii_uppercase() && !name.is_empty() {
+                name.push('_');
+            }
+            name.push(character.to_ascii_lowercase());
+        }
+        name
+    }
+
+    /// A label's ellipsis is not part of a word.
+    fn label_words(label: &str) -> String {
         label
             .to_lowercase()
-            .chars()
-            .filter(char::is_ascii_alphanumeric)
-            .collect()
+            .split_whitespace()
+            .map(|word| {
+                word.chars()
+                    .filter(char::is_ascii_alphanumeric)
+                    .collect::<String>()
+            })
+            .collect::<Vec<_>>()
+            .join("_")
     }
 }

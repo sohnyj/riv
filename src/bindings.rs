@@ -139,52 +139,52 @@ pub const MAXIMUM_MOUSE_ENCODINGS: usize = 1;
 
 const DEFAULT_KEYBOARD: &[(&str, &[&str])] = &[
     ("open", &["Ctrl+O"]),
-    ("pasteurl", &["Ctrl+V"]),
+    ("paste_url", &["Ctrl+V"]),
     ("playlist", &["E"]),
     ("loop", &["L"]),
-    ("firstfile", &["Home"]),
-    ("previousfile", &["Left"]),
-    ("nextfile", &["Right"]),
-    ("lastfile", &["End"]),
+    ("first_file", &["Home"]),
+    ("previous_file", &["Left"]),
+    ("next_file", &["Right"]),
+    ("last_file", &["End"]),
     ("pause", &["spacebar"]),
-    ("previousframe", &["B"]),
-    ("nextframe", &["N"]),
-    ("decreasespeed", &["["]),
-    ("increasespeed", &["]"]),
-    ("resetspeed", &["\\"]),
+    ("previous_frame", &["B"]),
+    ("next_frame", &["N"]),
+    ("decrease_speed", &["["]),
+    ("increase_speed", &["]"]),
+    ("reset_speed", &["\\"]),
     ("information", &["I", "Tab"]),
     ("reload", &["Ctrl+R", "F5"]),
-    ("togglefitmode", &["V"]),
-    ("preservezoom", &["Z"]),
-    ("zoomin", &["Up"]),
-    ("zoomout", &["Down"]),
-    ("togglezoom", &["Enter"]),
-    ("panup", &["Ctrl+Up"]),
-    ("pandown", &["Ctrl+Down"]),
-    ("panleft", &["Ctrl+Left"]),
-    ("panright", &["Ctrl+Right"]),
-    ("rotateleft", &["Shift+Left"]),
-    ("rotateright", &["Shift+Right"]),
+    ("toggle_fit_mode", &["V"]),
+    ("preserve_zoom", &["Z"]),
+    ("zoom_in", &["Up"]),
+    ("zoom_out", &["Down"]),
+    ("toggle_zoom", &["Enter"]),
+    ("pan_up", &["Ctrl+Up"]),
+    ("pan_down", &["Ctrl+Down"]),
+    ("pan_left", &["Ctrl+Left"]),
+    ("pan_right", &["Ctrl+Right"]),
+    ("rotate_left", &["Shift+Left"]),
+    ("rotate_right", &["Shift+Right"]),
     ("mirror", &["Shift+M"]),
     ("flip", &["Shift+F"]),
-    ("showinexplorer", &["Ctrl+E"]),
+    ("show_in_explorer", &["Ctrl+E"]),
     ("rename", &["R", "F2"]),
     ("delete", &["Delete", "Ctrl+D"]),
-    ("deletepermanently", &["Shift+Delete", "Ctrl+Shift+D"]),
-    ("toggleslideshow", &["S"]),
+    ("delete_permanently", &["Shift+Delete", "Ctrl+Shift+D"]),
+    ("toggle_slideshow", &["S"]),
     ("settings", &["Ctrl+,"]),
-    ("togglefullscreen", &["F", "F11"]),
-    ("alwaysontop", &["T"]),
+    ("toggle_fullscreen", &["F", "F11"]),
+    ("always_on_top", &["T"]),
     ("exit", &["Ctrl+W"]),
 ];
 
 const DEFAULT_MOUSE: &[(&str, &[&str])] = &[
-    ("previousfile", &["WheelUp"]),
-    ("nextfile", &["WheelDown"]),
-    ("zoomin", &["Ctrl+WheelUp"]),
-    ("zoomout", &["Ctrl+WheelDown"]),
-    ("togglezoom", &["Double-click"]),
-    ("togglefullscreen", &["WheelButton"]),
+    ("previous_file", &["WheelUp"]),
+    ("next_file", &["WheelDown"]),
+    ("zoom_in", &["Ctrl+WheelUp"]),
+    ("zoom_out", &["Ctrl+WheelDown"]),
+    ("toggle_zoom", &["Double-click"]),
+    ("toggle_fullscreen", &["WheelButton"]),
 ];
 
 impl Bindings {
@@ -486,11 +486,11 @@ mod normalization_tests {
         let overrides = serde_json::json!({ "previous": ["Q"], "next": ["W"] });
         let map = overrides.as_object().expect("object");
         assert_eq!(
-            resolved_keyboard_sequences(Some(map), "previousfile"),
+            resolved_keyboard_sequences(Some(map), "previous_file"),
             ["Left"]
         );
         assert_eq!(
-            resolved_keyboard_sequences(Some(map), "nextfile"),
+            resolved_keyboard_sequences(Some(map), "next_file"),
             ["Right"]
         );
         let bindings = Bindings::from_settings(Some(map), None);
@@ -499,18 +499,31 @@ mod normalization_tests {
     }
 
     #[test]
+    fn the_retired_joined_names_bind_nothing() {
+        // Names without underscores were retired in 2026-09 with no migration: the defaults apply.
+        let overrides = serde_json::json!({ "togglefullscreen": ["Q"] });
+        let map = overrides.as_object().expect("object");
+        assert_eq!(
+            resolved_keyboard_sequences(Some(map), "toggle_fullscreen"),
+            ["F", "F11"]
+        );
+        let bindings = Bindings::from_settings(Some(map), None);
+        assert!(bindings.lookup_key(0, u16::from(b'Q')).is_none());
+    }
+
+    #[test]
     fn resolved_bindings_round_trip_and_discard_junk() {
         let overrides = serde_json::json!({
-            "nextfile": ["Right", "Ctrl+Ctrl+X", "A".repeat(300)],
-            "togglefullscreen": ["WheelButton", "Nope"],
+            "next_file": ["Right", "Ctrl+Ctrl+X", "A".repeat(300)],
+            "toggle_fullscreen": ["WheelButton", "Nope"],
         });
         let map = overrides.as_object().expect("object");
         assert_eq!(
-            resolved_keyboard_sequences(Some(map), "nextfile"),
+            resolved_keyboard_sequences(Some(map), "next_file"),
             ["Right", "Ctrl+X"]
         );
         assert_eq!(
-            resolved_mouse_encodings(Some(map), "togglefullscreen"),
+            resolved_mouse_encodings(Some(map), "toggle_fullscreen"),
             ["WheelButton"]
         );
     }
@@ -558,16 +571,16 @@ mod normalization_tests {
     #[test]
     fn a_hand_written_list_stops_at_the_maximum() {
         let overrides = serde_json::json!({
-            "nextfile": ["Right", "Ctrl+A", "Ctrl+B", "Ctrl+C"],
-            "togglefullscreen": ["WheelButton", "Ctrl+WheelUp"],
+            "next_file": ["Right", "Ctrl+A", "Ctrl+B", "Ctrl+C"],
+            "toggle_fullscreen": ["WheelButton", "Ctrl+WheelUp"],
         });
         let map = overrides.as_object().expect("object");
         assert_eq!(
-            resolved_keyboard_sequences(Some(map), "nextfile"),
+            resolved_keyboard_sequences(Some(map), "next_file"),
             ["Right", "Ctrl+A", "Ctrl+B"]
         );
         assert_eq!(
-            resolved_mouse_encodings(Some(map), "togglefullscreen"),
+            resolved_mouse_encodings(Some(map), "toggle_fullscreen"),
             ["WheelButton"]
         );
         let bindings = Bindings::from_settings(Some(map), Some(map));
@@ -600,42 +613,42 @@ mod default_table_tests {
         assert_eq!(
             rendered(DEFAULT_KEYBOARD),
             "open=Ctrl+O\n\
-             pasteurl=Ctrl+V\n\
+             paste_url=Ctrl+V\n\
              playlist=E\n\
              loop=L\n\
-             firstfile=Home\n\
-             previousfile=Left\n\
-             nextfile=Right\n\
-             lastfile=End\n\
+             first_file=Home\n\
+             previous_file=Left\n\
+             next_file=Right\n\
+             last_file=End\n\
              pause=spacebar\n\
-             previousframe=B\n\
-             nextframe=N\n\
-             decreasespeed=[\n\
-             increasespeed=]\n\
-             resetspeed=\\\n\
+             previous_frame=B\n\
+             next_frame=N\n\
+             decrease_speed=[\n\
+             increase_speed=]\n\
+             reset_speed=\\\n\
              information=I,Tab\n\
              reload=Ctrl+R,F5\n\
-             togglefitmode=V\n\
-             preservezoom=Z\n\
-             zoomin=Up\n\
-             zoomout=Down\n\
-             togglezoom=Enter\n\
-             panup=Ctrl+Up\n\
-             pandown=Ctrl+Down\n\
-             panleft=Ctrl+Left\n\
-             panright=Ctrl+Right\n\
-             rotateleft=Shift+Left\n\
-             rotateright=Shift+Right\n\
+             toggle_fit_mode=V\n\
+             preserve_zoom=Z\n\
+             zoom_in=Up\n\
+             zoom_out=Down\n\
+             toggle_zoom=Enter\n\
+             pan_up=Ctrl+Up\n\
+             pan_down=Ctrl+Down\n\
+             pan_left=Ctrl+Left\n\
+             pan_right=Ctrl+Right\n\
+             rotate_left=Shift+Left\n\
+             rotate_right=Shift+Right\n\
              mirror=Shift+M\n\
              flip=Shift+F\n\
-             showinexplorer=Ctrl+E\n\
+             show_in_explorer=Ctrl+E\n\
              rename=R,F2\n\
              delete=Delete,Ctrl+D\n\
-             deletepermanently=Shift+Delete,Ctrl+Shift+D\n\
-             toggleslideshow=S\n\
+             delete_permanently=Shift+Delete,Ctrl+Shift+D\n\
+             toggle_slideshow=S\n\
              settings=Ctrl+,\n\
-             togglefullscreen=F,F11\n\
-             alwaysontop=T\n\
+             toggle_fullscreen=F,F11\n\
+             always_on_top=T\n\
              exit=Ctrl+W\n"
         );
     }
@@ -644,12 +657,12 @@ mod default_table_tests {
     fn the_mouse_defaults_match_the_documented_table() {
         assert_eq!(
             rendered(DEFAULT_MOUSE),
-            "previousfile=WheelUp\n\
-             nextfile=WheelDown\n\
-             zoomin=Ctrl+WheelUp\n\
-             zoomout=Ctrl+WheelDown\n\
-             togglezoom=Double-click\n\
-             togglefullscreen=WheelButton\n"
+            "previous_file=WheelUp\n\
+             next_file=WheelDown\n\
+             zoom_in=Ctrl+WheelUp\n\
+             zoom_out=Ctrl+WheelDown\n\
+             toggle_zoom=Double-click\n\
+             toggle_fullscreen=WheelButton\n"
         );
     }
 
@@ -675,9 +688,9 @@ mod default_table_tests {
     }
 
     #[test]
-    fn escape_and_openurl_stay_unbound() {
+    fn escape_and_open_url_stay_unbound() {
         // Esc must reach the fullscreen exit; a default on it would swallow that.
-        assert!(default_keyboard_sequences("openurl").is_empty());
+        assert!(default_keyboard_sequences("open_url").is_empty());
         assert!(Bindings::from_settings(None, None).escape_is_unbound());
         let overrides = serde_json::json!({ "exit": ["Esc"] });
         let bindings = Bindings::from_settings(overrides.as_object(), None);
@@ -687,10 +700,10 @@ mod default_table_tests {
     #[test]
     fn the_menu_column_shows_the_first_keyboard_sequence_only() {
         assert_eq!(
-            menu_shortcut_text(None, "togglefullscreen").as_deref(),
+            menu_shortcut_text(None, "toggle_fullscreen").as_deref(),
             Some("F")
         );
-        assert_eq!(menu_shortcut_text(None, "openurl"), None);
+        assert_eq!(menu_shortcut_text(None, "open_url"), None);
         let overrides = serde_json::json!({ "reload": [] });
         assert_eq!(menu_shortcut_text(overrides.as_object(), "reload"), None);
     }

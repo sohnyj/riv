@@ -3422,7 +3422,7 @@ mod open_url_smoke_tests {
             }
         });
         // Bind the dialog to a plain key so a posted WM_KEYDOWN can open it.
-        let _settings = SettingsFile::replace(r#"{"keyboardbindings":{"openurl":["U"]}}"#);
+        let _settings = SettingsFile::replace(r#"{"keyboard_bindings":{"open_url":["U"]}}"#);
         let mut riv_process = std::process::Command::new(EXECUTABLE)
             .spawn()
             .expect("riv.exe spawn (build first, run from the repo root)");
