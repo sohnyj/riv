@@ -281,10 +281,9 @@ unsafe extern "system" fn frame_procedure(
             if header.idFrom == IDC_OPTIONS_TAB as usize && header.code == TCN_SELCHANGE {
                 let selected =
                     unsafe { SendMessageW(header.hwndFrom, TCM_GETCURSEL, None, None).0 };
+                let selected = usize::try_from(selected).expect("a selection change names a tab");
                 select_page(dialog, header.hwndFrom, selected);
-                if let Ok(index) = usize::try_from(selected) {
-                    sync_number_edit(dialog, index);
-                }
+                sync_number_edit(dialog, selected);
             }
             0
         }
@@ -391,18 +390,14 @@ fn page_area(dialog: HWND, tab: HWND) -> RECT {
     area
 }
 
-fn select_page(dialog: HWND, tab: HWND, selected: isize) {
-    if let Ok(index) = usize::try_from(selected)
-        && index < PAGES.len()
-    {
-        if let Some(state) = state_mut(dialog) {
-            ensure_page(state, tab, index);
-        }
-        if index == WINDOW_PAGE {
-            sync_background_color_button(dialog);
-        }
+fn select_page(dialog: HWND, tab: HWND, index: usize) {
+    if let Some(state) = state_mut(dialog) {
+        ensure_page(state, tab, index);
     }
-    show_page(dialog, selected);
+    if index == WINDOW_PAGE {
+        sync_background_color_button(dialog);
+    }
+    show_page(dialog, index);
 }
 
 /// A tab page: its template, its tab title, and what runs at creation and at each sync.
@@ -523,17 +518,14 @@ fn create_page(state: &mut OptionsState, tab: HWND, index: usize) -> HWND {
 }
 
 /// The selected page goes up before the others go down, so the bare tab never shows.
-fn show_page(dialog: HWND, selected: isize) {
+fn show_page(dialog: HWND, visible: usize) {
     let Some(pages) = state_mut(dialog).map(|state| state.pages) else {
         return;
     };
     // No borrow spans the shows: a synchronously delivered draw message would take a second &mut.
-    let visible = usize::try_from(selected).ok();
-    if let Some(page) = visible.and_then(|index| pages.get(index)) {
-        let _ = unsafe { ShowWindow(*page, SW_SHOW) };
-    }
+    let _ = unsafe { ShowWindow(pages[visible], SW_SHOW) };
     for (index, page) in pages.iter().enumerate() {
-        if Some(index) != visible {
+        if index != visible {
             let _ = unsafe { ShowWindow(*page, SW_HIDE) };
         }
     }
@@ -581,9 +573,9 @@ fn fit_page_controls(page: HWND, stretched_control: i32, right_following_control
 
 fn update_buttons(state: &OptionsState) {
     let enable = |control: i32, enabled: bool| {
-        if let Ok(button) = unsafe { GetDlgItem(Some(state.dialog), control) } {
-            let _ = unsafe { EnableWindow(button, enabled) };
-        }
+        let button = unsafe { GetDlgItem(Some(state.dialog), control) }
+            .expect("the frame template carries the Apply and Restore defaults buttons");
+        let _ = unsafe { EnableWindow(button, enabled) };
     };
     enable(IDC_APPLY, state.is_dirty());
     enable(IDC_RESTORE_DEFAULTS, state.differs_from_defaults());
@@ -950,6 +942,10 @@ fn initialize_miscellaneous_page(state: &OptionsState) {
 
 fn sync_all_pages(state: &mut OptionsState) {
     for index in 0..PAGES.len() {
+        // A page not visited yet is synced by ensure_page when it is created.
+        if state.pages[index].is_invalid() {
+            continue;
+        }
         sync_page(state, index);
     }
 }
@@ -1260,10 +1256,8 @@ fn insert_shortcut_rows(list: HWND, rows: &[ShortcutRow]) {
 }
 
 fn refresh_shortcut_rows(state: &OptionsState) {
-    let Ok(list) = (unsafe { GetDlgItem(Some(state.pages[SHORTCUTS_PAGE]), IDC_SHORTCUTS_LIST) })
-    else {
-        return;
-    };
+    let list = unsafe { GetDlgItem(Some(state.pages[SHORTCUTS_PAGE]), IDC_SHORTCUTS_LIST) }
+        .expect("the shortcuts page carries the list");
     for (index, row) in state.transient_shortcuts.iter().enumerate() {
         for (subitem, text) in [
             (KEYBOARD_COLUMN, row.keyboard.join(", ")),
@@ -1645,11 +1639,8 @@ fn refresh_group_check_image(state: &OptionsState, tree: HWND, group_index: usiz
 }
 
 fn set_all_associations(state: &mut OptionsState, checked: bool) {
-    let Ok(tree) =
-        (unsafe { GetDlgItem(Some(state.pages[ASSOCIATION_PAGE]), IDC_ASSOCIATION_TREE) })
-    else {
-        return;
-    };
+    let tree = unsafe { GetDlgItem(Some(state.pages[ASSOCIATION_PAGE]), IDC_ASSOCIATION_TREE) }
+        .expect("the association page carries the tree");
     for entry in &mut state.extensions {
         entry.checked = checked;
         tree_set_state_image(tree, entry.item, check_state(checked));
@@ -1677,9 +1668,15 @@ fn combo_fill(page: HWND, control: i32, entries: &[&str]) {
 }
 
 fn combo_select(page: HWND, control: i32, index: u32) {
-    if let Ok(combo) = unsafe { GetDlgItem(Some(page), control) } {
-        unsafe { SendMessageW(combo, CB_SETCURSEL, Some(WPARAM(index as usize)), None) };
-    }
+    unsafe {
+        SendDlgItemMessageW(
+            page,
+            control,
+            CB_SETCURSEL,
+            WPARAM(index as usize),
+            LPARAM(0),
+        )
+    };
 }
 
 /// Only CBN_SELCHANGE calls this, so the combo exists and its selection is never CB_ERR.

@@ -164,10 +164,8 @@ unsafe extern "system" fn keyboard_procedure(
         WM_RIV_KEYBOARD_REMOVE => {
             if let Some(state) = state_mut::<KeyboardCaptureState>(dialog) {
                 let index = wparam.0;
-                if index < state.sequences.len() {
-                    state.sequences.remove(index);
-                    listbox_remove(dialog, index);
-                }
+                state.sequences.remove(index);
+                listbox_remove(dialog, index);
             }
             1
         }
@@ -236,9 +234,9 @@ unsafe extern "system" fn mouse_procedure(
         }
         WM_RIV_MOUSE_CAPTURED => {
             let modifiers = (wparam.0 >> MOUSE_CAPTURE_MODIFIER_SHIFT) as u8;
-            if let Some(base) = MouseBase::from_index(wparam.0 as u8)
-                && let Some(state) = state_mut::<MouseCaptureState>(dialog)
-            {
+            let base = MouseBase::from_index(wparam.0 as u8)
+                .expect("the field packs a base it took from the table");
+            if let Some(state) = state_mut::<MouseCaptureState>(dialog) {
                 let encoding = bindings::format_mouse_encoding(modifiers, base);
                 set_mouse_field_text(dialog, Some(&encoding));
                 state.binding = Some(encoding);
@@ -281,11 +279,15 @@ unsafe extern "system" fn mouse_procedure(
 }
 
 fn set_mouse_field_text(dialog: HWND, binding: Option<&str>) {
-    if let Ok(field) = unsafe { GetDlgItem(Some(dialog), IDC_CAPTURE_MOUSE_FIELD) } {
-        let _ =
-            unsafe { SetWindowTextW(field, &HSTRING::from(binding.unwrap_or(NO_BINDING_TEXT))) };
-        let _ = unsafe { InvalidateRect(Some(field), None, false) };
-    }
+    let field = unsafe { GetDlgItem(Some(dialog), IDC_CAPTURE_MOUSE_FIELD) }
+        .expect("the mouse capture template carries the field");
+    let _ = unsafe { SetWindowTextW(field, &HSTRING::from(binding.unwrap_or(NO_BINDING_TEXT))) };
+    let _ = unsafe { InvalidateRect(Some(field), None, false) };
+}
+
+/// The dialog holding a capture control; a child control always has a parent.
+fn dialog_of(control: HWND) -> HWND {
+    unsafe { GetParent(control) }.expect("a child control has a parent")
 }
 
 fn remove_icon_bounds(item: &RECT) -> RECT {
@@ -300,10 +302,10 @@ fn remove_icon_bounds(item: &RECT) -> RECT {
 
 /// The control's text, read into a buffer sized from GetWindowTextLengthW.
 fn window_text(window: HWND) -> String {
-    let length = unsafe { GetWindowTextLengthW(window) };
-    let mut text = vec![0u16; usize::try_from(length).unwrap_or(0) + 1]; // + 1 for the NUL
-    let copied = unsafe { GetWindowTextW(window, &mut text) };
-    String::from_utf16_lossy(&text[..usize::try_from(copied).unwrap_or(0)])
+    let length = unsafe { GetWindowTextLengthW(window) } as usize;
+    let mut text = vec![0u16; length + 1]; // + 1 for the NUL
+    let copied = unsafe { GetWindowTextW(window, &mut text) } as usize;
+    String::from_utf16_lossy(&text[..copied])
 }
 
 /// Reads a list item into a buffer sized from LB_GETTEXTLEN (LB_GETTEXT has no bound).
@@ -316,7 +318,7 @@ fn listbox_item_text(listbox: HWND, item_index: u32) -> Vec<u16> {
             None,
         )
     };
-    let length = usize::try_from(length.0).unwrap_or(0);
+    let length = length.0 as usize;
     let mut text = vec![0u16; length + 1]; // + 1 for the NUL
     let copied = unsafe {
         SendMessageW(
@@ -326,7 +328,7 @@ fn listbox_item_text(listbox: HWND, item_index: u32) -> Vec<u16> {
             Some(LPARAM(text.as_mut_ptr() as isize)),
         )
     };
-    text.truncate(usize::try_from(copied.0).unwrap_or(0));
+    text.truncate(copied.0 as usize);
     text
 }
 
@@ -451,16 +453,14 @@ unsafe extern "system" fn keyboard_list_procedure(
             };
             let zone = remove_icon_bounds(&item);
             if x >= zone.left && x < zone.right && y >= zone.top && y < zone.bottom {
-                if let Ok(dialog) = unsafe { GetParent(listbox) } {
-                    unsafe {
-                        SendMessageW(
-                            dialog,
-                            WM_RIV_KEYBOARD_REMOVE,
-                            Some(WPARAM(selected as usize)),
-                            None,
-                        )
-                    };
-                }
+                unsafe {
+                    SendMessageW(
+                        dialog_of(listbox),
+                        WM_RIV_KEYBOARD_REMOVE,
+                        Some(WPARAM(selected as usize)),
+                        None,
+                    )
+                };
                 return LRESULT(0); // consume so the selection does not move
             }
         }
@@ -606,11 +606,14 @@ unsafe extern "system" fn keyboard_field_procedure(
                 let _ = unsafe { InvalidateRect(Some(field), None, false) };
             } else {
                 let packed = pack_words(u32::from(current_modifiers()), u32::from(virtual_key));
-                if let Ok(dialog) = unsafe { GetParent(field) } {
-                    unsafe {
-                        SendMessageW(dialog, WM_RIV_KEYBOARD_CAPTURED, Some(WPARAM(packed)), None)
-                    };
-                }
+                unsafe {
+                    SendMessageW(
+                        dialog_of(field),
+                        WM_RIV_KEYBOARD_CAPTURED,
+                        Some(WPARAM(packed)),
+                        None,
+                    )
+                };
             }
             LRESULT(0)
         }
@@ -652,9 +655,14 @@ unsafe extern "system" fn mouse_field_procedure(
     fn notify(field: HWND, base: MouseBase) -> LRESULT {
         let packed = ((current_modifiers() as usize) << MOUSE_CAPTURE_MODIFIER_SHIFT)
             | base.index() as usize;
-        if let Ok(dialog) = unsafe { GetParent(field) } {
-            unsafe { SendMessageW(dialog, WM_RIV_MOUSE_CAPTURED, Some(WPARAM(packed)), None) };
-        }
+        unsafe {
+            SendMessageW(
+                dialog_of(field),
+                WM_RIV_MOUSE_CAPTURED,
+                Some(WPARAM(packed)),
+                None,
+            )
+        };
         LRESULT(0)
     }
     match message {
