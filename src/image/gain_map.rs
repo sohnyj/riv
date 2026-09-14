@@ -405,7 +405,8 @@ fn parse_hdrgm(xml: &str) -> Option<GainMapMetadata> {
     let hdr_capacity_minimum = scalar_or("HDRCapacityMin", 0.0)?;
     let base_rendition_is_hdr = match property_values(xml, prefix, "BaseRenditionIsHDR") {
         Some(values) => match values.as_slice() {
-            [one] => one.eq_ignore_ascii_case("true"),
+            [one] if one.eq_ignore_ascii_case("true") => true,
+            [one] if one.eq_ignore_ascii_case("false") => false,
             _ => return None,
         },
         None => false,
@@ -523,6 +524,13 @@ mod metadata_tests {
         assert_eq!(metadata.hdr_capacity_minimum, 0.0);
         assert_eq!(metadata.hdr_capacity_maximum, 4.709);
         assert!(!metadata.base_rendition_is_hdr);
+    }
+
+    #[test]
+    fn an_unreadable_base_rendition_flag_rejects_the_packet() {
+        let attributes = "hdrgm:Version=\"1.0\" hdrgm:GainMapMax=\"3.0\" \
+             hdrgm:HDRCapacityMax=\"3.0\" hdrgm:BaseRenditionIsHDR=\"maybe\"";
+        assert!(parse_hdrgm(&xmp_packet(attributes)).is_none());
     }
 
     #[test]
