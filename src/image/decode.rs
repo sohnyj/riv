@@ -2181,6 +2181,8 @@ fn hybrid_log_gamma_scene_linear(code: f32) -> f32 {
 
 /// Peak-scan histogram resolution in PQ code space.
 const PEAK_HISTOGRAM_BINS: usize = 4096;
+/// The content peak is the 99.9th percentile of channel maxima, so lone outliers are ignored.
+const PEAK_PERCENTILE_PER_MILLE: u64 = 999;
 
 /// Histogram bin per half bit pattern; built once, two powf per entry.
 fn peak_histogram_bin_table() -> &'static [u16; LOOKUP_TABLE_ENTRIES] {
@@ -2257,17 +2259,18 @@ fn maxima_histogram(pixels: &[u8], subsample: bool) -> ([u32; PEAK_HISTOGRAM_BIN
     (histogram, sample_count)
 }
 
-/// The bin the 99.9th percentile of samples falls in; the top bin when the count is tiny.
+/// The bin the PEAK_PERCENTILE_PER_MILLE percentile of samples falls in.
 fn percentile_bin(histogram: &[u32; PEAK_HISTOGRAM_BINS], sample_count: u32) -> usize {
-    let threshold = (u64::from(sample_count) * 999 / 1000) as u32;
-    let mut accumulated = 0u32;
-    for (bin, count) in histogram.iter().enumerate() {
-        accumulated += count;
-        if accumulated >= threshold {
-            return bin;
-        }
-    }
-    PEAK_HISTOGRAM_BINS - 1
+    // Rounded up, so a handful of samples still needs one of them at or below the bin.
+    let threshold = (u64::from(sample_count) * PEAK_PERCENTILE_PER_MILLE).div_ceil(1000) as u32;
+    histogram
+        .iter()
+        .scan(0u32, |accumulated, count| {
+            *accumulated += count;
+            Some(*accumulated)
+        })
+        .position(|accumulated| accumulated >= threshold)
+        .expect("the bins sum to the sample count, which the threshold never exceeds")
 }
 
 /// Per-channel maxima; the discarded alpha lane keeps the stride regular.
@@ -3748,6 +3751,14 @@ mod peak_scan_tests {
             values[index] = (60.0, 60.0, 60.0);
         }
         let pixels = half_pixels(&values);
+        let peak = peak_luminance_from_half_pixels(&pixels).unwrap();
+        assert!((peak - 200.0).abs() < 5.0, "peak={peak}");
+    }
+
+    #[test]
+    fn a_single_hdr_pixel_is_its_own_peak() {
+        // One sample: the percentile threshold rounds up to that sample instead of down to none.
+        let pixels = half_pixels(&[(2.5f32, 2.5f32, 2.5f32)]);
         let peak = peak_luminance_from_half_pixels(&pixels).unwrap();
         assert!((peak - 200.0).abs() < 5.0, "peak={peak}");
     }
