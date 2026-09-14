@@ -219,7 +219,6 @@ fn colorants(icc: &[u8]) -> Option<[[f32; 3]; 3]> {
 pub fn primaries(icc: &[u8]) -> Option<[[f32; 2]; 3]> {
     let mut primaries = [[0.0f32; 2]; 3];
     for (stored, primary) in colorants(icc)?.iter().zip(&mut primaries) {
-        // The colorants are stored against the D50 PCS; adapt out of it to name the gamut.
         let mut adapted = [0.0f32; 3];
         for (row, channel) in D50_TO_D65.iter().zip(&mut adapted) {
             *channel = row[0] * stored[0] + row[1] * stored[1] + row[2] * stored[2];

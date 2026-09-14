@@ -1,4 +1,4 @@
-// Fullscreen triangle from SV_VertexID for the quantize pass.
+// Fullscreen triangle from SV_VertexID for every fullscreen pass.
 
 float4 main(uint vertex_id : SV_VertexID) : SV_POSITION
 {

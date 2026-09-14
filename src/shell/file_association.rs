@@ -156,7 +156,7 @@ fn reclaim_all_registration() {
     }
     registry_delete_value(REGISTERED_APPLICATIONS_KEY, crate::APPLICATION_NAME);
     registry_delete_tree(&classes_progid_key());
-    registry_delete_tree(APPLICATION_ROOT_KEY); // includes Capabilities and FileAssociations
+    registry_delete_tree(APPLICATION_ROOT_KEY);
 }
 
 pub fn registered_extensions() -> Vec<String> {

@@ -1,5 +1,3 @@
-//! Painting a dialog surface through a buffer.
-
 use windows::Win32::Foundation::RECT;
 use windows::Win32::Graphics::Gdi::{GetCurrentObject, HDC, OBJ_FONT, SelectObject};
 use windows::Win32::UI::Controls::{

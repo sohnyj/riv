@@ -155,7 +155,6 @@ fn shaped_text<'a>(
     Ok(slot.as_ref().expect("layout shaped"))
 }
 
-/// A solid brush for `color` mapped to the output color target.
 fn solid_brush(
     context: &ID2D1DeviceContext,
     color: D2D1_COLOR_F,
@@ -218,7 +217,6 @@ impl Overlay {
         })
     }
 
-    /// Called when the renderer is rebuilt: the brushes belong to its device context.
     pub fn release_brushes(&mut self) {
         self.brushes = None;
     }
@@ -744,7 +742,6 @@ pub fn build_error_text(
         ErrorCode::None if reason.ends_with('.') => reason,
         ErrorCode::None => format!("{reason}."),
     };
-    // With no file name to head it, the reason stands alone.
     let mut text = if file_name.is_empty() {
         reason
     } else {

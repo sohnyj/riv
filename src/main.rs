@@ -376,7 +376,6 @@ struct InformationTextCache {
     text: Rc<str>,
 }
 
-/// The output mode the renderer drives, from the display's current capabilities.
 fn output_mode(
     capabilities: &color::DisplayCapabilities,
     display_profile: Option<Arc<[u8]>>,
@@ -388,7 +387,6 @@ fn output_mode(
     }
 }
 
-/// Builds a window-sized renderer for the queried display state.
 fn create_renderer(
     window: HWND,
     capabilities: &color::DisplayCapabilities,
@@ -859,7 +857,6 @@ impl Application {
         }
     }
 
-    /// A new item starts upright, unmirrored, centered, and fitted unless zoom is preserved.
     fn reset_view_for_new_item(&mut self) {
         let transform = &mut self.view_transform;
         transform.rotation_quadrant = 0;
@@ -1449,7 +1446,6 @@ impl Application {
             .map(|renderer| renderer.decide_frame(matrix, interpolation))
         {
             Some(Ok(decision)) => Some(decision),
-            // Wiring the frame failed on the device: rebuild once and decide again.
             Some(Err(_)) => match self.rebuild_renderer(window) {
                 Ok(()) => self
                     .renderer

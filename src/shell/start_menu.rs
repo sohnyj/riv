@@ -49,7 +49,7 @@ mod start_menu_tests {
     use super::*;
 
     #[test]
-    #[ignore] // touches the real user profile; run explicitly under wine
+    #[ignore = "touches the real user profile; run explicitly under wine"]
     fn shortcut_roundtrip() {
         unsafe {
             let _ = windows::Win32::System::Com::CoInitializeEx(

@@ -120,7 +120,7 @@ impl Generator {
     }
 }
 
-/// 64x64 matrix of unique rank values in [0, 1), row-major.
+/// EDGE_TEXELS-square matrix of unique rank values in [0, 1), row-major.
 fn generate() -> Vec<f32> {
     let mut generator = Generator::new();
     generator.fill_gaussian();

@@ -1,5 +1,3 @@
-//! Running a dialog template and reaching the state it was given.
-
 use windows::Win32::Foundation::{HMODULE, HWND, LPARAM, WPARAM};
 use windows::Win32::System::LibraryLoader::GetModuleHandleW;
 use windows::Win32::UI::WindowsAndMessaging::{

@@ -1,5 +1,3 @@
-//! Where a dialog is placed and where its controls sit.
-
 use windows::Win32::Foundation::{HWND, POINT, RECT};
 use windows::Win32::Graphics::Gdi::{MONITOR_DEFAULTTONEAREST, MapWindowPoints, MonitorFromRect};
 use windows::Win32::UI::WindowsAndMessaging::GetWindowRect;

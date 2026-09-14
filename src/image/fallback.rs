@@ -673,7 +673,6 @@ fn copy_heif_rows(plane: &HeifPlane, hdr_encoding: Option<HdrEncoding>, pixels: 
         let row_pointer = unsafe { plane.plane.add(row * plane.stride) };
         let row_pixels = unsafe { std::slice::from_raw_parts(row_pointer, plane.row_bytes) };
         match hdr_encoding {
-            // The codes stay as libheif wrote them; the transfer table expands them.
             Some(_) => output_row.copy_from_slice(row_pixels),
             None => premultiplied_bgra_from_rgba(row_pixels, output_row),
         }

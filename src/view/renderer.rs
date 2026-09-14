@@ -505,7 +505,6 @@ impl Renderer {
         sdr_destination_context: &ID2D1ColorContext,
     ) -> Result<ModeEffects> {
         let color_management = Self::create_color_management_effect(d2d_context)?;
-        // SDR only: HDR displays pass content through with no tone map.
         let tone_map = build_when(!is_hdr_output, || {
             let effect = unsafe { d2d_context.CreateEffect(&CLSID_D2D1HdrToneMap) }?;
             unsafe {
@@ -896,7 +895,6 @@ impl Renderer {
         let (format, color_space) =
             Self::mode_format_and_color_space(is_hdr_output, is_sdr_wide_gamut);
         if format == SCRGB_BACKBUFFER_FORMAT {
-            // FP16 leaves quantization to DWM.
             self.quantize_pass = None;
         } else if self.quantize_pass.is_none() {
             // The pass depends only on the (unchanged) device, so keep it across reconfigures.
@@ -1330,7 +1328,7 @@ impl Renderer {
                     stage.tone_map.SetInput(0, &converted, true);
                 }
                 let tone_mapped = unsafe { stage.tone_map.GetOutput() }?;
-                // Reinterpret scene-referred white as display-referred, then re-encode to sRGB.
+                // Reinterpret scene-referred white as display-referred; a non-scRGB backbuffer then re-encodes.
                 let display_white = self.luminances.target_nits.min(input_maximum);
                 unsafe {
                     stage.normalize.SetValue(
@@ -1494,7 +1492,7 @@ impl Renderer {
                         decision.draw_interpolation,
                         D2D1_COMPOSITE_MODE_SOURCE_OVER,
                     ),
-                    // Untouched pixels, or no effect support.
+                    // The source is already in the destination space, so color management is unwired.
                     None => {
                         let destination = D2D_RECT_F {
                             left: 0.0,

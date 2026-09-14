@@ -717,7 +717,6 @@ impl ImageCore {
             });
             return Some(LoadOutcome::Pending);
         }
-        // A reload re-decodes the item and re-collects the listing it belongs to.
         let outcome = self.load_item(&location);
         self.submit_refresh_scan();
         Some(outcome)
@@ -893,7 +892,6 @@ impl ImageCore {
         scope: ListingScope,
         scanned_with: &ListingOptions,
     ) {
-        // The worker used an options snapshot; a change since then re-sorts here.
         let current = ListingOptions::from(&self.options);
         if *scanned_with != current {
             sort_entries(&mut entries, &self.options);
@@ -1318,7 +1316,7 @@ impl ImageCore {
             }
             return None;
         }
-        // Preview stages always post Ok; an Err would fall through to Final's failure paths.
+        // A preview post always carries Ok; the pattern only unpacks the image.
         if matches!(completion.stage, DecodeStage::PreviewFinal)
             && let Ok(image) = &completion.result
         {
@@ -2147,7 +2145,7 @@ impl DecodePool {
             metadata,
             cancellation,
             kind,
-            speculative: !awaited, // only a preload goes to the back of the queue
+            speculative: !awaited,
         };
         if awaited {
             queue.push_front(job);
@@ -2214,7 +2212,7 @@ fn worker_loop(shared: &PoolShared, window: isize) {
         }
         let mut metadata = job.metadata;
         let Some(result) = decode_job(&job, window, &mut metadata) else {
-            continue; // a posted preview finished the job
+            continue;
         };
         post_final_result(shared, window, job.location, metadata, result);
     }

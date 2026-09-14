@@ -333,7 +333,6 @@ fn collect_bindings<T>(
     maximum: usize,
     mut parse: impl FnMut(&str) -> Option<T>,
 ) -> Vec<(T, Action)> {
-    // Default names first, then names only the overrides know; a name without either is skipped.
     let override_only = overrides
         .into_iter()
         .flat_map(Map::keys)
